@@ -35,9 +35,11 @@ npm start
 
 - `POST /api/v1/auth/register`，JSON：`{"username":"用户名","password":"至少6位密码"}`
 - `POST /api/v1/auth/login`，JSON：`{"username":"用户名","password":"密码"}`
-- `GET /api/v1/auth/me`，请求头：`Authorization: Bearer <token>`
+- `POST /api/v1/auth/refresh`，JSON：`{"refreshToken":"刷新令牌"}`
+- `POST /api/v1/auth/logout`，JSON：`{"refreshToken":"刷新令牌"}`
+- `GET /api/v1/auth/me`，请求头：`Authorization: Bearer <accessToken>`
 
-密码使用随机盐和 scrypt 哈希，不保存明文密码。登录令牌有效期为 30 天。
+密码使用随机盐和高成本 scrypt 哈希，不保存明文密码。访问令牌有效期为 15 分钟，刷新令牌有效期为 30 天；刷新令牌只保存 SHA-256 哈希，刷新时会轮换，注销后立即失效。登录和注册接口按来源地址限流。
 
 搜索适配接口：`GET /api/v1/search?keyword=歌曲名&page=1&num=10&quality=10`，其中 `page` 默认 1，`num` 默认 10，范围为 1–60，`quality` 默认 10，范围为 0–16。接口返回 NDJSON 流，每行一个 `{ "type": "song" }`，最后一行为 `{ "type": "end" }`。
 

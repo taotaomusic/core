@@ -3,7 +3,7 @@ import type { IncomingMessage } from "node:http";
 
 /** 输出统一 JSON 响应。 */
 export function json(res: ServerResponse, status: number, value: unknown) {
-  res.writeHead(status, { "content-type": "application/json; charset=utf-8", "access-control-allow-origin": "*" });
+  res.writeHead(status, { "content-type": "application/json; charset=utf-8", "access-control-allow-origin": "*", "x-content-type-options": "nosniff", "x-frame-options": "DENY", "referrer-policy": "no-referrer", "cache-control": "no-store" });
   res.end(JSON.stringify(value));
 }
 

@@ -1,14 +1,17 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createUser, findUserByUsername } from "../database.js";
-import { authenticate, createToken, hashPassword, passwordOf, usernameOf, verifyPassword } from "../auth.js";
+import { authenticate, issueTokens, hashPassword, logout, passwordOf, refreshTokens, usernameOf, verifyPassword } from "../auth.js";
 import { requestJson } from "../upstream/tencent.js";
 import { qualityOf, requestLyric, resolveSong } from "../services/song.js";
 import { json, readJson, success } from "../utils/http.js";
+import { allowAuthAttempt } from "../rate-limit.js";
 
 /** 处理移动端 API。 */
 export async function handleApi(url: URL, request: IncomingMessage, response: ServerResponse) {
   if (url.pathname === "/api/v1/auth/register" && request.method === "POST") return register(request, response);
   if (url.pathname === "/api/v1/auth/login" && request.method === "POST") return login(request, response);
+  if (url.pathname === "/api/v1/auth/refresh" && request.method === "POST") return refresh(request, response);
+  if (url.pathname === "/api/v1/auth/logout" && request.method === "POST") return logoutUser(request, response);
   if (url.pathname === "/api/v1/auth/me" && request.method === "GET") {
     const user = authenticate(request);
     return user ? json(response, 200, success(user)) : json(response, 401, { code: 4010, message: "未登录" });
@@ -28,17 +31,29 @@ export async function handleApi(url: URL, request: IncomingMessage, response: Se
 }
 
 async function register(request: IncomingMessage, response: ServerResponse) {
+  if (!allowAuthAttempt(`register:${request.socket.remoteAddress ?? "unknown"}`)) return json(response, 429, { code: 4290, message: "请求过于频繁，请稍后再试" });
   const body = await readJson(request); const username = usernameOf(body.username); const password = passwordOf(body.password);
   if (!/^[\w\u4e00-\u9fa5]{3,32}$/.test(username) || password.length < 6) return json(response, 400, { code: 4003, message: "用户名为3至32位，密码至少6位" });
   if (findUserByUsername(username)) return json(response, 409, { code: 4090, message: "用户名已存在" });
   const credentials = hashPassword(password); const user = createUser(username, credentials.hash, credentials.salt);
-  return json(response, 201, success({ user, token: createToken(user) }));
+  return json(response, 201, success({ user, ...issueTokens(user) }));
 }
 
 async function login(request: IncomingMessage, response: ServerResponse) {
+  if (!allowAuthAttempt(`login:${request.socket.remoteAddress ?? "unknown"}`)) return json(response, 429, { code: 4290, message: "请求过于频繁，请稍后再试" });
   const body = await readJson(request); const user = findUserByUsername(usernameOf(body.username));
   if (!user || !verifyPassword(passwordOf(body.password), user.password_salt, user.password_hash)) return json(response, 401, { code: 4011, message: "用户名或密码错误" });
-  return json(response, 200, success({ user: { id: user.id, username: user.username, created_at: user.created_at }, token: createToken(user) }));
+  return json(response, 200, success({ user: { id: user.id, username: user.username, created_at: user.created_at }, ...issueTokens(user) }));
+}
+
+async function refresh(request: IncomingMessage, response: ServerResponse) {
+  const body = await readJson(request); const tokens = refreshTokens(passwordOf(body.refreshToken));
+  return tokens ? json(response, 200, success(tokens)) : json(response, 401, { code: 4012, message: "刷新令牌无效或已过期" });
+}
+
+async function logoutUser(request: IncomingMessage, response: ServerResponse) {
+  const body = await readJson(request); const token = passwordOf(body.refreshToken); if (token) logout(token);
+  return json(response, 204, undefined);
 }
 
 async function streamMedia(response: ServerResponse, target: string) {
