@@ -1,0 +1,1 @@
+<resources><style name="Theme.Taotao" parent="android:style/Theme.Material.Light.NoActionBar"><item name="android:fontFamily">sans</item><item name="android:colorAccent">#FF6B5F</item><item name="android:navigationBarColor">#FFF9F7</item><item name="android:statusBarColor">#FFF9F7</item><item name="android:windowLightStatusBar">true</item></style></resources>

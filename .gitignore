@@ -1,0 +1,7 @@
+.gradle/
+build/
+**/build/
+local.properties
+taotao-release.jks
+*.iml
+.idea/
