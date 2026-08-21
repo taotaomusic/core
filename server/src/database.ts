@@ -24,6 +24,15 @@ database.exec(`
     revoked_at INTEGER
   );
   CREATE INDEX IF NOT EXISTS idx_refresh_tokens_hash ON refresh_tokens(token_hash);
+  CREATE TABLE IF NOT EXISTS favorites (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    source TEXT NOT NULL,
+    song_id TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    UNIQUE(user_id, source, song_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_favorites_user ON favorites(user_id, created_at DESC);
 `);
 
 export type UserRecord = { id: number; username: string; created_at: string };
@@ -54,4 +63,18 @@ export function consumeRefreshToken(tokenHash: string) {
 
 export function revokeRefreshToken(tokenHash: string) {
   database.prepare("UPDATE refresh_tokens SET revoked_at = ? WHERE token_hash = ? AND revoked_at IS NULL").run(Date.now(), tokenHash);
+}
+
+export function addFavorite(userId: number, source: string, songId: string) {
+  database.prepare("INSERT OR IGNORE INTO favorites (user_id, source, song_id, created_at) VALUES (?, ?, ?, ?)").run(userId, source, songId, Date.now());
+  return database.prepare("SELECT source, song_id AS songId, created_at AS createdAt FROM favorites WHERE user_id = ? AND source = ? AND song_id = ?").get(userId, source, songId);
+}
+
+export function removeFavorite(userId: number, source: string, songId: string) {
+  const result = database.prepare("DELETE FROM favorites WHERE user_id = ? AND source = ? AND song_id = ?").run(userId, source, songId);
+  return result.changes > 0;
+}
+
+export function listFavorites(userId: number) {
+  return database.prepare("SELECT source, song_id AS songId, created_at AS createdAt FROM favorites WHERE user_id = ? ORDER BY created_at DESC").all(userId);
 }

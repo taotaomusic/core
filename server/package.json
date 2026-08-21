@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc --noEmit -p tsconfig.json && rimraf dist && esbuild src/index.ts --bundle --platform=node --format=esm --minify --legal-comments=none --outfile=dist/app.js",
+    "build": "tsc --noEmit -p tsconfig.json && esbuild src/index.ts --bundle --platform=node --format=esm --external:better-sqlite3 --minify --legal-comments=none --outfile=dist/app.js && node -e \"require('fs').copyFileSync('package.json','dist/package.json')\"",
     "start": "node dist/app.js"
   },
   "engines": {

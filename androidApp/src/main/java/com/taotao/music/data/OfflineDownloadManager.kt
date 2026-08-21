@@ -8,15 +8,20 @@ import java.net.HttpURLConnection
 import java.util.Properties
 
 /** 将网络歌曲及其封面、歌词保存到应用私有目录，避免申请外部存储权限。 */
-class OfflineDownloadManager(context: Context) {
+class OfflineDownloadManager(context: Context, private val tokenProvider: () -> String? = { null }) {
     private val root = File(context.filesDir, "offline_music").apply { mkdirs() }
 
     fun download(song: Song): Song {
         val id = requireNotNull(song.remoteId) { "网络歌曲缺少歌曲 ID" }
         val dir = File(root, id.toString()).apply { mkdirs() }
-        val audio = song.audioUri?.takeIf { it.startsWith("http") }?.let { download(it.replaceFirst("http://", "https://"), File(dir, "audio")) }
+        val audio = song.audioUri?.takeIf { it.startsWith("http") }?.let {
+            val extension = URL(it).path.substringAfterLast('.', "").lowercase().takeIf { value -> value in setOf("mp3", "m4a", "aac", "flac", "ogg", "wav") } ?: "mp3"
+            download(it.replaceFirst("http://", "https://"), File(dir, "audio.$extension"))
+        }
         val cover = song.coverUri?.takeIf { it.startsWith("http") }?.let { download(it, File(dir, "cover")) }
-        val lyric = song.lyricUri?.takeIf { it.startsWith("http") }?.let { download(it, File(dir, "lyric.txt")) }
+        val lyric = song.lyricUri
+            ?.takeIf { it.startsWith("http") }
+            ?.let { runCatching { download(it, File(dir, "lyric.txt")) }.getOrNull() }
         Properties().apply {
             setProperty("title", song.title)
             setProperty("artist", song.artist)
@@ -31,7 +36,7 @@ class OfflineDownloadManager(context: Context) {
     }
 
     fun listDownloaded(): List<Song> = root.listFiles()
-        ?.filter { File(it, "song.properties").isFile && File(it, "audio").isFile }
+        ?.filter { dir -> File(dir, "song.properties").isFile && dir.listFiles()?.any { it.name.startsWith("audio") && it.isFile && it.length() >= 4_096L } == true }
         ?.mapNotNull { dir ->
             runCatching {
                 val properties = Properties().apply { load(File(dir, "song.properties").inputStream()) }
@@ -41,7 +46,12 @@ class OfflineDownloadManager(context: Context) {
                     artist = properties.getProperty("artist", "未知歌手"),
                     duration = properties.getProperty("duration", "网络歌曲"),
                     color = properties.getProperty("color", "0xFFFFB4A2").toLong(),
-                    audioUri = File(dir, "audio").toURI().toString(),
+                    audioUri = dir.listFiles()!!
+                        .filter { it.name.startsWith("audio") && it.isFile && it.length() >= 4_096L }
+                        .sortedBy { it.name == "audio" }
+                        .first()
+                        .toURI()
+                        .toString(),
                     remoteId = id,
                     coverUri = File(dir, "cover").takeIf(File::isFile)?.toURI()?.toString(),
                     lyricUri = File(dir, "lyric.txt").takeIf(File::isFile)?.toURI()?.toString(),
@@ -55,7 +65,14 @@ class OfflineDownloadManager(context: Context) {
 
     private fun download(url: String, target: File): File {
         if (target.exists() && target.length() > 0L) return target
-        val connection = (URL(url).openConnection() as HttpURLConnection).apply { connectTimeout = 20_000; readTimeout = 60_000; requestMethod = "GET" }
+        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
+            connectTimeout = 20_000
+            readTimeout = 60_000
+            requestMethod = "GET"
+            if (URL(url).host == "music.xydaigua.cn") {
+                tokenProvider()?.takeIf { it.isNotBlank() }?.let { setRequestProperty("Authorization", "Bearer $it") }
+            }
+        }
         check(connection.responseCode in 200..299) { "下载失败：HTTP ${connection.responseCode}" }
         val temp = File(target.parentFile, "${target.name}.part")
         connection.inputStream.use { input -> temp.outputStream().use { input.copyTo(it) } }

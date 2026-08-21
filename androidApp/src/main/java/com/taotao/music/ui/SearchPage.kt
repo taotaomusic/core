@@ -6,6 +6,7 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
@@ -36,10 +37,15 @@ fun SearchPage(
     songs: List<Song>,
     isSearching: Boolean,
     hasSearched: Boolean,
+    errorMessage: String? = null,
     onBack: () -> Unit,
     onKeywordChanged: (String) -> Unit,
     onSearch: () -> Unit,
     onSongClick: (Int, Song) -> Unit,
+    history: List<String>,
+    onHistoryClick: (String) -> Unit,
+    onHistoryRemove: (String) -> Unit,
+    onHistoryClear: () -> Unit,
 ) {
     val focusRequester = remember { FocusRequester() }
     LaunchedEffect(Unit) { focusRequester.requestFocus() }
@@ -55,19 +61,40 @@ fun SearchPage(
             Text("搜索音乐", fontSize = 22.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
         }
         MusicSearchBar(keyword, onKeywordChanged, onSearch, focusRequester = focusRequester)
-        if (isSearching) SearchSkeletonList()
-        if (hasSearched && !isSearching && songs.isEmpty()) {
-            Text("没有找到相关歌曲", color = Color.Gray, modifier = Modifier.padding(top = 28.dp))
+        if (!hasSearched && history.isNotEmpty()) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Text("搜索历史", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                TextButton(onClick = onHistoryClear) { Text("清空") }
+            }
+            history.forEach { item ->
+                ListItem(
+                    headlineContent = { Text(item) },
+                    leadingContent = { Icon(Icons.Default.Search, null, tint = Color.Gray) },
+                    trailingContent = { TextButton(onClick = { onHistoryRemove(item) }) { Text("删除") } },
+                    modifier = Modifier.fillMaxWidth().clickable { onHistoryClick(item) },
+                )
+            }
         }
-        LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            itemsIndexed(songs, key = { index, song -> "${song.remoteId ?: index}-${song.title}" }) { index, song ->
-                var visible by remember { mutableStateOf(false) }
-                LaunchedEffect(song) { visible = true }
-                AnimatedVisibility(
-                    visible = visible,
-                    enter = fadeIn(tween(180, index.coerceAtMost(7) * 24)) + slideInVertically(tween(180, index.coerceAtMost(7) * 24)) { it / 12 },
-                ) {
-                    SongListItem(song, false) { onSongClick(index, song) }
+        if (isSearching) SearchSkeletonList()
+        if (hasSearched && !isSearching && !errorMessage.isNullOrBlank()) {
+            Text(errorMessage, color = SearchCoral, modifier = Modifier.padding(top = 28.dp))
+        }
+        if (hasSearched && !isSearching && songs.isEmpty()) {
+            if (errorMessage.isNullOrBlank()) {
+                Text("没有找到相关歌曲", color = Color.Gray, modifier = Modifier.padding(top = 28.dp))
+            }
+        }
+        if (hasSearched) {
+            LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                itemsIndexed(songs, key = { index, song -> "${song.remoteId ?: index}-${song.title}" }) { index, song ->
+                    var visible by remember { mutableStateOf(false) }
+                    LaunchedEffect(song) { visible = true }
+                    AnimatedVisibility(
+                        visible = visible,
+                        enter = fadeIn(tween(180, index.coerceAtMost(7) * 24)) + slideInVertically(tween(180, index.coerceAtMost(7) * 24)) { it / 12 },
+                    ) {
+                        SongListItem(song, false) { onSongClick(index, song) }
+                    }
                 }
             }
         }

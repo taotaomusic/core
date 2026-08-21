@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { createUser, findUserByUsername } from "../database.js";
+import { addFavorite, createUser, findUserByUsername, listFavorites, removeFavorite } from "../database.js";
 import { authenticate, issueTokens, hashPassword, logout, passwordOf, refreshTokens, usernameOf, verifyPassword } from "../auth.js";
 import { requestJson } from "../upstream/tencent.js";
 import { qualityOf, requestLyric, resolveSong } from "../services/song.js";
@@ -8,15 +8,20 @@ import { allowAuthAttempt } from "../rate-limit.js";
 
 /** 处理移动端 API。 */
 export async function handleApi(url: URL, request: IncomingMessage, response: ServerResponse) {
-  if (url.pathname === "/api/v1/auth/register" && request.method === "POST") return register(request, response);
-  if (url.pathname === "/api/v1/auth/login" && request.method === "POST") return login(request, response);
-  if (url.pathname === "/api/v1/auth/refresh" && request.method === "POST") return refresh(request, response);
-  if (url.pathname === "/api/v1/auth/logout" && request.method === "POST") return logoutUser(request, response);
-  if (url.pathname === "/api/v1/auth/me" && request.method === "GET") {
+  const path = url.pathname.replace(/\/$/, "") || "/";
+  if (path === "/api/v1/auth/register" && request.method === "POST") return register(request, response);
+  if (path === "/api/v1/auth/login" && request.method === "POST") return login(request, response);
+  if (path === "/api/v1/auth/refresh" && request.method === "POST") return refresh(request, response);
+  if (path === "/api/v1/auth/logout" && request.method === "POST") return logoutUser(request, response);
+  if (!authenticate(request)) return json(response, 401, { code: 4010, message: "请先登录" });
+  if (path === "/api/v1/auth/me" && request.method === "GET") {
     const user = authenticate(request);
     return user ? json(response, 200, success(user)) : json(response, 401, { code: 4010, message: "未登录" });
   }
-  if (url.pathname === "/api/v1/search") {
+  const favorite = url.pathname.match(/^\/api\/v1\/favorites\/([^/]+)\/([^/]+)$/);
+  if (favorite && (request.method === "POST" || request.method === "DELETE")) return changeFavorite(request, response, favorite[1], favorite[2]);
+  if (path === "/api/v1/favorites" && request.method === "GET") return getFavorites(request, response);
+  if (path === "/api/v1/search") {
     const keyword = (url.searchParams.get("keyword") ?? "").trim(); const page = Math.max(1, Number(url.searchParams.get("page") ?? 1));
     const num = Math.min(60, Math.max(1, Number(url.searchParams.get("num") ?? 10))); const quality = qualityOf(url.searchParams.get("quality"));
     if (!keyword) return json(response, 400, { code: 4001, message: "请输入搜索关键词" });
@@ -54,6 +59,18 @@ async function refresh(request: IncomingMessage, response: ServerResponse) {
 async function logoutUser(request: IncomingMessage, response: ServerResponse) {
   const body = await readJson(request); const token = passwordOf(body.refreshToken); if (token) logout(token);
   return json(response, 204, undefined);
+}
+
+async function changeFavorite(request: IncomingMessage, response: ServerResponse, source: string, songId: string) {
+  const user = authenticate(request); if (!user) return json(response, 401, { code: 4010, message: "未登录" });
+  if (!/^[a-z0-9_-]{2,32}$/i.test(source) || !/^[\w-]{1,128}$/.test(songId)) return json(response, 400, { code: 4004, message: "渠道或歌曲 ID 不合法" });
+  if (request.method === "POST") return json(response, 200, success(addFavorite(user.id, source.toLowerCase(), songId)));
+  return json(response, 200, success({ removed: removeFavorite(user.id, source.toLowerCase(), songId) }));
+}
+
+async function getFavorites(request: IncomingMessage, response: ServerResponse) {
+  const user = authenticate(request); if (!user) return json(response, 401, { code: 4010, message: "未登录" });
+  return json(response, 200, success(listFavorites(user.id)));
 }
 
 async function streamMedia(response: ServerResponse, target: string) {

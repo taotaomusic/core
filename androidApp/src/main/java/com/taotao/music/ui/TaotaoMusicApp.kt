@@ -35,14 +35,25 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import coil.compose.AsyncImage
 import com.taotao.music.model.Song
 import com.taotao.music.data.OfflineDownloadManager
 import com.taotao.music.data.TencentMusicApi
+import com.taotao.music.data.SearchHistoryStore
+import com.taotao.music.data.AuthSession
+import com.taotao.music.data.PlaybackStateStore
+import com.taotao.music.data.SavedPlaybackState
 import com.taotao.music.player.AudioPlayer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.isActive
+import androidx.lifecycle.LifecycleEventObserver
+import android.net.Uri
+import java.io.File
 import java.net.URL
 
 private val Background = Color(0xFFFFF9F7)
@@ -51,11 +62,16 @@ private val Coral = Color(0xFFFF6B5F)
 @Composable
 fun TaotaoMusicApp() {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val audioPlayer = remember { AudioPlayer(context) }
-    val musicApi = remember { TencentMusicApi() }
-    val downloadManager = remember { OfflineDownloadManager(context) }
+    val authSession = remember { AuthSession(context) }
+    val musicApi = remember { TencentMusicApi { authSession.accessToken } }
+    val downloadManager = remember { OfflineDownloadManager(context) { authSession.accessToken } }
+    val playbackStateStore = remember { PlaybackStateStore(context) }
+    val searchHistoryStore = remember { SearchHistoryStore(context) }
     val scope = rememberCoroutineScope()
-    var songs by remember { mutableStateOf(emptyList<Song>()) }
+    var playbackSongs by remember { mutableStateOf(emptyList<Song>()) }
+    var searchResults by remember { mutableStateOf(emptyList<Song>()) }
     var selectedIndex by remember { mutableIntStateOf(0) }
     var isPlaying by remember { mutableStateOf(false) }
     var selectedTab by remember { mutableIntStateOf(0) }
@@ -64,25 +80,154 @@ fun TaotaoMusicApp() {
     var showSearchPage by remember { mutableStateOf(false) }
     var isSearching by remember { mutableStateOf(false) }
     var hasSearched by remember { mutableStateOf(false) }
+    var searchError by remember { mutableStateOf<String?>(null) }
     var message by remember { mutableStateOf<String?>(null) }
     var repeatMode by remember { mutableIntStateOf(androidx.media3.common.Player.REPEAT_MODE_OFF) }
     var downloadedSongs by remember { mutableStateOf(emptyList<Song>()) }
+    var bottomTab by remember { mutableIntStateOf(0) }
+    var searchHistory by remember { mutableStateOf(searchHistoryStore.read()) }
+    var accessToken by remember { mutableStateOf(authSession.accessToken) }
+    var authChecking by remember { mutableStateOf(true) }
+    var restoredPlayback by remember { mutableStateOf<SavedPlaybackState?>(null) }
+    var pendingResumePositionMs by remember { mutableIntStateOf(0) }
+    var searchGeneration by remember { mutableIntStateOf(0) }
+    val latestPlaybackSongs = rememberUpdatedState(playbackSongs)
+    val latestSelectedIndex = rememberUpdatedState(selectedIndex)
+
+    LaunchedEffect(Unit) {
+        restoredPlayback = playbackStateStore.read()
+    }
+
+    LaunchedEffect(Unit) {
+        if (authSession.isSignedIn && !authSession.isAccessValid) {
+            if (authSession.refresh(musicApi)) accessToken = authSession.accessToken
+        }
+        authChecking = false
+    }
+
+    if (authChecking) return
+    if (accessToken.isNullOrBlank()) {
+        AuthPage(musicApi) { tokens ->
+            authSession.save(tokens)
+            accessToken = tokens.accessToken
+        }
+        return
+    }
+
+    LaunchedEffect(restoredPlayback) {
+        restoredPlayback?.let { savedState ->
+            if (playbackSongs.isEmpty()) {
+                playbackSongs = listOf(savedState.song)
+                pendingResumePositionMs = savedState.positionMs
+            }
+        }
+    }
 
     LaunchedEffect(Unit) {
         downloadedSongs = withContext(Dispatchers.IO) { downloadManager.listDownloaded() }
     }
 
-    DisposableEffect(Unit) { onDispose { audioPlayer.release() } }
-    LaunchedEffect(Unit) {
-        while (true) {
-            isPlaying = audioPlayer.isPlaying()
-            if (songs.isNotEmpty()) {
-                val playerIndex = audioPlayer.currentMediaItemIndex()
-                if (playerIndex in songs.indices && playerIndex != selectedIndex) {
-                    selectedIndex = playerIndex
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP || event == Lifecycle.Event.ON_DESTROY) {
+                if (audioPlayer.isPrepared()) {
+                    latestPlaybackSongs.value.getOrNull(latestSelectedIndex.value)?.let { song ->
+                        playbackStateStore.save(song, audioPlayer.currentPositionMs())
+                    }
                 }
             }
-            kotlinx.coroutines.delay(300)
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            var saveTick = 0
+            while (isActive) {
+                isPlaying = audioPlayer.isPlaying()
+                if (playbackSongs.isNotEmpty()) {
+                    val playerIndex = audioPlayer.currentMediaItemIndex()
+                    if (playerIndex in playbackSongs.indices && playerIndex != selectedIndex) {
+                        selectedIndex = playerIndex
+                    }
+                    if (saveTick++ % 7 == 0 && audioPlayer.isPrepared()) {
+                        playbackSongs.getOrNull(selectedIndex)?.let { song ->
+                            playbackStateStore.save(song, audioPlayer.currentPositionMs())
+                        }
+                    }
+                }
+                kotlinx.coroutines.delay(300)
+            }
+        }
+    }
+
+    fun openSearchPage() {
+        searchGeneration += 1
+        showSearchPage = true
+        searchResults = emptyList()
+        hasSearched = false
+        isSearching = false
+        searchError = null
+    }
+
+    fun startSearch() {
+        val query = searchKeyword.trim()
+        if (query.isBlank()) return
+        searchHistoryStore.add(query)
+        searchHistory = searchHistoryStore.read()
+        val generation = searchGeneration + 1
+        searchGeneration = generation
+        scope.launch {
+            hasSearched = true
+            isSearching = true
+            searchError = null
+            searchResults = emptyList()
+            if (generation == searchGeneration) {
+                runCatching { withContext(Dispatchers.IO) { musicApi.search(query) } }
+                    .onSuccess { searchResults = it }
+                    .onFailure { searchError = it.message ?: "搜索失败，请稍后重试" }
+                isSearching = false
+            }
+        }
+    }
+
+    fun playSong(queue: List<Song>, index: Int, positionMs: Int = 0) {
+        val requestedSong = queue.getOrNull(index) ?: return
+        scope.launch {
+            val playable = if (requestedSong.audioUri?.startsWith("file:") == true) {
+                requestedSong
+            } else if (requestedSong.remoteId != null) {
+                runCatching {
+                    withContext(Dispatchers.IO) { musicApi.resolve(requestedSong) }
+                }.getOrElse { requestedSong }
+            } else {
+                requestedSong
+            }
+            if (playable.audioUri.isNullOrBlank()) {
+                message = "歌曲暂时没有可用播放链接"
+                return@launch
+            }
+            val updatedQueue = queue.toMutableList().also { it[index] = playable }
+            playbackSongs = updatedQueue
+            selectedIndex = index
+            audioPlayer.play(playable, updatedQueue, index, positionMs)
+            playbackStateStore.save(playable, positionMs)
+            pendingResumePositionMs = 0
+            isPlaying = true
+        }
+    }
+
+    fun togglePlayback() {
+        val currentSong = playbackSongs.getOrNull(selectedIndex) ?: return
+        if (audioPlayer.isPlaying()) {
+            audioPlayer.pause()
+            playbackStateStore.save(currentSong, audioPlayer.currentPositionMs())
+            isPlaying = false
+        } else if (audioPlayer.isPrepared()) {
+            audioPlayer.resume()
+            isPlaying = true
+        } else {
+            playSong(playbackSongs, selectedIndex, pendingResumePositionMs)
         }
     }
 
@@ -91,17 +236,22 @@ fun TaotaoMusicApp() {
             Scaffold(
                 containerColor = Background,
                 bottomBar = {
-                    if (!showPlayerDetail && songs.isNotEmpty()) {
+                    Column {
+                    if (!showPlayerDetail && playbackSongs.isNotEmpty()) {
                         MiniPlayer(
-                            songs[selectedIndex.coerceIn(songs.indices)],
+                            playbackSongs[selectedIndex.coerceIn(playbackSongs.indices)],
                             isPlaying,
                             onOpen = { showPlayerDetail = true },
                             onPrevious = { audioPlayer.previous() },
                             onNext = { audioPlayer.next() },
                         ) {
-                            if (audioPlayer.isPlaying()) audioPlayer.pause() else audioPlayer.resume()
-                            isPlaying = audioPlayer.isPlaying()
+                            togglePlayback()
                         }
+                    }
+                    NavigationBar {
+                        NavigationBarItem(bottomTab == 0, { bottomTab = 0 }, icon = { Icon(Icons.Default.MusicNote, "音乐") }, label = { Text("音乐") })
+                        NavigationBarItem(bottomTab == 1, { bottomTab = 1 }, icon = { Icon(Icons.Default.Person, "我的") }, label = { Text("我的") })
+                    }
                     }
                 },
             ) { innerPadding ->
@@ -119,28 +269,26 @@ fun TaotaoMusicApp() {
             ) { page ->
             Box(Modifier.fillMaxSize().padding(innerPadding)) {
             if (page == "detail") {
-                if (songs.isNotEmpty()) PlayerDetailPage(
-                    song = songs[selectedIndex.coerceIn(songs.indices)],
+                if (playbackSongs.isNotEmpty()) PlayerDetailPage(
+                    song = playbackSongs[selectedIndex.coerceIn(playbackSongs.indices)],
                     audioPlayer = audioPlayer,
                     isPlaying = isPlaying,
                     onBack = { showPlayerDetail = false },
                     onDownload = {
                         scope.launch(Dispatchers.IO) {
                             runCatching {
-                                val resolved = if (songs[selectedIndex].audioUri == null) musicApi.resolve(songs[selectedIndex]) else songs[selectedIndex]
+                                val resolved = if (playbackSongs[selectedIndex].audioUri == null) musicApi.resolve(playbackSongs[selectedIndex]) else playbackSongs[selectedIndex]
                                 downloadManager.download(resolved)
                             }.onSuccess { offline ->
-                                songs = songs.toMutableList().also { it[selectedIndex] = offline }
+                                playbackSongs = playbackSongs.toMutableList().also { it[selectedIndex] = offline }
                                 downloadedSongs = withContext(Dispatchers.IO) { downloadManager.listDownloaded() }
                                 message = "已下载，可离线播放"
                             }
                                 .onFailure { message = it.message ?: "下载失败" }
                         }
                     },
-                    onTogglePlaying = {
-                        if (audioPlayer.isPlaying()) audioPlayer.pause() else audioPlayer.resume()
-                        isPlaying = audioPlayer.isPlaying()
-                    },
+                    musicApi = musicApi,
+                    onTogglePlaying = { togglePlayback() },
                     onPrevious = { audioPlayer.previous() },
                     onNext = { audioPlayer.next() },
                     repeatMode = repeatMode,
@@ -156,48 +304,32 @@ fun TaotaoMusicApp() {
             } else if (page == "search") {
                 SearchPage(
                     keyword = searchKeyword,
-                    songs = songs,
+                    songs = searchResults,
                     isSearching = isSearching,
                     hasSearched = hasSearched,
+                    errorMessage = searchError,
                     onBack = { showSearchPage = false },
                     onKeywordChanged = { searchKeyword = it },
-                    onSearch = {
-                        if (searchKeyword.isNotBlank()) {
-                            scope.launch {
-                                hasSearched = true
-                                isSearching = true
-                                songs = emptyList()
-                                songs = withContext(Dispatchers.IO) { musicApi.search(searchKeyword) }
-                                isSearching = false
-                            }
-                        }
-                    },
+                    onSearch = { startSearch() },
+                    history = searchHistory,
+                    onHistoryClick = { value -> searchKeyword = value; searchHistoryStore.add(value); searchHistory = searchHistoryStore.read() },
+                    onHistoryRemove = { value -> searchHistoryStore.remove(value); searchHistory = searchHistoryStore.read() },
+                    onHistoryClear = { searchHistoryStore.clear(); searchHistory = emptyList() },
                     onSongClick = { index, song ->
-                        selectedIndex = index
-                        scope.launch {
-                            val playable = if (song.remoteId != null && song.audioUri == null) musicApi.resolve(song) else song
-                            val updatedSongs = songs.toMutableList().also { it[index] = playable }
-                            songs = updatedSongs
-                            audioPlayer.play(playable, updatedSongs, index)
-                            isPlaying = false
-                        }
+                        playSong(searchResults, index)
                     },
                 )
+            } else if (bottomTab == 1) {
+                MinePage(onLogout = { audioPlayer.release(); authSession.clear(); accessToken = null })
             } else Column(Modifier.fillMaxSize().padding(horizontal = 22.dp)) {
                 Spacer(Modifier.height(24.dp))
                 HomeHeader()
                 MusicSearchBar(searchKeyword, onKeywordChanged = { searchKeyword = it }, onSearch = {
                     if (searchKeyword.isNotBlank()) {
-                        showSearchPage = true
-                        scope.launch {
-                            hasSearched = true
-                            isSearching = true
-                            songs = emptyList()
-                            songs = withContext(Dispatchers.IO) { musicApi.search(searchKeyword) }
-                            isSearching = false
-                        }
+                        openSearchPage()
+                        startSearch()
                     }
-                }, onFocus = { showSearchPage = true })
+                }, onFocus = { openSearchPage() })
                 CategoryTabs(selectedTab) { selectedTab = it }
                 if (selectedTab == 2) {
                     SectionTitle("本地音乐")
@@ -206,9 +338,7 @@ fun TaotaoMusicApp() {
                     } else {
                         downloadedSongs.forEachIndexed { index, song ->
                             SongListItem(song, false) {
-                                songs = downloadedSongs
-                                selectedIndex = index
-                                audioPlayer.play(song, downloadedSongs, index)
+                                playSong(downloadedSongs, index)
                             }
                         }
                     }
@@ -233,9 +363,27 @@ fun TaotaoMusicApp() {
             Text("听点喜欢的", fontSize = 28.sp, fontWeight = FontWeight.Bold)
         }
         IconButton(onClick = {}) { Icon(Icons.Default.NotificationsNone, "通知") }
-        IconButton(onClick = {}) { Icon(Icons.Default.Search, "搜索") }
+                Spacer(Modifier.width(48.dp))
     }
     Spacer(Modifier.height(22.dp))
+}
+
+@Composable
+private fun MinePage(onLogout: () -> Unit) {
+    Column(Modifier.fillMaxSize().padding(22.dp)) {
+        Spacer(Modifier.height(28.dp))
+        Text("我的", fontSize = 30.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(28.dp))
+        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(Color.White).padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Default.Person, null, tint = Coral)
+            Text("账号设置", modifier = Modifier.weight(1f).padding(start = 12.dp))
+        }
+        Spacer(Modifier.height(14.dp))
+        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(Color.White).clickable(onClick = onLogout).padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Default.ExitToApp, "退出登录", tint = Coral)
+            Text("退出登录", modifier = Modifier.padding(start = 12.dp))
+        }
+    }
 }
 
 @Composable private fun CategoryTabs(selectedIndex: Int, onSelected: (Int) -> Unit) {
@@ -286,6 +434,7 @@ private fun PlayerDetailPage(
     onBack: () -> Unit,
     onDownload: () -> Unit,
     onTogglePlaying: () -> Unit,
+    musicApi: TencentMusicApi,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
     repeatMode: Int,
@@ -296,26 +445,51 @@ private fun PlayerDetailPage(
     var dragging by remember(song) { mutableStateOf(false) }
     var lyricText by remember(song) { mutableStateOf<String?>(null) }
     var actualPlaying by remember(song) { mutableStateOf(false) }
+    var favorite by remember(song) { mutableStateOf(false) }
+    var favoriteLoading by remember(song) { mutableStateOf(false) }
+    val detailScope = rememberCoroutineScope()
+    val lifecycleOwner = LocalLifecycleOwner.current
     val coverRotation = remember(song) { Animatable(0f) }
-    LaunchedEffect(song.lyricUri) {
-        if (song.lyricUri != null) lyricText = runCatching { withContext(Dispatchers.IO) { URL(song.lyricUri!!).readText() } }.getOrNull()
+    LaunchedEffect(song.lyricUri, song.remoteId) {
+        lyricText = runCatching {
+            withContext(Dispatchers.IO) {
+                val lyricUri = song.lyricUri
+                if (lyricUri?.startsWith("file:") == true) {
+                    Uri.parse(lyricUri).path
+                        ?.let(::File)
+                        ?.takeIf(File::isFile)
+                        ?.readText()
+                } else if (song.remoteId != null) {
+                    musicApi.requestLyric(song)
+                } else {
+                    null
+                }
+            }
+        }.getOrNull()
     }
-    LaunchedEffect(Unit) {
-        while (true) {
+    LaunchedEffect(song.remoteId) {
+        favorite = runCatching { withContext(Dispatchers.IO) { musicApi.isFavorite(song) } }.getOrDefault(false)
+    }
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            while (isActive) {
             if (!dragging) positionMs = audioPlayer.currentPositionMs()
             durationMs = audioPlayer.durationMs()
             actualPlaying = audioPlayer.isPlaying()
             kotlinx.coroutines.delay(500)
+            }
         }
     }
-    LaunchedEffect(song, isPlaying) {
-        if (isPlaying) {
+    LaunchedEffect(song, isPlaying, lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            if (isPlaying) {
             while (true) {
                 val nextRotation = coverRotation.value + 360f
                 coverRotation.animateTo(
                     targetValue = nextRotation,
                     animationSpec = tween(durationMillis = 20_000, easing = LinearEasing),
                 )
+            }
             }
         }
     }
@@ -351,7 +525,18 @@ private fun PlayerDetailPage(
                 Text(song.title, fontSize = 25.sp, fontWeight = FontWeight.Bold)
                 Text(song.artist, color = Color.Gray, fontSize = 15.sp, modifier = Modifier.padding(top = 7.dp))
             }
-            IconButton(onClick = {}) { Icon(Icons.Default.FavoriteBorder, "收藏", tint = Coral) }
+            IconButton(
+                enabled = !favoriteLoading,
+                onClick = {
+                    favoriteLoading = true
+                    detailScope.launch {
+                        runCatching {
+                            withContext(Dispatchers.IO) { musicApi.setFavorite(song, !favorite) }
+                        }.onSuccess { favorite = !favorite }
+                        favoriteLoading = false
+                    }
+                },
+            ) { Icon(if (favorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder, "收藏", tint = Coral) }
         }
         Spacer(Modifier.height(28.dp))
         val progress = if (durationMs > 0) positionMs.toFloat() / durationMs else 0f

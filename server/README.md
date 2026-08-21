@@ -16,6 +16,8 @@ npm run build
 npm start
 ```
 
+部署时需要同时上传 `dist/app.js` 和 `dist/package.json`，并在同目录执行 `npm install --omit=dev`，因为 SQLite 原生模块 `better-sqlite3` 不会被打进单文件。
+
 构建后的 `dist/app.js` 会打包、压缩并移除注释；`src/` 源码保持正常可读格式。
 
 开发模式使用 `tsx watch`，修改 `src/` 下的 TypeScript 文件后会自动重启服务；如果修改了 `package.json`，需要手动重新运行一次命令。
@@ -38,6 +40,14 @@ npm start
 - `POST /api/v1/auth/refresh`，JSON：`{"refreshToken":"刷新令牌"}`
 - `POST /api/v1/auth/logout`，JSON：`{"refreshToken":"刷新令牌"}`
 - `GET /api/v1/auth/me`，请求头：`Authorization: Bearer <accessToken>`
+
+收藏接口均需要 `Authorization: Bearer <accessToken>`：
+
+- `POST /api/v1/favorites/tencent/105648974`：收藏腾讯歌曲
+- `DELETE /api/v1/favorites/tencent/105648974`：取消收藏
+- `GET /api/v1/favorites`：获取当前用户收藏列表
+
+除注册、登录、刷新令牌、注销和 `/health` 外，搜索、播放、歌词、收藏及用户信息接口均必须携带访问令牌。
 
 密码使用随机盐和高成本 scrypt 哈希，不保存明文密码。访问令牌有效期为 15 分钟，刷新令牌有效期为 30 天；刷新令牌只保存 SHA-256 哈希，刷新时会轮换，注销后立即失效。登录和注册接口按来源地址限流。
 
