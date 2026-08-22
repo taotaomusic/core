@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- FileProvider 可共享的目录。只开放存放安装包的 files/update，不暴露其它私有数据。 -->
+<paths>
+    <files-path name="update" path="update/" />
+</paths>

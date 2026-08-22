@@ -24,3 +24,6 @@ fun TaotaoTheme(content: @Composable () -> Unit) {
         content = content,
     )
 }
+
+/** 骨架屏占位色。比背景略深，比纯灰更贴主题。 */
+val TaotaoSkeleton = Color(0xFFF3E7E4)

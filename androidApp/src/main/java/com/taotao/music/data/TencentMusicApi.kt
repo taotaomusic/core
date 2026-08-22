@@ -127,7 +127,8 @@ class TencentMusicApi(private val tokenProvider: TokenProvider) {
     private fun encode(value: String) = URLEncoder.encode(value, Charsets.UTF_8.name())
 
     companion object {
-        private const val ENDPOINT = "https://music.xydaigua.cn"
+        /** 后端地址。热更新模块也要用，因此对包内公开，保持单一来源。 */
+        const val ENDPOINT = "https://music.xydaigua.cn"
         private const val MAX_AUTH_ATTEMPTS = 2
 
         /** 媒体地址是否由本服务提供，只有自家地址才附带访问令牌。 */
