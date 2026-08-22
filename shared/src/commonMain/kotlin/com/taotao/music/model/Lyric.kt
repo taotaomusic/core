@@ -107,8 +107,16 @@ object LyricParser {
     /** YRC 行头：`[行起始ms,行时长ms]`。 */
     private val YRC_HEADER = Regex("""^\[(\d+),(\d+)\]""")
 
-    /** YRC 逐字单元：`文本(起始ms,时长ms)`，尾部可能还带一个用途不明的数字。 */
-    private val YRC_WORD = Regex("""([^(\n]*)\((\d+),(\d+)(?:,\d+)?\)""")
+    /**
+     * YRC 的字级时间组：`(起始ms,时长ms)`，尾部可能还带一个用途不明的数字。
+     *
+     * 只匹配时间组本身，文本取相邻两个时间组之间的内容 —— 不能用
+     * `([^(\n]*)\(…\)` 这种「文本 + 时间组」的写法去捕获文本：文本捕获组必须排除
+     * `(` 才不会吞掉时间组的左括号，于是歌词里字面的 `(` 永远匹配不上而被丢掉。
+     * 实际数据里就有这种行，例如「雨爱 - 杨丞琳 (Rainie Yang)」会少掉左括号，
+     * 只剩一个孤立的右括号。
+     */
+    private val YRC_TIMING = Regex("""\((\d+),(\d+)(?:,\d+)?\)""")
 
     /**
      * 优先使用逐字歌词。
@@ -124,30 +132,42 @@ object LyricParser {
 
     fun parseYrc(raw: String?): Lyric {
         if (raw.isNullOrBlank()) return Lyric.EMPTY
+        // yrc 同样可能带 offset 标签，行时间和字时间都要跟着平移。
+        val offsetMs = OFFSET.find(raw)?.groupValues?.get(1)?.toIntOrNull() ?: 0
         val lines = mutableListOf<LyricLine>()
         for (rawLine in raw.lineSequence()) {
             val header = YRC_HEADER.find(rawLine) ?: continue
             val body = rawLine.substring(header.value.length)
-            val words = YRC_WORD.findAll(body).mapNotNull { match ->
-                val text = match.groupValues[1]
-                if (text.isEmpty()) null
-                else LyricWord(
-                    timeMs = match.groupValues[2].toIntOrNull() ?: return@mapNotNull null,
-                    durationMs = match.groupValues[3].toIntOrNull() ?: 0,
-                    text = text,
-                )
-            }.toList()
+            val words = wordsOf(body, offsetMs)
             if (words.isEmpty()) continue
             val text = words.joinToString("") { it.text }.trim()
             if (text.isEmpty()) continue
             lines += LyricLine(
-                timeMs = header.groupValues[1].toIntOrNull() ?: 0,
+                timeMs = ((header.groupValues[1].toIntOrNull() ?: 0) + offsetMs).coerceAtLeast(0),
                 text = text,
                 durationMs = header.groupValues[2].toIntOrNull() ?: 0,
                 words = words,
             )
         }
         return if (lines.isEmpty()) Lyric.EMPTY else Lyric(lines.sortedBy(LyricLine::timeMs), synced = true)
+    }
+
+    /** 按时间组切分一行 YRC，每个时间组前面的那段文字就是它对应的字。 */
+    private fun wordsOf(body: String, offsetMs: Int): List<LyricWord> {
+        val words = mutableListOf<LyricWord>()
+        var cursor = 0
+        for (timing in YRC_TIMING.findAll(body)) {
+            val text = body.substring(cursor, timing.range.first)
+            cursor = timing.range.last + 1
+            if (text.isEmpty()) continue
+            val start = timing.groupValues[1].toIntOrNull() ?: continue
+            words += LyricWord(
+                timeMs = (start + offsetMs).coerceAtLeast(0),
+                durationMs = timing.groupValues[2].toIntOrNull() ?: 0,
+                text = text,
+            )
+        }
+        return words
     }
 
     fun parseLrc(raw: String?): Lyric {

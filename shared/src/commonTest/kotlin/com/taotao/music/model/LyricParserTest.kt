@@ -137,6 +137,26 @@ class LyricParserTest {
     }
 
     @Test
+    fun 歌词里字面的左括号不能被丢掉() {
+        // 取自线上真实数据（id=645819 雨爱）。左括号自己也是一个带时间的逐字单元，
+        // 用「文本 + 时间组」的正则去捕获文本时，文本组必须排除 '(' 才不会吞掉时间组的
+        // 左括号，结果字面的 '(' 永远匹配不上，只剩一个孤立的右括号。
+        val lyric = LyricParser.parseYrc(
+            "[0,3320]雨(0,237)爱(237,237) (474,237)-(711,237) (948,237)杨(1185,237)丞(1422,237)" +
+                "琳(1659,237) (1896,237)((2133,237)Rainie(2370,237) (2607,237)Yang(2844,237))(3081,237)",
+        )
+        assertEquals("雨爱 - 杨丞琳 (Rainie Yang)", lyric.lines[0].text)
+        assertEquals(LyricWord(2_133, 237, "("), lyric.lines[0].words.single { it.text == "(" })
+        assertEquals(LyricWord(3_081, 237, ")"), lyric.lines[0].words.last())
+    }
+
+    @Test
+    fun 括号出现在字中间也能保留() {
+        val lyric = LyricParser.parseYrc("[0,500]a(b(0,250)c)d(250,250)")
+        assertEquals("a(bc)d", lyric.lines[0].text)
+    }
+
+    @Test
     fun 优先使用逐字歌词其次退回LRC() {
         val withYrc = LyricParser.parse("[00:01.00]来自LRC", "[0,500]来(0,250)自(250,250)")
         assertTrue(withYrc.hasWords)
@@ -186,6 +206,13 @@ class LyricParserTest {
         val lyric = LyricParser.parseYrc("[5000,1000]甲(5000,500)乙(5500,500)")
         assertEquals(0f, lyric.progressOf(0, 0))
         assertEquals(0f, lyric.progressOf(0, 5_000))
+    }
+
+    @Test
+    fun 逐字歌词的offset同时平移行与字() {
+        val lyric = LyricParser.parseYrc("[offset:-500]\n[1000,500]甲(1000,250)乙(1250,250)")
+        assertEquals(500, lyric.lines[0].timeMs)
+        assertEquals(listOf(500, 750), lyric.lines[0].words.map(LyricWord::timeMs))
     }
 
     @Test
