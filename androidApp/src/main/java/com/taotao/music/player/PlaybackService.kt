@@ -1,6 +1,5 @@
 package com.taotao.music.player
 
-import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.util.Log
@@ -11,16 +10,19 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.ResolvingDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
+import com.taotao.music.data.AuthSession
+import com.taotao.music.data.TencentMusicApi
 
 /** Media3 系统媒体服务，负责后台播放、锁屏控制和系统媒体通知。 */
 class PlaybackService : MediaSessionService() {
     private var player: ExoPlayer? = null
     private var mediaSession: MediaSession? = null
-    private lateinit var httpDataSourceFactory: DefaultHttpDataSource.Factory
+    private lateinit var authSession: AuthSession
 
     @Volatile
     private var released = false
@@ -28,10 +30,18 @@ class PlaybackService : MediaSessionService() {
     override fun onCreate() {
         super.onCreate()
         released = false
-        httpDataSourceFactory = DefaultHttpDataSource.Factory()
-        val upstreamFactory = DefaultDataSource.Factory(this, httpDataSourceFactory)
+        authSession = AuthSession(this)
+        val upstreamFactory = DefaultDataSource.Factory(this, DefaultHttpDataSource.Factory())
+        // 每次取流时现取访问令牌：长时间播放或队列续播时令牌可能已经轮换，不能沿用启动时的旧令牌。
+        val resolvingFactory = ResolvingDataSource.Factory(upstreamFactory) { dataSpec ->
+            val url = dataSpec.uri.toString()
+            if (!TencentMusicApi.isOwnEndpoint(url)) return@Factory dataSpec
+            val token = runCatching { authSession.validToken() }.getOrNull()
+            if (token.isNullOrBlank()) dataSpec
+            else dataSpec.withAdditionalHeaders(mapOf("Authorization" to "Bearer $token"))
+        }
         val createdPlayer = ExoPlayer.Builder(this)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(upstreamFactory))
+            .setMediaSourceFactory(DefaultMediaSourceFactory(resolvingFactory))
             .build()
             .apply {
                 addListener(object : Player.Listener {
@@ -55,7 +65,6 @@ class PlaybackService : MediaSessionService() {
                     intent.getStringExtra(EXTRA_URI).orEmpty(),
                     intent.getStringExtra(EXTRA_TITLE).orEmpty(),
                     intent.getStringExtra(EXTRA_ARTIST).orEmpty(),
-                    intent.getStringExtra(EXTRA_ACCESS_TOKEN),
                     intent.getIntExtra(EXTRA_START_POSITION, 0),
                     intent.getStringArrayListExtra(EXTRA_QUEUE_URI).orEmpty(),
                     intent.getStringArrayListExtra(EXTRA_QUEUE_TITLE).orEmpty(),
@@ -79,7 +88,6 @@ class PlaybackService : MediaSessionService() {
         uri: String,
         title: String,
         artist: String,
-        accessToken: String?,
         startPositionMs: Int,
         uris: List<String>,
         titles: List<String>,
@@ -89,9 +97,6 @@ class PlaybackService : MediaSessionService() {
     ) {
         if (uri.isBlank()) return
         val currentPlayer = player ?: return
-        if (!accessToken.isNullOrBlank()) {
-            httpDataSourceFactory.setDefaultRequestProperties(mapOf("Authorization" to "Bearer $accessToken"))
-        }
         val mediaItems = if (uris.isNotEmpty() && uris.size == titles.size && uris.size == artists.size) {
             uris.mapIndexed { itemIndex, itemUri ->
                 val metadata = MediaMetadata.Builder()
@@ -183,7 +188,6 @@ class PlaybackService : MediaSessionService() {
         const val EXTRA_URI = "uri"
         const val EXTRA_TITLE = "title"
         const val EXTRA_ARTIST = "artist"
-        const val EXTRA_ACCESS_TOKEN = "access_token"
         const val EXTRA_START_POSITION = "start_position_ms"
         const val EXTRA_QUEUE_URI = "queue_uri"
         const val EXTRA_QUEUE_TITLE = "queue_title"

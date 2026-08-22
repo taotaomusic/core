@@ -1,7 +1,6 @@
 package com.taotao.music.ui
 
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.ContentTransform
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
@@ -14,13 +13,13 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ExitToApp
+import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -54,7 +53,6 @@ import kotlinx.coroutines.isActive
 import androidx.lifecycle.LifecycleEventObserver
 import android.net.Uri
 import java.io.File
-import java.net.URL
 
 private val Background = Color(0xFFFFF9F7)
 private val Coral = Color(0xFFFF6B5F)
@@ -63,10 +61,10 @@ private val Coral = Color(0xFFFF6B5F)
 fun TaotaoMusicApp() {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    val audioPlayer = remember { AudioPlayer(context) }
     val authSession = remember { AuthSession(context) }
-    val musicApi = remember { TencentMusicApi { authSession.accessToken } }
-    val downloadManager = remember { OfflineDownloadManager(context) { authSession.accessToken } }
+    val audioPlayer = remember { AudioPlayer(context) }
+    val musicApi = remember { TencentMusicApi(authSession) }
+    val downloadManager = remember { OfflineDownloadManager(context, authSession) }
     val playbackStateStore = remember { PlaybackStateStore(context) }
     val searchHistoryStore = remember { SearchHistoryStore(context) }
     val scope = rememberCoroutineScope()
@@ -86,32 +84,32 @@ fun TaotaoMusicApp() {
     var downloadedSongs by remember { mutableStateOf(emptyList<Song>()) }
     var bottomTab by remember { mutableIntStateOf(0) }
     var searchHistory by remember { mutableStateOf(searchHistoryStore.read()) }
-    var accessToken by remember { mutableStateOf(authSession.accessToken) }
-    var authChecking by remember { mutableStateOf(true) }
+    var signedIn by remember { mutableStateOf(authSession.isSignedIn) }
     var restoredPlayback by remember { mutableStateOf<SavedPlaybackState?>(null) }
     var pendingResumePositionMs by remember { mutableIntStateOf(0) }
     var searchGeneration by remember { mutableIntStateOf(0) }
     val latestPlaybackSongs = rememberUpdatedState(playbackSongs)
     val latestSelectedIndex = rememberUpdatedState(selectedIndex)
 
-    LaunchedEffect(Unit) {
-        restoredPlayback = playbackStateStore.read()
-    }
-
-    LaunchedEffect(Unit) {
-        if (authSession.isSignedIn && !authSession.isAccessValid) {
-            if (authSession.refresh(musicApi)) accessToken = authSession.accessToken
+    /** 会话彻底失效（刷新令牌也被拒绝）时停止播放并回到登录页。 */
+    DisposableEffect(authSession) {
+        authSession.onSessionExpired = {
+            audioPlayer.release()
+            signedIn = false
         }
-        authChecking = false
+        onDispose { authSession.onSessionExpired = null }
     }
 
-    if (authChecking) return
-    if (accessToken.isNullOrBlank()) {
+    if (!signedIn) {
         AuthPage(musicApi) { tokens ->
             authSession.save(tokens)
-            accessToken = tokens.accessToken
+            signedIn = true
         }
         return
+    }
+
+    LaunchedEffect(Unit) {
+        restoredPlayback = playbackStateStore.read()
     }
 
     LaunchedEffect(restoredPlayback) {
@@ -145,6 +143,8 @@ fun TaotaoMusicApp() {
             var saveTick = 0
             while (isActive) {
                 isPlaying = audioPlayer.isPlaying()
+                // 播放服务在后台线程记录失败原因，这里取出后清空，避免同一条错误反复提示。
+                audioPlayer.consumePlayError()?.let { message = it }
                 if (playbackSongs.isNotEmpty()) {
                     val playerIndex = audioPlayer.currentMediaItemIndex()
                     if (playerIndex in playbackSongs.indices && playerIndex != selectedIndex) {
@@ -158,6 +158,15 @@ fun TaotaoMusicApp() {
                 }
                 kotlinx.coroutines.delay(300)
             }
+        }
+    }
+
+    /** 提示信息通过 Snackbar 展示，任意页面都能看到下载、收藏和播放的反馈。 */
+    val snackbarHostState = remember { SnackbarHostState() }
+    LaunchedEffect(message) {
+        message?.let {
+            snackbarHostState.showSnackbar(it)
+            message = null
         }
     }
 
@@ -182,24 +191,27 @@ fun TaotaoMusicApp() {
             isSearching = true
             searchError = null
             searchResults = emptyList()
-            if (generation == searchGeneration) {
-                runCatching { withContext(Dispatchers.IO) { musicApi.search(query) } }
-                    .onSuccess { searchResults = it }
-                    .onFailure { searchError = it.message ?: "搜索失败，请稍后重试" }
-                isSearching = false
-            }
+            val result = runCatching { withContext(Dispatchers.IO) { musicApi.search(query) } }
+            // 请求返回后再次校验代次：期间用户可能已经发起新搜索或退出搜索页，旧结果不应覆盖新状态。
+            if (generation != searchGeneration) return@launch
+            result
+                .onSuccess { searchResults = it }
+                .onFailure { searchError = it.message ?: "搜索失败，请稍后重试" }
+            isSearching = false
         }
     }
 
     fun playSong(queue: List<Song>, index: Int, positionMs: Int = 0) {
         val requestedSong = queue.getOrNull(index) ?: return
         scope.launch {
-            val playable = if (requestedSong.audioUri?.startsWith("file:") == true) {
-                requestedSong
-            } else if (requestedSong.remoteId != null) {
-                runCatching {
-                    withContext(Dispatchers.IO) { musicApi.resolve(requestedSong) }
-                }.getOrElse { requestedSong }
+            val isLocalFile = requestedSong.audioUri?.startsWith("file:") == true
+            val playable = if (!isLocalFile && requestedSong.remoteId != null) {
+                // 解析失败时明确提示，而不是拿着可能已过期的旧地址静默重试。
+                runCatching { withContext(Dispatchers.IO) { musicApi.resolve(requestedSong) } }
+                    .getOrElse {
+                        message = it.message ?: "无法获取播放地址，请稍后重试"
+                        return@launch
+                    }
             } else {
                 requestedSong
             }
@@ -207,6 +219,7 @@ fun TaotaoMusicApp() {
                 message = "歌曲暂时没有可用播放链接"
                 return@launch
             }
+            message = null
             val updatedQueue = queue.toMutableList().also { it[index] = playable }
             playbackSongs = updatedQueue
             selectedIndex = index
@@ -235,6 +248,7 @@ fun TaotaoMusicApp() {
         Surface(color = Background, modifier = Modifier.fillMaxSize()) {
             Scaffold(
                 containerColor = Background,
+                snackbarHost = { SnackbarHost(snackbarHostState) },
                 bottomBar = {
                     Column {
                     if (!showPlayerDetail && playbackSongs.isNotEmpty()) {
@@ -275,16 +289,28 @@ fun TaotaoMusicApp() {
                     isPlaying = isPlaying,
                     onBack = { showPlayerDetail = false },
                     onDownload = {
-                        scope.launch(Dispatchers.IO) {
+                        // 先在主线程取定目标歌曲，避免后台任务期间 selectedIndex 变化导致下错歌或越界。
+                        val target = playbackSongs.getOrNull(selectedIndex)
+                        val targetIndex = selectedIndex
+                        if (target == null) {
+                            message = "没有正在播放的歌曲"
+                        } else if (target.audioUri?.startsWith("file:") == true) {
+                            message = "这首歌已经下载过了"
+                        } else scope.launch {
+                            message = "正在下载…"
                             runCatching {
-                                val resolved = if (playbackSongs[selectedIndex].audioUri == null) musicApi.resolve(playbackSongs[selectedIndex]) else playbackSongs[selectedIndex]
-                                downloadManager.download(resolved)
+                                withContext(Dispatchers.IO) {
+                                    // 下载前重新解析，确保播放地址携带的是当前有效的访问令牌。
+                                    val resolved = if (target.remoteId != null) musicApi.resolve(target) else target
+                                    downloadManager.download(resolved)
+                                }
                             }.onSuccess { offline ->
-                                playbackSongs = playbackSongs.toMutableList().also { it[selectedIndex] = offline }
+                                if (playbackSongs.getOrNull(targetIndex)?.remoteId == offline.remoteId) {
+                                    playbackSongs = playbackSongs.toMutableList().also { it[targetIndex] = offline }
+                                }
                                 downloadedSongs = withContext(Dispatchers.IO) { downloadManager.listDownloaded() }
                                 message = "已下载，可离线播放"
-                            }
-                                .onFailure { message = it.message ?: "下载失败" }
+                            }.onFailure { message = it.message ?: "下载失败" }
                         }
                     },
                     musicApi = musicApi,
@@ -300,6 +326,7 @@ fun TaotaoMusicApp() {
                         }
                         audioPlayer.setRepeatMode(repeatMode)
                     },
+                    onMessage = { message = it },
                 )
             } else if (page == "search") {
                 SearchPage(
@@ -320,7 +347,13 @@ fun TaotaoMusicApp() {
                     },
                 )
             } else if (bottomTab == 1) {
-                MinePage(onLogout = { audioPlayer.release(); authSession.clear(); accessToken = null })
+                MinePage(onLogout = {
+                    audioPlayer.release()
+                    playbackStateStore.clear()
+                    // 撤销刷新令牌需要访问网络，放到 IO 线程；本地会话已在 signOut 内同步清空。
+                    scope.launch(Dispatchers.IO) { authSession.signOut() }
+                    signedIn = false
+                })
             } else Column(Modifier.fillMaxSize().padding(horizontal = 22.dp)) {
                 Spacer(Modifier.height(24.dp))
                 HomeHeader()
@@ -344,7 +377,6 @@ fun TaotaoMusicApp() {
                     }
                 }
                 Text("在线搜索歌曲，下载后可在无网络时播放", color = Color.Gray, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
-                message?.let { Text(it, color = Coral, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp)) }
                 SectionTitle("今日推荐")
                 RecommendationCard()
                 Spacer(Modifier.height(10.dp))
@@ -380,7 +412,7 @@ private fun MinePage(onLogout: () -> Unit) {
         }
         Spacer(Modifier.height(14.dp))
         Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(Color.White).clickable(onClick = onLogout).padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Default.ExitToApp, "退出登录", tint = Coral)
+            Icon(Icons.AutoMirrored.Filled.ExitToApp, "退出登录", tint = Coral)
             Text("退出登录", modifier = Modifier.padding(start = 12.dp))
         }
     }
@@ -439,6 +471,7 @@ private fun PlayerDetailPage(
     onNext: () -> Unit,
     repeatMode: Int,
     onToggleRepeat: () -> Unit,
+    onMessage: (String) -> Unit,
 ) {
     var positionMs by remember(song) { mutableIntStateOf(0) }
     var durationMs by remember(song) { mutableIntStateOf(0) }
@@ -468,7 +501,10 @@ private fun PlayerDetailPage(
         }.getOrNull()
     }
     LaunchedEffect(song.remoteId) {
-        favorite = runCatching { withContext(Dispatchers.IO) { musicApi.isFavorite(song) } }.getOrDefault(false)
+        // 本地歌曲没有服务端 ID，跳过收藏状态查询，避免无意义的请求。
+        favorite = song.remoteId?.let {
+            runCatching { withContext(Dispatchers.IO) { musicApi.isFavorite(song) } }.getOrDefault(false)
+        } ?: false
     }
     LaunchedEffect(lifecycleOwner) {
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
@@ -526,13 +562,15 @@ private fun PlayerDetailPage(
                 Text(song.artist, color = Color.Gray, fontSize = 15.sp, modifier = Modifier.padding(top = 7.dp))
             }
             IconButton(
-                enabled = !favoriteLoading,
+                // 收藏依赖服务端歌曲 ID，纯本地歌曲不提供该操作。
+                enabled = !favoriteLoading && song.remoteId != null,
                 onClick = {
                     favoriteLoading = true
                     detailScope.launch {
                         runCatching {
                             withContext(Dispatchers.IO) { musicApi.setFavorite(song, !favorite) }
                         }.onSuccess { favorite = !favorite }
+                            .onFailure { onMessage(it.message ?: "收藏操作失败，请稍后重试") }
                         favoriteLoading = false
                     }
                 },
@@ -563,7 +601,7 @@ private fun PlayerDetailPage(
                 Icon(if (actualPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, "播放", modifier = Modifier.size(36.dp))
             }
             IconButton(onClick = onNext) { Icon(Icons.Default.SkipNext, "下一首", modifier = Modifier.size(34.dp)) }
-            IconButton(onClick = {}) { Icon(Icons.Default.QueueMusic, "播放队列", tint = Color.Gray) }
+            IconButton(onClick = {}) { Icon(Icons.AutoMirrored.Filled.QueueMusic, "播放队列", tint = Color.Gray) }
         }
         Spacer(Modifier.height(28.dp))
         Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Color.White).clickable(onClick = onDownload).padding(16.dp), verticalAlignment = Alignment.CenterVertically) {

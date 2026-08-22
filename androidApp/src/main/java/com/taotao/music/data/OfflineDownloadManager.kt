@@ -8,7 +8,7 @@ import java.net.HttpURLConnection
 import java.util.Properties
 
 /** 将网络歌曲及其封面、歌词保存到应用私有目录，避免申请外部存储权限。 */
-class OfflineDownloadManager(context: Context, private val tokenProvider: () -> String? = { null }) {
+class OfflineDownloadManager(context: Context, private val tokenProvider: TokenProvider) {
     private val root = File(context.filesDir, "offline_music").apply { mkdirs() }
 
     fun download(song: Song): Song {
@@ -18,7 +18,9 @@ class OfflineDownloadManager(context: Context, private val tokenProvider: () -> 
             val extension = URL(it).path.substringAfterLast('.', "").lowercase().takeIf { value -> value in setOf("mp3", "m4a", "aac", "flac", "ogg", "wav") } ?: "mp3"
             download(it.replaceFirst("http://", "https://"), File(dir, "audio.$extension"))
         }
-        val cover = song.coverUri?.takeIf { it.startsWith("http") }?.let { download(it, File(dir, "cover")) }
+        // 音频是离线播放的必要条件，失败直接抛出；封面和歌词属于附加内容，失败不影响下载结果。
+        val cover = song.coverUri?.takeIf { it.startsWith("http") }
+            ?.let { runCatching { download(it, File(dir, "cover")) }.getOrNull() }
         val lyric = song.lyricUri
             ?.takeIf { it.startsWith("http") }
             ?.let { runCatching { download(it, File(dir, "lyric.txt")) }.getOrNull() }
@@ -31,8 +33,15 @@ class OfflineDownloadManager(context: Context, private val tokenProvider: () -> 
             setProperty("album", song.album)
             setProperty("subtitle", song.subtitle)
             setProperty("releaseTime", song.releaseTime)
-        }.store(File(dir, "song.properties").outputStream(), "歌曲信息")
-        return song.copy(audioUri = audio?.toURI()?.toString() ?: song.audioUri, coverUri = cover?.toURI()?.toString(), lyricUri = lyric?.toURI()?.toString())
+        }.also { properties ->
+            File(dir, "song.properties").outputStream().use { properties.store(it, "歌曲信息") }
+        }
+        return song.copy(
+            audioUri = audio?.toURI()?.toString() ?: song.audioUri,
+            // 封面或歌词下载失败时保留原地址，避免离线歌曲反而丢掉在线资源。
+            coverUri = cover?.toURI()?.toString() ?: song.coverUri,
+            lyricUri = lyric?.toURI()?.toString() ?: song.lyricUri,
+        )
     }
 
     fun listDownloaded(): List<Song> = root.listFiles()
@@ -63,21 +72,44 @@ class OfflineDownloadManager(context: Context, private val tokenProvider: () -> 
         }
         .orEmpty()
 
+    /**
+     * 下载单个文件。自家地址附带访问令牌，令牌被拒绝时续期后重试一次，
+     * 避免下载中途因为访问令牌过期而失败。
+     */
     private fun download(url: String, target: File): File {
         if (target.exists() && target.length() > 0L) return target
-        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
+        val ownEndpoint = TencentMusicApi.isOwnEndpoint(url)
+        var token = if (ownEndpoint) tokenProvider.validToken() ?: throw SessionExpiredException() else null
+        repeat(MAX_ATTEMPTS) { attempt ->
+            val connection = open(url, token)
+            val code = connection.responseCode
+            if (code == HttpURLConnection.HTTP_UNAUTHORIZED && ownEndpoint && attempt < MAX_ATTEMPTS - 1) {
+                runCatching { connection.errorStream?.close() }
+                token = tokenProvider.renewToken(token) ?: throw SessionExpiredException()
+                return@repeat
+            }
+            check(code in 200..299) { "下载失败：HTTP $code" }
+            val temp = File(target.parentFile, "${target.name}.part")
+            try {
+                connection.inputStream.use { input -> temp.outputStream().use { input.copyTo(it) } }
+                check(temp.length() > 0L) { "下载内容为空" }
+                check(temp.renameTo(target)) { "无法保存下载文件" }
+            } catch (error: Throwable) {
+                temp.delete()
+                throw error
+            }
+            return target
+        }
+        throw SessionExpiredException()
+    }
+
+    private fun open(url: String, token: String?): HttpURLConnection =
+        (URL(url).openConnection() as HttpURLConnection).apply {
             connectTimeout = 20_000
             readTimeout = 60_000
             requestMethod = "GET"
-            if (URL(url).host == "music.xydaigua.cn") {
-                tokenProvider()?.takeIf { it.isNotBlank() }?.let { setRequestProperty("Authorization", "Bearer $it") }
-            }
+            token?.takeIf { it.isNotBlank() }?.let { setRequestProperty("Authorization", "Bearer $it") }
         }
-        check(connection.responseCode in 200..299) { "下载失败：HTTP ${connection.responseCode}" }
-        val temp = File(target.parentFile, "${target.name}.part")
-        connection.inputStream.use { input -> temp.outputStream().use { input.copyTo(it) } }
-        check(temp.length() > 0L) { "下载内容为空" }
-        check(temp.renameTo(target)) { "无法保存下载文件" }
-        return target
-    }
+
+    private companion object { const val MAX_ATTEMPTS = 2 }
 }

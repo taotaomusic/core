@@ -7,7 +7,10 @@ import com.taotao.music.model.Song
 import android.net.Uri
 import java.io.File
 
-/** Android 音频播放封装，页面只通过 play/pause/stop 使用它。 */
+/**
+ * Android 音频播放封装，页面只通过 play/pause/stop 使用它。
+ * 播放请求的鉴权由 [com.taotao.music.player.PlaybackService] 在取流时自行处理。
+ */
 class AudioPlayer(context: Context) {
     private val appContext = context.applicationContext
     private var playing = false
@@ -32,7 +35,6 @@ class AudioPlayer(context: Context) {
                     putExtra(PlaybackService.EXTRA_URI, uri)
                     putExtra(PlaybackService.EXTRA_TITLE, song.title)
                     putExtra(PlaybackService.EXTRA_ARTIST, song.artist)
-                    putExtra(PlaybackService.EXTRA_ACCESS_TOKEN, tokenProvider())
                     putExtra(PlaybackService.EXTRA_START_POSITION, startPositionMs.coerceAtLeast(0))
                     putStringArrayListExtra(
                         PlaybackService.EXTRA_QUEUE_URI,
@@ -86,10 +88,12 @@ class AudioPlayer(context: Context) {
     fun setRepeatMode(mode: Int) { PlaybackService.instance?.setRepeatMode(mode) }
     fun isPrepared(): Boolean = PlaybackService.instance?.isPrepared() == true
     fun seekTo(positionMs: Int) { PlaybackService.instance?.seekTo(positionMs) }
+
+    /** 取出并清空播放服务记录的失败原因，供界面提示一次。 */
+    fun consumePlayError(): String? = PlaybackService.playError?.also { PlaybackService.playError = null }
+
     fun release() {
         appContext.stopService(Intent(appContext, PlaybackService::class.java))
         playing = false
     }
-
-    private fun tokenProvider(): String? = appContext.getSharedPreferences("auth", Context.MODE_PRIVATE).getString("access_token", null)
 }

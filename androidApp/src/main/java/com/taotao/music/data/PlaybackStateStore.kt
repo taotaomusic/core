@@ -25,16 +25,22 @@ class PlaybackStateStore(context: Context) {
             data.getString("artist"),
             data.getString("duration"),
             data.getLong("color"),
-            data.optString("audioUri").takeIf { it != "null" },
+            data.optText("audioUri"),
             remoteId = data.optLong("remoteId").takeIf { it > 0 },
-            coverUri = data.optString("coverUri").takeIf { it != "null" },
-            lyricUri = data.optString("lyricUri").takeIf { it != "null" },
+            coverUri = data.optText("coverUri"),
+            lyricUri = data.optText("lyricUri"),
             album = data.optString("album"),
             subtitle = data.optString("subtitle"),
             releaseTime = data.optString("releaseTime"),
         )
         SavedPlaybackState(song, data.optInt("positionMs").coerceAtLeast(0))
     }.getOrNull()
+
+    fun clear() { preferences.edit().remove("song").apply() }
+
+    /** 可空字段统一处理：JSONObject 存入 null 会写成 JSONObject.NULL，取出来是字符串 "null"。 */
+    private fun JSONObject.optText(name: String): String? =
+        optString(name).takeIf { it.isNotBlank() && it != "null" }
 }
 
 data class SavedPlaybackState(
