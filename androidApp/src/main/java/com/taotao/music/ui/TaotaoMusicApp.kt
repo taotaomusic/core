@@ -341,8 +341,15 @@ fun TaotaoMusicApp() {
                         }
                     }
                     NavigationBar {
-                        NavigationBarItem(bottomTab == 0, { bottomTab = 0 }, icon = { Icon(Icons.Default.MusicNote, "音乐") }, label = { Text("音乐") })
-                        NavigationBarItem(bottomTab == 1, { bottomTab = 1 }, icon = { Icon(Icons.Default.Person, "我的") }, label = { Text("我的") })
+                        // 切换底部标签时要收起详情页和搜索页，否则 AnimatedContent 仍停在
+                        // "detail" 分支，用户点了「我的」却还留在播放详情里。
+                        val switchTab = { target: Int ->
+                            bottomTab = target
+                            showPlayerDetail = false
+                            showSearchPage = false
+                        }
+                        NavigationBarItem(bottomTab == 0, { switchTab(0) }, icon = { Icon(Icons.Default.MusicNote, "音乐") }, label = { Text("音乐") })
+                        NavigationBarItem(bottomTab == 1, { switchTab(1) }, icon = { Icon(Icons.Default.Person, "我的") }, label = { Text("我的") })
                     }
                     }
                 },
@@ -635,14 +642,25 @@ private fun PlayerDetailPage(
     }
     // key 必须包含 song：positionMs / dragging 是 remember(song)，切歌后会换成新的 state 对象，
     // 若 ticker 不跟着重启，就会一直往已被丢弃的旧对象里写进度，界面上停在 0:00。
+    //
+    // 播放中按帧取进度而不是每 500 毫秒轮询一次：逐字高亮对延迟很敏感，
+    // 500 毫秒的采样周期平均会慢上 250 毫秒，肉眼能明显看出歌词跟不上。
+    // MediaController 的 currentPosition 是本地推算的，不走跨进程调用，逐帧读取代价很低。
     LaunchedEffect(song, lifecycleOwner) {
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
             while (isActive) {
+                if (audioPlayer.isPlaying) {
+                    withFrameMillis { }
+                } else {
+                    // 暂停时没有推进，降频到 300 毫秒，只为跟上外部（通知栏、耳机键）的跳转。
+                    kotlinx.coroutines.delay(300)
+                }
                 if (!dragging) positionMs = audioPlayer.currentPositionMs()
-                kotlinx.coroutines.delay(500)
             }
         }
     }
+    // 时间文字只需要秒级精度。用派生状态挡住逐帧变化，避免每帧重新格式化字符串。
+    val positionSeconds by remember { derivedStateOf { positionMs / 1000 } }
     LaunchedEffect(song, isPlaying, lifecycleOwner) {
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
             if (!isPlaying) return@repeatOnLifecycle
@@ -656,59 +674,69 @@ private fun PlayerDetailPage(
             }
         }
     }
-    // 详情页与歌词页做成左右两页：滑动切换，与 QQ 音乐的交互一致。
+    // 详情页与歌词页做成左右两页，但只有中间区域参与滑动：
+    // 顶栏、歌名、进度条和播放控制留在外层，切到歌词页时仍然可见可操作。
     val pagerState = rememberPagerState(pageCount = { 2 })
     // 在歌词页按返回先回到封面页，而不是直接关掉整个详情页。
     // 这个 BackHandler 比 TaotaoMusicApp 里那个更深，启用时优先生效。
     BackHandler(enabled = pagerState.currentPage > 0) {
         detailScope.launch { pagerState.animateScrollToPage(0) }
     }
-    Box(Modifier.fillMaxSize()) {
-        HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
-        if (page == 1) {
-            LyricPane(
-                lyric = lyric,
-                positionMs = positionMs,
-                title = song.title,
-                artist = song.artist,
-                onSeek = { target ->
-                    positionMs = target
-                    audioPlayer.seekTo(target)
-                },
-            )
-            return@HorizontalPager
-        }
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 22.dp),
-        ) {
+    Column(Modifier.fillMaxSize().padding(horizontal = 22.dp)) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(top = 18.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             IconButton(onClick = onBack) { Icon(Icons.Default.KeyboardArrowDown, "收起") }
-            Text("正在播放", modifier = Modifier.weight(1f), fontWeight = FontWeight.Bold, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+            Text(
+                if (pagerState.currentPage == 1) "歌词" else "正在播放",
+                modifier = Modifier.weight(1f),
+                fontWeight = FontWeight.Bold,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            )
             IconButton(onClick = {}) { Icon(Icons.Default.MoreVert, "更多") }
         }
-        Spacer(Modifier.height(38.dp))
-        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-            if (!song.coverUri.isNullOrBlank()) AsyncImage(
-                model = song.coverUri,
-                contentDescription = "专辑封面",
-                modifier = Modifier
-                    .size(292.dp)
-                    .graphicsLayer { rotationZ = coverRotation.value }
-                    .clip(CircleShape),
-            )
-            else AlbumArt(Color(song.color), 292.dp, 132.sp)
+        HorizontalPager(
+            state = pagerState,
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+        ) { page ->
+            if (page == 1) {
+                LyricPane(
+                    lyric = lyric,
+                    positionMs = positionMs,
+                    onSeek = { target ->
+                        positionMs = target
+                        audioPlayer.seekTo(target)
+                    },
+                )
+            } else {
+                // 封面按可用空间取尺寸，固定 292dp 在小屏上会把下方控制区挤出屏幕。
+                BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    val coverSize = minOf(maxWidth, maxHeight) * 0.86f
+                    if (!song.coverUri.isNullOrBlank()) {
+                        AsyncImage(
+                            model = song.coverUri,
+                            contentDescription = "专辑封面",
+                            modifier = Modifier
+                                .size(coverSize)
+                                .graphicsLayer { rotationZ = coverRotation.value }
+                                .clip(CircleShape),
+                        )
+                    } else {
+                        AlbumArt(Color(song.color), coverSize, 132.sp)
+                    }
+                }
+            }
         }
-        Spacer(Modifier.height(34.dp))
+        PagerDots(
+            current = pagerState.currentPage,
+            total = 2,
+            modifier = Modifier.align(Alignment.CenterHorizontally).padding(vertical = 12.dp),
+        )
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text(song.title, fontSize = 25.sp, fontWeight = FontWeight.Bold)
-                Text(song.artist, color = Color.Gray, fontSize = 15.sp, modifier = Modifier.padding(top = 7.dp))
+                Text(song.title, fontSize = 22.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                Text(song.artist, color = Color.Gray, fontSize = 14.sp, maxLines = 1, modifier = Modifier.padding(top = 5.dp))
             }
             IconButton(
                 // 收藏依赖服务端歌曲 ID，纯本地歌曲不提供该操作。
@@ -725,18 +753,18 @@ private fun PlayerDetailPage(
                 },
             ) { Icon(if (favorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder, "收藏", tint = TaotaoCoral) }
         }
-        Spacer(Modifier.height(28.dp))
+        Spacer(Modifier.height(12.dp))
         val progress = if (durationMs > 0) positionMs.toFloat() / durationMs else 0f
         Slider(value = progress.coerceIn(0f, 1f), onValueChange = { dragging = true; positionMs = (it * durationMs).toInt() }, onValueChangeFinished = { dragging = false; audioPlayer.seekTo(positionMs) }, colors = SliderDefaults.colors(thumbColor = TaotaoCoral, activeTrackColor = TaotaoCoral))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(formatTime(positionMs), color = Color.Gray, fontSize = 12.sp)
+            Text(formatTime(positionSeconds * 1000), color = Color.Gray, fontSize = 12.sp)
             Text(
                 formatTime(durationMs).takeIf { durationMs > 0 } ?: "--:--",
                 color = Color.Gray,
                 fontSize = 12.sp,
             )
         }
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(14.dp))
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceEvenly) {
             IconButton(onClick = onToggleRepeat) {
                 Icon(
@@ -746,29 +774,21 @@ private fun PlayerDetailPage(
                 )
             }
             IconButton(onClick = onPrevious) { Icon(Icons.Default.SkipPrevious, "上一首", modifier = Modifier.size(34.dp)) }
-            FilledIconButton(onClick = onTogglePlaying, modifier = Modifier.size(68.dp), colors = IconButtonDefaults.filledIconButtonColors(containerColor = TaotaoCoral)) {
-                Icon(if (actualPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, "播放", modifier = Modifier.size(36.dp))
+            FilledIconButton(onClick = onTogglePlaying, modifier = Modifier.size(64.dp), colors = IconButtonDefaults.filledIconButtonColors(containerColor = TaotaoCoral)) {
+                Icon(if (actualPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, "播放", modifier = Modifier.size(34.dp))
             }
             IconButton(onClick = onNext) { Icon(Icons.Default.SkipNext, "下一首", modifier = Modifier.size(34.dp)) }
             IconButton(onClick = { showQueue = true }) {
                 Icon(Icons.AutoMirrored.Filled.QueueMusic, "播放队列", tint = if (queue.isEmpty()) Color.Gray else TaotaoCoral)
             }
         }
-        Spacer(Modifier.height(28.dp))
-        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Color.White).clickable(onClick = onDownload).padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+        Spacer(Modifier.height(10.dp))
+        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Color.White).clickable(onClick = onDownload).padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Default.MusicNote, null, tint = TaotaoCoral)
             Text("下载歌曲、封面和歌词", modifier = Modifier.weight(1f).padding(start = 12.dp), fontWeight = FontWeight.Medium)
             Icon(Icons.Default.Download, "下载", tint = Color.Gray)
         }
-        Spacer(Modifier.height(24.dp))
-        }
-        }
-        // 两点指示器：让「可以左右滑动」这件事可见，否则歌词页很难被发现。
-        PagerDots(
-            current = pagerState.currentPage,
-            total = 2,
-            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp),
-        )
+        Spacer(Modifier.height(16.dp))
     }
     if (showQueue) {
         PlaybackQueueSheet(
