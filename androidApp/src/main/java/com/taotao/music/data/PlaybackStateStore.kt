@@ -2,48 +2,55 @@ package com.taotao.music.data
 
 import android.content.Context
 import com.taotao.music.model.Song
-import org.json.JSONObject
 
-/** 保存最近播放歌曲及其进度，应用重新打开时恢复页面状态。 */
+/** 保存最近的播放队列及进度，应用重新打开时恢复整条队列而不只是当前一首。 */
 class PlaybackStateStore(context: Context) {
     private val preferences = context.getSharedPreferences("playback_state", Context.MODE_PRIVATE)
 
-    fun save(song: Song, positionMs: Int) {
-        val data = JSONObject().apply {
-            put("title", song.title); put("artist", song.artist); put("duration", song.duration)
-            put("color", song.color); put("audioUri", song.audioUri); put("remoteId", song.remoteId)
-            put("coverUri", song.coverUri); put("lyricUri", song.lyricUri); put("album", song.album)
-            put("subtitle", song.subtitle); put("releaseTime", song.releaseTime); put("positionMs", positionMs)
-        }
-        preferences.edit().putString("song", data.toString()).apply()
+    fun save(queue: List<Song>, index: Int, positionMs: Int) {
+        if (queue.isEmpty()) return
+        preferences.edit()
+            .putString(KEY_QUEUE, SongCodec.encodeList(queue))
+            .putInt(KEY_INDEX, index.coerceIn(queue.indices))
+            .putInt(KEY_POSITION, positionMs.coerceAtLeast(0))
+            .remove(KEY_LEGACY_SONG)
+            .apply()
     }
 
-    fun read(): SavedPlaybackState? = runCatching {
-        val data = JSONObject(preferences.getString("song", null) ?: return null)
-        val song = Song(
-            data.getString("title"),
-            data.getString("artist"),
-            data.getString("duration"),
-            data.getLong("color"),
-            data.optText("audioUri"),
-            remoteId = data.optLong("remoteId").takeIf { it > 0 },
-            coverUri = data.optText("coverUri"),
-            lyricUri = data.optText("lyricUri"),
-            album = data.optString("album"),
-            subtitle = data.optString("subtitle"),
-            releaseTime = data.optString("releaseTime"),
-        )
-        SavedPlaybackState(song, data.optInt("positionMs").coerceAtLeast(0))
-    }.getOrNull()
+    fun read(): SavedPlaybackState? {
+        val queue = SongCodec.decodeList(preferences.getString(KEY_QUEUE, null))
+        if (queue.isNotEmpty()) {
+            return SavedPlaybackState(
+                queue = queue,
+                index = preferences.getInt(KEY_INDEX, 0).coerceIn(queue.indices),
+                positionMs = preferences.getInt(KEY_POSITION, 0).coerceAtLeast(0),
+            )
+        }
+        // 兼容旧版本只存单曲的格式，读到后按单曲队列恢复。
+        val legacy = SongCodec.decode(preferences.getString(KEY_LEGACY_SONG, null)) ?: return null
+        val legacyPosition = runCatching {
+            org.json.JSONObject(preferences.getString(KEY_LEGACY_SONG, null)!!).optInt("positionMs")
+        }.getOrDefault(0)
+        return SavedPlaybackState(listOf(legacy), 0, legacyPosition.coerceAtLeast(0))
+    }
 
-    fun clear() { preferences.edit().remove("song").apply() }
+    fun clear() {
+        preferences.edit().remove(KEY_QUEUE).remove(KEY_INDEX).remove(KEY_POSITION).remove(KEY_LEGACY_SONG).apply()
+    }
 
-    /** 可空字段统一处理：JSONObject 存入 null 会写成 JSONObject.NULL，取出来是字符串 "null"。 */
-    private fun JSONObject.optText(name: String): String? =
-        optString(name).takeIf { it.isNotBlank() && it != "null" }
+    private companion object {
+        const val KEY_QUEUE = "queue"
+        const val KEY_INDEX = "queue_index"
+        const val KEY_POSITION = "position_ms"
+        const val KEY_LEGACY_SONG = "song"
+    }
 }
 
 data class SavedPlaybackState(
-    val song: Song,
+    val queue: List<Song>,
+    val index: Int,
     val positionMs: Int,
-)
+) {
+    /** 当前曲目，便于界面直接取用。 */
+    val song: Song get() = queue[index.coerceIn(queue.indices)]
+}

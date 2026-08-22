@@ -1,19 +1,123 @@
 package com.taotao.music.player
 
+import android.content.ComponentName
 import android.content.Context
-import android.content.Intent
-import androidx.core.content.ContextCompat
-import com.taotao.music.model.Song
 import android.net.Uri
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
+import androidx.media3.common.MimeTypes
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
+import androidx.media3.session.MediaController
+import androidx.media3.session.SessionToken
+import com.google.common.util.concurrent.ListenableFuture
+import com.taotao.music.data.SongCodec
+import com.taotao.music.model.Song
 import java.io.File
 
 /**
- * Android 音频播放封装，页面只通过 play/pause/stop 使用它。
- * 播放请求的鉴权由 [com.taotao.music.player.PlaybackService] 在取流时自行处理。
+ * Android 音频播放封装，页面只通过 play/pause/resume 使用它。
+ *
+ * 通过 Media3 的 [MediaController] 连接 [PlaybackService]，而不是用 Intent 驱动服务：
+ * MediaSessionService 只识别媒体按键和通知自定义动作，自定义 action 会被静默忽略，
+ * 于是 startForegroundService 之后没有代码调用 startForeground，系统在超时后杀掉进程；
+ * 而暂停或队列播完（STATE_ENDED）时 Media3 会主动 stopForeground，此后再次
+ * startForegroundService 在后台还会被系统拒绝。MediaController 走 bindService，
+ * 既能安全连接，也让 Media3 自行管理前台通知的生命周期。
+ *
+ * 播放状态由 [Player.Listener] 事件驱动并暴露为 Compose 状态，界面无需轮询播放器。
+ * 播放请求的鉴权由 [PlaybackService] 在取流时自行处理。
  */
 class AudioPlayer(context: Context) {
     private val appContext = context.applicationContext
-    private var playing = false
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var controllerFuture: ListenableFuture<MediaController>? = null
+    private var controller: MediaController? = null
+
+    /** 连接完成前收到的播放请求，连接成功后立即补发。 */
+    private var pendingCommand: ((MediaController) -> Unit)? = null
+
+    /** 最近一次在主线程读到的播放进度，供非主线程调用时回退使用。 */
+    private var lastKnownPositionMs = 0
+
+    /** 正在播放。 */
+    var isPlaying by mutableStateOf(false)
+        private set
+
+    /** 播放器已装载队列且未处于空闲态，可以直接续播而不必重新取流。 */
+    var hasMedia by mutableStateOf(false)
+        private set
+
+    /** 播放器当前所在的队列下标，用于让界面跟随上一首/下一首。 */
+    var currentIndex by mutableIntStateOf(0)
+        private set
+
+    /** 当前曲目总时长，未知时为 0。 */
+    var durationMs by mutableIntStateOf(0)
+        private set
+
+    /**
+     * 播放器里的完整队列。
+     * 界面被销毁重建（而播放服务仍在后台播放）时，队列从这里恢复，
+     * 不依赖磁盘缓存，因此不会出现「还在播但列表只剩一首」。
+     */
+    var queue by mutableStateOf(emptyList<Song>())
+        private set
+
+    /** 播放失败原因，界面提示一次后调用 [consumePlayError] 清空。 */
+    var playError by mutableStateOf<String?>(null)
+        private set
+
+    private val listener = object : Player.Listener {
+        override fun onEvents(player: Player, events: Player.Events) {
+            syncFrom(player)
+        }
+
+        override fun onPlayerError(error: PlaybackException) {
+            playError = error.message ?: "播放失败"
+        }
+    }
+
+    /** 建立与播放服务的连接，应在界面进入时调用一次。 */
+    fun connect() {
+        if (!isMainThread()) {
+            mainHandler.post(::connect)
+            return
+        }
+        if (controllerFuture != null) return
+        val token = SessionToken(appContext, ComponentName(appContext, PlaybackService::class.java))
+        val future = MediaController.Builder(appContext, token)
+            // 显式绑定主线程，之后所有 controller 调用都必须来自主线程。
+            .setApplicationLooper(Looper.getMainLooper())
+            .buildAsync()
+        controllerFuture = future
+        future.addListener(
+            {
+                val connected = runCatching { future.get() }.getOrNull()
+                if (connected == null) {
+                    playError = "无法连接播放服务"
+                    return@addListener
+                }
+                controller = connected
+                connected.addListener(listener)
+                syncFrom(connected)
+                pendingCommand?.let { command ->
+                    pendingCommand = null
+                    runCatching { command(connected) }
+                        .onFailure { playError = it.message ?: "播放失败" }
+                }
+            },
+            // MediaController 只能在创建它的线程上使用，这里固定回到主线程。
+            mainHandler::post,
+        )
+    }
 
     fun play(
         song: Song,
@@ -22,78 +126,182 @@ class AudioPlayer(context: Context) {
         startPositionMs: Int = 0,
     ) {
         val uri = song.audioUri ?: return
-        if (uri.startsWith("file:")) {
-            val localFile = Uri.parse(uri).path?.let(::File)
-            if (localFile?.isFile != true || localFile.length() < 4_096L) return
-        }
+        if (uri.startsWith("file:") && !isPlayableFile(uri)) return
         val queueHasAllAudio = queue.isNotEmpty() && queue.all { !it.audioUri.isNullOrBlank() }
-        runCatching {
-            ContextCompat.startForegroundService(
-                appContext,
-                Intent(appContext, PlaybackService::class.java).apply {
-                    action = PlaybackService.ACTION_PLAY
-                    putExtra(PlaybackService.EXTRA_URI, uri)
-                    putExtra(PlaybackService.EXTRA_TITLE, song.title)
-                    putExtra(PlaybackService.EXTRA_ARTIST, song.artist)
-                    putExtra(PlaybackService.EXTRA_START_POSITION, startPositionMs.coerceAtLeast(0))
-                    putStringArrayListExtra(
-                        PlaybackService.EXTRA_QUEUE_URI,
-                        ArrayList(if (queueHasAllAudio) queue.mapNotNull { it.audioUri } else emptyList()),
-                    )
-                    putStringArrayListExtra(
-                        PlaybackService.EXTRA_QUEUE_TITLE,
-                        ArrayList(if (queueHasAllAudio) queue.map { it.title } else emptyList()),
-                    )
-                    putStringArrayListExtra(
-                        PlaybackService.EXTRA_QUEUE_ARTIST,
-                        ArrayList(if (queueHasAllAudio) queue.map { it.artist } else emptyList()),
-                    )
-                    putStringArrayListExtra(
-                        PlaybackService.EXTRA_QUEUE_COVER,
-                        ArrayList(if (queueHasAllAudio) queue.map { it.coverUri ?: "" } else emptyList()),
-                    )
-                    putExtra(PlaybackService.EXTRA_QUEUE_INDEX, if (queueHasAllAudio) index else 0)
-                },
+        val songs = if (queueHasAllAudio) queue else listOf(song)
+        val startIndex = if (queueHasAllAudio) index else 0
+        val mediaItems = songs.map(::mediaItemOf)
+        submit { activeController ->
+            activeController.setMediaItems(
+                mediaItems,
+                startIndex.coerceIn(mediaItems.indices),
+                startPositionMs.coerceAtLeast(0).toLong(),
             )
-            playing = true
-        }.onFailure {
-            playing = false
-            PlaybackService.playError = it.message ?: "无法启动播放服务"
+            activeController.prepare()
+            activeController.play()
+            playError = null
         }
     }
 
-    fun pause() {
-        if (PlaybackService.instance?.isPrepared() == true) {
-            runCatching {
-                appContext.startService(Intent(appContext, PlaybackService::class.java).setAction(PlaybackService.ACTION_PAUSE))
-            }
-            playing = false
+    fun pause() = submit { it.pause() }
+
+    /**
+     * 冷启动恢复：把队列装载进播放器并定位到上次的进度，但**不开始播放**。
+     *
+     * 装载后播放器进入 READY，界面立刻拿到时长和进度，点播放走 [resume] 即刻续播，
+     * 不必重新解析播放地址（网络歌曲的鉴权由 PlaybackService 在取流时现取令牌）。
+     *
+     * `mediaItemCount` 的判断放在指令体内部，即在 controller 连接完成后才求值：
+     * 播放服务仍在后台播放时会跳过装载，不会把正在播的队列覆盖掉。
+     */
+    fun prepareQueueIfIdle(songs: List<Song>, index: Int, positionMs: Int) {
+        if (songs.isEmpty()) return
+        val mediaItems = songs.map(::mediaItemOf)
+        submit { activeController ->
+            if (activeController.mediaItemCount > 0) return@submit
+            activeController.setMediaItems(
+                mediaItems,
+                index.coerceIn(mediaItems.indices),
+                positionMs.coerceAtLeast(0).toLong(),
+            )
+            activeController.prepare()
         }
     }
 
-    fun resume() {
-        if (PlaybackService.instance?.isPrepared() == true) {
-            runCatching {
-                appContext.startService(Intent(appContext, PlaybackService::class.java).setAction(PlaybackService.ACTION_RESUME))
-            }
-            playing = true
-        }
+    /** 播放完成后从头重播当前歌曲，避免必须重新点击列表项。 */
+    fun resume() = submit { activeController ->
+        if (activeController.playbackState == Player.STATE_ENDED) activeController.seekTo(0L)
+        activeController.play()
     }
-    fun isPlaying(): Boolean = PlaybackService.instance?.let { it.isPlaying() || (playing && !it.isEnded()) } ?: playing
-    fun currentPositionMs(): Int = PlaybackService.instance?.positionMs() ?: 0
-    fun durationMs(): Int = PlaybackService.instance?.durationMs() ?: 0
-    fun currentMediaItemIndex(): Int = PlaybackService.instance?.currentMediaItemIndex() ?: 0
-    fun next() { PlaybackService.instance?.next() }
-    fun previous() { PlaybackService.instance?.previous() }
-    fun setRepeatMode(mode: Int) { PlaybackService.instance?.setRepeatMode(mode) }
-    fun isPrepared(): Boolean = PlaybackService.instance?.isPrepared() == true
-    fun seekTo(positionMs: Int) { PlaybackService.instance?.seekTo(positionMs) }
 
-    /** 取出并清空播放服务记录的失败原因，供界面提示一次。 */
-    fun consumePlayError(): String? = PlaybackService.playError?.also { PlaybackService.playError = null }
+    fun next() = submit { it.seekToNextMediaItem() }
+    fun previous() = submit { it.seekToPreviousMediaItem() }
+    fun setRepeatMode(mode: Int) = submit { it.repeatMode = mode }
 
+    /** 从播放队列里直接跳到某一首，供播放队列面板使用。 */
+    fun playAt(index: Int) = submit { activeController ->
+        if (index !in 0 until activeController.mediaItemCount) return@submit
+        activeController.seekToDefaultPosition(index)
+        activeController.play()
+    }
+
+    fun seekTo(positionMs: Int) = submit { activeController ->
+        val duration = activeController.duration.takeIf { it > 0L } ?: return@submit
+        activeController.seekTo(positionMs.toLong().coerceIn(0L, duration))
+    }
+
+    /**
+     * 当前播放进度。MediaController 有线程亲和，只能在主线程访问，
+     * 非主线程调用时返回最近一次已知进度而不是抛异常，避免调用方写错线程直接崩溃。
+     */
+    fun currentPositionMs(): Int {
+        if (!isMainThread()) return lastKnownPositionMs
+        lastKnownPositionMs = controller?.currentPosition?.coerceAtLeast(0L)?.toInt() ?: lastKnownPositionMs
+        return lastKnownPositionMs
+    }
+
+    /** 取出并清空失败原因，供界面提示一次。 */
+    fun consumePlayError(): String? = playError?.also { playError = null }
+
+    /** 停止播放并清空队列，用于退出登录或会话失效。 */
+    fun stop() = submit { activeController ->
+        activeController.stop()
+        activeController.clearMediaItems()
+    }
+
+    /** 断开与播放服务的连接，界面销毁时调用；播放中的服务会继续在后台运行。 */
     fun release() {
-        appContext.stopService(Intent(appContext, PlaybackService::class.java))
-        playing = false
+        if (!isMainThread()) {
+            mainHandler.post(::release)
+            return
+        }
+        controller?.removeListener(listener)
+        controller = null
+        pendingCommand = null
+        controllerFuture?.let(MediaController::releaseFuture)
+        controllerFuture = null
+        isPlaying = false
+        hasMedia = false
+        durationMs = 0
+    }
+
+    /**
+     * 下发一条播放指令：连接尚未完成时先记下最后一条，连接成功后补发。
+     * 只保留最后一条，因为用户连续点击时只有最新的意图有意义。
+     * 非主线程调用会被转到主线程，MediaController 不允许跨线程访问。
+     */
+    private fun submit(command: (MediaController) -> Unit) {
+        if (!isMainThread()) {
+            mainHandler.post { submit(command) }
+            return
+        }
+        val activeController = controller
+        if (activeController == null || !activeController.isConnected) {
+            pendingCommand = command
+            connect()
+            return
+        }
+        runCatching { command(activeController) }
+            .onFailure { playError = it.message ?: "播放操作失败" }
+    }
+
+    private fun isMainThread(): Boolean = Looper.myLooper() == Looper.getMainLooper()
+
+    private companion object {
+        /** MediaMetadata extras 中存放整首歌 JSON 的键。 */
+        const val EXTRA_SONG = "com.taotao.music.SONG"
+    }
+
+    private fun syncFrom(player: Player) {
+        isPlaying = player.isPlaying
+        hasMedia = player.mediaItemCount > 0 && player.playbackState != Player.STATE_IDLE
+        currentIndex = player.currentMediaItemIndex
+        durationMs = player.duration.takeIf { it > 0L }?.toInt() ?: 0
+        queue = readQueue(player)
+    }
+
+    /** 从播放器时间线还原队列：每个 MediaItem 的 extras 里带着完整的 Song。 */
+    private fun readQueue(player: Player): List<Song> {
+        val count = player.mediaItemCount
+        if (count == 0) return emptyList()
+        val restored = (0 until count).mapNotNull { index ->
+            val extras = player.getMediaItemAt(index).mediaMetadata.extras
+            SongCodec.decode(extras?.getString(EXTRA_SONG))
+        }
+        // 解码不完整说明队列不是本应用写入的，保留原队列避免界面被清空。
+        return if (restored.size == count) restored else queue
+    }
+
+    private fun mediaItemOf(song: Song): MediaItem {
+        val metadata = MediaMetadata.Builder()
+            .setTitle(song.title)
+            .setArtist(song.artist)
+            .setAlbumTitle(song.album.takeIf { it.isNotBlank() })
+            .setArtworkUri(song.coverUri?.takeIf { it.isNotBlank() }?.let(Uri::parse))
+            // 队列需要能从播放器反查，把整首歌的字段一起带上。
+            .setExtras(Bundle().apply { putString(EXTRA_SONG, SongCodec.encode(song)) })
+            .build()
+        return MediaItem.Builder()
+            .setUri(song.audioUri)
+            .setMediaId(song.remoteId?.toString() ?: song.audioUri.orEmpty())
+            .setMimeType(mimeTypeOf(song.audioUri.orEmpty()))
+            .setMediaMetadata(metadata)
+            .build()
+    }
+
+    /** 离线文件可能下载中断，过小的文件直接跳过，避免播放器反复报错。 */
+    private fun isPlayableFile(uri: String): Boolean {
+        val localFile = Uri.parse(uri).path?.let(::File)
+        return localFile?.isFile == true && localFile.length() >= 4_096L
+    }
+
+    private fun mimeTypeOf(uri: String): String? = when (uri.substringBefore('?').substringAfterLast('.').lowercase()) {
+        "mp3" -> MimeTypes.AUDIO_MPEG
+        "m4a" -> MimeTypes.AUDIO_MP4
+        "aac" -> MimeTypes.AUDIO_AAC
+        "flac" -> MimeTypes.AUDIO_FLAC
+        "ogg" -> MimeTypes.AUDIO_OGG
+        "wav" -> MimeTypes.AUDIO_WAV
+        else -> null
     }
 }

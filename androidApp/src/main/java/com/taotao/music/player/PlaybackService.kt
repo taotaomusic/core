@@ -1,11 +1,10 @@
 package com.taotao.music.player
 
 import android.content.Intent
-import android.net.Uri
 import android.util.Log
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
-import androidx.media3.common.MediaMetadata
-import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.datasource.DefaultDataSource
@@ -18,20 +17,25 @@ import androidx.media3.session.MediaSessionService
 import com.taotao.music.data.AuthSession
 import com.taotao.music.data.TencentMusicApi
 
-/** Media3 系统媒体服务，负责后台播放、锁屏控制和系统媒体通知。 */
+/**
+ * Media3 系统媒体服务，负责后台播放、锁屏控制和系统媒体通知。
+ *
+ * 服务不再处理自定义 Intent 动作：[MediaSessionService.onStartCommand] 只识别媒体按键
+ * 和通知自定义动作，其它 action 会被静默忽略，导致调用方 startForegroundService 之后
+ * 没有任何代码调用 startForeground，系统超时后直接杀进程。
+ * 播放指令统一由 [AudioPlayer] 通过 MediaController 下发。
+ */
 class PlaybackService : MediaSessionService() {
     private var player: ExoPlayer? = null
     private var mediaSession: MediaSession? = null
-    private lateinit var authSession: AuthSession
-
-    @Volatile
-    private var released = false
 
     override fun onCreate() {
         super.onCreate()
-        released = false
-        authSession = AuthSession(this)
-        val upstreamFactory = DefaultDataSource.Factory(this, DefaultHttpDataSource.Factory())
+        val authSession = AuthSession(this)
+        val upstreamFactory = DefaultDataSource.Factory(
+            this,
+            DefaultHttpDataSource.Factory().setAllowCrossProtocolRedirects(true),
+        )
         // 每次取流时现取访问令牌：长时间播放或队列续播时令牌可能已经轮换，不能沿用启动时的旧令牌。
         val resolvingFactory = ResolvingDataSource.Factory(upstreamFactory) { dataSpec ->
             val url = dataSpec.uri.toString()
@@ -42,157 +46,68 @@ class PlaybackService : MediaSessionService() {
         }
         val createdPlayer = ExoPlayer.Builder(this)
             .setMediaSourceFactory(DefaultMediaSourceFactory(resolvingFactory))
+            // 声明音乐用途，交由系统处理音频焦点；拔耳机时自动暂停。
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
+                    .setUsage(C.USAGE_MEDIA)
+                    .build(),
+                true,
+            )
+            .setHandleAudioBecomingNoisy(true)
+            // 长时间后台播放需要持有唤醒锁，否则设备休眠后取流中断。
+            // 先按本地档位初始化，切到网络歌曲时再升级为 WAKE_MODE_NETWORK。
+            .setWakeMode(C.WAKE_MODE_LOCAL)
             .build()
             .apply {
                 addListener(object : Player.Listener {
                     override fun onPlayerError(error: PlaybackException) {
-                        playError = error.message ?: "播放失败"
                         Log.e(TAG, "音频播放失败", error)
+                    }
+
+                    /**
+                     * 按当前曲目切换唤醒锁档位。
+                     * WAKE_MODE_NETWORK 会额外持有 WifiLock，让 Wi-Fi 无法进入省电模式，
+                     * 播放本地文件时这笔开销纯属浪费，因此只在取网络流时才升档。
+                     */
+                    override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                        val uri = mediaItem?.localConfiguration?.uri?.scheme?.lowercase()
+                        val needsNetwork = uri == "http" || uri == "https"
+                        setWakeMode(if (needsNetwork) C.WAKE_MODE_NETWORK else C.WAKE_MODE_LOCAL)
                     }
                 })
             }
-        val createdSession = MediaSession.Builder(this, createdPlayer).build()
         player = createdPlayer
-        mediaSession = createdSession
-        instance = this
-    }
-
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (released) return START_NOT_STICKY
-        runCatching {
-            when (intent?.action) {
-                ACTION_PLAY -> play(
-                    intent.getStringExtra(EXTRA_URI).orEmpty(),
-                    intent.getStringExtra(EXTRA_TITLE).orEmpty(),
-                    intent.getStringExtra(EXTRA_ARTIST).orEmpty(),
-                    intent.getIntExtra(EXTRA_START_POSITION, 0),
-                    intent.getStringArrayListExtra(EXTRA_QUEUE_URI).orEmpty(),
-                    intent.getStringArrayListExtra(EXTRA_QUEUE_TITLE).orEmpty(),
-                    intent.getStringArrayListExtra(EXTRA_QUEUE_ARTIST).orEmpty(),
-                    intent.getStringArrayListExtra(EXTRA_QUEUE_COVER).orEmpty(),
-                    intent.getIntExtra(EXTRA_QUEUE_INDEX, 0),
-                )
-                ACTION_PAUSE -> player?.pause()
-                ACTION_RESUME -> resumePlayback()
+        mediaSession = MediaSession.Builder(this, createdPlayer).build()
+        // Android 12 起后台启动前台服务可能被拒绝，注册监听避免 Media3 内部异常无人处理。
+        setListener(object : Listener {
+            override fun onForegroundServiceStartNotAllowedException() {
+                Log.w(TAG, "系统拒绝在后台启动前台播放服务，已停止播放")
+                runCatching { player?.pause() }
             }
-        }.onFailure { error ->
-            playError = error.message ?: "播放服务异常"
-            Log.e(TAG, "播放服务处理请求失败", error)
-        }
-
-        // MediaSessionService 负责前台通知、媒体按键和系统媒体会话生命周期，不能绕过父类。
-        return super.onStartCommand(intent, flags, startId)
-    }
-
-    private fun play(
-        uri: String,
-        title: String,
-        artist: String,
-        startPositionMs: Int,
-        uris: List<String>,
-        titles: List<String>,
-        artists: List<String>,
-        covers: List<String>,
-        index: Int,
-    ) {
-        if (uri.isBlank()) return
-        val currentPlayer = player ?: return
-        val mediaItems = if (uris.isNotEmpty() && uris.size == titles.size && uris.size == artists.size) {
-            uris.mapIndexed { itemIndex, itemUri ->
-                val metadata = MediaMetadata.Builder()
-                    .setTitle(titles[itemIndex])
-                    .setArtist(artists[itemIndex])
-                    .setArtworkUri(covers.getOrNull(itemIndex)?.takeIf { it.isNotBlank() }?.let(Uri::parse))
-                    .build()
-                MediaItem.Builder()
-                    .setUri(itemUri)
-                    .setMimeType(mimeTypeOf(itemUri))
-                    .setMediaMetadata(metadata)
-                    .build()
-            }
-        } else {
-            listOf(
-                MediaItem.Builder()
-                    .setUri(uri)
-                    .setMimeType(mimeTypeOf(uri))
-                    .setMediaMetadata(MediaMetadata.Builder().setTitle(title).setArtist(artist).build())
-                .build(),
-            )
-        }
-        currentPlayer.setMediaItems(
-            mediaItems,
-            index.coerceIn(mediaItems.indices),
-            startPositionMs.coerceAtLeast(0).toLong(),
-        )
-        currentPlayer.prepare()
-        currentPlayer.play()
-        playError = null
-    }
-
-    /** 播放完成后从头重播当前歌曲，避免必须重新点击列表项。 */
-    private fun resumePlayback() {
-        val currentPlayer = player ?: return
-        if (currentPlayer.playbackState == Player.STATE_ENDED) {
-            currentPlayer.seekTo(0L)
-        }
-        currentPlayer.play()
+        })
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = mediaSession
 
+    /** 任务被划掉时若已暂停就结束服务，避免留下一个不再播放的常驻通知。 */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        val current = player
+        if (current == null || !current.playWhenReady || current.mediaItemCount == 0) {
+            stopSelf()
+        }
+    }
+
     override fun onDestroy() {
-        released = true
-        instance = null
         runCatching { mediaSession?.release() }
         runCatching { player?.release() }
         mediaSession = null
         player = null
+        clearListener()
         super.onDestroy()
     }
 
-    fun isPrepared(): Boolean = !released && runCatching { player?.playbackState == Player.STATE_READY }.getOrDefault(false)
-    fun isPlaying(): Boolean = !released && runCatching { player?.isPlaying == true }.getOrDefault(false)
-    fun isEnded(): Boolean = released || runCatching { player?.playbackState == Player.STATE_ENDED }.getOrDefault(true)
-    fun positionMs(): Int = if (released) 0 else runCatching { player?.currentPosition?.toInt() ?: 0 }.getOrDefault(0)
-    fun durationMs(): Int = if (released) 0 else runCatching { player?.duration?.coerceAtLeast(0L)?.toInt() ?: 0 }.getOrDefault(0)
-    fun currentMediaItemIndex(): Int = if (released) 0 else runCatching { player?.currentMediaItemIndex ?: 0 }.getOrDefault(0)
-    fun next() { if (!released) runCatching { player?.seekToNextMediaItem() } }
-    fun previous() { if (!released) runCatching { player?.seekToPreviousMediaItem() } }
-    fun setRepeatMode(mode: Int) { if (!released) runCatching { player?.repeatMode = mode } }
-    fun seekTo(positionMs: Int) {
-        if (isPrepared()) {
-            runCatching { player?.seekTo(positionMs.toLong().coerceIn(0L, durationMs().toLong())) }
-        }
-    }
-
-    private fun mimeTypeOf(uri: String): String? = when (uri.substringBefore('?').substringAfterLast('.').lowercase()) {
-        "mp3" -> MimeTypes.AUDIO_MPEG
-        "m4a" -> MimeTypes.AUDIO_MP4
-        "aac" -> MimeTypes.AUDIO_AAC
-        "flac" -> MimeTypes.AUDIO_FLAC
-        "ogg" -> MimeTypes.AUDIO_OGG
-        "wav" -> MimeTypes.AUDIO_WAV
-        else -> null
-    }
-
-    companion object {
-        private const val TAG = "PlaybackService"
-
-        @Volatile
-        var instance: PlaybackService? = null
-        @Volatile
-        var playError: String? = null
-        const val ACTION_PLAY = "com.taotao.music.action.PLAY"
-        const val ACTION_PAUSE = "com.taotao.music.action.PAUSE"
-        const val ACTION_RESUME = "com.taotao.music.action.RESUME"
-        const val EXTRA_URI = "uri"
-        const val EXTRA_TITLE = "title"
-        const val EXTRA_ARTIST = "artist"
-        const val EXTRA_START_POSITION = "start_position_ms"
-        const val EXTRA_QUEUE_URI = "queue_uri"
-        const val EXTRA_QUEUE_TITLE = "queue_title"
-        const val EXTRA_QUEUE_ARTIST = "queue_artist"
-        const val EXTRA_QUEUE_COVER = "queue_cover"
-        const val EXTRA_QUEUE_INDEX = "queue_index"
+    private companion object {
+        const val TAG = "PlaybackService"
     }
 }
