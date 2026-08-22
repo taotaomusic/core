@@ -19,7 +19,22 @@ loadEnvFile();
 
 /** 服务运行配置。 */
 export const port = Number(process.env.PORT ?? 4500);
-export const upstreamBaseUrl = "https://api.vkeys.cn/v2/music/tencent";
+
+/**
+ * 上游接口基地址。
+ *
+ * 搜索与播放链接用 v3（v3 的路径里不带版本号前缀），歌词仍用 v2 ——
+ * v2 的歌词接口同时给出 lrc、逐字 yrc、翻译和音译，v3 没有等价接口。
+ */
+export const upstreamV3BaseUrl = "https://api.vkeys.cn/music/tencent";
+export const upstreamV2BaseUrl = "https://api.vkeys.cn/v2/music/tencent";
+
+/**
+ * 搜索时解析播放地址的并发上限。
+ * 串行解析 20 首要十几秒，并发后总耗时取决于最慢的一批而不是累加。
+ */
+export const searchConcurrency = Math.max(1, Number(process.env.SEARCH_CONCURRENCY ?? 8));
+
 export const allowedMediaHosts = new Set(["ws.stream.qqmusic.qq.com", "y.qq.com"]);
 
 /** 发布管理接口的静态令牌，通过请求头 `X-Admin-Token` 校验；未配置则整组管理接口关闭。 */

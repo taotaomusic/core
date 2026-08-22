@@ -10,21 +10,25 @@ import java.net.URL
 class TencentMusicApi(private val tokenProvider: TokenProvider) {
     data class TokenPair(val accessToken: String, val refreshToken: String, val expiresIn: Int)
 
-    fun search(keyword: String, page: Int = 1, num: Int = 20, quality: Int = 10): List<Song> {
+    fun search(keyword: String, page: Int = 1, num: Int = 20, quality: Int = 10): SearchResult {
         val query = "?keyword=${encode(keyword)}" +
             "&page=$page&num=${num.coerceIn(1, 60)}" +
             "&quality=${quality.coerceIn(0, 16)}"
         return authorized("/api/v1/search$query") { connection ->
             val songs = mutableListOf<Song>()
+            var dropped = 0
             connection.inputStream.bufferedReader().useLines { lines ->
                 lines.filter { it.isNotBlank() }.forEach { line ->
                     val record = runCatching { JSONObject(line) }.getOrNull() ?: return@forEach
-                    if (record.optString("type") == "song") {
-                        record.optJSONObject("data")?.let { songs += it.toSong() }
+                    when (record.optString("type")) {
+                        "song" -> record.optJSONObject("data")?.let { songs += it.toSong() }
+                        // 收尾行带着被丢弃的数量：服务端拿不到可用播放地址的歌不会返回，
+                        // 不告知用户的话，搜到 20 首只显示 17 首会显得像 bug。
+                        "end" -> dropped = record.optJSONObject("meta")?.optInt("dropped") ?: 0
                     }
                 }
             }
-            songs
+            SearchResult(songs, dropped)
         }
     }
 
@@ -211,3 +215,9 @@ class CredentialsRejectedException(message: String) : IllegalStateException(mess
 
 /** 歌词原始数据。[yrc] 为空表示这首歌没有逐字时间轴，界面退化为整行高亮。 */
 data class RichLyric(val lrc: String, val yrc: String)
+
+/**
+ * 搜索结果。[dropped] 是服务端因拿不到可用播放地址而丢弃的数量，
+ * 界面据此提示用户，避免「搜到 20 首却只显示 17 首」看起来像故障。
+ */
+data class SearchResult(val songs: List<Song>, val dropped: Int)

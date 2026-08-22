@@ -259,7 +259,11 @@ fun TaotaoMusicApp() {
             // 请求返回后再次校验代次：期间用户可能已经发起新搜索或退出搜索页，旧结果不应覆盖新状态。
             if (generation != searchGeneration) return@launch
             result
-                .onSuccess { searchResults = it }
+                .onSuccess { found ->
+                    searchResults = found.songs
+                    // 服务端丢弃的是所有音质都拿不到地址的歌，说明一声免得像漏结果。
+                    if (found.dropped > 0) message = "有 ${found.dropped} 首暂时无法播放，已跳过"
+                }
                 .onFailure { searchError = it.message ?: "搜索失败，请稍后重试" }
             isSearching = false
         }
