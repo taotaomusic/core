@@ -1,17 +1,35 @@
 package com.taotao.music.model
 
-/** 一行歌词及其出现时间。纯文本歌词的 [timeMs] 恒为 0。 */
-data class LyricLine(val timeMs: Int, val text: String)
+/** 一个逐字单元。[text] 可能是一个汉字，也可能是一个英文单词。 */
+data class LyricWord(val timeMs: Int, val durationMs: Int, val text: String) {
+    val endMs: Int get() = timeMs + durationMs
+}
+
+/**
+ * 一行歌词。
+ *
+ * [durationMs] 为 0 表示时长未知（普通 LRC 只有起始时间）；
+ * [words] 为空表示没有逐字时间轴，界面只能整行高亮。
+ */
+data class LyricLine(
+    val timeMs: Int,
+    val text: String,
+    val durationMs: Int = 0,
+    val words: List<LyricWord> = emptyList(),
+)
 
 /**
  * 解析后的歌词。
  *
- * [synced] 为 false 表示歌词没有时间轴（服务端返回纯文本），
- * 此时界面只做分行展示，不做高亮和点击跳转。
+ * [synced] 为 false 表示没有时间轴（服务端只给到纯文本），
+ * 此时界面只做分行展示，不高亮也不可点击跳转。
  */
 data class Lyric(val lines: List<LyricLine>, val synced: Boolean) {
 
     val isEmpty: Boolean get() = lines.isEmpty()
+
+    /** 是否具备逐字时间轴。只要有一行带字级数据就按逐字渲染。 */
+    val hasWords: Boolean get() = lines.any { it.words.isNotEmpty() }
 
     /**
      * 给定播放进度，返回当前应高亮的行下标；进度早于第一行时返回 -1。
@@ -34,12 +52,47 @@ data class Lyric(val lines: List<LyricLine>, val synced: Boolean) {
         return result
     }
 
+    /**
+     * 某一行已唱到的比例，取值 0..1，用于逐字高亮的裁切宽度。
+     *
+     * 有逐字数据时按字宽累计：已唱完的字算满，正在唱的字按其自身进度插值，
+     * 这样长音的字会平滑推进而不是整字跳变。
+     * 没有逐字数据时退化为按行时长线性插值；连行时长都没有则整行直接算已唱完。
+     */
+    fun progressOf(lineIndex: Int, positionMs: Int): Float {
+        val line = lines.getOrNull(lineIndex) ?: return 0f
+        if (positionMs <= line.timeMs) return 0f
+
+        val words = line.words
+        if (words.isEmpty()) {
+            if (line.durationMs <= 0) return 1f
+            return ((positionMs - line.timeMs).toFloat() / line.durationMs).coerceIn(0f, 1f)
+        }
+
+        val totalChars = words.sumOf { it.text.length }
+        if (totalChars == 0) return 1f
+        var doneChars = 0f
+        for (word in words) {
+            when {
+                positionMs >= word.endMs -> doneChars += word.text.length
+                positionMs <= word.timeMs -> return (doneChars / totalChars).coerceIn(0f, 1f)
+                else -> {
+                    val within = if (word.durationMs <= 0) 1f
+                    else (positionMs - word.timeMs).toFloat() / word.durationMs
+                    doneChars += word.text.length * within.coerceIn(0f, 1f)
+                    return (doneChars / totalChars).coerceIn(0f, 1f)
+                }
+            }
+        }
+        return 1f
+    }
+
     companion object {
         val EMPTY = Lyric(emptyList(), synced = false)
     }
 }
 
-/** LRC 歌词解析。 */
+/** LRC 与 YRC 歌词解析。 */
 object LyricParser {
 
     /** `[mm:ss.xx]`、`[mm:ss.xxx]`、`[mm:ss]`，也兼容用冒号分隔毫秒的 `[mm:ss:xx]`。 */
@@ -51,7 +104,53 @@ object LyricParser {
     /** `[offset:-500]` 表示整体提前 500 毫秒，正数为延后。 */
     private val OFFSET = Regex("""\[offset:\s*([+-]?\d+)\s*\]""", RegexOption.IGNORE_CASE)
 
-    fun parse(raw: String?): Lyric {
+    /** YRC 行头：`[行起始ms,行时长ms]`。 */
+    private val YRC_HEADER = Regex("""^\[(\d+),(\d+)\]""")
+
+    /** YRC 逐字单元：`文本(起始ms,时长ms)`，尾部可能还带一个用途不明的数字。 */
+    private val YRC_WORD = Regex("""([^(\n]*)\((\d+),(\d+)(?:,\d+)?\)""")
+
+    /**
+     * 优先使用逐字歌词。
+     *
+     * [yrc] 解析成功就用它，因为它同时含有行时间和字时间；
+     * 失败或为空才退回 [lrc]。两者都没有时返回 [Lyric.EMPTY]，界面据此显示「暂无歌词」。
+     */
+    fun parse(lrc: String?, yrc: String? = null): Lyric {
+        val word = parseYrc(yrc)
+        if (!word.isEmpty) return word
+        return parseLrc(lrc)
+    }
+
+    fun parseYrc(raw: String?): Lyric {
+        if (raw.isNullOrBlank()) return Lyric.EMPTY
+        val lines = mutableListOf<LyricLine>()
+        for (rawLine in raw.lineSequence()) {
+            val header = YRC_HEADER.find(rawLine) ?: continue
+            val body = rawLine.substring(header.value.length)
+            val words = YRC_WORD.findAll(body).mapNotNull { match ->
+                val text = match.groupValues[1]
+                if (text.isEmpty()) null
+                else LyricWord(
+                    timeMs = match.groupValues[2].toIntOrNull() ?: return@mapNotNull null,
+                    durationMs = match.groupValues[3].toIntOrNull() ?: 0,
+                    text = text,
+                )
+            }.toList()
+            if (words.isEmpty()) continue
+            val text = words.joinToString("") { it.text }.trim()
+            if (text.isEmpty()) continue
+            lines += LyricLine(
+                timeMs = header.groupValues[1].toIntOrNull() ?: 0,
+                text = text,
+                durationMs = header.groupValues[2].toIntOrNull() ?: 0,
+                words = words,
+            )
+        }
+        return if (lines.isEmpty()) Lyric.EMPTY else Lyric(lines.sortedBy(LyricLine::timeMs), synced = true)
+    }
+
+    fun parseLrc(raw: String?): Lyric {
         if (raw.isNullOrBlank()) return Lyric.EMPTY
         val offsetMs = OFFSET.find(raw)?.groupValues?.get(1)?.toIntOrNull() ?: 0
         val lines = mutableListOf<LyricLine>()
@@ -79,7 +178,15 @@ object LyricParser {
                 .toList()
             return Lyric(plain, synced = false)
         }
-        return Lyric(lines.sortedBy(LyricLine::timeMs), synced = true)
+        val sorted = lines.sortedBy(LyricLine::timeMs)
+        // LRC 不含行时长，用下一行的起始时间补出来，逐字高亮的插值需要它。
+        return Lyric(
+            sorted.mapIndexed { index, line ->
+                val next = sorted.getOrNull(index + 1)?.timeMs
+                if (next != null && next > line.timeMs) line.copy(durationMs = next - line.timeMs) else line
+            },
+            synced = true,
+        )
     }
 
     private fun timeMsOf(groups: List<String>, offsetMs: Int): Int {

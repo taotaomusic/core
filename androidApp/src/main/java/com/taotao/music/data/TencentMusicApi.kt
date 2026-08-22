@@ -69,6 +69,24 @@ class TencentMusicApi(private val tokenProvider: TokenProvider) {
         }
     }
 
+    /**
+     * 取歌词的完整数据：`lrc` 是行级时间轴，`yrc` 是逐字时间轴。
+     * 服务端默认返回纯文本以兼容旧客户端，必须显式带 `format=json` 才给到 yrc。
+     */
+    fun requestRichLyric(song: Song): RichLyric {
+        val id = requireNotNull(song.remoteId) { "网络歌曲缺少歌曲 ID" }
+        return authorized("/api/v1/songs/$id/lyrics?format=json") { connection ->
+            val body = connection.inputStream.bufferedReader().use { it.readText() }
+            // 服务端若还没部署 format=json，旧版本会忽略该参数直接返回纯 LRC 文本。
+            // 这里把解析失败的响应体当作 LRC 使用，避免客户端先发版时所有歌词都变成「暂无歌词」。
+            val result = runCatching { JSONObject(body) }.getOrNull()
+                ?: return@authorized RichLyric(lrc = body, yrc = "")
+            check(result.optInt("code") == 0) { result.optString("message", "获取歌词失败") }
+            val data = result.getJSONObject("data")
+            RichLyric(lrc = data.optString("lrc"), yrc = data.optString("yrc"))
+        }
+    }
+
     fun login(username: String, password: String): TokenPair = authenticate("/api/v1/auth/login", username, password)
     fun register(username: String, password: String): TokenPair = authenticate("/api/v1/auth/register", username, password)
 
@@ -190,3 +208,6 @@ class TencentMusicApi(private val tokenProvider: TokenProvider) {
 
 /** 用户名、密码或刷新令牌被服务端明确拒绝。 */
 class CredentialsRejectedException(message: String) : IllegalStateException(message)
+
+/** 歌词原始数据。[yrc] 为空表示这首歌没有逐字时间轴，界面退化为整行高亮。 */
+data class RichLyric(val lrc: String, val yrc: String)

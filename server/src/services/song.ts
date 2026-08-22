@@ -15,7 +15,9 @@ export async function resolveSong(item: any, quality = 10): Promise<Song> {
   const id = Number(item.id); const mid = String(item.mid ?? ""); const key = id > 0 ? `id=${id}` : `mid=${encodeURIComponent(mid)}`;
   const result = await requestJson(`/geturl?${key}&quality=${quality}`); const song = normalize({ ...item, ...(result.data ?? {}) });
   if (!song.audioUrl || !(await validAudio(song.audioUrl))) throw new Error("播放地址不可用");
-  const lyric = await requestLyric(id).catch(() => ""); return { ...song, lyricUrl: lyric ? `/api/v1/songs/${id}/lyrics` : undefined };
+  // 只判断歌词是否存在，正文由客户端按需另取，避免搜索结果里塞进大段文本。
+  const lyric = await requestLyric(id).catch(() => undefined);
+  return { ...song, lyricUrl: lyric ? `/api/v1/songs/${id}/lyrics` : undefined };
 }
 
 export { requestLyric };

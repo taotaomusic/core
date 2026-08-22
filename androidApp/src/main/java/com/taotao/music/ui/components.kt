@@ -194,3 +194,18 @@ fun EmptyStateView(title: String = "暂无数据", description: String? = null, 
         }
     }
 }
+
+/** 分页指示器：几页就几个点，当前页用主色实心。 */
+@Composable
+fun PagerDots(current: Int, total: Int, modifier: Modifier = Modifier) {
+    Row(modifier, horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+        repeat(total) { index ->
+            Box(
+                Modifier
+                    .size(if (index == current) 8.dp else 6.dp)
+                    .clip(CircleShape)
+                    .background(if (index == current) TaotaoCoral else Color.Gray.copy(alpha = 0.35f)),
+            )
+        }
+    }
+}

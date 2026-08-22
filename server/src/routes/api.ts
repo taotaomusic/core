@@ -35,7 +35,15 @@ export async function handleApi(url: URL, request: IncomingMessage, response: Se
     return response.end(`${JSON.stringify({ type: "end", meta: { page, num, quality, count, hasMore: (result.data ?? []).length === num } })}\n`);
   }
   const play = url.pathname.match(/^\/api\/v1\/songs\/(\d+)\/play$/); if (play) return streamMedia(response, (await resolveSong({ id: Number(play[1]) }, qualityOf(url.searchParams.get("quality")))).audioUrl!);
-  const lyric = url.pathname.match(/^\/api\/v1\/songs\/(\d+)\/lyrics$/); if (lyric) { response.writeHead(200, { "content-type": "text/plain; charset=utf-8" }); return response.end(await requestLyric(Number(lyric[1]))); }
+  const lyric = url.pathname.match(/^\/api\/v1\/songs\/(\d+)\/lyrics$/);
+  if (lyric) {
+    const rich = await requestLyric(Number(lyric[1]));
+    // 默认仍返回纯 LRC 文本：已安装的旧客户端把响应体直接当歌词展示，不能改成 JSON。
+    // 新客户端显式带 format=json 才拿到逐字时间轴（yrc）和翻译。
+    if (url.searchParams.get("format") === "json") return json(response, 200, success(rich));
+    response.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
+    return response.end(rich.lrc || rich.yrc);
+  }
   return json(response, 404, { code: 4040, message: "接口不存在" });
 }
 

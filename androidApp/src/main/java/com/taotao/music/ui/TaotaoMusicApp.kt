@@ -2,6 +2,8 @@ package com.taotao.music.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
@@ -594,8 +596,9 @@ private fun PlayerDetailPage(
     // 解析播放地址后队列里的 Song 会被换成新副本，song 变了但 remoteId / lyricUri 没变，
     // key 不一致就会出现「状态被清空、拉取逻辑却不重跑」的空白歌词和收藏状态丢失。
     var lyricText by remember(song.lyricUri, song.remoteId) { mutableStateOf<String?>(null) }
-    // 解析结果按原文缓存，避免每帧进度变化都重新解析整段 LRC。
-    val lyric = remember(lyricText) { LyricParser.parse(lyricText) }
+    var lyricWords by remember(song.lyricUri, song.remoteId) { mutableStateOf<String?>(null) }
+    // 解析结果按原文缓存，避免每帧进度变化都重新解析整段歌词。
+    val lyric = remember(lyricText, lyricWords) { LyricParser.parse(lyricText, lyricWords) }
     var favorite by remember(song.remoteId) { mutableStateOf(false) }
     var favoriteLoading by remember(song.remoteId) { mutableStateOf(false) }
     var showQueue by remember { mutableStateOf(false) }
@@ -606,21 +609,23 @@ private fun PlayerDetailPage(
     val lifecycleOwner = LocalLifecycleOwner.current
     val coverRotation = remember(song) { Animatable(0f) }
     LaunchedEffect(song.lyricUri, song.remoteId) {
-        lyricText = runCatching {
+        // 网络歌曲优先取带逐字时间轴的数据；离线歌曲只有下载时保存的 LRC 文本。
+        val loaded = runCatching {
             withContext(Dispatchers.IO) {
                 val lyricUri = song.lyricUri
                 if (lyricUri?.startsWith("file:") == true) {
-                    Uri.parse(lyricUri).path
-                        ?.let(::File)
-                        ?.takeIf(File::isFile)
-                        ?.readText()
+                    val text = Uri.parse(lyricUri).path?.let(::File)?.takeIf(File::isFile)?.readText()
+                    text to null
                 } else if (song.remoteId != null) {
-                    musicApi.requestLyric(song)
+                    val rich = musicApi.requestRichLyric(song)
+                    rich.lrc to rich.yrc
                 } else {
-                    null
+                    null to null
                 }
             }
-        }.getOrNull()
+        }.getOrElse { null to null }
+        lyricText = loaded.first
+        lyricWords = loaded.second
     }
     LaunchedEffect(song.remoteId) {
         // 本地歌曲没有服务端 ID，跳过收藏状态查询，避免无意义的请求。
@@ -651,12 +656,34 @@ private fun PlayerDetailPage(
             }
         }
     }
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 22.dp),
-    ) {
+    // 详情页与歌词页做成左右两页：滑动切换，与 QQ 音乐的交互一致。
+    val pagerState = rememberPagerState(pageCount = { 2 })
+    // 在歌词页按返回先回到封面页，而不是直接关掉整个详情页。
+    // 这个 BackHandler 比 TaotaoMusicApp 里那个更深，启用时优先生效。
+    BackHandler(enabled = pagerState.currentPage > 0) {
+        detailScope.launch { pagerState.animateScrollToPage(0) }
+    }
+    Box(Modifier.fillMaxSize()) {
+        HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
+        if (page == 1) {
+            LyricPane(
+                lyric = lyric,
+                positionMs = positionMs,
+                title = song.title,
+                artist = song.artist,
+                onSeek = { target ->
+                    positionMs = target
+                    audioPlayer.seekTo(target)
+                },
+            )
+            return@HorizontalPager
+        }
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 22.dp),
+        ) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(top = 18.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -733,16 +760,15 @@ private fun PlayerDetailPage(
             Text("下载歌曲、封面和歌词", modifier = Modifier.weight(1f).padding(start = 12.dp), fontWeight = FontWeight.Medium)
             Icon(Icons.Default.Download, "下载", tint = Color.Gray)
         }
-        Spacer(Modifier.height(18.dp))
-        LyricSection(
-            lyric = lyric,
-            positionMs = positionMs,
-            onSeek = { target ->
-                positionMs = target
-                audioPlayer.seekTo(target)
-            },
-        )
         Spacer(Modifier.height(24.dp))
+        }
+        }
+        // 两点指示器：让「可以左右滑动」这件事可见，否则歌词页很难被发现。
+        PagerDots(
+            current = pagerState.currentPage,
+            total = 2,
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp),
+        )
     }
     if (showQueue) {
         PlaybackQueueSheet(
