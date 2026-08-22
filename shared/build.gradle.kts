@@ -3,6 +3,13 @@ plugins {
     id("com.android.library")
 }
 
-kotlin { androidTarget(); jvmToolchain(21) }
+kotlin {
+    androidTarget()
+    jvmToolchain(21)
+    sourceSets {
+        // 共享业务规则（如歌词解析）在 commonTest 里覆盖，需要 kotlin-test 断言库。
+        commonTest.dependencies { implementation(kotlin("test")) }
+    }
+}
 
 android { namespace = "com.taotao.music.shared"; compileSdk = 35 }

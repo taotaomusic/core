@@ -42,6 +42,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import coil.compose.AsyncImage
+import com.taotao.music.model.LyricParser
 import com.taotao.music.model.Song
 import com.taotao.music.data.CrashLog
 import com.taotao.music.data.CrashReporter
@@ -593,6 +594,8 @@ private fun PlayerDetailPage(
     // 解析播放地址后队列里的 Song 会被换成新副本，song 变了但 remoteId / lyricUri 没变，
     // key 不一致就会出现「状态被清空、拉取逻辑却不重跑」的空白歌词和收藏状态丢失。
     var lyricText by remember(song.lyricUri, song.remoteId) { mutableStateOf<String?>(null) }
+    // 解析结果按原文缓存，避免每帧进度变化都重新解析整段 LRC。
+    val lyric = remember(lyricText) { LyricParser.parse(lyricText) }
     var favorite by remember(song.remoteId) { mutableStateOf(false) }
     var favoriteLoading by remember(song.remoteId) { mutableStateOf(false) }
     var showQueue by remember { mutableStateOf(false) }
@@ -730,11 +733,15 @@ private fun PlayerDetailPage(
             Text("下载歌曲、封面和歌词", modifier = Modifier.weight(1f).padding(start = 12.dp), fontWeight = FontWeight.Medium)
             Icon(Icons.Default.Download, "下载", tint = Color.Gray)
         }
-        lyricText?.let { lyrics ->
-            Spacer(Modifier.height(18.dp))
-            Text("歌词", fontSize = 18.sp, fontWeight = FontWeight.Bold)
-            Text(lyrics, color = Color.DarkGray, lineHeight = 24.sp, modifier = Modifier.padding(top = 10.dp))
-        }
+        Spacer(Modifier.height(18.dp))
+        LyricSection(
+            lyric = lyric,
+            positionMs = positionMs,
+            onSeek = { target ->
+                positionMs = target
+                audioPlayer.seekTo(target)
+            },
+        )
         Spacer(Modifier.height(24.dp))
     }
     if (showQueue) {
