@@ -28,8 +28,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.taotao.music.model.Song
 
-private val SearchCoral = Color(0xFFFF6B5F)
-
 /** 搜索页面：负责关键词输入、流式结果展示和搜索结果进入动画。 */
 @Composable
 fun SearchPage(
@@ -77,7 +75,7 @@ fun SearchPage(
         }
         if (isSearching) SearchSkeletonList()
         if (hasSearched && !isSearching && !errorMessage.isNullOrBlank()) {
-            Text(errorMessage, color = SearchCoral, modifier = Modifier.padding(top = 28.dp))
+            Text(errorMessage, color = TaotaoCoral, modifier = Modifier.padding(top = 28.dp))
         }
         if (hasSearched && !isSearching && songs.isEmpty()) {
             if (errorMessage.isNullOrBlank()) {
@@ -141,7 +139,7 @@ fun MusicSearchBar(
             leadingIcon = { Icon(Icons.Default.Search, "搜索") },
         )
         TextButton(onClick = onSearch) {
-            Text("搜索", color = SearchCoral)
+            Text("搜索", color = TaotaoCoral)
         }
     }
 }
