@@ -5,6 +5,7 @@ import { requestJson } from "../upstream/tencent.js";
 import { qualityOf, requestLyric, resolveSong } from "../services/song.js";
 import { json, readJson, success } from "../utils/http.js";
 import { allowAuthAttempt } from "../rate-limit.js";
+import { handleApp } from "./app.js";
 
 /** 处理移动端 API。 */
 export async function handleApi(url: URL, request: IncomingMessage, response: ServerResponse) {
@@ -13,6 +14,9 @@ export async function handleApi(url: URL, request: IncomingMessage, response: Se
   if (path === "/api/v1/auth/login" && request.method === "POST") return login(request, response);
   if (path === "/api/v1/auth/refresh" && request.method === "POST") return refresh(request, response);
   if (path === "/api/v1/auth/logout" && request.method === "POST") return logoutUser(request, response);
+  // 客户端引导与发布管理必须在访问令牌门禁之前：最需要强制更新的场景恰恰是
+  // 上一个版本把登录搞坏了，若检查接口自己要求登录，这些客户端永远收不到升级通知。
+  if (path.startsWith("/api/v1/app/")) return handleApp(url, request, response);
   if (!authenticate(request)) return json(response, 401, { code: 4010, message: "请先登录" });
   if (path === "/api/v1/auth/me" && request.method === "GET") {
     const user = authenticate(request);
