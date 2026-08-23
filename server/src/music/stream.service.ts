@@ -1,4 +1,5 @@
 import { Injectable, Logger } from "@nestjs/common";
+import { once } from "node:events";
 import type { Request, Response } from "express";
 import { ApiErrors } from "../common/api.exception";
 import { AppConfigService } from "../config/app-config.service";
@@ -40,7 +41,9 @@ export class StreamService {
     });
     if (!upstream.ok || !upstream.body) {
       this.logger.warn(`媒体资源获取失败：HTTP ${upstream.status}`);
-      response.status(upstream.status).json({ code: 5021, message: "媒体资源获取失败" });
+      // 一律归成 502，**不能把上游的状态码原样透出**：上游的 401/403 会被客户端
+      // 当成自己的令牌失效，触发续期重放，二次失败后把用户踢回登录页。
+      response.status(502).json({ code: 5021, message: "媒体资源获取失败" });
       return;
     }
 
@@ -58,7 +61,8 @@ export class StreamService {
 
     response.writeHead(upstream.status, headers);
     for await (const chunk of upstream.body as unknown as AsyncIterable<Uint8Array>) {
-      response.write(chunk);
+      // 必须处理背压：忽略 write 的返回值会让慢速手机 + 快速 CDN 把整首歌缓进内存。
+      if (!response.write(chunk)) await once(response, "drain");
     }
     response.end();
   }

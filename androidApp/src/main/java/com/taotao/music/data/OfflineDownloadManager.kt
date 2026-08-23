@@ -11,11 +11,18 @@ import java.util.Properties
 class OfflineDownloadManager(context: Context, private val tokenProvider: TokenProvider) {
     private val root = File(context.filesDir, "offline_music").apply { mkdirs() }
 
-    fun download(song: Song): Song {
+    /**
+     * 下载一首歌。
+     *
+     * [audioUrl] 是调用方**先解析好**的上游直链 —— 队列里存的是不带扩展名的占位地址，
+     * 直接拿它下载会一律落成 `.mp3`，而无损其实是 flac，扩展名错了播放器会认错容器。
+     * 直链里带着真实文件名，扩展名从它推断。
+     */
+    fun download(song: Song, audioUrl: String): Song {
         val id = requireNotNull(song.remoteId) { "网络歌曲缺少歌曲 ID" }
         val dir = File(root, id.toString()).apply { mkdirs() }
-        val audio = song.audioUri?.takeIf { it.startsWith("http") }?.let {
-            val extension = URL(it).path.substringAfterLast('.', "").lowercase().takeIf { value -> value in setOf("mp3", "m4a", "aac", "flac", "ogg", "wav") } ?: "mp3"
+        val audio = audioUrl.takeIf { it.startsWith("http") }?.let {
+            val extension = URL(it).path.substringAfterLast('.', "").lowercase().takeIf { value -> value in AUDIO_EXTENSIONS } ?: "mp3"
             download(it.replaceFirst("http://", "https://"), File(dir, "audio.$extension"))
         }
         // 音频是离线播放的必要条件，失败直接抛出；封面和歌词属于附加内容，失败不影响下载结果。
@@ -33,6 +40,9 @@ class OfflineDownloadManager(context: Context, private val tokenProvider: TokenP
             setProperty("album", song.album)
             setProperty("subtitle", song.subtitle)
             setProperty("releaseTime", song.releaseTime)
+            // mid 与 type 要留着：离线歌重新联网想换音质时还得靠它们解析。
+            song.mid?.let { setProperty("mid", it) }
+            song.type?.let { setProperty("type", it.toString()) }
         }.also { properties ->
             File(dir, "song.properties").outputStream().use { properties.store(it, "歌曲信息") }
         }
@@ -67,6 +77,8 @@ class OfflineDownloadManager(context: Context, private val tokenProvider: TokenP
                     album = properties.getProperty("album", ""),
                     subtitle = properties.getProperty("subtitle", ""),
                     releaseTime = properties.getProperty("releaseTime", ""),
+                    mid = properties.getProperty("mid"),
+                    type = properties.getProperty("type")?.toIntOrNull(),
                 )
             }.getOrNull()
         }
@@ -111,5 +123,10 @@ class OfflineDownloadManager(context: Context, private val tokenProvider: TokenP
             token?.takeIf { it.isNotBlank() }?.let { setRequestProperty("Authorization", "Bearer $it") }
         }
 
-    private companion object { const val MAX_ATTEMPTS = 2 }
+    private companion object {
+        const val MAX_ATTEMPTS = 2
+
+        /** 上游会给出这些容器；无损是 flac，扩展名认错会让播放器解析失败。 */
+        val AUDIO_EXTENSIONS = setOf("mp3", "m4a", "aac", "flac", "ogg", "wav", "nac")
+    }
 }

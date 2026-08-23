@@ -15,6 +15,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -66,20 +68,64 @@ fun AlbumArt(color: Color, size: Dp, iconSize: TextUnit, imageUri: String? = nul
     }
 }
 
-/** 歌曲列表项，搜索结果和本地音乐共用。 */
+/**
+ * 歌曲列表项，搜索结果和本地音乐共用。
+ *
+ * [favorited] / [onToggleFavorite] 带默认值：本地音乐没有服务端 ID、本来就不能收藏，
+ * 不传即维持原来的样子（末尾仍是那个纯装饰的更多图标）。
+ */
 @Composable
-fun SongListItem(song: Song, active: Boolean, onClick: () -> Unit) {
+fun SongListItem(
+    song: Song,
+    active: Boolean,
+    favorited: Boolean = false,
+    onToggleFavorite: (() -> Unit)? = null,
+    onClick: () -> Unit,
+) {
     Row(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).clickable(onClick = onClick).padding(vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         AlbumArt(Color(song.color), 48.dp, 24.sp, song.coverUri)
         Column(Modifier.weight(1f).padding(start = 13.dp)) {
-            Text(song.title, fontWeight = if (active) FontWeight.Bold else FontWeight.Medium, maxLines = 1)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    song.title,
+                    fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
+                    maxLines = 1,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                // 付费歌曲搜索结果里就有标记，不用等点开才发现放不出来。
+                if (song.vip) VipBadge(Modifier.padding(start = 6.dp))
+            }
             Text(song.artist, color = Color.Gray, fontSize = 13.sp, maxLines = 1, modifier = Modifier.padding(top = 3.dp))
         }
         Text(song.duration, color = Color.Gray, fontSize = 12.sp)
-        Icon(Icons.Default.MoreVert, "更多", tint = Color.Gray, modifier = Modifier.padding(start = 8.dp))
+        if (onToggleFavorite != null) {
+            IconButton(onClick = onToggleFavorite, modifier = Modifier.size(36.dp)) {
+                Icon(
+                    if (favorited) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                    if (favorited) "取消收藏" else "收藏",
+                    tint = if (favorited) TaotaoCoral else Color.Gray,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+        } else {
+            Icon(Icons.Default.MoreVert, "更多", tint = Color.Gray, modifier = Modifier.padding(start = 8.dp))
+        }
+    }
+}
+
+/** VIP / 付费标记。 */
+@Composable
+fun VipBadge(modifier: Modifier = Modifier) {
+    Box(
+        modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(TaotaoCoral.copy(alpha = 0.14f))
+            .padding(horizontal = 4.dp, vertical = 1.dp),
+    ) {
+        Text("VIP", color = TaotaoCoral, fontSize = 10.sp, fontWeight = FontWeight.Bold)
     }
 }
 

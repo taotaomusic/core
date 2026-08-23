@@ -134,13 +134,33 @@ src/
 
 ### 搜索、播放与歌词（需要访问令牌）
 
-`GET /api/v1/search?keyword=歌曲名&page=1&num=20&quality=10`
+`GET /api/v1/search?keyword=歌曲名&page=1&num=60&quality=10`
 
-`num` 范围 1–60（也接受 `limit`），`quality` 范围 0–16。返回 NDJSON 流，每行一个 `{"type":"song","data":{...}}`，末行为 `{"type":"end","meta":{...}}`。`meta.dropped` 是因所有音质都拿不到播放地址而被丢弃的数量，客户端据此提示用户。
+`num` 范围 1–60（也接受 `limit`），默认 60，`quality` 范围 0–18。返回 NDJSON 流，每行一个 `{"type":"song","data":{...}}`，末行为 `{"type":"end","meta":{...}}`。
 
-搜索先打一次上游拿列表，再**并发**解析各首的播放地址（并发上限见 `SEARCH_CONCURRENCY`）。串行实现下 20 首约需 11 秒，并发后约 2 秒。
+**搜索只返回元信息，不解析播放地址。** 早先每首歌都要额外向上游要一次播放链接、还要探测首字节，20 首约 1.8 秒，60 首最坏能打 240 次上游请求；而客户端拿到后又会把这个地址丢掉，改用自己拼的播放地址 —— 那些请求换来的只是「把拿不到地址的歌过滤掉」。现在改成客户端点播时再走 `/songs/{id}/link` 单独解析，搜索只剩一次上游请求，**60 首实测 130–900ms**（取决于上游缓存）。
 
-`GET /api/v1/songs/{id}/play?quality=10` 转发音频流，支持 Range 断点续传（透传给上游并回写 206 与 `Content-Range`）；无 Range 时返回 200 全量。
+代价是付费/下架的歌现在会出现在结果里。搜索结果带 `vip` 字段（上游本来就返回 `pay`，之前没读），界面据此加标记；真正拿不到地址的歌在点播时才提示。`meta.dropped` 因此恒为 0，保留只为兼容装机的旧客户端。
+
+每行还带上：
+
+- `favorited` —— 当前用户是否已收藏，由一次批量查询填入（`song_id = ANY($3::text[])`，走 `UNIQUE (user_id, source, song_id)` 索引）。这替掉了客户端原来「为每首歌拉一次完整收藏列表再线性查找」的做法。批量查询刻意放在 `writeHead` **之前**：响应头一旦发出，异常就只能截断连接。
+- `mid` / `type` —— 解析播放地址要用。`songID` 为 0 的歌只能靠 `mid` 解析，拆成独立接口后不下发它们就永远拿不到地址。
+
+响应带 `X-Accel-Buffering: no`：nginx 默认 `proxy_buffering on` 会把整个响应缓完再转发，逐行下发就白做了。代理配置不在版本库里，只能由服务端主动声明。
+
+`GET /api/v1/songs/{id}/link?quality=10&mid=&type=` 解析播放地址，返回**上游直链**：
+
+```json
+{ "code": 0, "data": { "songId": 97773, "url": "https://ws.stream.qqmusic.qq.com/...",
+  "quality": 10, "requestedQuality": 12, "kbps": "1644kbps", "fallback": true } }
+```
+
+客户端直接拉 QQ 的 CDN，音频字节不再经过本服务。`quality` 是**实际拿到的**档位 —— 上游不会自动降级，阶梯是我们自己走的，`fallback` 为真表示发生了降级，客户端据此提示「这首只有 320kbps」。拿不到地址走 502，**绝不能 401**。
+
+`GET /api/v1/songs/{id}/info?mid=` 给出歌曲信息与**真实存在**的音质档位（含各档字节数），已过滤掉 `size` 为 0 的档位。客户端的音质选择器用它只列出能选的档，并在下载前提示体积。
+
+`GET /api/v1/songs/{id}/play?quality=10` 仍然保留：装机的旧客户端在用，也是新客户端解析失败时的兜底。支持 Range 断点续传（透传给上游并回写 206 与 `Content-Range`）；无 Range 时返回 200 全量。上游非 2xx 一律归成 502，**不透传上游的状态码** —— 上游的 401 会被客户端当成自己的令牌失效。
 
 `GET /api/v1/songs/{id}/lyrics` 默认返回纯 LRC 文本；带 `format=json` 时返回 `{lrc, yrc, trans}`，其中 `yrc` 是逐字时间轴，格式为 `[行起始ms,行时长ms]文本(字起始ms,字时长ms)…`。
 
@@ -153,8 +173,11 @@ src/
 - v3 搜索的封面字段是 `cover`，文档写的 `albumImage` 不存在
 - v3 播放链接实际只返回 `songID` / `songMID` / `kbps` / `link` / `url`，文档里的歌名、歌手、封面、时长、音质全都没有，因此元信息全部取自搜索结果
 - 成功码不统一：v3 用 `0`，v2 歌词用 `200`，两个都认
-- v3 播放链接**不会自动降级**，付费歌曲请求 `quality=14` 直接返回 `code=110000`，因此实现了音质阶梯 `[14,11,10,8,4,0]`，最多试 4 档
+- v3 播放链接**不会自动降级**，付费歌曲请求 `quality=14` 可能返回 `code=110000`，因此实现了音质阶梯 `[14,11,10,8,4,0]`，最多试 4 档
 - 上游会返回 `code=0` 但 `kbps=0kbps` 的死链，所以首字节探测放在阶梯循环**内部**：某一档给出死链时继续往下试，否则会白白放弃后面本来可用的低音质档位
+- **`/song/info` 的 `qualityInfo[].type` 与 `/song/link` 的 `quality` 参数一一对应**（已用同一首歌逐档核对，返回的文件名完全一致），且 `size == 0` 与「这一档拿不到可用地址」严格对应。所以 `/link` 先问一次 `/song/info`，直接挑一个真实存在的档位 —— 最坏情况从 4 次请求降到 1 次，也不会再把请求打在必定失败的档位上。`info` 自己失败时退回音质阶梯
+- 实测档位到 **18**（NAC），不是文档和旧版 README 写的 16
+- 一处旧注释的误判：付费歌曲**并非**一律在 `quality=14` 失败 —— 实测付费歌的 14 档同样能拿到地址（6020kbps），报 `110000` 的真正原因是该档 `size` 为 0，与是否付费无关
 
 ### 热更新
 
@@ -225,7 +248,9 @@ npm run dev
 node tools/verify-contract.mjs http://127.0.0.1:4720 verify-token
 ```
 
-当前共 62 项，必须全绿。脚本会核对状态码、业务码、信封形状、NDJSON 行格式、字段类型（`data.id` 必须是 number、`songId` 必须是字符串、`createdAt` / `configVersion` / `apkSize` 必须是 number）、纯文本歌词、Range 行为，以及「无效令牌访问 bootstrap 仍返回 200」这类红线；最后一组专门覆盖上面「数据层的四条硬规矩」，包括并发注册、并发刷新同一令牌、停用版本不可下载、灰度分桶稳定。
+当前共 82 项，必须全绿。脚本会核对状态码、业务码、信封形状、NDJSON 行格式、字段类型（`data.id` 必须是 number、`songId` 必须是字符串、`createdAt` / `configVersion` / `apkSize` 必须是 number）、纯文本歌词、Range 行为，以及「无效令牌访问 bootstrap 仍返回 200」这类红线。
+
+后面三组分别覆盖：PostgreSQL 迁移的四条硬规矩（并发注册、并发刷新同一令牌、停用版本不可下载、灰度分桶稳定）；搜索拆分后的新契约（60 首的耗时、`X-Accel-Buffering`、`favorited` / `vip` / `mid` 字段、批量收藏查询、`/link` 给的是上游直链、请求不存在的档位会降级、`/info` 过滤掉不存在的档位）；以及参数健壮性（`page=abc` 不会拼出 `page=NaN`、`quality=` 空串回落到 10 而不是 0）。
 
 `reset-db.mjs` 会 `DROP SCHEMA public CASCADE`，所以它拒绝库名里不含 `verify` / `test` 的连接串 —— SQLite 时代「删掉那个文件」就够了，现在需要一个显式且带护栏的动作。
 

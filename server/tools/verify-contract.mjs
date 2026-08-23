@@ -113,7 +113,8 @@ async function main() {
   check("duration 是 mm:ss 字符串", /^\d{2}:\d{2}$|^网络歌曲$/.test(songs[0]?.data?.duration ?? ""), songs[0]?.data?.duration);
   check("lyricUrl 是带前导斜杠的相对路径", (songs[0]?.data?.lyricUrl ?? "").startsWith("/api/v1/"), songs[0]?.data?.lyricUrl);
   check("coverUrl 是绝对 https 地址", (songs[0]?.data?.coverUrl ?? "").startsWith("https://"), songs[0]?.data?.coverUrl);
-  check(`耗时在 6 秒内（实测 ${elapsed}ms）`, elapsed < 6000, `${elapsed}ms`);
+  // 搜索不再逐首解析播放地址，一次上游请求就该返回；放宽到 3 秒只是留出网络抖动余量。
+  check(`耗时在 3 秒内（实测 ${elapsed}ms）`, elapsed < 3000, `${elapsed}ms`);
 
   section("歌词");
   const plain = await fetch(`${base}/api/v1/songs/97773/lyrics`, { headers: { authorization: `Bearer ${token}` } });
@@ -273,8 +274,109 @@ async function main() {
   );
   check("apkSize 是 number", typeof offered[0].data?.update?.apkSize === "number", `${typeof offered[0].data?.update?.apkSize}`);
 
-  console.log(`\n通过 ${passed} 项，失败 ${failed} 项`);
-  process.exitCode = failed === 0 ? 0 : 1;
+  section("搜索拆分：元信息 + 独立解析");
+  // 播放地址解析已从搜索里拆出去，搜索只返回元信息。这一组覆盖拆分后的新契约。
+
+  const wideStarted = Date.now();
+  const wide = await fetch(`${base}/api/v1/search?keyword=${encodeURIComponent("周杰伦")}&num=60`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  const wideBody = await wide.text();
+  const wideElapsed = Date.now() - wideStarted;
+  const wideLines = wideBody.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  const wideSongs = wideLines.filter((line) => line.type === "song").map((line) => line.data);
+  check(`60 首在 3 秒内返回（实测 ${wideElapsed}ms）`, wideElapsed < 3000, `${wideElapsed}ms`);
+  check("确实返回了 60 首", wideSongs.length === 60, `${wideSongs.length} 首`);
+  // 反向代理默认会把整个响应缓完再转发，逐行下发就白做了。
+  check(
+    "带 x-accel-buffering: no（否则反代会缓冲，逐行下发失效）",
+    wide.headers.get("x-accel-buffering") === "no",
+    String(wide.headers.get("x-accel-buffering")),
+  );
+  check("每首都带 favorited 且是 boolean", wideSongs.every((song) => typeof song.favorited === "boolean"));
+  check("每首都带 vip 且是 boolean", wideSongs.every((song) => typeof song.vip === "boolean"));
+  // songID 为 0 的歌只能靠 mid 解析，拆分后必须把它下发给客户端。
+  check("每首都带 mid", wideSongs.every((song) => typeof song.mid === "string" && song.mid.length > 0));
+  check(
+    "audioUrl 指向自家 host（不是上游直链）",
+    new URL(wideSongs[0].audioUrl).host === new URL(base).host,
+    wideSongs[0].audioUrl,
+  );
+  check("meta.dropped 仍然存在（旧客户端会读）", typeof wideLines.at(-1)?.meta?.dropped === "number");
+
+  const favSong = wideSongs[0];
+  await fetch(`${base}/api/v1/favorites/tencent/${favSong.id}`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}` },
+  });
+  const afterFav = (await (await fetch(`${base}/api/v1/search?keyword=${encodeURIComponent("周杰伦")}&num=60`, {
+    headers: { authorization: `Bearer ${token}` },
+  })).text())
+    .split("\n").filter(Boolean).map((line) => JSON.parse(line))
+    .filter((line) => line.type === "song").map((line) => line.data);
+  const flagged = afterFav.filter((song) => song.favorited);
+  check(
+    "批量收藏查询只标记真正收藏的那首",
+    flagged.length === 1 && flagged[0].id === favSong.id,
+    `${flagged.length} 首：${flagged.map((song) => song.id).join(",")}`,
+  );
+
+  section("解析播放地址与音质列表");
+  const linked = await (await fetch(`${base}/api/v1/songs/97773/link?quality=10`, {
+    headers: { authorization: `Bearer ${token}` },
+  })).json();
+  check("/link 返回 code 0", linked.code === 0, JSON.stringify(linked).slice(0, 140));
+  // 音频要由客户端直拉 QQ 的 CDN，服务器只负责解析。
+  check(
+    "/link 给出的是上游直链",
+    (linked.data?.url ?? "").includes("qqmusic.qq.com"),
+    (linked.data?.url ?? "").slice(0, 60),
+  );
+  check("/link 带实际档位与 kbps", typeof linked.data?.quality === "number" && !!linked.data?.kbps, JSON.stringify(linked.data));
+
+  // 这首歌没有杜比档（/song/info 里 size 为 0），必须降级而不是报错。
+  const downgraded = await (await fetch(`${base}/api/v1/songs/97773/link?quality=12`, {
+    headers: { authorization: `Bearer ${token}` },
+  })).json();
+  check(
+    "请求不存在的档位会降级并标记 fallback",
+    downgraded.code === 0 && downgraded.data?.fallback === true && downgraded.data?.quality < 12,
+    JSON.stringify(downgraded.data),
+  );
+
+  // 业务失败绝不能借用 401：那会触发客户端续期重放，二次失败把用户踢回登录页。
+  const unresolvable = await fetch(`${base}/api/v1/songs/1/link?quality=10`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  check("拿不到地址时不是 401", unresolvable.status !== 401, `实际 ${unresolvable.status}`);
+
+  const info = await (await fetch(`${base}/api/v1/songs/97773/info`, {
+    headers: { authorization: `Bearer ${token}` },
+  })).json();
+  check("/info 返回 code 0", info.code === 0, JSON.stringify(info).slice(0, 140));
+  check("/info 列出可用档位", (info.data?.qualities?.length ?? 0) > 0, `${info.data?.qualities?.length} 档`);
+  // size 为 0 的档位这首歌没有，服务端应该已经过滤掉，客户端不用自己判断。
+  check(
+    "/info 不下发 size 为 0 的档位",
+    (info.data?.qualities ?? []).every((tier) => tier.size > 0),
+    JSON.stringify(info.data?.qualities?.filter((tier) => !(tier.size > 0))),
+  );
+  check("/info 每档都有中文标签", (info.data?.qualities ?? []).every((tier) => typeof tier.label === "string" && tier.label.length > 0));
+
+  section("参数健壮性");
+  // Math.max(1, Number("abc")) 是 NaN，会拼出字面量 page=NaN 打给上游。
+  const nanPage = await fetch(`${base}/api/v1/search?keyword=test&page=abc&num=3`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  check("page 非法时不炸（回落默认值）", nanPage.status === 200, `实际 ${nanPage.status}`);
+  // Number("") 是 0 且 Number.isInteger(0) 为真，空 quality 曾静默落到最低档。
+  const blankQuality = await (await fetch(`${base}/api/v1/search?keyword=test&quality=&num=3`, {
+    headers: { authorization: `Bearer ${token}` },
+  })).text();
+  const blankMeta = blankQuality.split("\n").filter(Boolean).map((line) => JSON.parse(line)).at(-1)?.meta;
+  check("空 quality 回落到默认 10 而不是 0", blankMeta?.quality === 10, `quality=${blankMeta?.quality}`);
+
+  console.log(`\n通过 ${passed} 项，失败 ${failed} 项`);  process.exitCode = failed === 0 ? 0 : 1;
 }
 
 async function postJson(path, body) {

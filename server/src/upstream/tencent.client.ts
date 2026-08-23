@@ -21,6 +21,22 @@ export type UpstreamSong = {
 export type SearchResult = { total: number; perPage: number; nextPage: number | null; list: UpstreamSong[] };
 export type UpstreamLink = { url: string; kbps: string; quality: number };
 
+/** 一个音质档位。[size] 为 0 表示这首歌**没有**这一档，请求它必然拿不到可用地址。 */
+export type QualityTier = { type: number; size: number; label: string };
+
+/** 歌曲信息与可用音质档位。 */
+export type UpstreamSongInfo = {
+  songID: number;
+  songMID: string;
+  title: string;
+  singer: string;
+  album: string;
+  cover: string;
+  pay: string;
+  interval: number;
+  tiers: QualityTier[];
+};
+
 /**
  * 歌词三件套。
  *
@@ -33,9 +49,13 @@ export type RichLyric = { lrc: string; yrc: string; trans: string };
 /**
  * 音质降级阶梯。
  *
- * v3 的播放链接接口与 v2 不同：所选音质拿不到时**不会自动降级**，而是直接报错
- * （实测付费歌曲请求 quality=14 返回 code=110000）。所以必须自己逐级往下试，
- * 否则大量歌曲会因为「无损拿不到」而被当成不可播放直接丢弃。
+ * v3 的播放链接接口拿不到所选音质时**不会自动降级**，所以必须自己逐级往下试。
+ *
+ * 这是**兜底路径**：优先用 `/song/info` 的 `qualityInfo` 直接挑一个真实存在的档位
+ * （实测 `size == 0` 与「拿不到可用地址」严格对应），只有 info 拿不到时才走阶梯。
+ *
+ * 另外纠正一处旧注释里的误判：付费歌曲并非一律在 quality=14 失败 ——
+ * 实测付费歌的 14 档同样能拿到地址，报 code=110000 的真正原因是该档 size 为 0。
  */
 const QUALITY_LADDER = [14, 11, 10, 8, 4, 0];
 
@@ -59,21 +79,56 @@ export class TencentClient {
   }
 
   /**
+   * 歌曲信息与可用音质档位（v3 `/song/info`）。
+   *
+   * 这是唯一能按 id / mid 单曲查询的接口 —— 搜索只能按关键词。它比搜索结果多出来的
+   * 只有 `qualityInfo`，但那正是关键：它列出这首歌**真实存在**的档位与各档字节数。
+   */
+  async requestSongInfo(key: { id?: number; mid?: string }): Promise<UpstreamSongInfo> {
+    const data = this.unwrap(
+      await this.requestJson(`${this.config.upstreamV3BaseUrl}/song/info?${this.identityOf(key)}`),
+      "歌曲信息不可用",
+    );
+    const tiers: QualityTier[] = (Array.isArray(data.qualityInfo) ? data.qualityInfo : [])
+      .map((item: any) => ({
+        type: Number(item?.type),
+        size: Number(item?.size ?? 0),
+        label: String(item?.quality ?? ""),
+      }))
+      .filter((tier: QualityTier) => Number.isInteger(tier.type));
+    return {
+      songID: Number(data.songID ?? 0),
+      songMID: String(data.songMID ?? ""),
+      title: String(data.title ?? ""),
+      singer: String(data.singer ?? ""),
+      album: String(data.album ?? ""),
+      cover: String(data.cover ?? ""),
+      pay: String(data.pay ?? ""),
+      interval: Number(data.interval ?? 0),
+      tiers,
+    };
+  }
+
+  /**
    * 获取播放链接（v3），按音质阶梯逐级降级。
    *
    * 上游偶尔返回 code=0 但 url 为空、或 kbps 为 0kbps 的死链，所以不能只看返回码。
    * [verify] 用于在阶梯内部就把死链筛掉：探测放在循环里而不是循环外，
    * 某一档给出死链时还能继续往下试，否则会白白放弃后面本来可用的低音质档位。
+   *
+   * [available] 是 `/song/info` 给出的可用档位集合，传了就只试这些档 ——
+   * 能把最坏情况从 4 次请求降到 1 次，也不会再把请求打在必定失败的档位上。
    */
   async resolveLink(
     key: { id?: number; mid?: string; type?: number },
     quality: number,
     verify?: (url: string) => Promise<boolean>,
+    available?: Set<number>,
   ): Promise<UpstreamLink> {
-    const identity = key.id && key.id > 0 ? `id=${key.id}` : `mid=${encodeURIComponent(key.mid ?? "")}`;
+    const identity = this.identityOf(key);
     const typeParam = key.type === undefined ? "" : `&type=${key.type}`;
     let lastError = "播放地址不可用";
-    for (const attempt of this.qualityLadderFrom(quality)) {
+    for (const attempt of this.qualityLadderFrom(quality, available)) {
       try {
         const data = this.unwrap(
           await this.requestJson(`${this.config.upstreamV3BaseUrl}/song/link?${identity}&quality=${attempt}${typeParam}`),
@@ -106,7 +161,23 @@ export class TencentClient {
     return { lrc, yrc, trans: String(data.trans ?? "").trim() };
   }
 
-  private qualityLadderFrom(quality: number): number[] {
+  /** 身份参数：优先用数字 id，没有正整数 id 时退回 mid。 */
+  private identityOf(key: { id?: number; mid?: string }): string {
+    return key.id && key.id > 0 ? `id=${key.id}` : `mid=${encodeURIComponent(key.mid ?? "")}`;
+  }
+
+  /**
+   * 要尝试的档位序列。
+   *
+   * 传了可用档位集合时只保留其中存在的档：请求档位本身可用就直接命中，
+   * 否则取比它低的最高可用档 —— 一次请求就够，不用把阶梯走完。
+   */
+  private qualityLadderFrom(quality: number, available?: Set<number>): number[] {
+    if (available?.size) {
+      if (available.has(quality)) return [quality];
+      const lower = [...available].filter((value) => value < quality).sort((left, right) => right - left);
+      return lower.slice(0, MAX_QUALITY_ATTEMPTS);
+    }
     const lower = QUALITY_LADDER.filter((value) => value < quality);
     return [quality, ...lower].slice(0, MAX_QUALITY_ATTEMPTS);
   }

@@ -49,6 +49,13 @@ fun SearchPage(
     onHistoryClick: (String) -> Unit,
     onHistoryRemove: (String) -> Unit,
     onHistoryClear: () -> Unit,
+    /**
+     * 收藏缓存的版本号。它本身不参与渲染，只是让缓存变化能触发重组 ——
+     * 收藏状态存在 SharedPreferences 里，那东西不是可观察状态。
+     */
+    favoriteRevision: Int = 0,
+    isFavorite: (Song) -> Boolean = { false },
+    onToggleFavorite: ((Song) -> Unit)? = null,
 ) {
     val focusRequester = remember { FocusRequester() }
     // 进入搜索页自动聚焦输入框。焦点请求必须在组件挂载后发起，否则请求会被丢弃。
@@ -79,7 +86,8 @@ fun SearchPage(
                 )
             }
         }
-        if (isSearching) SearchSkeletonList()
+        // 结果现在是逐条到达的，已经有结果就不该再显示骨架屏，否则骨架和结果会同时出现。
+        if (isSearching && songs.isEmpty()) SearchSkeletonList()
         if (hasSearched && !isSearching && !errorMessage.isNullOrBlank()) {
             Text(errorMessage, color = TaotaoCoral, modifier = Modifier.padding(top = 28.dp))
         }
@@ -92,7 +100,16 @@ fun SearchPage(
                     var visible by remember(song) { mutableStateOf(false) }
                     LaunchedEffect(song) { visible = true }
                     AnimatedVisibility(visible = visible, enter = listItemEnter(index)) {
-                        SongListItem(song, false) { onSongClick(index, song) }
+                        // favoriteRevision 参与读取，收藏变化才会重组到这一行。
+                        val favorited = remember(song.remoteId, favoriteRevision) { isFavorite(song) }
+                        SongListItem(
+                            song = song,
+                            active = false,
+                            favorited = favorited,
+                            onToggleFavorite = onToggleFavorite
+                                ?.takeIf { song.remoteId != null }
+                                ?.let { toggle -> { toggle(song) } },
+                        ) { onSongClick(index, song) }
                     }
                 }
             }

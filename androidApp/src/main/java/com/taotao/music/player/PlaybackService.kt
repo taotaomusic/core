@@ -1,6 +1,7 @@
 package com.taotao.music.player
 
 import android.content.Intent
+import android.net.Uri
 import android.util.Log
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -32,14 +33,34 @@ class PlaybackService : MediaSessionService() {
     override fun onCreate() {
         super.onCreate()
         val authSession = AuthSession(this)
+        val musicApi = TencentMusicApi(authSession)
         val upstreamFactory = DefaultDataSource.Factory(
             this,
             DefaultHttpDataSource.Factory().setAllowCrossProtocolRedirects(true),
         )
-        // 每次取流时现取访问令牌：长时间播放或队列续播时令牌可能已经轮换，不能沿用启动时的旧令牌。
+        /**
+         * 取流前把占位地址换成上游直链。
+         *
+         * 队列里存的是 `/api/v1/songs/{id}/play?quality=N` 这种永不过期的占位地址
+         * （上游直链是限时的，存进队列后冷启动恢复时早就失效了）。真正的地址在这里、
+         * 也就是 ExoPlayer 打开流的那一刻才解析,所以拿到的总是新鲜的。
+         *
+         * 解析失败就照占位地址走服务器代理,并补上访问令牌 —— 天然的兜底,
+         * 后端还没部署 `/link` 时也能正常播放。
+         *
+         * 这个回调跑在 ExoPlayer 的 loader 线程上且是同步的,多一次请求会阻塞几百毫秒,
+         * 那段时间正好落在播放器的缓冲状态里,界面上就是加载动画。
+         */
         val resolvingFactory = ResolvingDataSource.Factory(upstreamFactory) { dataSpec ->
             val url = dataSpec.uri.toString()
             if (!TencentMusicApi.isOwnEndpoint(url)) return@Factory dataSpec
+            val placeholder = TencentMusicApi.parsePlaceholder(url)
+            if (placeholder != null) {
+                val direct = runCatching { musicApi.resolveDirectUrl(placeholder.first, placeholder.second) }.getOrNull()
+                // 直链在 QQ 的 CDN 上，不需要也不应该带上我们的访问令牌。
+                if (!direct.isNullOrBlank()) return@Factory dataSpec.withUri(Uri.parse(direct))
+                Log.w(TAG, "解析直链失败，回退服务器代理：$url")
+            }
             val token = runCatching { authSession.validToken() }.getOrNull()
             if (token.isNullOrBlank()) dataSpec
             else dataSpec.withAdditionalHeaders(mapOf("Authorization" to "Bearer $token"))

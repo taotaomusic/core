@@ -45,4 +45,21 @@ export class FavoritesRepository {
       [userId],
     );
   }
+
+  /**
+   * 批量判断哪些歌已被收藏，一次查询覆盖整页搜索结果。
+   *
+   * 建表时的 `UNIQUE (user_id, source, song_id)` 正好能服务 `= ANY(...)`，
+   * 60 个 id 也只是一次索引扫描。`song_id` 是 text，调用方传字符串数组。
+   *
+   * 这替掉了客户端原来的做法：为每首歌拉一次**完整**收藏列表再线性查找。
+   */
+  async favoritedIds(userId: number, source: string, songIds: string[]): Promise<Set<string>> {
+    if (songIds.length === 0) return new Set();
+    const rows = await this.database.all<{ song_id: string }>(
+      "SELECT song_id FROM favorites WHERE user_id = $1 AND source = $2 AND song_id = ANY($3::text[])",
+      [userId, source, songIds],
+    );
+    return new Set(rows.map((row) => row.song_id));
+  }
 }

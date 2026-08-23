@@ -1,5 +1,6 @@
 package com.taotao.music.data
 
+import com.taotao.music.model.AudioQuality
 import com.taotao.music.model.Song
 import org.json.JSONObject
 import java.net.HttpURLConnection
@@ -10,10 +11,24 @@ import java.net.URL
 class TencentMusicApi(private val tokenProvider: TokenProvider) {
     data class TokenPair(val accessToken: String, val refreshToken: String, val expiresIn: Int)
 
-    fun search(keyword: String, page: Int = 1, num: Int = 20, quality: Int = 10): SearchResult {
+    /**
+     * 搜索歌曲。
+     *
+     * [onProgress] 在解析过程中被反复调用，每次传入**当前累积的完整列表**而不是新增的一首。
+     * 这样设计是因为 [authorized] 在令牌被拒时会重放整个请求、把 NDJSON 从头再读一遍：
+     * 若回调语义是「追加一首」，重放就会产出重复条目；传累积快照时累积列表是下面这个
+     * lambda 的局部变量，重放自然从空开始，界面直接整体赋值即可。
+     */
+    fun search(
+        keyword: String,
+        page: Int = 1,
+        num: Int = 60,
+        quality: Int = AudioQuality.Default.value,
+        onProgress: (List<Song>) -> Unit = {},
+    ): SearchResult {
         val query = "?keyword=${encode(keyword)}" +
             "&page=$page&num=${num.coerceIn(1, 60)}" +
-            "&quality=${quality.coerceIn(0, 16)}"
+            "&quality=${quality.coerceIn(0, MAX_QUALITY)}"
         return authorized("/api/v1/search$query") { connection ->
             val songs = mutableListOf<Song>()
             var dropped = 0
@@ -21,9 +36,12 @@ class TencentMusicApi(private val tokenProvider: TokenProvider) {
                 lines.filter { it.isNotBlank() }.forEach { line ->
                     val record = runCatching { JSONObject(line) }.getOrNull() ?: return@forEach
                     when (record.optString("type")) {
-                        "song" -> record.optJSONObject("data")?.let { songs += it.toSong() }
-                        // 收尾行带着被丢弃的数量：服务端拿不到可用播放地址的歌不会返回，
-                        // 不告知用户的话，搜到 20 首只显示 17 首会显得像 bug。
+                        "song" -> record.optJSONObject("data")?.let {
+                            songs += it.toSong(quality)
+                            onProgress(songs.toList())
+                        }
+                        // 收尾行的 dropped 现在恒为 0：服务端不再逐首探测播放地址，也就不再丢歌。
+                        // 仍然读它是为了兼容尚未部署新版本的服务端。
                         "end" -> dropped = record.optJSONObject("meta")?.optInt("dropped") ?: 0
                     }
                 }
@@ -33,29 +51,67 @@ class TencentMusicApi(private val tokenProvider: TokenProvider) {
     }
 
     /**
-     * 返回后端的指定品质播放流地址，不再解析第三方播放地址。
-     * 播放地址需要携带访问令牌，因此这里同时确保本地令牌可用，
-     * 让随后交给播放服务的令牌是新鲜的。
+     * 解析播放地址。
+     *
+     * 返回的是**上游直链**，音频字节不再经过我们的服务器。所以调用方拿到的地址
+     * 是限时的，不能持久化 —— 队列里存的始终是 [placeholderUri] 那种永不过期的占位地址，
+     * 真正的直链在取流的那一刻才换上。
      */
-    fun resolve(song: Song, quality: Int = 10): Song {
+    fun resolveLink(song: Song, quality: Int): ResolvedLink {
         val id = requireNotNull(song.remoteId) { "网络歌曲缺少歌曲 ID" }
-        tokenProvider.validToken() ?: throw SessionExpiredException()
-        return song.copy(
-            audioUri = "$ENDPOINT/api/v1/songs/$id/play?quality=${quality.coerceIn(0, 16)}",
-            lyricUri = song.lyricUri?.let { if (it.startsWith("http")) it else "$ENDPOINT$it" }
-                ?: "$ENDPOINT/api/v1/songs/$id/lyrics",
-        )
+        val query = buildString {
+            append("?quality=${quality.coerceIn(0, MAX_QUALITY)}")
+            song.mid?.takeIf { it.isNotBlank() }?.let { append("&mid=${encode(it)}") }
+            song.type?.let { append("&type=$it") }
+        }
+        return authorized("/api/v1/songs/$id/link$query") { connection ->
+            val result = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+            check(result.optInt("code") == 0) { result.optString("message", "无法获取播放地址") }
+            val data = result.getJSONObject("data")
+            ResolvedLink(
+                url = data.getString("url"),
+                quality = data.optInt("quality", quality),
+                kbps = data.optString("kbps"),
+                fallback = data.optBoolean("fallback"),
+            )
+        }
     }
 
-    fun isFavorite(song: Song): Boolean {
-        val id = requireNotNull(song.remoteId) { "网络歌曲缺少歌曲 ID" }
-        val result = authorized("/api/v1/favorites") { connection ->
-            JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+    /**
+     * 只按歌曲 ID 解析直链，供取流时使用。
+     *
+     * 取流时手上只有占位地址,拿不到 mid 与 type;但占位地址只在 `remoteId > 0` 时才生成,
+     * 所以按 ID 解析一定够用。
+     */
+    fun resolveDirectUrl(remoteId: Long, quality: Int): String =
+        authorized("/api/v1/songs/$remoteId/link?quality=${quality.coerceIn(0, MAX_QUALITY)}") { connection ->
+            val result = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+            check(result.optInt("code") == 0) { result.optString("message", "无法获取播放地址") }
+            result.getJSONObject("data").getString("url")
         }
-        val favorites = result.optJSONArray("data") ?: return false
-        return (0 until favorites.length()).any { index ->
-            val item = favorites.optJSONObject(index)
-            item?.optString("source") == "tencent" && item.optString("songId") == id.toString()
+
+    /** 这首歌真实存在的音质档位，用于让选择器只列出能选的档并提示体积。 */
+    fun requestQualities(song: Song): List<QualityOption> {
+        val id = requireNotNull(song.remoteId) { "网络歌曲缺少歌曲 ID" }
+        val query = song.mid?.takeIf { it.isNotBlank() }?.let { "?mid=${encode(it)}" } ?: ""
+        return authorized("/api/v1/songs/$id/info$query") { connection ->
+            val result = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+            check(result.optInt("code") == 0) { result.optString("message", "无法获取音质列表") }
+            val list = result.getJSONObject("data").optJSONArray("qualities") ?: return@authorized emptyList()
+            (0 until list.length()).mapNotNull { index ->
+                val item = list.optJSONObject(index) ?: return@mapNotNull null
+                QualityOption(item.optInt("quality"), item.optString("label"), item.optLong("size"))
+            }
+        }
+    }
+
+    /** 当前用户收藏的全部歌曲 ID，用于播种本地缓存。 */
+    fun favoriteIds(): Set<String> = authorized("/api/v1/favorites") { connection ->
+        val result = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+        val favorites = result.optJSONArray("data") ?: return@authorized emptySet()
+        (0 until favorites.length()).mapNotNullTo(mutableSetOf()) { index ->
+            val item = favorites.optJSONObject(index) ?: return@mapNotNullTo null
+            item.optString("songId").takeIf { it.isNotBlank() && item.optString("source") == "tencent" }
         }
     }
 
@@ -127,7 +183,7 @@ class TencentMusicApi(private val tokenProvider: TokenProvider) {
             token?.takeIf { it.isNotBlank() }?.let { setRequestProperty("Authorization", "Bearer $it") }
         }
 
-    private fun JSONObject.toSong(): Song {
+    private fun JSONObject.toSong(quality: Int): Song {
         val id = optLong("id")
         return Song(
             title = optString("title", "未知歌曲"),
@@ -135,14 +191,19 @@ class TencentMusicApi(private val tokenProvider: TokenProvider) {
             duration = optString("duration", "网络歌曲"),
             color = 0xFFFFB4A2,
             remoteId = id.takeIf { it > 0 },
-            audioUri = optString("audioUrl").ifBlank {
-                id.takeIf { it > 0 }?.let { "$ENDPOINT/api/v1/songs/$it/play?quality=10" } ?: ""
-            }.takeIf { it.isNotBlank() },
+            // 队列里存的是永不过期的占位地址，真正的上游直链在取流那一刻才解析。
+            // 服务端下发的 audioUrl 只是同样的占位地址，这里直接自己拼，音质才跟得上偏好。
+            audioUri = id.takeIf { it > 0 }?.let { placeholderUri(it, quality) }
+                ?: optString("audioUrl").takeIf { it.isNotBlank() },
             coverUri = optString("coverUrl").ifBlank { null },
             lyricUri = optString("lyricUrl").ifBlank { null }?.let {
                 if (it.startsWith("http")) it else "$ENDPOINT$it"
             } ?: id.takeIf { it > 0 }?.let { "$ENDPOINT/api/v1/songs/$it/lyrics" },
             album = optString("album", "未知专辑"), subtitle = optString("subtitle"), releaseTime = optString("time"),
+            mid = optString("mid").ifBlank { null },
+            type = if (has("type") && !isNull("type")) optInt("type") else null,
+            vip = optBoolean("vip"),
+            favorited = optBoolean("favorited"),
         )
     }
 
@@ -152,6 +213,29 @@ class TencentMusicApi(private val tokenProvider: TokenProvider) {
         /** 后端地址。热更新模块也要用，因此对包内公开，保持单一来源。 */
         const val ENDPOINT = "https://music.xydaigua.cn"
         private const val MAX_AUTH_ATTEMPTS = 2
+
+        /** 音质取值上限。实测上游档位到 18（NAC）。 */
+        const val MAX_QUALITY = 18
+
+        /**
+         * 队列里存的占位地址。
+         *
+         * 刻意用自家的 `/play` 路径而不是上游直链：直链是限时的，存进 MediaItem 或
+         * 持久化队列后，冷启动恢复时早就失效了。占位地址永不过期，且 [isOwnEndpoint]
+         * 认得它，取流时由 PlaybackService 的 ResolvingDataSource 换成直链；
+         * 换不成就照这个地址走服务器代理，正好是天然的兜底。
+         */
+        fun placeholderUri(remoteId: Long, quality: Int): String =
+            "$ENDPOINT/api/v1/songs/$remoteId/play?quality=${quality.coerceIn(0, MAX_QUALITY)}"
+
+        /** 从占位地址里取回歌曲 ID 与音质，供 ResolvingDataSource 解析用。 */
+        fun parsePlaceholder(url: String): Pair<Long, Int>? = runCatching {
+            val parsed = URL(url)
+            if (parsed.host != URL(ENDPOINT).host) return null
+            val id = Regex("""/api/v1/songs/(\d+)/play""").find(parsed.path)?.groupValues?.get(1)?.toLong() ?: return null
+            val quality = Regex("""(?:^|&)quality=(\d+)""").find(parsed.query ?: "")?.groupValues?.get(1)?.toIntOrNull()
+            id to (quality ?: AudioQuality.Default.value)
+        }.getOrNull()
 
         /** 媒体地址是否由本服务提供，只有自家地址才附带访问令牌。 */
         fun isOwnEndpoint(url: String): Boolean = runCatching { URL(url).host == URL(ENDPOINT).host }.getOrDefault(false)
@@ -217,7 +301,18 @@ class CredentialsRejectedException(message: String) : IllegalStateException(mess
 data class RichLyric(val lrc: String, val yrc: String)
 
 /**
- * 搜索结果。[dropped] 是服务端因拿不到可用播放地址而丢弃的数量，
- * 界面据此提示用户，避免「搜到 20 首却只显示 17 首」看起来像故障。
+ * 搜索结果。[dropped] 是服务端因拿不到可用播放地址而丢弃的数量。
+ * 服务端不再逐首探测后它恒为 0，保留只为兼容尚未升级的服务端。
  */
 data class SearchResult(val songs: List<Song>, val dropped: Int)
+
+/**
+ * 解析出来的播放地址。
+ *
+ * [url] 是上游直链，**限时**，不能持久化。[quality] 是实际拿到的档位 ——
+ * 上游不会自动降级，服务端按阶梯往下试，所以可能低于请求的档位，[fallback] 即表示发生了降级。
+ */
+data class ResolvedLink(val url: String, val quality: Int, val kbps: String, val fallback: Boolean)
+
+/** 一个可选音质档位。[size] 是字节数，用于在下载前提示体积。 */
+data class QualityOption(val quality: Int, val label: String, val size: Long)

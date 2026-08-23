@@ -40,6 +40,11 @@ object SongCodec {
         put("album", song.album)
         put("subtitle", song.subtitle)
         put("releaseTime", song.releaseTime)
+        // mid 与 type 必须一起持久化：冷启动恢复队列后还要靠它们去解析播放地址。
+        put("mid", song.mid)
+        put("type", song.type)
+        put("vip", song.vip)
+        put("favorited", song.favorited)
     }
 
     private fun fromJson(data: JSONObject): Song = Song(
@@ -54,6 +59,10 @@ object SongCodec {
         album = data.optString("album"),
         subtitle = data.optString("subtitle"),
         releaseTime = data.optString("releaseTime"),
+        mid = data.optText("mid"),
+        type = if (data.has("type") && !data.isNull("type")) data.optInt("type") else null,
+        vip = data.optBoolean("vip"),
+        favorited = data.optBoolean("favorited"),
     )
 
     /** 可空字段统一处理：JSONObject 存入 null 会写成 JSONObject.NULL，取出来是字符串 "null"。 */
