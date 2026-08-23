@@ -13,6 +13,7 @@
 | [05-image-generation.md](05-image-generation.md) | 维护 gpt-image-2、Key 池、额度和图片任务时 |
 | [06-release-deployment.md](06-release-deployment.md) | 部署后端、发布 APK、灰度或回滚时 |
 | [07-troubleshooting.md](07-troubleshooting.md) | 服务启动失败、接口异常或线上行为不符合预期时 |
+| [08-native-crypto.md](08-native-crypto.md) | 接口需要原生加密、认证、防重放或排查 Kiwi Crypto 时 |
 
 ## 上位文档
 
@@ -30,6 +31,7 @@
 5. 不在文档中写入真实密码、API Key、数据库连接串或签名信息。
 6. 示例密钥只能使用明显的占位文本，例如 `替换为真实Key`。
 7. 文档中的命令应能从标注的工作目录直接执行。
+8. 原生加密格式或密钥规则变化时同步更新 Kiwi Crypto 专题和模块内 `SECURITY.md`。
 
 ## 快速入口
 
