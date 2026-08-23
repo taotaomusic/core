@@ -1,42 +1,84 @@
 # 桃桃音乐
 
-桃桃音乐是一个使用 Kotlin Multiplatform 构建的音乐播放器项目，当前先实现 Android 版本，后续复用 `shared` 模块扩展 iOS。
+Kotlin Multiplatform 音乐播放器 + 自建后端。当前只有 Android 客户端,`shared` 模块为后续扩展 iOS 预留。
 
-## 当前功能
+- 开发约定(代码风格、模块划分、测试、签名)见 [AGENTS.md](AGENTS.md)
+- **发布与热更新流程见 [RELEASE.md](RELEASE.md)** —— 推版本前务必先看
+- 后端接口与数据层细节见 [server/README.md](server/README.md)
+- 热更新的设计动机见 [HOT_UPDATE.md](HOT_UPDATE.md)
 
-- 推荐首页、分类标签和每日推荐卡片
-- 最近播放列表
-- 歌曲选择、播放/暂停状态和迷你播放器
-- 可复用的专辑封面、歌曲列表项和播放器组件
-- Release 版本使用本地发布签名，关闭代码压缩与混淆
+## 这个项目由三块组成
 
-## 模块说明
-
-- `shared`：跨平台歌曲模型和共享业务逻辑。
-- `androidApp`：Android 入口、Compose UI、主题和平台资源。
-- `androidApp/src/main/java/com/taotao/music/ui`：页面和可复用 UI 组件。
-
-## 打开与运行
-
-使用 Android Studio 打开 `F:/music`，等待 Gradle 同步后运行 `androidApp`。
-
-也可以在项目根目录执行：
-
-```powershell
-.\gradlew.bat :androidApp:assembleDebug
-.\gradlew.bat :androidApp:assembleRelease
+```
+androidApp/   Android 应用：Compose 界面、Media3 播放、热更新、离线下载
+shared/       跨平台层：歌曲模型、歌词解析、音质档位定义（有单元测试）
+server/       NestJS 后端：账号、收藏、上游接口适配、热更新分发
 ```
 
-生产 APK 输出路径：
+客户端**不直接请求第三方音乐接口**,全部经过自己的后端。后端是接口适配层:媒体、图片、歌词只做实时转发或解析,PostgreSQL 只保存账号、刷新令牌哈希、收藏和发布记录,不存任何媒体内容。
 
-`androidApp/build/outputs/apk/release/androidApp-release.apk`
+## 一次播放会发生什么
 
-完整开发约定请阅读 [AGENTS.md](AGENTS.md)。
+理解这条链路基本就理解了整个项目:
 
-## 版本号
+1. **搜索** —— 客户端请求 `/api/v1/search?num=60`,后端打一次上游拿列表,把 60 首元信息逐行以 NDJSON 写出(含 `favorited` / `vip` / `mid`)。客户端收到一首渲染一首。本机实测 130–900ms(取决于上游缓存);线上从发起到首行约 1.2 秒(含建连与上游),首行之后 60 行在 18ms 内到齐。
+2. **入队** —— 点击某首时,客户端把**占位地址** `/api/v1/songs/{id}/play?quality=N` 放进播放队列。这个地址永不过期,可以安全地持久化。
+3. **取流** —— ExoPlayer 打开流的那一刻,`PlaybackService` 的 `ResolvingDataSource` 拿占位地址去问 `/api/v1/songs/{id}/link`,后端解析出**上游直链**并返回实际拿到的音质档位。
+4. **播放** —— 客户端直接拉 QQ 的 CDN,音频字节**不经过我们的服务器**。解析失败就明确报错,不回退代理(回退会把流量悄悄绕回自己服务器,还会藏住"解析坏了"这件事)。
+5. **歌词** —— `/api/v1/songs/{id}/lyrics?format=json` 同时给出行级 `lrc` 与逐字 `yrc`,客户端据此做逐字高亮。
 
-版本号保存在 `version.properties`。执行 `assembleDebug` 或 `assembleRelease` 成功后，Gradle 会自动调用 `tools/Update-Version.ps1`，递增 `versionCode` 和补丁版本号。也可以手动执行：
+搜索**刻意不解析播放地址**。早先每首都要额外要一次播放链接并探测首字节,20 首约 1.8 秒、60 首最坏 240 次上游请求,而客户端拿到后又会丢掉它 —— 那些请求换来的只是"过滤掉拿不到地址的歌"。现在改成点播时才解析。代价是付费/下架的歌会出现在结果里,所以搜索结果带 `vip` 标记,真正放不出来的在点播时提示。
+
+## 主要功能
+
+**播放** —— Media3 `MediaSessionService` 后台播放、锁屏与通知控制、拔耳机自动暂停、按曲目切换唤醒锁档位。播放指令统一由 `AudioPlayer` 通过 `MediaController` 下发。
+
+**账号** —— 访问令牌 15 分钟、刷新令牌 30 天且刷新时轮换。令牌格式是 `base64url(payload).HMAC-SHA256`,刻意没有用 JWT 库 —— 换格式会让所有装机客户端的令牌立刻失效。密码用随机盐 + 高成本 scrypt。
+
+**收藏** —— 搜索结果内联 `favorited`(一次批量查询),客户端本地缓存 + 乐观更新,服务端的值是权威值。
+
+**音质** —— 播放与下载的默认音质分开设置(下载只花一次流量,可以选得更高)。播放页可临时切档。档位表来自上游 `/song/info`,只列出这首歌**真实存在**的档位并显示体积。
+
+**离线下载** —— 音频、封面、行级歌词与逐字歌词一并落到应用私有目录。下载前可选音质并看到体积,带系统通知显示进度。
+
+**热更新** —— 整包 APK + 远程配置,支持灰度放量与强制更新下限。详见 [RELEASE.md](RELEASE.md)。
+
+**崩溃日志** —— 测试机无法连 adb,崩溃堆栈写到本地并可在「我的」页内查看和复制。
+
+## 开发
+
+### 客户端
 
 ```powershell
-.\tools\Update-Version.ps1
+.\gradlew.bat :androidApp:assembleDebug        # 调试包
+.\gradlew.bat :androidApp:assembleRelease      # 发布包（验收标准）
+.\gradlew.bat :shared:testDebugUnitTest        # 共享层单元测试
 ```
+
+产物在 `androidApp/build/outputs/apk/release/`。**注意:两种 assemble 都会递增 `version.properties`**,细节见 [RELEASE.md](RELEASE.md) 的版本号铁律。
+
+### 后端
+
+需要本机有 PostgreSQL,并建好库:
+
+```powershell
+psql -U postgres -c "CREATE DATABASE music"
+cd server
+npm install
+copy .env.example .env    # 然后填 DATABASE_URL、AUTH_SECRET、ADMIN_TOKEN
+npm run dev
+```
+
+建表由服务启动时自动完成(幂等 DDL + 顾问锁),不需要手工跑迁移。
+
+改完后端**必须跑契约验证**(当前 82 项):做法见 [RELEASE.md](RELEASE.md#四服务端发布)。线上有装机客户端,而 `/api/v1/app/bootstrap` 本身就是推修复的通道,坏掉就没有补救手段。
+
+## 几个反复踩过的坑
+
+留在这里避免重复付学费,完整清单见 [RELEASE.md](RELEASE.md)。
+
+- **前台服务契约** —— `startForegroundService` 之后必须在几秒内调 `startForeground`,否则系统直接杀进程。media3 的 `onStartCommand` 会静默忽略自定义 action,当年那个"播放一段时间就闪退"就是这么来的。所以播放指令走 `MediaController`,而下载通知刻意**不用**前台服务。
+- **`remember(key)` 与 `LaunchedEffect(key)` 的 key 必须一致** —— 不一致会出现"状态被清空、拉取逻辑却不重跑",表现成进度停在 0:00 或歌词空白。
+- **新增整页要同步三处** —— `switchTab`、`AnimatedContent` 的 `targetState`、`BackHandler`。漏掉第一处的表现是"点了底部标签却还停在原页面"。
+- **`LazyColumn` 会销毁滚出屏幕的项** —— item 内部的 `remember` 随之重置,入场动画于是每次滚回来都重播。需要"只播一次"的状态要提到列表外面。
+- **Node 未处理的 promise rejection 会终止进程** —— 并发任务必须在**创建时**就挂上失败处理,留到循环里再 await 就晚了。同理 `pool.on("error")` 必须挂监听,否则数据库重启会直接带走 Node 进程。

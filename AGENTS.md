@@ -8,9 +8,16 @@
 - `shared/`：跨平台共享的数据模型、业务状态和未来的播放领域逻辑，代码放在 `src/commonMain/`。
 - 根目录 Gradle 文件：定义 `:androidApp` 和 `:shared` 模块。
 - `build/` 目录：构建生成物，只读，不手工修改。
-- `server/`：Node.js + TypeScript 无状态音乐接口适配服务；服务源码必须保持可读，不得提交压缩后的源码。
+- `server/`：NestJS + TypeScript + PostgreSQL 的接口适配服务；服务源码必须保持可读，不得提交压缩后的源码。
 - 外部参考仓库不得放在项目根目录；临时参考代码使用项目外目录，交付前清理无关仓库。
 - 新增 Kotlin 代码必须放在已有的 `com.taotao.music` 包层级下。
+
+## 文档索引
+
+- [README.md](README.md)：项目总览、播放链路、开发入口。
+- **[RELEASE.md](RELEASE.md)：发布与热更新流程、版本号铁律、不能破的客户端契约。改后端或推版本前必读。**
+- [server/README.md](server/README.md)：后端接口、数据层规矩、契约验证。
+- [HOT_UPDATE.md](HOT_UPDATE.md)：热更新的设计动机（部分内容已被实现取代，文内有标注）。
 
 ## 文档语言
 
@@ -47,6 +54,20 @@
 
 当前要求使用 JDK 21 和项目自带 Gradle Wrapper。生产 APK 输出在 `androidApp/build/outputs/apk/release/`。
 
+**`assembleDebug` 与 `assembleRelease` 都会递增 `version.properties`**（`incrementVersion` 是它们的 `finalizedBy`）。因此：
+
+- 登记发布时版本号只能取自 `androidApp/build/outputs/apk/release/output-metadata.json`，**不能读 `version.properties`** —— 构建结束时它已经比刚产出的包大 1。
+- **不要回滚 `version.properties`**，也不要为了让版本号连续而复用旧号。跳号无害，重号会静默覆盖已发布记录的 sha256，导致更新推不出去。
+
+完整规则见 [RELEASE.md](RELEASE.md)。
+
+## 后端开发
+
+- 构建必须用 `tsc`，开发用 `ts-node`。**不能用 esbuild 或 tsx** —— 它们不支持 `emitDecoratorMetadata`，NestJS 的构造器注入会拿不到 `design:paramtypes`。
+- 数据层改动后必须跑 `server/tools/verify-contract.mjs`（当前 82 项，须全绿），用独立的验证库而不是正式库。
+- 新增路由默认就受全局访问令牌守卫保护；公开路由必须显式标 `@Public()`。漏标只会让接口意外要求登录（能立刻发现），不会意外裸奔。
+- 数据层与客户端之间有一组不能破的契约（401 不能变 403、`/search` 必须是裸 NDJSON、SQL 别名必须加双引号等），逐条列在 [RELEASE.md](RELEASE.md) 里。
+
 ## 测试规范
 
 新增共享逻辑时，在 `shared/src/commonTest/` 添加 `*Test.kt`；Android 单元测试放在 `androidApp/src/test/`，设备测试放在 `androidApp/src/androidTest/`。
@@ -74,3 +95,12 @@
 - 默认以签名 Release APK 生成为主要验收标准，修改完成后优先执行 `.\gradlew.bat :androidApp:assembleRelease`。
 - 仅在定位编译问题、快速验证局部改动或 Release 构建受阻时，单独执行 Kotlin 编译测试；单独编译不能替代 APK 交付。
 - 交付时必须提供最新 Release APK 的绝对路径、版本号和构建结果。
+- 后端改动以 `server/tools/verify-contract.mjs` 全绿为验收标准。
+
+## 界面新增页面的检查清单
+
+导航是手写的 `AnimatedContent`，新增一整页时必须同步**三处**，漏一处就会出现"点了底部标签却还停在原页面"：
+
+1. `switchTab`：切换底部标签时把新页面的显示状态复位。
+2. `AnimatedContent` 的 `targetState`：加上对应分支。
+3. `BackHandler`：把新页面纳入返回键处理。
