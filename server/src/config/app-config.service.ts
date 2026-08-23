@@ -41,9 +41,8 @@ export class AppConfigService {
    */
   readonly searchConcurrency: number;
 
-  /** ApiSweet 图片生成服务配置。密钥仅从环境变量读取，不提供源码默认值。 */
+  /** ApiSweet 图片生成服务地址。API Key 存在数据库的 api_key 表中。 */
   readonly apiSweetBaseUrl: string;
-  readonly apiSweetApiKey: string;
 
   /**
    * 上游接口基地址。
@@ -73,6 +72,5 @@ export class AppConfigService {
       /\/+$/,
       "",
     );
-    this.apiSweetApiKey = String(config.get("APISWEET_API_KEY") ?? "").trim();
   }
 }

@@ -87,6 +87,28 @@ export async function runMigrations(pool: Pool): Promise<void> {
         max_version_code integer,
         updated_at       bigint NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS api_key (
+        id      integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        channel text NOT NULL,
+        key     text NOT NULL CHECK (btrim(key) <> ''),
+        quota   integer NOT NULL DEFAULT 0 CHECK (quota >= 0),
+        UNIQUE (channel, key)
+      );
+      CREATE INDEX IF NOT EXISTS idx_api_key_available ON api_key (channel, quota DESC);
+
+      CREATE TABLE IF NOT EXISTS image_generation_task (
+        task_id        text PRIMARY KEY,
+        prompt         text NOT NULL,
+        consumed_quota integer NOT NULL CHECK (consumed_quota > 0),
+        channel        text NOT NULL,
+        state          text NOT NULL DEFAULT 'IN_PROGRESS'
+                       CHECK (state IN ('IN_PROGRESS', 'COMPLETED', 'FAILED')),
+        completed      smallint NOT NULL DEFAULT 0 CHECK (completed IN (0, 1)),
+        image_url      text,
+        api_key_id     integer NOT NULL REFERENCES api_key(id) ON DELETE RESTRICT
+      );
+      CREATE INDEX IF NOT EXISTS idx_image_generation_task_key ON image_generation_task (api_key_id);
     `);
     await client.query("COMMIT");
   } catch (error) {

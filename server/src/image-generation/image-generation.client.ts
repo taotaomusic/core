@@ -1,7 +1,12 @@
-import { HttpStatus, Injectable } from "@nestjs/common";
+import { HttpStatus, Injectable, Logger } from "@nestjs/common";
 import { ApiErrors, ApiException } from "../common/api.exception";
 import { AppConfigService } from "../config/app-config.service";
+import { ApiKeyRepository } from "./api-key.repository";
 import type { CreateImageDto } from "./dto/create-image.dto";
+import { ImageTaskRepository } from "./image-task.repository";
+
+const IMAGE_API_CHANNEL = "GPTIMAGE2";
+const QUOTA_PER_TASK = 1;
 
 type ApiSweetPayload = {
   code?: number;
@@ -36,69 +41,89 @@ export type ImageTaskResult = {
 /** ApiSweet gpt-image-2 接口适配层。 */
 @Injectable()
 export class ImageGenerationClient {
-  constructor(private readonly config: AppConfigService) {}
+  private readonly logger = new Logger(ImageGenerationClient.name);
+
+  constructor(
+    private readonly config: AppConfigService,
+    private readonly apiKeys: ApiKeyRepository,
+    private readonly tasks: ImageTaskRepository,
+  ) {}
 
   async createTask(input: CreateImageDto): Promise<{ taskId: string; status: string }> {
-    if (!this.config.apiSweetApiKey) {
-      throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, 5031, "图片生成服务尚未配置");
-    }
-
     const prompt = input.prompt.trim();
     if (!prompt) throw ApiErrors.badRequest(4007, "图片生成提示词不能为空");
 
-    let response: Response;
+    const reserved = await this.apiKeys.reserve(IMAGE_API_CHANNEL, QUOTA_PER_TASK);
+    if (!reserved) {
+      throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, 5032, "图片生成服务未配置或额度不足");
+    }
+
     try {
-      response = await fetch(`${this.config.apiSweetBaseUrl}/v1/draw/completions`, {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${this.config.apiSweetApiKey}`,
-          "content-type": "application/json",
-          accept: "application/json",
-          "user-agent": "TaotaoMusic/1.0",
-        },
-        body: JSON.stringify({
-          model: "gpt-image-2",
-          prompt,
-          ...(input.images === undefined ? {} : { images: input.images }),
-          ...(input.aspectRatio === undefined ? {} : { aspectRatio: input.aspectRatio }),
-          ...(input.imageSize === undefined ? {} : { imageSize: input.imageSize }),
-          ...(input.quality === undefined ? {} : { quality: input.quality }),
-        }),
-        signal: AbortSignal.timeout(30_000),
+      let response: Response;
+      try {
+        response = await fetch(`${this.config.apiSweetBaseUrl}/v1/draw/completions`, {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${reserved.key}`,
+            "content-type": "application/json",
+            accept: "application/json",
+            "user-agent": "TaotaoMusic/1.0",
+          },
+          body: JSON.stringify({
+            model: "gpt-image-2",
+            prompt,
+            ...(input.images === undefined ? {} : { images: input.images }),
+            ...(input.aspectRatio === undefined ? {} : { aspectRatio: input.aspectRatio }),
+            ...(input.imageSize === undefined ? {} : { imageSize: input.imageSize }),
+            ...(input.quality === undefined ? {} : { quality: input.quality }),
+          }),
+          signal: AbortSignal.timeout(30_000),
+        });
+      } catch (error) {
+        const message =
+          error instanceof Error && error.name === "TimeoutError"
+            ? "图片生成服务请求超时"
+            : "图片生成服务连接失败";
+        throw ApiErrors.upstream(message);
+      }
+
+      const payload = await this.readPayload<ApiSweetCreateResponse>(response);
+      if (!response.ok || payload.code !== 200) {
+        this.throwUpstreamError(response.status, payload, "图片生成任务创建失败");
+      }
+
+      const taskId = String(payload.data?.task_id ?? "").trim();
+      const status = String(payload.data?.status ?? "").trim();
+      if (!taskId || !status) throw ApiErrors.upstream("图片生成服务返回了无效的任务信息");
+      await this.tasks.create({
+        taskId,
+        prompt,
+        consumedQuota: QUOTA_PER_TASK,
+        channel: IMAGE_API_CHANNEL,
+        apiKeyId: reserved.id,
       });
+      return { taskId, status };
     } catch (error) {
-      const message =
-        error instanceof Error && error.name === "TimeoutError" ? "图片生成服务请求超时" : "图片生成服务连接失败";
-      throw ApiErrors.upstream(message);
+      await this.refundQuietly(reserved.id, QUOTA_PER_TASK);
+      throw error;
     }
-
-    const payload = await this.readPayload<ApiSweetCreateResponse>(response);
-    if (!response.ok || payload.code !== 200) {
-      this.throwUpstreamError(response.status, payload, "图片生成任务创建失败");
-    }
-
-    const taskId = String(payload.data?.task_id ?? "").trim();
-    const status = String(payload.data?.status ?? "").trim();
-    if (!taskId || !status) throw ApiErrors.upstream("图片生成服务返回了无效的任务信息");
-    return { taskId, status };
   }
 
   /** 查询一次任务状态；轮询节奏由客户端控制，避免长时间占用服务端连接。 */
   async getTaskResult(rawTaskId: string): Promise<ImageTaskResult> {
-    if (!this.config.apiSweetApiKey) {
-      throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE, 5031, "图片生成服务尚未配置");
-    }
-
     const taskId = rawTaskId.trim();
     if (!/^[A-Za-z0-9_-]{1,128}$/.test(taskId)) {
       throw ApiErrors.badRequest(4007, "图片生成任务 ID 不合法");
     }
 
+    const storedTask = await this.tasks.find(taskId);
+    if (!storedTask) throw ApiErrors.notFound(4042, "图片生成任务不存在");
+
     let response: Response;
     try {
       response = await fetch(`${this.config.apiSweetBaseUrl}/v1/draw/result/${encodeURIComponent(taskId)}`, {
         headers: {
-          authorization: `Bearer ${this.config.apiSweetApiKey}`,
+          authorization: `Bearer ${storedTask.apiKey}`,
           accept: "application/json",
           "user-agent": "TaotaoMusic/1.0",
         },
@@ -120,7 +145,9 @@ export class ImageGenerationClient {
       throw ApiErrors.upstream("图片生成服务返回了未知的任务状态");
     }
     const returnedTaskId = String(payload.task_id ?? "").trim();
-    if (!returnedTaskId) throw ApiErrors.upstream("图片生成服务返回了无效的任务信息");
+    if (!returnedTaskId || returnedTaskId !== taskId) {
+      throw ApiErrors.upstream("图片生成服务返回了无效的任务信息");
+    }
 
     const imageUrl = String(payload.result?.image_url ?? "").replace(/^http:/, "https:");
     if (state === "COMPLETED" && !imageUrl) {
@@ -128,6 +155,8 @@ export class ImageGenerationClient {
     }
     const errorMessage =
       typeof payload.error === "string" ? payload.error.trim() : String(payload.error?.message ?? "").trim();
+
+    await this.tasks.updateResult(taskId, state, imageUrl || null);
 
     return {
       taskId: returnedTaskId,
@@ -172,5 +201,14 @@ export class ImageGenerationClient {
     if (value === undefined || value === null) return null;
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  private async refundQuietly(apiKeyId: number, quota: number): Promise<void> {
+    try {
+      await this.apiKeys.refund(apiKeyId, quota);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      this.logger.error(`图片生成额度归还失败：${reason}`);
+    }
   }
 }

@@ -102,7 +102,6 @@ src/
 | `SEARCH_CONCURRENCY` | 搜索时解析播放地址的并发上限，默认 `8` |
 | `ENV_FILE` | 指定 `.env` 的其它路径 |
 | `APISWEET_BASE_URL` | 图片生成服务地址，默认 `https://apisweet.com` |
-| `APISWEET_API_KEY` | 图片生成服务 API Key；留空时图片生成接口返回 503 |
 
 ## 响应约定
 
@@ -169,8 +168,20 @@ src/
 
 ### 图片生成（需要访问令牌）
 
-`POST /api/v1/draw/completions` 创建 `gpt-image-2` 图片生成任务。服务端使用
-`APISWEET_API_KEY` 调用 ApiSweet，客户端不能直接接触第三方密钥。
+`POST /api/v1/draw/completions` 创建 `gpt-image-2` 图片生成任务。服务端从数据库
+`api_key` 表读取 `GPTIMAGE2` 渠道的 Key，客户端不能直接接触第三方密钥。
+
+Key 不存环境变量。同一渠道可放多条 Key，创建任务时优先使用剩余额度最高的一条：
+
+```sql
+INSERT INTO api_key (channel, key, quota)
+VALUES ('GPTIMAGE2', '替换为真实Key', 100)
+ON CONFLICT (channel, key) DO UPDATE SET quota = excluded.quota;
+```
+
+`quota` 是本地可创建任务次数，每次成功创建任务扣减 1；上游拒绝或连接失败时自动归还。
+状态轮询不消耗额度。任务会记录提示词、消耗额度、渠道、状态、完成图片和创建时使用的
+`api_key_id`，所以同渠道多 Key 或后续新增 Key 都不会让轮询查错。
 
 ```json
 {
