@@ -54,6 +54,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import coil.compose.AsyncImage
+import com.taotao.music.TaotaoApplication
 import com.taotao.music.model.AudioQuality
 import com.taotao.music.model.LyricParser
 import com.taotao.music.model.Song
@@ -274,6 +275,18 @@ fun TaotaoMusicApp() {
      */
     val updateManager = remember { UpdateManager(context, authSession) }
     LaunchedEffect(updateManager) { updateManager.check() }
+
+    /**
+     * 确认热修复补丁可用。
+     *
+     * 刻意等到界面组合起来、再多等几秒才确认：加载补丁前记了尝试计数，只有走到这里
+     * 才清零。太早确认等于把自愈机制关掉 —— 一个能让应用起不来的补丁必须能自己退回去。
+     */
+    LaunchedEffect(Unit) {
+        val active = (context.applicationContext as? TaotaoApplication)?.activePatchVersion ?: 0
+        kotlinx.coroutines.delay(5_000)
+        updateManager.confirmPatch(active)
+    }
 
     /**
      * 会话中途发现新版本。
@@ -751,6 +764,7 @@ fun TaotaoMusicApp() {
                     versionName = updateManager.installedVersionName,
                     checking = updateStatus.stage == UpdateStage.CHECKING,
                     onCheckUpdate = { scope.launch { updateManager.check(manual = true) } },
+                    onMessage = { message = it },
                 )
             } else Column(Modifier.fillMaxSize().padding(horizontal = 22.dp)) {
                 Spacer(Modifier.height(24.dp))
@@ -926,6 +940,7 @@ private fun MinePage(
     versionName: String,
     checking: Boolean,
     onCheckUpdate: () -> Unit,
+    onMessage: (String) -> Unit,
 ) {
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
@@ -984,26 +999,68 @@ private fun MinePage(
     }
     if (showCrashLogs) {
         val allLogs = crashLogs.joinToString("\n\n" + "=".repeat(40) + "\n\n") { "${it.name}\n${it.content}" }
+        val scope = rememberCoroutineScope()
         AlertDialog(
             onDismissRequest = { showCrashLogs = false },
-            title = { Text("崩溃日志") },
+            title = { Text("崩溃日志（${crashLogs.size} 条）") },
             text = {
                 Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
                     Text(allLogs, fontSize = 11.sp, lineHeight = 15.sp)
                 }
             },
             confirmButton = {
-                TextButton(onClick = { clipboard.setText(androidx.compose.ui.text.AnnotatedString(allLogs)) }) { Text("复制") }
+                // 导出成 .log 交给系统分享：多条堆栈叠起来轻易上万字符，
+                // 剪贴板装不下，粘贴时换行也常被吃掉。
+                TextButton(onClick = {
+                    scope.launch {
+                        val file = withContext(Dispatchers.IO) { crashReporter.exportToFile() }
+                        if (file == null) {
+                            onMessage("没有可导出的日志")
+                            return@launch
+                        }
+                        runCatching { shareLogFile(context, file) }
+                            .onFailure { onMessage(it.message ?: "导出失败") }
+                    }
+                }) { Text("导出 .log") }
             },
             dismissButton = {
-                TextButton(onClick = {
-                    crashReporter.clear()
-                    crashLogs = emptyList()
-                    showCrashLogs = false
-                }) { Text("清空") }
+                Row {
+                    TextButton(onClick = { clipboard.setText(androidx.compose.ui.text.AnnotatedString(allLogs)) }) {
+                        Text("复制")
+                    }
+                    TextButton(onClick = {
+                        crashReporter.clear()
+                        crashLogs = emptyList()
+                        showCrashLogs = false
+                    }) { Text("清空") }
+                }
             },
         )
     }
+}
+
+/**
+ * 把导出的日志文件交给系统分享面板。
+ *
+ * 必须走 FileProvider 换成 content:// —— Android 7 起直接传 file:// 给别的应用会抛
+ * FileUriExposedException。`crash/export/` 已在 file_paths.xml 里声明。
+ */
+private fun shareLogFile(context: android.content.Context, file: java.io.File) {
+    val uri = androidx.core.content.FileProvider.getUriForFile(
+        context,
+        "${context.packageName}.fileprovider",
+        file,
+    )
+    val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(android.content.Intent.EXTRA_STREAM, uri)
+        putExtra(android.content.Intent.EXTRA_SUBJECT, file.name)
+        addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    context.startActivity(android.content.Intent.createChooser(intent, "导出崩溃日志").apply {
+        // 从非 Activity 上下文启动分享面板需要这个标记。
+        addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+    })
 }
 
 @Composable private fun CategoryTabs(selectedIndex: Int, onSelected: (Int) -> Unit) {

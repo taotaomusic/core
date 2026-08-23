@@ -38,6 +38,7 @@ class AppUpdateApi(private val tokenProvider: TokenProvider?) {
             release = releaseOf(data.optJSONObject("update")),
             forced = data.optJSONObject("update")?.optBoolean("forced") == true,
             minSupportedVersionCode = data.optJSONObject("update")?.optLong("minSupportedVersionCode") ?: 0L,
+            patch = patchOf(data.optJSONObject("patch")),
             config = configOf(data.optJSONObject("config")),
             configVersion = data.optLong("configVersion"),
         )
@@ -55,6 +56,23 @@ class AppUpdateApi(private val tokenProvider: TokenProvider?) {
             apkSize = update.optLong("apkSize"),
             apkSha256 = update.optString("apkSha256").lowercase(),
             releaseNote = update.optString("releaseNote"),
+        )
+    }
+
+    /** 服务端还没部署补丁功能时这个字段不存在，按"没有补丁"处理即可。 */
+    private fun patchOf(patch: JSONObject?): AvailablePatch? {
+        if (patch == null || !patch.optBoolean("available")) return null
+        val url = patch.optString("url")
+        val patchVersion = patch.optInt("patchVersion")
+        val targetVersionCode = patch.optLong("targetVersionCode")
+        if (url.isBlank() || patchVersion <= 0 || targetVersionCode <= 0L) return null
+        return AvailablePatch(
+            patchVersion = patchVersion,
+            targetVersionCode = targetVersionCode,
+            url = url,
+            size = patch.optLong("size"),
+            sha256 = patch.optString("sha256").lowercase(),
+            note = patch.optString("note"),
         )
     }
 

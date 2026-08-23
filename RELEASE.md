@@ -6,7 +6,22 @@
 
 ---
 
-## 一、版本号的三条铁律
+## 一、两种更新方式
+
+| | 整包更新 | 热修复补丁 |
+| --- | --- | --- |
+| 内容 | 完整 APK（约 14MB） | 只含改动方法的 DEX（几 KB） |
+| 生效 | 用户确认安装 → 重启 | **立即生效，不用重启** |
+| 能改什么 | 全部 | **只有 `data` / `player` / `update` 包** |
+| 用在 | 功能、界面、依赖升级 | 逻辑 bug 的紧急止血 |
+
+**界面代码不能热修。** Compose 的可组合函数依赖 `startRestartGroup` / `endRestartGroup` 严格配对,在函数开头插入提前 return 会破坏组结构,所以 `ui/` 包刻意没有插桩。UI bug 只能发整包。
+
+**有整包更新时服务端不下发补丁** —— 既然能装新版本就没必要打补丁,补丁只给"来不及发版或用户还没升级"兜底。
+
+---
+
+## 二、版本号的三条铁律
 
 版本号存在根目录 `version.properties`,由 `tools/Update-Version.ps1` 递增,而 `androidApp/build.gradle.kts` 把 `incrementVersion` 挂成了 `assembleDebug` / `assembleRelease` 的 `finalizedBy`。
 
@@ -41,7 +56,7 @@ curl.exe -X POST "https://music.xydaigua.cn/api/v1/app/admin/rollout" `
 
 ---
 
-## 二、发布流程
+## 三、整包发布流程
 
 ### 1. 构建
 
@@ -107,7 +122,7 @@ curl.exe "https://music.xydaigua.cn/api/v1/app/bootstrap?versionCode=<上一个�
 
 ---
 
-## 三、强制更新
+## 四、强制更新
 
 抬高最低可用版本,低于它的客户端会被判定为强制更新:
 
@@ -123,7 +138,85 @@ curl.exe -X POST "https://music.xydaigua.cn/api/v1/app/admin/min-version" `
 
 ---
 
-## 四、服务端发布
+## 五、热修复补丁流程
+
+补丁只能改 `data` / `player` / `update` 包里的方法。开工前先确认目标方法真的被插过桩:
+
+```powershell
+.\gradlew.bat :patch:printMethodKeys -Pfilter=TencentMusicApi
+```
+
+它直接从 release APK 的 DEX 里读,是唯一不会说谎的口径 —— 源码里有的方法不一定插了桩(构造器、静态初始化块、合成方法都跳过了)。
+
+### 1. 写补丁
+
+改 `patch/src/main/kotlin/com/taotao/music/hotfix/generated/PatchEntryImpl.kt`:
+
+- `targets()` 列出要接管的类(全名,点号形式)
+- `isSupport()` 认领方法键,格式就是上一步打印出来的那种
+- `dispatch()` 写新实现。`receiver` 是实例方法的 this(静态方法为 null),`args` 是实参且基本类型已装箱
+
+**四条不能踩的:**
+
+1. **不要在 `dispatch` 里调用被自己接管的那个方法** —— 插桩的判断在方法入口,调用它会再次进到这里,无限递归直接 StackOverflow。要原逻辑就自己重写一遍。
+2. **不要 new 宿主已有的类并跨边界传递** —— 补丁类加载器加载的同名类与宿主的不是同一个 `Class`,传参会 `ClassCastException`。引用宿主类型只做类型声明(`compileOnly` 已保证不打进补丁),实例一律用传进来的那个。
+3. **不要改方法签名** —— 补丁是按宿主那份代码的签名生成的,签名变了匹配不上。
+4. **改完补丁要同步改源码** —— 补丁只是让线上先不崩,下一个整包版本里真正的修复必须在原位置也做一遍,否则升级后 bug 回归。
+
+### 2. 生成
+
+补丁要按**已发布的那个 APK** 编译,所以顺序不能颠倒:
+
+```powershell
+# 补丁引用宿主类型，必须先有宿主的编译产物
+.\gradlew.bat :androidApp:assembleRelease
+.\gradlew.bat :patch:buildPatch -PpatchVersion=1
+```
+
+产物在 `patch/build/patch/patch-1.apk`,几 KB。
+
+**核对它没把宿主类打进去**(打进去会 `ClassCastException`):补丁包里应该只有 `PatchEntryImpl` 及其内部类,加上对 `PatchDispatcher` / `PatchEntry` 两个接口的引用。
+
+### 3. 登记与放量
+
+`targetVersionCode` 必须是**补丁基于的那个已发布版本**,服务端会校验它真的发布过:
+
+```powershell
+$patch = "patch\build\patch\patch-1.apk"
+$sha = (Get-FileHash $patch -Algorithm SHA256).Hash.ToLower()
+
+curl.exe -X POST "https://music.xydaigua.cn/api/v1/app/admin/patches?targetVersionCode=71&patchVersion=1&note=修复内容&rollout=0&sha256=$sha" `
+  -H "X-Admin-Token: $env:ADMIN_TOKEN" --data-binary "@$patch"
+
+# 自测通过后放量
+curl.exe -X POST "https://music.xydaigua.cn/api/v1/app/admin/patch-rollout" `
+  -H "content-type: application/json" -H "X-Admin-Token: $env:ADMIN_TOKEN" `
+  -d '{"targetVersionCode":71,"patchVersion":1,"percent":10}'
+```
+
+出问题紧急下架(客户端下次检查就不再拿到,已装上的会在下次启动时因为宿主版本或失败记录而失效):
+
+```powershell
+curl.exe -X POST "https://music.xydaigua.cn/api/v1/app/admin/patch-rollout" `
+  -H "content-type: application/json" -H "X-Admin-Token: $env:ADMIN_TOKEN" `
+  -d '{"targetVersionCode":71,"patchVersion":1,"percent":0,"enabled":false}'
+```
+
+### 4. 自愈机制(为什么敢上线)
+
+唯一的修复通道本身就是更新通道,所以补丁必须能自己退回去:
+
+- 加载补丁**之前**把尝试计数 +1 并**同步写盘**(写在加载之前,否则加载即崩就丢了)
+- 应用平稳跑起来(界面组合完成再等 5 秒)后清零
+- 启动时发现计数不为 0,说明上次加载后没能平稳运行 → **直接弃用该补丁并删文件**
+- 失败过的补丁版本会被记住,不再重试,避免「下载 → 崩 → 回滚 → 再下载」的循环
+- 宿主 versionCode 与补丁登记的目标版本必须严格相等,升级后旧补丁自动失效
+
+所以最坏情况是崩一次就自动回滚,而不是反复崩。
+
+---
+
+## 六、服务端发布
 
 产物是 `dist/` 目录树,不是单文件。
 
@@ -156,7 +249,7 @@ node dist/main.js
 
 ---
 
-## 五、绝对不能破的客户端契约
+## 七、绝对不能破的客户端契约
 
 线上有装机客户端,以下每一条都能悄无声息地弄坏线上功能。改后端时逐条核对。
 
@@ -179,7 +272,7 @@ node dist/main.js
 
 ---
 
-## 六、客户端侧的两条易忘规则
+## 八、客户端侧的易忘规则
 
 - **新增整页时要同步三处**:`switchTab`(底部标签切换时收起)、`AnimatedContent` 的 `targetState`、`BackHandler`。漏掉 `switchTab` 的表现是"点了底部标签却还停在原页面"—— 这个坑踩过两次。
 - **队列里只存永不过期的占位地址** `/api/v1/songs/{id}/play?quality=N`,上游直链在 `ResolvingDataSource` 里取流那一刻才换上。直链是限时的,存进 `MediaItem` 或持久化队列后冷启动恢复时就失效了;而占位地址还顺带保证了 `AudioPlayer` 的 `queueHasAllAudio` 判断不会把整条队列塌陷成单首。

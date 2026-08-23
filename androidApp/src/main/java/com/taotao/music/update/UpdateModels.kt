@@ -12,11 +12,27 @@ data class UpdateRelease(
     val releaseNote: String,
 )
 
-/** `bootstrap` 接口的完整返回：更新信息 + 远程配置。 */
+/**
+ * 服务端下发的一个可用补丁。
+ *
+ * [targetVersionCode] 是这个补丁**基于哪个宿主版本**生成的，必须与本机严格相等 ——
+ * 补丁里的方法签名就是那份代码的，装到别的版本上会匹配不上。
+ */
+data class AvailablePatch(
+    val patchVersion: Int,
+    val targetVersionCode: Long,
+    val url: String,
+    val size: Long,
+    val sha256: String,
+    val note: String,
+)
+
+/** `bootstrap` 接口的完整返回：更新信息 + 热修复补丁 + 远程配置。 */
 data class BootstrapResult(
     val release: UpdateRelease?,
     val forced: Boolean,
     val minSupportedVersionCode: Long,
+    val patch: AvailablePatch?,
     val config: Map<String, String>,
     val configVersion: Long,
 )

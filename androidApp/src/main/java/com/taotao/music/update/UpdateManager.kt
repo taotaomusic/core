@@ -6,6 +6,7 @@ import android.os.Build
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.taotao.music.hotfix.HotfixInstaller
 import com.taotao.music.data.DeviceIdStore
 import com.taotao.music.data.RemoteConfigStore
 import com.taotao.music.data.TokenProvider
@@ -29,6 +30,7 @@ class UpdateManager(
     private val downloader = UpdateDownloader(appContext)
     private val installer = UpdateInstaller(appContext)
     private val deviceIdStore = DeviceIdStore(appContext)
+    private val hotfix = HotfixInstaller(appContext)
 
     /** 远程配置缓存，界面可直接读取，取不到时用代码内默认值。 */
     val remoteConfig = RemoteConfigStore(appContext)
@@ -52,6 +54,25 @@ class UpdateManager(
     /** 本机已安装的版本号，用于上报和比对。 */
     val installedVersionCode: Long = versionCodeOf(packageInfo())
     val installedVersionName: String = packageInfo()?.versionName ?: "未知"
+
+    /**
+     * 当前生效的热修复补丁版本，0 表示没有。
+     *
+     * 初值由 Application 在启动时加载得到；会话中途装上新补丁后会更新。
+     */
+    var activePatchVersion: Int = 0
+        private set
+
+    /**
+     * 确认热修复补丁可用。
+     *
+     * 必须在应用**平稳跑起来之后**调用，不是刚启动就调 —— 这是自愈机制的另一半：
+     * 加载前记了尝试计数，只有走到这里才清零；太早调等于把保护关掉。
+     */
+    fun confirmPatch(activeVersion: Int) {
+        activePatchVersion = activeVersion
+        hotfix.confirm()
+    }
 
     /**
      * 检查更新并落盘远程配置。
@@ -82,6 +103,18 @@ class UpdateManager(
             }
 
             withContext(Dispatchers.IO) { remoteConfig.save(result.config, result.configVersion) }
+
+            // 热修复：服务端只在没有整包更新时才下发补丁，所以放在整包判断之前处理。
+            // 补丁生效不需要重启，成功后把版本号暴露给界面。
+            result.patch?.let { patch ->
+                val ok = withContext(Dispatchers.IO) {
+                    hotfix.install(patch, installedVersionCode, activePatchVersion)
+                }
+                if (ok) {
+                    activePatchVersion = patch.patchVersion
+                    if (manual) manualResult = "已应用热修复补丁 ${patch.patchVersion}"
+                }
+            }
 
             val release = result.release
             if (release == null || release.versionCode <= installedVersionCode) {

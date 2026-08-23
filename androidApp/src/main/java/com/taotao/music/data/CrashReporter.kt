@@ -46,6 +46,44 @@ class CrashReporter(context: Context) {
         directory.listFiles()?.forEach { runCatching { it.delete() } }
     }
 
+    /**
+     * 把全部日志合并写成一个 `.log` 文件，返回可分享的地址。
+     *
+     * 复制到剪贴板对长堆栈不好用 —— 多条崩溃叠起来轻易上万字符，粘贴框装不下，
+     * 而且换行常被吃掉。导出成文件交给系统分享（微信、邮件、存到文件）更实用。
+     *
+     * 写到 `files/crash/export/` 而不是 cache：FileProvider 的 file_paths.xml
+     * 声明的是 files 目录，放 cache 里取不到 content URI。
+     */
+    fun exportToFile(): File? {
+        val all = logs()
+        if (all.isEmpty()) return null
+        val exportDirectory = File(directory, "export").apply { mkdirs() }
+        // 每次导出前清掉旧文件：留着只会让分享面板里出现一堆同名文件。
+        exportDirectory.listFiles()?.forEach { runCatching { it.delete() } }
+        val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.getDefault()).format(Date())
+        val target = File(exportDirectory, "taotao-crash-$stamp.log")
+        val separator = "=".repeat(60)
+        target.writeText(
+            buildString {
+                appendLine("桃桃音乐崩溃日志导出")
+                appendLine("导出时间：${SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())}")
+                appendLine("版本：${versionName()}")
+                appendLine("机型：${Build.MANUFACTURER} ${Build.MODEL}（Android ${Build.VERSION.RELEASE} / API ${Build.VERSION.SDK_INT}）")
+                appendLine("共 ${all.size} 条")
+                all.forEach { log ->
+                    appendLine()
+                    appendLine(separator)
+                    appendLine(log.name)
+                    appendLine(separator)
+                    append(log.content)
+                    appendLine()
+                }
+            },
+        )
+        return target
+    }
+
     private fun write(thread: Thread, error: Throwable) {
         directory.mkdirs()
         val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.getDefault()).format(Date())
