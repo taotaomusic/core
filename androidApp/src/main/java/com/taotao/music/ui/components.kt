@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.MoreVert
@@ -71,8 +72,8 @@ fun AlbumArt(color: Color, size: Dp, iconSize: TextUnit, imageUri: String? = nul
 /**
  * 歌曲列表项，搜索结果和本地音乐共用。
  *
- * [favorited] / [onToggleFavorite] 带默认值：本地音乐没有服务端 ID、本来就不能收藏，
- * 不传即维持原来的样子（末尾仍是那个纯装饰的更多图标）。
+ * [favorited] / [onToggleFavorite] / [onDelete] 都带默认值：不传即维持原来的样子
+ * （末尾是那个纯装饰的更多图标）。本地文件没有服务端 ID 时本来就不能收藏。
  */
 @Composable
 fun SongListItem(
@@ -80,6 +81,7 @@ fun SongListItem(
     active: Boolean,
     favorited: Boolean = false,
     onToggleFavorite: (() -> Unit)? = null,
+    onDelete: (() -> Unit)? = null,
     onClick: () -> Unit,
 ) {
     Row(
@@ -110,7 +112,13 @@ fun SongListItem(
                     modifier = Modifier.size(20.dp),
                 )
             }
-        } else {
+        }
+        if (onDelete != null) {
+            IconButton(onClick = onDelete, modifier = Modifier.size(36.dp)) {
+                Icon(Icons.Default.DeleteOutline, "删除", tint = Color.Gray, modifier = Modifier.size(20.dp))
+            }
+        }
+        if (onToggleFavorite == null && onDelete == null) {
             Icon(Icons.Default.MoreVert, "更多", tint = Color.Gray, modifier = Modifier.padding(start = 8.dp))
         }
     }

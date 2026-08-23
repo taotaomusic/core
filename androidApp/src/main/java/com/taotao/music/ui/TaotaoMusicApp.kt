@@ -1,6 +1,10 @@
 package com.taotao.music.ui
 
+import android.Manifest
+import android.os.Build
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -49,6 +53,7 @@ import com.taotao.music.model.LyricParser
 import com.taotao.music.model.Song
 import com.taotao.music.data.CrashLog
 import com.taotao.music.data.CrashReporter
+import com.taotao.music.data.DownloadNotifier
 import com.taotao.music.data.FavoritesStore
 import com.taotao.music.data.OfflineDownloadManager
 import com.taotao.music.data.QualityStore
@@ -80,6 +85,7 @@ fun TaotaoMusicApp() {
     val searchHistoryStore = remember { SearchHistoryStore(context) }
     val favoritesStore = remember { FavoritesStore(context) }
     val qualityStore = remember { QualityStore(context) }
+    val downloadNotifier = remember { DownloadNotifier(context) }
     val scope = rememberCoroutineScope()
     var playbackSongs by remember { mutableStateOf(emptyList<Song>()) }
     var searchResults by remember { mutableStateOf(emptyList<Song>()) }
@@ -100,11 +106,18 @@ fun TaotaoMusicApp() {
     var restoredPlayback by remember { mutableStateOf<SavedPlaybackState?>(null) }
     var pendingResumePositionMs by remember { mutableIntStateOf(0) }
     var searchGeneration by remember { mutableIntStateOf(0) }
+    /** 分页状态。服务端一直在返回 hasMore / total，客户端以前直接丢掉。 */
+    var searchPage by remember { mutableIntStateOf(1) }
+    var searchHasMore by remember { mutableStateOf(false) }
+    var searchTotal by remember { mutableIntStateOf(0) }
+    var isLoadingMore by remember { mutableStateOf(false) }
     /** 收藏缓存被改动后自增，让读了它的界面重新组合 —— SharedPreferences 本身不是可观察的。 */
     var favoriteRevision by remember { mutableIntStateOf(0) }
     var showSettingsPage by remember { mutableStateOf(false) }
     var playbackQuality by remember { mutableStateOf(qualityStore.playbackQuality()) }
     var downloadQuality by remember { mutableStateOf(qualityStore.downloadQuality()) }
+    /** 待删除确认的已下载歌曲。删除是不可逆的，不做二次确认容易误触。 */
+    var pendingDelete by remember { mutableStateOf<Song?>(null) }
     /** 待下载的歌与它在队列里的位置。非空即弹出音质面板。 */
     var downloadTarget by remember { mutableStateOf<Pair<Song, Int>?>(null) }
     /** 音质面板的用途。 */
@@ -140,6 +153,20 @@ fun TaotaoMusicApp() {
     }
 
     /**
+     * 申请通知权限。
+     *
+     * Android 13 起 POST_NOTIFICATIONS 要运行时授权，而清单里早就声明了却从没申请过 ——
+     * 也就是说系统媒体通知（锁屏控制）在 13+ 上一直没显示。下载进度通知同样依赖它，
+     * 顺手一起补上。只申请一次，拒绝了也不再骚扰。
+     */
+    val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
+    LaunchedEffect(Unit) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !downloadNotifier.canNotify()) {
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    /**
      * 按指定音质下载。
      *
      * 必须先解析出上游直链再交给下载器：队列里存的是不带扩展名的占位地址，
@@ -148,10 +175,16 @@ fun TaotaoMusicApp() {
     fun startDownload(song: Song, index: Int, quality: Int) {
         scope.launch {
             message = "正在下载…"
+            downloadNotifier.progress(song.title, 0, 0)
             runCatching {
                 withContext(Dispatchers.IO) {
                     val link = musicApi.resolveLink(song, quality)
-                    downloadManager.download(song, link.url)
+                    // 歌词取带逐字时间轴的那份，两条轴都存下去，离线播放才和在线一致。
+                    // 取不到不算失败：歌词是附加内容。
+                    val lyric = runCatching { musicApi.requestRichLyric(song) }.getOrNull()
+                    downloadManager.download(song, link.url, lyric?.lrc, lyric?.yrc) { downloaded, total ->
+                        downloadNotifier.progress(song.title, downloaded, total)
+                    }
                 }
             }.onSuccess { offline ->
                 if (playbackSongs.getOrNull(index)?.remoteId == offline.remoteId) {
@@ -159,7 +192,23 @@ fun TaotaoMusicApp() {
                 }
                 downloadedSongs = withContext(Dispatchers.IO) { downloadManager.listDownloaded() }
                 message = "已下载，可离线播放"
-            }.onFailure { message = it.message ?: "下载失败" }
+                downloadNotifier.completed(song.title)
+            }.onFailure {
+                message = it.message ?: "下载失败"
+                downloadNotifier.failed(song.title, it.message ?: "请稍后重试")
+            }
+        }
+    }
+
+    /** 删除一首已下载的歌。播放中的那首要先停下来，否则文件删了播放器还握着句柄。 */
+    fun deleteDownloaded(song: Song) {
+        scope.launch {
+            val playingThis = playbackSongs.getOrNull(selectedIndex)?.remoteId == song.remoteId &&
+                playbackSongs.getOrNull(selectedIndex)?.audioUri?.startsWith("file:") == true
+            if (playingThis) audioPlayer.stop()
+            val removed = withContext(Dispatchers.IO) { downloadManager.delete(song) }
+            downloadedSongs = withContext(Dispatchers.IO) { downloadManager.listDownloaded() }
+            message = if (removed) "已删除「${song.title}」" else "删除失败"
         }
     }
 
@@ -337,6 +386,18 @@ fun TaotaoMusicApp() {
         hasSearched = false
         isSearching = false
         searchError = null
+        searchPage = 1
+        searchHasMore = false
+        searchTotal = 0
+        isLoadingMore = false
+    }
+
+    /** 把一页结果里的收藏状态同步进本地缓存。服务端给的是权威值。 */
+    suspend fun mergeFavorites(songs: List<Song>) {
+        val seen = songs.mapNotNull { it.remoteId?.toString() }.toSet()
+        val favorited = songs.filter { it.favorited }.mapNotNull { it.remoteId?.toString() }.toSet()
+        withContext(Dispatchers.IO) { favoritesStore.merge(favorited, seen) }
+        favoriteRevision++
     }
 
     fun startSearch() {
@@ -351,6 +412,8 @@ fun TaotaoMusicApp() {
             isSearching = true
             searchError = null
             searchResults = emptyList()
+            searchPage = 1
+            searchHasMore = false
             val result = runCatching {
                 withContext(Dispatchers.IO) {
                     musicApi.search(query, quality = qualityStore.playbackQuality().value) { partial ->
@@ -365,14 +428,49 @@ fun TaotaoMusicApp() {
             result
                 .onSuccess { found ->
                     searchResults = found.songs
-                    // 搜索结果里的收藏状态是服务端给的权威值，就地校正本地缓存。
-                    val seen = found.songs.mapNotNull { it.remoteId?.toString() }.toSet()
-                    val favorited = found.songs.filter { it.favorited }.mapNotNull { it.remoteId?.toString() }.toSet()
-                    withContext(Dispatchers.IO) { favoritesStore.merge(favorited, seen) }
-                    favoriteRevision++
+                    searchHasMore = found.hasMore
+                    searchTotal = found.total
+                    mergeFavorites(found.songs)
                 }
                 .onFailure { searchError = it.message ?: "搜索失败，请稍后重试" }
             isSearching = false
+        }
+    }
+
+    /**
+     * 滚到底时拉下一页。
+     *
+     * 累加时的基线 [base] 在请求前就取定：`authorized()` 遇到 401 会重放整个请求、
+     * 把这一页的 NDJSON 从头再读一遍，回调给的是**本页**的累积快照，
+     * 所以必须每次都用 `base + partial` 而不是往当前列表上追加，否则重放会产出重复条目。
+     */
+    fun loadMoreSearch() {
+        val query = searchKeyword.trim()
+        if (query.isBlank() || isSearching || isLoadingMore || !searchHasMore) return
+        val generation = searchGeneration
+        val nextPage = searchPage + 1
+        val base = searchResults
+        isLoadingMore = true
+        scope.launch {
+            val result = runCatching {
+                withContext(Dispatchers.IO) {
+                    musicApi.search(query, page = nextPage, quality = qualityStore.playbackQuality().value) { partial ->
+                        scope.launch { if (generation == searchGeneration) searchResults = base + partial }
+                    }
+                }
+            }
+            if (generation != searchGeneration) return@launch
+            result
+                .onSuccess { found ->
+                    searchResults = base + found.songs
+                    searchPage = nextPage
+                    // 上游可能给出空页却仍然说 hasMore，那样会无限拉；空页直接收口。
+                    searchHasMore = found.hasMore && found.songs.isNotEmpty()
+                    searchTotal = found.total
+                    mergeFavorites(found.songs)
+                }
+                .onFailure { message = it.message ?: "加载更多失败" }
+            isLoadingMore = false
         }
     }
 
@@ -455,12 +553,14 @@ fun TaotaoMusicApp() {
                         }
                     }
                     NavigationBar {
-                        // 切换底部标签时要收起详情页和搜索页，否则 AnimatedContent 仍停在
-                        // "detail" 分支，用户点了「我的」却还留在播放详情里。
+                        // 切换底部标签时要收起详情页、搜索页和设置页，否则 AnimatedContent 仍停在
+                        // 原来的分支，用户点了「音乐」却还留在设置里。新增页面时必须同步这里、
+                        // AnimatedContent 的 targetState 和 BackHandler 三处。
                         val switchTab = { target: Int ->
                             bottomTab = target
                             showPlayerDetail = false
                             showSearchPage = false
+                            showSettingsPage = false
                         }
                         NavigationBarItem(bottomTab == 0, { switchTab(0) }, icon = { Icon(Icons.Default.MusicNote, "音乐") }, label = { Text("音乐") })
                         NavigationBarItem(bottomTab == 1, { switchTab(1) }, icon = { Icon(Icons.Default.Person, "我的") }, label = { Text("我的") })
@@ -552,6 +652,11 @@ fun TaotaoMusicApp() {
                     favoriteRevision = favoriteRevision,
                     isFavorite = { song -> favoritesStore.contains(song.remoteId) },
                     onToggleFavorite = { song -> toggleFavorite(song) },
+                    onLoadMore = { loadMoreSearch() },
+                    isLoadingMore = isLoadingMore,
+                    hasMore = searchHasMore,
+                    total = searchTotal,
+                    searchSession = searchGeneration,
                 )
             } else if (page == "settings") {
                 SettingsPage(
@@ -590,9 +695,15 @@ fun TaotaoMusicApp() {
                         Text("还没有下载歌曲", color = Color.Gray)
                     } else {
                         downloadedSongs.forEachIndexed { index, song ->
-                            SongListItem(song, false) {
-                                playSong(downloadedSongs, index)
-                            }
+                            SongListItem(
+                                song = song,
+                                active = false,
+                                favorited = remember(song.remoteId, favoriteRevision) {
+                                    favoritesStore.contains(song.remoteId)
+                                },
+                                onToggleFavorite = song.remoteId?.let { { toggleFavorite(song) } },
+                                onDelete = { pendingDelete = song },
+                            ) { playSong(downloadedSongs, index) }
                         }
                     }
                 }
@@ -605,6 +716,21 @@ fun TaotaoMusicApp() {
             }
             }
         }
+    }
+
+    pendingDelete?.let { target ->
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text("删除下载") },
+            text = { Text("将删除「${target.title}」的音频、封面和歌词，无法恢复。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingDelete = null
+                    deleteDownloaded(target)
+                }) { Text("删除", color = TaotaoCoral) }
+            },
+            dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("取消") } },
+        )
     }
 
     // 下载前的音质面板：查一次 /song/info 拿到这首歌真实存在的档位与体积。
@@ -818,7 +944,9 @@ private fun PlayerDetailPage(
     playbackQuality: Int,
     onPickQuality: () -> Unit,
 ) {
-    var positionMs by remember(song) { mutableIntStateOf(0) }
+    // 初值直接取播放器的当前进度，而不是 0：进详情页时若从 0 起再被 ticker 拉到真实位置，
+    // 进度条会明显地从头飞过去一次。
+    var positionMs by remember(song) { mutableIntStateOf(audioPlayer.currentPositionMs()) }
     var dragging by remember(song) { mutableStateOf(false) }
     // 这两组状态的 remember key 必须与下面对应 LaunchedEffect 的 key 一致：
     // 解析播放地址后队列里的 Song 会被换成新副本，song 变了但 remoteId / lyricUri 没变，
@@ -835,13 +963,17 @@ private fun PlayerDetailPage(
     val lifecycleOwner = LocalLifecycleOwner.current
     val coverRotation = remember(song) { Animatable(0f) }
     LaunchedEffect(song.lyricUri, song.remoteId) {
-        // 网络歌曲优先取带逐字时间轴的数据；离线歌曲只有下载时保存的 LRC 文本。
+        // 离线歌曲的行级与逐字时间轴分别存成两个文件，两个都要读 ——
+        // 早先这里只读一个文本文件，离线播放于是永远没有逐字高亮。
         val loaded = runCatching {
             withContext(Dispatchers.IO) {
                 val lyricUri = song.lyricUri
                 if (lyricUri?.startsWith("file:") == true) {
                     val text = Uri.parse(lyricUri).path?.let(::File)?.takeIf(File::isFile)?.readText()
-                    text to null
+                    val words = song.lyricWordsUri
+                        ?.let { Uri.parse(it).path }
+                        ?.let(::File)?.takeIf(File::isFile)?.readText()
+                    text to words
                 } else if (song.remoteId != null) {
                     val rich = musicApi.requestRichLyric(song)
                     rich.lrc to rich.yrc

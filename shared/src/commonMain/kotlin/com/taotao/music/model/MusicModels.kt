@@ -9,6 +9,11 @@ data class Song(
     val remoteId: Long? = null,
     val coverUri: String? = null,
     val lyricUri: String? = null,
+    /**
+     * 逐字时间轴（yrc）的本地地址，只有离线歌曲会用到。
+     * 在线播放时逐字数据随 `?format=json` 一起取，不需要单独的地址。
+     */
+    val lyricWordsUri: String? = null,
     val album: String = "",
     val subtitle: String = "",
     val releaseTime: String = "",

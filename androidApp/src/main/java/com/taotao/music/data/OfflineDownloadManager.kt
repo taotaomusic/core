@@ -17,20 +17,34 @@ class OfflineDownloadManager(context: Context, private val tokenProvider: TokenP
      * [audioUrl] 是调用方**先解析好**的上游直链 —— 队列里存的是不带扩展名的占位地址，
      * 直接拿它下载会一律落成 `.mp3`，而无损其实是 flac，扩展名错了播放器会认错容器。
      * 直链里带着真实文件名，扩展名从它推断。
+     *
+     * [lrc] / [yrc] 同样由调用方先取好。**两个都要存**：早先这里只下载纯文本歌词接口，
+     * 那个接口只返回行级 LRC，于是离线播放永远没有逐字高亮，看起来像"歌词没下全"。
+     * 云端播放走的是 `?format=json`，两条时间轴都有。
+     *
+     * [onProgress] 报告音频文件的下载进度，`total` 为 0 表示上游没给 Content-Length。
+     * 只在音频这一步报告：封面和歌词加起来通常不到一百 KB，报了反而让进度条乱跳。
      */
-    fun download(song: Song, audioUrl: String): Song {
+    fun download(
+        song: Song,
+        audioUrl: String,
+        lrc: String? = null,
+        yrc: String? = null,
+        onProgress: (downloaded: Long, total: Long) -> Unit = { _, _ -> },
+    ): Song {
         val id = requireNotNull(song.remoteId) { "网络歌曲缺少歌曲 ID" }
         val dir = File(root, id.toString()).apply { mkdirs() }
         val audio = audioUrl.takeIf { it.startsWith("http") }?.let {
             val extension = URL(it).path.substringAfterLast('.', "").lowercase().takeIf { value -> value in AUDIO_EXTENSIONS } ?: "mp3"
-            download(it.replaceFirst("http://", "https://"), File(dir, "audio.$extension"))
+            download(it.replaceFirst("http://", "https://"), File(dir, "audio.$extension"), onProgress)
         }
         // 音频是离线播放的必要条件，失败直接抛出；封面和歌词属于附加内容，失败不影响下载结果。
         val cover = song.coverUri?.takeIf { it.startsWith("http") }
             ?.let { runCatching { download(it, File(dir, "cover")) }.getOrNull() }
-        val lyric = song.lyricUri
-            ?.takeIf { it.startsWith("http") }
-            ?.let { runCatching { download(it, File(dir, "lyric.txt")) }.getOrNull() }
+        val lyric = lrc?.takeIf { it.isNotBlank() }
+            ?.let { text -> runCatching { File(dir, "lyric.txt").apply { writeText(text) } }.getOrNull() }
+        val lyricWords = yrc?.takeIf { it.isNotBlank() }
+            ?.let { text -> runCatching { File(dir, "lyric.yrc").apply { writeText(text) } }.getOrNull() }
         Properties().apply {
             setProperty("title", song.title)
             setProperty("artist", song.artist)
@@ -51,6 +65,7 @@ class OfflineDownloadManager(context: Context, private val tokenProvider: TokenP
             // 封面或歌词下载失败时保留原地址，避免离线歌曲反而丢掉在线资源。
             coverUri = cover?.toURI()?.toString() ?: song.coverUri,
             lyricUri = lyric?.toURI()?.toString() ?: song.lyricUri,
+            lyricWordsUri = lyricWords?.toURI()?.toString(),
         )
     }
 
@@ -74,6 +89,8 @@ class OfflineDownloadManager(context: Context, private val tokenProvider: TokenP
                     remoteId = id,
                     coverUri = File(dir, "cover").takeIf(File::isFile)?.toURI()?.toString(),
                     lyricUri = File(dir, "lyric.txt").takeIf(File::isFile)?.toURI()?.toString(),
+                    // 早于本版本下载的歌没有 .yrc，逐字高亮会退化成整行高亮而不是报错。
+                    lyricWordsUri = File(dir, "lyric.yrc").takeIf(File::isFile)?.toURI()?.toString(),
                     album = properties.getProperty("album", ""),
                     subtitle = properties.getProperty("subtitle", ""),
                     releaseTime = properties.getProperty("releaseTime", ""),
@@ -88,7 +105,11 @@ class OfflineDownloadManager(context: Context, private val tokenProvider: TokenP
      * 下载单个文件。自家地址附带访问令牌，令牌被拒绝时续期后重试一次，
      * 避免下载中途因为访问令牌过期而失败。
      */
-    private fun download(url: String, target: File): File {
+    private fun download(
+        url: String,
+        target: File,
+        onProgress: (Long, Long) -> Unit = { _, _ -> },
+    ): File {
         if (target.exists() && target.length() > 0L) return target
         val ownEndpoint = TencentMusicApi.isOwnEndpoint(url)
         var token = if (ownEndpoint) tokenProvider.validToken() ?: throw SessionExpiredException() else null
@@ -101,9 +122,28 @@ class OfflineDownloadManager(context: Context, private val tokenProvider: TokenP
                 return@repeat
             }
             check(code in 200..299) { "下载失败：HTTP $code" }
+            val total = connection.contentLengthLong.coerceAtLeast(0L)
             val temp = File(target.parentFile, "${target.name}.part")
             try {
-                connection.inputStream.use { input -> temp.outputStream().use { input.copyTo(it) } }
+                connection.inputStream.use { input ->
+                    temp.outputStream().use { output ->
+                        val buffer = ByteArray(64 * 1024)
+                        var downloaded = 0L
+                        var lastReported = 0L
+                        while (true) {
+                            val read = input.read(buffer)
+                            if (read < 0) break
+                            output.write(buffer, 0, read)
+                            downloaded += read
+                            // 每 256KB 报一次就够了：通知栏刷得太勤会被系统限流，还白耗电。
+                            if (downloaded - lastReported >= 256 * 1024) {
+                                lastReported = downloaded
+                                onProgress(downloaded, total)
+                            }
+                        }
+                        onProgress(downloaded, total)
+                    }
+                }
                 check(temp.length() > 0L) { "下载内容为空" }
                 check(temp.renameTo(target)) { "无法保存下载文件" }
             } catch (error: Throwable) {
@@ -113,6 +153,14 @@ class OfflineDownloadManager(context: Context, private val tokenProvider: TokenP
             return target
         }
         throw SessionExpiredException()
+    }
+
+    /** 删除一首已下载的歌，连同封面和歌词。 */
+    fun delete(song: Song): Boolean {
+        val id = song.remoteId ?: return false
+        val dir = File(root, id.toString())
+        if (!dir.isDirectory) return false
+        return dir.deleteRecursively()
     }
 
     private fun open(url: String, token: String?): HttpURLConnection =

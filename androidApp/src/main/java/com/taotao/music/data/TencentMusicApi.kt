@@ -32,6 +32,8 @@ class TencentMusicApi(private val tokenProvider: TokenProvider) {
         return authorized("/api/v1/search$query") { connection ->
             val songs = mutableListOf<Song>()
             var dropped = 0
+            var hasMore = false
+            var total = 0
             connection.inputStream.bufferedReader().useLines { lines ->
                 lines.filter { it.isNotBlank() }.forEach { line ->
                     val record = runCatching { JSONObject(line) }.getOrNull() ?: return@forEach
@@ -40,13 +42,16 @@ class TencentMusicApi(private val tokenProvider: TokenProvider) {
                             songs += it.toSong(quality)
                             onProgress(songs.toList())
                         }
-                        // 收尾行的 dropped 现在恒为 0：服务端不再逐首探测播放地址，也就不再丢歌。
-                        // 仍然读它是为了兼容尚未部署新版本的服务端。
-                        "end" -> dropped = record.optJSONObject("meta")?.optInt("dropped") ?: 0
+                        "end" -> record.optJSONObject("meta")?.let { meta ->
+                            // dropped 现在恒为 0（服务端不再逐首探测），仍然读它是为了兼容旧服务端。
+                            dropped = meta.optInt("dropped")
+                            hasMore = meta.optBoolean("hasMore")
+                            total = meta.optInt("total")
+                        }
                     }
                 }
             }
-            SearchResult(songs, dropped)
+            SearchResult(songs, dropped, hasMore, total, page)
         }
     }
 
@@ -301,10 +306,19 @@ class CredentialsRejectedException(message: String) : IllegalStateException(mess
 data class RichLyric(val lrc: String, val yrc: String)
 
 /**
- * 搜索结果。[dropped] 是服务端因拿不到可用播放地址而丢弃的数量。
- * 服务端不再逐首探测后它恒为 0，保留只为兼容尚未升级的服务端。
+ * 搜索结果。
+ *
+ * [dropped] 是服务端因拿不到可用播放地址而丢弃的数量，服务端不再逐首探测后恒为 0，
+ * 保留只为兼容尚未升级的服务端。[hasMore] 与 [total] 服务端一直在返回，
+ * 客户端以前直接丢掉，现在用来驱动滚到底加载下一页。
  */
-data class SearchResult(val songs: List<Song>, val dropped: Int)
+data class SearchResult(
+    val songs: List<Song>,
+    val dropped: Int,
+    val hasMore: Boolean = false,
+    val total: Int = 0,
+    val page: Int = 1,
+)
 
 /**
  * 解析出来的播放地址。

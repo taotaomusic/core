@@ -37,6 +37,7 @@ object SongCodec {
         put("remoteId", song.remoteId)
         put("coverUri", song.coverUri)
         put("lyricUri", song.lyricUri)
+        put("lyricWordsUri", song.lyricWordsUri)
         put("album", song.album)
         put("subtitle", song.subtitle)
         put("releaseTime", song.releaseTime)
@@ -56,6 +57,7 @@ object SongCodec {
         remoteId = data.optLong("remoteId").takeIf { it > 0 },
         coverUri = data.optText("coverUri"),
         lyricUri = data.optText("lyricUri"),
+        lyricWordsUri = data.optText("lyricWordsUri"),
         album = data.optString("album"),
         subtitle = data.optString("subtitle"),
         releaseTime = data.optString("releaseTime"),
