@@ -14,6 +14,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
@@ -44,6 +45,9 @@ object AnimationDurations {
 
     /** 页面之间的过渡。再长就显得拖沓。 */
     const val PAGE = 280
+
+    /** 详情页升起/落下。位移是整屏高度，比横向换页远，时间给足才不显得仓促。 */
+    const val SHEET = 340
 
     /** 内容淡入淡出，比如骨架屏换成结果。 */
     const val FADE = 220
@@ -107,14 +111,42 @@ fun pageDepthOf(page: String): Int = when (page) {
 /**
  * 换页过渡。
  *
- * 进：新页从右侧滑入，旧页向左退出并轻微缩小，做出"压进去一层"的感觉。
- * 退：整套反向。
+ * 三种语义分开处理：
  *
- * 位移按容器宽度取比例而不是写死 dp：同一个数值在小屏和大屏上的观感差别很大。
- * 淡入淡出与位移同时进行，且**入场比离场略慢**，避免中途出现两页都半透明的空档。
+ * - **详情页**是"正在播放"那一层，从底部升起来盖住当前页，关闭时落回去 ——
+ *   和左右换页不是一回事，音乐类应用几乎都是这个手势语言。
+ * - **进入下一层**（首页 → 搜索 / 设置）：新页从右侧滑入，旧页向左退出。
+ *   方向必须区分，否则返回时没有任何空间线索，用户感觉不到自己"退回来了"。
+ * - **同层之间**（音乐 ⇄ 我的）：没有进退可言，纯淡入淡出，别硬造一个方向。
+ *
+ * 横向位移按容器宽度取比例而不是写死 dp：同一个数值在小屏和大屏上观感差别很大。
  */
 fun AnimatedContentTransitionScope<String>.pageTransition(): ContentTransform {
-    // 同层之间（音乐 ⇄ 我的）没有进退可言，用纯淡入淡出，别硬造一个方向出来。
+    // 详情页升起：它必须画在旧页**之上**，否则会看到它从旧页背后钻出来。
+    // zIndex 给 1，离开时新页拿默认的 0，详情页就仍然压在上面往下落。
+    if (targetState == "detail") {
+        return ContentTransform(
+            targetContentEnter = slideInVertically(
+                animationSpec = taotaoTween(AnimationDurations.SHEET, easing = AnimationCurves.emphasizedIn),
+            ) { height -> height } + fadeIn(animationSpec = taotaoTween(AnimationDurations.MICRO)),
+            // 被盖住的那页轻微缩小并淡出，做出"被压到下面去"的层次。
+            initialContentExit = fadeOut(animationSpec = taotaoTween(AnimationDurations.PAGE)) +
+                scaleOut(targetScale = 0.94f, animationSpec = taotaoTween(AnimationDurations.SHEET)),
+            targetContentZIndex = 1f,
+            sizeTransform = null,
+        )
+    }
+    if (initialState == "detail") {
+        return ContentTransform(
+            targetContentEnter = fadeIn(animationSpec = taotaoTween(AnimationDurations.PAGE)) +
+                scaleIn(initialScale = 0.94f, animationSpec = taotaoTween(AnimationDurations.SHEET)),
+            initialContentExit = slideOutVertically(
+                animationSpec = taotaoTween(AnimationDurations.SHEET, easing = AnimationCurves.emphasizedOut),
+            ) { height -> height } + fadeOut(animationSpec = taotaoTween(AnimationDurations.SHEET)),
+            sizeTransform = null,
+        )
+    }
+
     val fromDepth = pageDepthOf(initialState)
     val toDepth = pageDepthOf(targetState)
     if (fromDepth == toDepth) {
