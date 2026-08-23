@@ -3,7 +3,7 @@
   "private": true,
   "scripts": {
     "dev": "node --watch --require ts-node/register src/main.ts",
-    "build": "rimraf dist && tsc -p tsconfig.json && node tools/copy-manifest.mjs",
+    "build": "rimraf --glob dist/* && tsc -p tsconfig.json && node tools/copy-manifest.mjs",
     "start": "node dist/main.js",
     "verify": "node tools/verify-contract.mjs"
   },
