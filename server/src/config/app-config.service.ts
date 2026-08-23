@@ -41,6 +41,10 @@ export class AppConfigService {
    */
   readonly searchConcurrency: number;
 
+  /** ApiSweet 图片生成服务配置。密钥仅从环境变量读取，不提供源码默认值。 */
+  readonly apiSweetBaseUrl: string;
+  readonly apiSweetApiKey: string;
+
   /**
    * 上游接口基地址。
    * 搜索与播放链接用 v3（v3 的路径里不带版本号前缀），歌词仍用 v2 ——
@@ -65,5 +69,10 @@ export class AppConfigService {
     this.defaultChannel = String(config.get("DEFAULT_CHANNEL") ?? "release");
     this.publicBaseUrl = String(config.get("PUBLIC_BASE_URL") ?? "").replace(/\/+$/, "");
     this.searchConcurrency = Math.max(1, Number(config.get("SEARCH_CONCURRENCY") ?? 8));
+    this.apiSweetBaseUrl = String(config.get("APISWEET_BASE_URL") ?? "https://apisweet.com").replace(
+      /\/+$/,
+      "",
+    );
+    this.apiSweetApiKey = String(config.get("APISWEET_API_KEY") ?? "").trim();
   }
 }

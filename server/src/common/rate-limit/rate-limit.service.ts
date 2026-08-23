@@ -42,4 +42,19 @@ export class RateLimitService {
   allowAdminRequest(address: string): boolean {
     return this.allow(`admin:${address}`, 60, 15 * 60_000);
   }
+
+  /**
+   * 图片生成是计费接口，因此同时按登录用户与来源地址限流。
+   * 来源地址阈值较宽，避免同一 NAT 下的正常用户互相挤占。
+   */
+  allowImageRequest(userId: number, address: string): boolean {
+    if (!this.allow(`image-ip:${address}`, 60, 15 * 60_000)) return false;
+    return this.allow(`image-user:${userId}`, 10, 15 * 60_000);
+  }
+
+  /** 图片任务状态轮询：独立于创建额度，允许客户端约每 3 秒查询一次。 */
+  allowImageStatusRequest(userId: number, address: string): boolean {
+    if (!this.allow(`image-status-ip:${address}`, 1800, 15 * 60_000)) return false;
+    return this.allow(`image-status-user:${userId}`, 300, 15 * 60_000);
+  }
 }

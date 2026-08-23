@@ -22,6 +22,15 @@ export class RateLimitGuard implements CanActivate {
 
     const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
     const address = clientAddressOf(request);
+    if (bucket === "image" || bucket === "image-status") {
+      if (!request.user) throw ApiErrors.unauthorized(4010, "请先登录");
+      const allowed =
+        bucket === "image"
+          ? this.rateLimit.allowImageRequest(request.user.id, address)
+          : this.rateLimit.allowImageStatusRequest(request.user.id, address);
+      if (!allowed) throw ApiErrors.tooManyRequests();
+      return true;
+    }
     const allowed = this.check(bucket, request, address);
     if (!allowed) throw ApiErrors.tooManyRequests();
     return true;

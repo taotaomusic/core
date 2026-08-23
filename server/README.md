@@ -61,6 +61,7 @@ src/
   favorites/              收藏
   upstream/               第三方接口适配（成功码、字段名、音质降级都收敛在此）
   music/                  搜索、播放转发、歌词
+  image-generation/       gpt-image-2 图片生成任务适配
   release/                热更新：客户端引导、安装包分发、发布管理
   health/                 健康检查
 ```
@@ -100,6 +101,8 @@ src/
 | `PUBLIC_BASE_URL` | 对外基地址，用于拼装 APK 下载地址 |
 | `SEARCH_CONCURRENCY` | 搜索时解析播放地址的并发上限，默认 `8` |
 | `ENV_FILE` | 指定 `.env` 的其它路径 |
+| `APISWEET_BASE_URL` | 图片生成服务地址，默认 `https://apisweet.com` |
+| `APISWEET_API_KEY` | 图片生成服务 API Key；留空时图片生成接口返回 503 |
 
 ## 响应约定
 
@@ -164,6 +167,57 @@ src/
 
 `GET /api/v1/songs/{id}/lyrics` 默认返回纯 LRC 文本；带 `format=json` 时返回 `{lrc, yrc, trans}`，其中 `yrc` 是逐字时间轴，格式为 `[行起始ms,行时长ms]文本(字起始ms,字时长ms)…`。
 
+### 图片生成（需要访问令牌）
+
+`POST /api/v1/draw/completions` 创建 `gpt-image-2` 图片生成任务。服务端使用
+`APISWEET_API_KEY` 调用 ApiSweet，客户端不能直接接触第三方密钥。
+
+```json
+{
+  "model": "gpt-image-2",
+  "prompt": "一只可爱的猫咪在草地上玩耍",
+  "aspectRatio": "1:1",
+  "imageSize": "1K",
+  "quality": "high",
+  "images": ["https://example.com/image-1.png"]
+}
+```
+
+`images` 最多 8 张且只接受 HTTP/HTTPS URL。成功响应沿用统一信封：
+
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": { "taskId": "xxxxx", "status": "IN_PROGRESS" }
+}
+```
+
+该接口按登录用户 10 次、来源地址 60 次/15 分钟限流。第三方 401/402 会转换为
+502，不能原样透传成 401，否则客户端会把服务端密钥或余额问题误判为用户登录失效。
+
+创建成功后，客户端每隔约 3 秒调用 `GET /api/v1/draw/result/{taskId}`。状态为
+`IN_PROGRESS` 时继续轮询，`COMPLETED` 或 `FAILED` 时停止：
+
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "taskId": "task_xxxxx",
+    "state": "COMPLETED",
+    "progress": 100,
+    "createdAt": 1773894600,
+    "completedAt": 1773894780,
+    "result": { "imageUrl": "https://example.com/generated-image.png" },
+    "error": null
+  }
+}
+```
+
+状态查询独立限流：按用户 300 次、来源地址 1800 次/15 分钟。第三方返回 404 时映射为
+本服务的 404/4042；第三方 401 仍转换为 502，不能触发客户端令牌续期。
+
 ### 上游接口与音质降级
 
 搜索与播放链接用 v3（`https://api.vkeys.cn/music/tencent`，路径里不带版本号前缀），歌词用 v2（`https://api.vkeys.cn/v2/music/tencent`）—— 只有 v2 的歌词接口同时给出逐字时间轴与翻译。
@@ -222,13 +276,15 @@ src/
 
 ### 限流
 
-三个计数器互相独立 —— 更新检查是周期性调用，与登录共用会烧掉用户的登录额度，表现成「登录提示请求过于频繁」。
+各用途计数器互相独立 —— 更新检查和图片轮询都是周期性调用，与登录或图片创建共用会烧掉其它用途的额度。
 
 | 用途 | 阈值 |
 | --- | --- |
 | 登录 / 注册 | 按来源地址 10 次 / 15 分钟 |
 | 客户端引导与安装包下载 | 按设备号 60 次 + 按来源地址 900 次 / 15 分钟 |
 | 发布管理 | 按来源地址 60 次 / 15 分钟 |
+| 图片任务创建 | 按用户 10 次 + 按来源地址 60 次 / 15 分钟 |
+| 图片任务轮询 | 按用户 300 次 + 按来源地址 1800 次 / 15 分钟 |
 
 外层阈值放得宽，因为校园网、办公网等 NAT 环境下大量用户共用一个出口地址，按 IP 收紧会互相挤占。状态在进程内存中，重启即清空，也不跨实例共享。
 
@@ -248,7 +304,7 @@ npm run dev
 node tools/verify-contract.mjs http://127.0.0.1:4720 verify-token
 ```
 
-当前共 82 项，必须全绿。脚本会核对状态码、业务码、信封形状、NDJSON 行格式、字段类型（`data.id` 必须是 number、`songId` 必须是字符串、`createdAt` / `configVersion` / `apkSize` 必须是 number）、纯文本歌词、Range 行为，以及「无效令牌访问 bootstrap 仍返回 200」这类红线。
+当前共 88 项，必须全绿。脚本会核对状态码、业务码、信封形状、NDJSON 行格式、字段类型（`data.id` 必须是 number、`songId` 必须是字符串、`createdAt` / `configVersion` / `apkSize` 必须是 number）、纯文本歌词、Range 行为，以及「无效令牌访问 bootstrap 仍返回 200」这类红线。
 
 后面三组分别覆盖：PostgreSQL 迁移的四条硬规矩（并发注册、并发刷新同一令牌、停用版本不可下载、灰度分桶稳定）；搜索拆分后的新契约（60 首的耗时、`X-Accel-Buffering`、`favorited` / `vip` / `mid` 字段、批量收藏查询、`/link` 给的是上游直链、请求不存在的档位会降级、`/info` 过滤掉不存在的档位）；以及参数健壮性（`page=abc` 不会拼出 `page=NaN`、`quality=` 空串回落到 10 而不是 0）。
 

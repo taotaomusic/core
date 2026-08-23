@@ -12,6 +12,7 @@ import { AppConfigModule } from "./config/config.module";
 import { DatabaseModule } from "./database/database.module";
 import { FavoritesModule } from "./favorites/favorites.module";
 import { HealthController } from "./health/health.controller";
+import { ImageGenerationModule } from "./image-generation/image-generation.module";
 import { MusicModule } from "./music/music.module";
 import { LatestVersionModule } from "./release/latest-version.cache";
 import { ReleaseModule } from "./release/release.module";
@@ -31,6 +32,7 @@ import { ReleaseModule } from "./release/release.module";
     AuthModule,
     FavoritesModule,
     MusicModule,
+    ImageGenerationModule,
     ReleaseModule,
   ],
   controllers: [HealthController],
