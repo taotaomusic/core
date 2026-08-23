@@ -1,24 +1,32 @@
 {
   "name": "taotao-music-proxy",
   "private": true,
-  "type": "module",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "build": "tsc --noEmit -p tsconfig.json && esbuild src/index.ts --bundle --platform=node --format=esm --external:better-sqlite3 --minify --legal-comments=none --outfile=dist/app.js && node -e \"require('fs').copyFileSync('package.json','dist/package.json')\"",
-    "start": "node dist/app.js"
+    "dev": "node --watch --require ts-node/register src/main.ts",
+    "build": "rimraf dist && tsc -p tsconfig.json && node tools/copy-manifest.mjs",
+    "start": "node dist/main.js",
+    "verify": "node tools/verify-contract.mjs"
   },
   "engines": {
     "node": ">=20"
   },
-  "devDependencies": {
-    "@types/node": "^22.10.2",
-    "esbuild": "^0.24.2",
-    "rimraf": "^6.0.1",
-    "tsx": "^4.19.2",
-    "typescript": "^5.7.2"
-  },
   "dependencies": {
+    "@nestjs/common": "^11.0.0",
+    "@nestjs/config": "^4.0.0",
+    "@nestjs/core": "^11.0.0",
+    "@nestjs/platform-express": "^11.0.0",
+    "better-sqlite3": "^13.0.3",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.14.1",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.1"
+  },
+  "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",
-    "better-sqlite3": "^13.0.3"
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.10.2",
+    "rimraf": "^6.0.1",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.7.2"
   }
 }
