@@ -30,6 +30,30 @@ export class MinVersionDto {
   versionCode: number;
 }
 
+/** 热修复补丁的放量调整。补丁按「宿主版本 + 补丁版本」定位，比发布多一维。 */
+export class PatchRolloutDto {
+  @IsOptional()
+  @IsString()
+  channel?: string;
+
+  @IsInt()
+  @Min(1)
+  targetVersionCode: number;
+
+  @IsInt()
+  @Min(1)
+  patchVersion: number;
+
+  @IsInt()
+  @Min(0)
+  @Max(100)
+  percent: number;
+
+  /** 传 false 可紧急下架某个补丁。 */
+  @IsOptional()
+  enabled?: boolean;
+}
+
 export class RemoteConfigDto {
   @IsOptional()
   @IsString()

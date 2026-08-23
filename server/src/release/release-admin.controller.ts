@@ -6,7 +6,7 @@ import { RateLimit } from "../common/decorators/rate-limit.decorator";
 import { AdminTokenGuard } from "../common/guards/admin-token.guard";
 import { AppConfigService } from "../config/app-config.service";
 import { ApkService } from "./apk.service";
-import { MinVersionDto, RemoteConfigDto, RolloutDto } from "./dto/admin.dto";
+import { MinVersionDto, PatchRolloutDto, RemoteConfigDto, RolloutDto } from "./dto/admin.dto";
 import { ReleaseRepository } from "./release.repository";
 import { ReleaseService } from "./release.service";
 
@@ -134,6 +134,83 @@ export class ReleaseAdminController {
     return this.releases.listConfig(ALL_VERSIONS);
   }
 
+  @Get("patches")
+  listPatches(@Query("channel") channel?: string) {
+    return this.releases.listPatches(channel ?? this.config.defaultChannel);
+  }
+
+  /**
+   * 登记一个热修复补丁。请求体是补丁包原始字节，元数据走查询参数。
+   *
+   * `targetVersionCode` 必须是补丁**基于哪个已发布版本**生成的 —— 补丁里的方法签名
+   * 就是那份代码的，装到别的版本上要么不生效要么直接抛 NoSuchMethodError。
+   * 客户端也会再校验一次，两边都不放过。
+   *
+   * 与安装包一样默认不放量：先登记，自己验过再逐步放开。
+   */
+  @Post("patches")
+  @HttpCode(HttpStatus.CREATED)
+  async publishPatch(
+    @Req() request: Request,
+    @Query("targetVersionCode") targetVersionCodeParam?: string,
+    @Query("patchVersion") patchVersionParam?: string,
+    @Query("channel") channelParam?: string,
+    @Query("note") note?: string,
+    @Query("rollout") rollout?: string,
+    @Query("sha256") sha256?: string,
+  ) {
+    const channel = (channelParam ?? this.config.defaultChannel).trim();
+    const targetVersionCode = Number(targetVersionCodeParam);
+    const patchVersion = Number(patchVersionParam);
+    if (!Number.isInteger(targetVersionCode) || targetVersionCode <= 0) {
+      throw ApiErrors.badRequest(4005, "targetVersionCode 不合法");
+    }
+    if (!Number.isInteger(patchVersion) || patchVersion <= 0) {
+      throw ApiErrors.badRequest(4005, "patchVersion 不合法");
+    }
+    // 补丁的目标版本必须真的发布过：拿一个不存在的版本号登记补丁，
+    // 客户端永远匹配不上，问题会很难查。
+    if (!(await this.releases.findRelease(channel, targetVersionCode))) {
+      throw ApiErrors.notFound(4041, `渠道 ${channel} 没有版本 ${targetVersionCode} 的发布记录`);
+    }
+
+    const stored = await this.apk.storePatch(
+      request,
+      channel,
+      targetVersionCode,
+      patchVersion,
+      (sha256 ?? "").trim(),
+    );
+    await this.releases.upsertPatch({
+      channel,
+      target_version_code: targetVersionCode,
+      patch_version: patchVersion,
+      patch_file: stored.apkFile,
+      patch_size: stored.size,
+      patch_sha256: stored.sha256,
+      note: note ?? "",
+      rollout_percent: this.clampPercent(rollout ?? 0),
+      enabled: 1,
+    });
+    return this.releases.findPatch(channel, targetVersionCode, patchVersion);
+  }
+
+  @Post("patch-rollout")
+  @HttpCode(HttpStatus.OK)
+  async changePatchRollout(@Body() body: PatchRolloutDto) {
+    const channel = body.channel?.trim() || this.config.defaultChannel;
+    if (!(await this.releases.findPatch(channel, body.targetVersionCode, body.patchVersion))) {
+      throw ApiErrors.notFound(4041, "补丁不存在");
+    }
+    await this.releases.updatePatchRollout(
+      channel,
+      body.targetVersionCode,
+      body.patchVersion,
+      this.clampPercent(body.percent),
+      body.enabled,
+    );
+    return this.releases.findPatch(channel, body.targetVersionCode, body.patchVersion);
+  }
   @Post("config")
   @HttpCode(HttpStatus.OK)
   async changeConfig(@Body() body: RemoteConfigDto) {

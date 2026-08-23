@@ -62,11 +62,42 @@ export class ReleaseController {
       this.releases.listConfig(installedVersion),
       this.releases.configVersion(),
     ]);
+    // 有整包更新时不下发补丁：既然能装新版本，就没必要再打补丁。
+    const patch = update.available
+      ? { available: false as const }
+      : await this.release.resolvePatch(request, currentChannel, installedVersion, subject);
     return {
       update,
+      patch,
       config: Object.fromEntries(config.map((item) => [item.key, item.value])),
       configVersion,
     };
+  }
+
+  /**
+   * 下载热修复补丁。
+   *
+   * 与安装包下载同样是公开的：补丁要修的可能正是登录本身。
+   * 复用 [ApkService] 的文件下发逻辑（Range、ETag、路径穿越防护都在里面）。
+   */
+  @Public()
+  @RateLimit("app")
+  @RawResponse()
+  @Get("patch/:targetVersionCode/:patchVersion")
+  async downloadPatch(
+    @Req() request: Request,
+    @Res() response: Response,
+    @Param("targetVersionCode", ParseIntPipe) targetVersionCode: number,
+    @Param("patchVersion", ParseIntPipe) patchVersion: number,
+    @Query("channel") channel?: string,
+  ): Promise<void> {
+    const patch = await this.releases.findPatch(
+      channel ?? this.config.defaultChannel,
+      targetVersionCode,
+      patchVersion,
+    );
+    if (!patch || !patch.enabled) throw ApiErrors.notFound(4041, "补丁不存在");
+    this.apk.downloadFile(request, response, patch.patch_file, patch.patch_sha256, `patch-${patchVersion}.apk`);
   }
 
   @Public()

@@ -21,6 +21,21 @@ export type ReleaseRecord = {
 
 export type ConfigEntry = { key: string; value: string };
 
+/** 一条代码热修复补丁。 */
+export type PatchRecord = {
+  id: number;
+  channel: string;
+  target_version_code: number;
+  patch_version: number;
+  patch_file: string;
+  patch_size: number;
+  patch_sha256: string;
+  note: string;
+  rollout_percent: number;
+  enabled: number;
+  published_at: number;
+};
+
 @Injectable()
 export class ReleaseRepository {
   constructor(
@@ -190,5 +205,73 @@ export class ReleaseRepository {
    */
   bucketOf(releaseId: number, subject: string): number {
     return createHash("sha1").update(`${releaseId}:${subject}`).digest().readUInt32BE(0) % 100;
+  }
+
+  /**
+   * 给这个宿主版本可下发的补丁，按补丁版本降序。
+   *
+   * 匹配条件是 `target_version_code` **精确相等** —— 补丁里的方法签名是按那一份代码
+   * 生成的，装到别的版本上会因为找不到方法而失效，甚至挂掉。
+   */
+  listPatchCandidates(channel: string, versionCode: number): Promise<PatchRecord[]> {
+    return this.database.all<PatchRecord>(
+      `SELECT * FROM app_patch
+       WHERE channel = $1 AND target_version_code = $2 AND enabled = 1
+       ORDER BY patch_version DESC`,
+      [channel, versionCode],
+    );
+  }
+
+  findPatch(channel: string, targetVersionCode: number, patchVersion: number): Promise<PatchRecord | undefined> {
+    return this.database.first<PatchRecord>(
+      "SELECT * FROM app_patch WHERE channel = $1 AND target_version_code = $2 AND patch_version = $3",
+      [channel, targetVersionCode, patchVersion],
+    );
+  }
+
+  listPatches(channel: string): Promise<PatchRecord[]> {
+    return this.database.all<PatchRecord>(
+      "SELECT * FROM app_patch WHERE channel = $1 ORDER BY target_version_code DESC, patch_version DESC",
+      [channel],
+    );
+  }
+
+  /** 登记或覆盖一个补丁。与 upsertRelease 一样刻意不覆盖 rollout_percent。 */
+  async upsertPatch(patch: Omit<PatchRecord, "id" | "published_at">): Promise<void> {
+    await this.database.run(
+      `INSERT INTO app_patch (channel, target_version_code, patch_version, patch_file, patch_size, patch_sha256, note, rollout_percent, enabled, published_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       ON CONFLICT (channel, target_version_code, patch_version) DO UPDATE SET
+         patch_file = excluded.patch_file, patch_size = excluded.patch_size,
+         patch_sha256 = excluded.patch_sha256, note = excluded.note,
+         enabled = excluded.enabled, published_at = excluded.published_at`,
+      [
+        patch.channel,
+        patch.target_version_code,
+        patch.patch_version,
+        patch.patch_file,
+        patch.patch_size,
+        patch.patch_sha256,
+        patch.note,
+        patch.rollout_percent,
+        patch.enabled,
+        Date.now(),
+      ],
+    );
+  }
+
+  async updatePatchRollout(
+    channel: string,
+    targetVersionCode: number,
+    patchVersion: number,
+    percent: number,
+    enabled?: boolean,
+  ): Promise<boolean> {
+    const affected = await this.database.run(
+      `UPDATE app_patch SET rollout_percent = $1, enabled = COALESCE($2, enabled)
+       WHERE channel = $3 AND target_version_code = $4 AND patch_version = $5`,
+      [percent, enabled === undefined ? null : enabled ? 1 : 0, channel, targetVersionCode, patchVersion],
+    );
+    return affected > 0;
   }
 }

@@ -8,8 +8,16 @@ import type { NextFunction, Request, Response } from "express";
 import { AppModule } from "./app.module";
 import { AppConfigService } from "./config/app-config.service";
 
-/** 安装包上传的路径。这条路由的请求体是原始字节，必须绕开 JSON 解析。 */
-const APK_UPLOAD_PATH = "/api/v1/app/admin/releases";
+/**
+ * 请求体是原始字节、必须绕开 JSON 解析的路由。
+ *
+ * 漏一条的表现很隐蔽：上传的字节被 `express.json()` 吃掉，
+ * 落盘时得到空文件或者报 413，而路由本身看起来是通的。
+ */
+const RAW_BODY_PATHS = new Set([
+  "/api/v1/app/admin/releases",
+  "/api/v1/app/admin/patches",
+]);
 
 async function bootstrap(): Promise<void> {
   // 关掉内置 body parser，改为按路由挂载：安装包上传是 14MB+ 的原始字节流，
@@ -19,7 +27,7 @@ async function bootstrap(): Promise<void> {
 
   const parseJson = json({ limit: "16kb" });
   app.use((request: Request, response: Response, next: NextFunction) => {
-    if (request.method === "POST" && request.path === APK_UPLOAD_PATH) return next();
+    if (request.method === "POST" && RAW_BODY_PATHS.has(request.path)) return next();
     return parseJson(request, response, next);
   });
 

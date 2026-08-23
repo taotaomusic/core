@@ -5,6 +5,8 @@ plugins {
     kotlin("android")
     kotlin("plugin.compose")
     id("org.jetbrains.compose")
+    // 热修复插桩。只作用于 data / player / update 包，UI 层不碰 —— 见 build-logic 里的说明。
+    id("com.taotao.hotfix")
 }
 
 val localSigningProperties = Properties().apply {

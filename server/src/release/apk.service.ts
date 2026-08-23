@@ -25,8 +25,24 @@ export class ApkService {
    * 先写 `.part` 再改名，避免中断留下半个可下发的包。
    */
   async store(request: Request, channel: string, versionCode: number, expectedSha256: string): Promise<StoredApk> {
+    return this.storeAs(request, `${channel}-${versionCode}.apk`, expectedSha256);
+  }
+
+  /**
+   * 接收上传的补丁包。文件名带上宿主版本与补丁版本，一个宿主版本可以有多个补丁。
+   */
+  async storePatch(
+    request: Request,
+    channel: string,
+    targetVersionCode: number,
+    patchVersion: number,
+    expectedSha256: string,
+  ): Promise<StoredApk> {
+    return this.storeAs(request, `${channel}-${targetVersionCode}-patch-${patchVersion}.apk`, expectedSha256);
+  }
+
+  private async storeAs(request: Request, apkFile: string, expectedSha256: string): Promise<StoredApk> {
     mkdirSync(this.config.apkDirectory, { recursive: true });
-    const apkFile = `${channel}-${versionCode}.apk`;
     const target = resolve(this.config.apkDirectory, apkFile);
     const temporary = `${target}.part`;
     const hash = createHash("sha256");
@@ -74,17 +90,39 @@ export class ApkService {
    * 起始字节开始，否则包会坏掉且要等 sha256 校验才发现。
    */
   download(request: Request, response: Response, release: ReleaseRecord): void {
+    this.downloadFile(
+      request,
+      response,
+      release.apk_file,
+      release.apk_sha256,
+      `taotao-${release.version_name}.apk`,
+    );
+  }
+
+  /**
+   * 按文件名下发一个 APK_DIR 下的文件，支持 Range。
+   *
+   * 安装包与热修复补丁共用这一份：两者的下发要求完全一样（可续传、可缓存、
+   * 文件名必须来自数据库并再取一次 basename 防路径穿越）。
+   */
+  downloadFile(
+    request: Request,
+    response: Response,
+    fileName: string,
+    sha256: string,
+    downloadName: string,
+  ): void {
     // 文件名来自数据库并再次取 basename，避免任何路径穿越。
-    const file = resolve(this.config.apkDirectory, basename(release.apk_file));
-    if (!existsSync(file)) throw ApiErrors.notFound(4042, "安装包文件缺失");
+    const file = resolve(this.config.apkDirectory, basename(fileName));
+    if (!existsSync(file)) throw ApiErrors.notFound(4042, "文件缺失");
 
     const total = statSync(file).size;
     const headers: Record<string, string> = {
       "content-type": "application/vnd.android.package-archive",
       "accept-ranges": "bytes",
-      etag: `"${release.apk_sha256}"`,
+      etag: `"${sha256}"`,
       "cache-control": "public, max-age=86400",
-      "content-disposition": `attachment; filename="taotao-${release.version_name}.apk"`,
+      "content-disposition": `attachment; filename="${downloadName}"`,
     };
 
     const range = /^bytes=(\d*)-(\d*)$/.exec(request.headers.range ?? "");

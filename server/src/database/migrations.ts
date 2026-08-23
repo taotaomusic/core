@@ -109,6 +109,26 @@ export async function runMigrations(pool: Pool): Promise<void> {
         api_key_id     integer NOT NULL REFERENCES api_key(id) ON DELETE RESTRICT
       );
       CREATE INDEX IF NOT EXISTS idx_image_generation_task_key ON image_generation_task (api_key_id);
+
+      -- 代码热修复补丁。与 app_release 并列而不是复用它：
+      -- 补丁只对**某一个** versionCode 的宿主有效（方法签名是按那份代码生成的），
+      -- 而发布记录是"版本号高于你就能装"，两者的匹配语义正好相反。
+      CREATE TABLE IF NOT EXISTS app_patch (
+        id                  integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        channel             text NOT NULL DEFAULT 'release',
+        target_version_code integer NOT NULL,
+        patch_version       integer NOT NULL,
+        patch_file          text NOT NULL,
+        patch_size          integer NOT NULL,
+        patch_sha256        text NOT NULL,
+        note                text NOT NULL DEFAULT '',
+        rollout_percent     integer NOT NULL DEFAULT 0,
+        enabled             smallint NOT NULL DEFAULT 1,
+        published_at        bigint NOT NULL,
+        UNIQUE (channel, target_version_code, patch_version)
+      );
+      CREATE INDEX IF NOT EXISTS idx_app_patch_lookup
+        ON app_patch (channel, target_version_code, enabled, patch_version DESC);
     `);
     await client.query("COMMIT");
   } catch (error) {

@@ -17,6 +17,18 @@ export type UpdateDescriptor =
       minSupportedVersionCode: number;
     };
 
+export type PatchDescriptor =
+  | { available: false }
+  | {
+      available: true;
+      patchVersion: number;
+      targetVersionCode: number;
+      url: string;
+      size: number;
+      sha256: string;
+      note: string;
+    };
+
 @Injectable()
 export class ReleaseService {
   private readonly logger = new Logger(ReleaseService.name);
@@ -82,13 +94,50 @@ export class ReleaseService {
     );
   }
 
+  /**
+   * 这个宿主版本该拿哪个补丁。
+   *
+   * 只在**没有可用整包更新**时才下发补丁：既然能装新版本，就没必要再打补丁 ——
+   * 补丁只是给"来不及发版或用户还没升级"的场景兜底。
+   *
+   * 分桶复用发布那套（`bucketOf` 是同步的纯计算，可以在 find 回调里调），
+   * 只是主体标识里混的是补丁 ID 而不是发布 ID，两者的灰度名单互相独立。
+   */
+  async resolvePatch(
+    request: Request,
+    channel: string,
+    versionCode: number,
+    subject: string,
+  ): Promise<PatchDescriptor> {
+    const candidates = await this.releases.listPatchCandidates(channel, versionCode);
+    const target = candidates.find((item) => this.releases.bucketOf(item.id, subject) < item.rollout_percent);
+    if (!target) return { available: false };
+    return {
+      available: true,
+      patchVersion: target.patch_version,
+      targetVersionCode: target.target_version_code,
+      url: this.patchUrlOf(request, channel, target.target_version_code, target.patch_version),
+      size: target.patch_size,
+      sha256: target.patch_sha256,
+      note: target.note,
+    };
+  }
+
+  private patchUrlOf(request: Request, channel: string, targetVersionCode: number, patchVersion: number): string {
+    const query = channel === this.config.defaultChannel ? "" : `?channel=${encodeURIComponent(channel)}`;
+    return `${this.baseUrlOf(request)}/api/v1/app/patch/${targetVersionCode}/${patchVersion}${query}`;
+  }
+
   /** 下载地址优先用配置的对外基地址；未配置时按请求推导，TLS 由 socket 或代理头判断。 */
   private apkUrlOf(request: Request, channel: string, versionCode: number): string {
     const query = channel === this.config.defaultChannel ? "" : `?channel=${encodeURIComponent(channel)}`;
-    const path = `/api/v1/app/apk/${versionCode}${query}`;
-    if (this.config.publicBaseUrl) return `${this.config.publicBaseUrl}${path}`;
+    return `${this.baseUrlOf(request)}/api/v1/app/apk/${versionCode}${query}`;
+  }
+
+  private baseUrlOf(request: Request): string {
+    if (this.config.publicBaseUrl) return this.config.publicBaseUrl;
     const forwarded = String(request.headers["x-forwarded-proto"] ?? "").split(",")[0].trim();
     const secure = (request.socket as { encrypted?: boolean }).encrypted === true;
-    return `${forwarded || (secure ? "https" : "http")}://${request.headers.host ?? "localhost"}${path}`;
+    return `${forwarded || (secure ? "https" : "http")}://${request.headers.host ?? "localhost"}`;
   }
 }
