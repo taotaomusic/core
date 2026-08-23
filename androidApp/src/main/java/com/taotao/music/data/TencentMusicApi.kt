@@ -12,6 +12,16 @@ class TencentMusicApi(private val tokenProvider: TokenProvider) {
     data class TokenPair(val accessToken: String, val refreshToken: String, val expiresIn: Int)
 
     /**
+     * 响应头里带回的最新版本号的观察者。
+     *
+     * 本类没有 Context 也没有协程作用域，所以不自己触发检查，只把值交出去 ——
+     * 与 [com.taotao.music.data.AuthSession.onSessionExpired] 同一套做法。
+     * 回调发生在发起请求的那个线程（通常是 IO），实现方要自己切线程。
+     */
+    @Volatile
+    var onLatestVersion: ((Long) -> Unit)? = null
+
+    /**
      * 搜索歌曲。
      *
      * [onProgress] 在解析过程中被反复调用，每次传入**当前累积的完整列表**而不是新增的一首。
@@ -166,6 +176,10 @@ class TencentMusicApi(private val tokenProvider: TokenProvider) {
             val code = connection.responseCode
             if (code != HttpURLConnection.HTTP_UNAUTHORIZED) {
                 check(code in 200..299) { messageOf(connection, "请求失败：HTTP $code") }
+                // 服务端在每个响应上带回当前全量可用的最高版本号，据此在会话中途也能发现更新。
+                // 放在 401 重放之后，所以只读成功那次的头；responseCode 已经把响应头
+                // 读进来了，这里不产生额外 I/O。
+                noteLatestVersion(connection)
                 return read(connection)
             }
             runCatching { connection.errorStream?.close() }
@@ -173,6 +187,12 @@ class TencentMusicApi(private val tokenProvider: TokenProvider) {
             token = tokenProvider.renewToken(token) ?: throw SessionExpiredException()
         }
         throw SessionExpiredException()
+    }
+
+    /** 把响应头里的最新版本号交给观察者。解析失败或没有这个头时什么都不做。 */
+    private fun noteLatestVersion(connection: HttpURLConnection) {
+        val latest = connection.getHeaderField(HEADER_LATEST_VERSION)?.toLongOrNull() ?: return
+        if (latest > 0) runCatching { onLatestVersion?.invoke(latest) }
     }
 
     private fun authenticate(path: String, username: String, password: String): TokenPair =
@@ -221,6 +241,9 @@ class TencentMusicApi(private val tokenProvider: TokenProvider) {
 
         /** 音质取值上限。实测上游档位到 18（NAC）。 */
         const val MAX_QUALITY = 18
+
+        /** 服务端下发的当前全量可用最高版本号。 */
+        const val HEADER_LATEST_VERSION = "x-latest-version-code"
 
         /**
          * 队列里存的占位地址。

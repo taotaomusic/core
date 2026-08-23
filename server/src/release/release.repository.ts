@@ -1,6 +1,7 @@
 import { Injectable } from "@nestjs/common";
 import { createHash } from "node:crypto";
 import { DatabaseService } from "../database/database.service";
+import { LatestVersionCache } from "./latest-version.cache";
 
 /** 一条可下发的发布记录。 */
 export type ReleaseRecord = {
@@ -22,7 +23,34 @@ export type ConfigEntry = { key: string; value: string };
 
 @Injectable()
 export class ReleaseRepository {
-  constructor(private readonly database: DatabaseService) {}
+  constructor(
+    private readonly database: DatabaseService,
+    private readonly latestVersion: LatestVersionCache,
+  ) {}
+
+  /**
+   * 当前**全量可用**的最高版本号,供响应头下发。
+   *
+   * 必须带 `rollout_percent >= 100` 这个条件,不能只取 `enabled = 1` 的最大值:
+   * 那样会广告一个灰度版本,而不在灰度名单里的客户端据此提示更新后,
+   * 调 `/app/bootstrap` 只会拿到 `available:false` —— 提示永远消不掉。
+   * 灰度版本仍然由 bootstrap 正常发现,只是不进这个头。
+   *
+   * 走 `idx_app_release_lookup (channel, enabled, version_code DESC)`,是一次索引取值;
+   * 结果缓存在内存里,由本类的写入方法失效。
+   */
+  async latestFullyRolledOut(channel: string): Promise<number | null> {
+    const cached = this.latestVersion.get();
+    if (cached !== undefined) return cached;
+    const row = await this.database.first<{ value: number | null }>(
+      `SELECT MAX(version_code) AS value FROM app_release
+       WHERE channel = $1 AND enabled = 1 AND rollout_percent >= 100`,
+      [channel],
+    );
+    const value = row?.value ?? null;
+    this.latestVersion.set(value);
+    return value;
+  }
 
   /**
    * 登记或更新一个版本。
@@ -52,6 +80,7 @@ export class ReleaseRepository {
         Date.now(),
       ],
     );
+    this.latestVersion.invalidate();
   }
 
   findRelease(channel: string, versionCode: number): Promise<ReleaseRecord | undefined> {
@@ -83,6 +112,7 @@ export class ReleaseRepository {
       "UPDATE app_release SET rollout_percent = $1 WHERE channel = $2 AND version_code = $3",
       [percent, channel, versionCode],
     );
+    this.latestVersion.invalidate();
     return affected > 0;
   }
 
@@ -92,6 +122,7 @@ export class ReleaseRepository {
       channel,
       versionCode,
     ]);
+    this.latestVersion.invalidate();
   }
 
   async minSupportedVersionCode(channel: string): Promise<number> {

@@ -376,6 +376,53 @@ async function main() {
   const blankMeta = blankQuality.split("\n").filter(Boolean).map((line) => JSON.parse(line)).at(-1)?.meta;
   check("空 quality 回落到默认 10 而不是 0", blankMeta?.quality === 10, `quality=${blankMeta?.quality}`);
 
+  section("最新版本号响应头");
+  // 服务端在每个响应上带回当前**全量可用**的最高版本号，客户端据此在会话中途发现更新。
+  // 只能包含 rollout=100 的版本：广告一个灰度版本会让不在名单里的客户端
+  // 提示更新 → bootstrap 返回 available:false → 提示永远消不掉。
+  const fakeApk = Buffer.from("PKtaotao-version-header");
+  const headerOf = async (path, init) => (await fetch(`${base}${path}`, init)).headers.get("x-latest-version-code");
+
+  await fetch(`${base}/api/v1/app/admin/releases?versionCode=999910&versionName=9.9.10&rollout=0`, {
+    method: "POST",
+    headers: { "x-admin-token": adminToken },
+    body: fakeApk,
+  });
+  await fetch(`${base}/health`);
+  check("未放量的版本不进响应头", (await headerOf("/health")) !== "999910", String(await headerOf("/health")));
+
+  await fetch(`${base}/api/v1/app/admin/rollout`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-admin-token": adminToken },
+    body: JSON.stringify({ versionCode: 999910, percent: 50 }),
+  });
+  await fetch(`${base}/health`);
+  check("灰度中（50%）的版本不进响应头", (await headerOf("/health")) !== "999910", String(await headerOf("/health")));
+
+  await fetch(`${base}/api/v1/app/admin/rollout`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-admin-token": adminToken },
+    body: JSON.stringify({ versionCode: 999910, percent: 100 }),
+  });
+  await fetch(`${base}/health`);
+  check("放量 100% 后出现在响应头", (await headerOf("/health")) === "999910", String(await headerOf("/health")));
+
+  // setHeader 设的头不会被各端点自己的 writeHead 覆盖，流式响应也要带上。
+  const streamed = await headerOf(`/api/v1/search?keyword=test&num=3`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  check("搜索 NDJSON 也带这个头（writeHead 不覆盖 setHeader）", streamed === "999910", String(streamed));
+  const apkHeader = await headerOf("/api/v1/app/apk/999910");
+  check("APK 二进制也带这个头", apkHeader === "999910", String(apkHeader));
+
+  await fetch(`${base}/api/v1/app/admin/rollout`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-admin-token": adminToken },
+    body: JSON.stringify({ versionCode: 999910, percent: 0, enabled: false }),
+  });
+  await fetch(`${base}/health`);
+  check("停用后立刻从响应头消失（缓存已失效）", (await headerOf("/health")) !== "999910", String(await headerOf("/health")));
+
   console.log(`\n通过 ${passed} 项，失败 ${failed} 项`);  process.exitCode = failed === 0 ? 0 : 1;
 }
 

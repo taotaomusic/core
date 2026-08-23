@@ -10,6 +10,7 @@ import com.taotao.music.data.DeviceIdStore
 import com.taotao.music.data.RemoteConfigStore
 import com.taotao.music.data.TokenProvider
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
 
 /**
@@ -32,7 +33,20 @@ class UpdateManager(
     /** 远程配置缓存，界面可直接读取，取不到时用代码内默认值。 */
     val remoteConfig = RemoteConfigStore(appContext)
 
+    /** 用户已划掉的版本号，跨启动记住。 */
+    private val preferences = appContext.getSharedPreferences("app_update", Context.MODE_PRIVATE)
+
+    /** 同一时刻只允许一次检查。原来靠读 status 判断，两个协程可能同时通过。 */
+    private val checkLock = Mutex()
+
     var status by mutableStateOf(UpdateStatus())
+        private set
+
+    /**
+     * 手动检查的结果，供界面弹一次提示后自行清空。
+     * 后台检查刻意不写它 —— 网络不好不该打扰用户。
+     */
+    var manualResult by mutableStateOf<String?>(null)
         private set
 
     /** 本机已安装的版本号，用于上报和比对。 */
@@ -41,36 +55,74 @@ class UpdateManager(
 
     /**
      * 检查更新并落盘远程配置。
-     * 检查失败时不打扰用户：非强制流程直接回到 [UpdateStage.UP_TO_DATE]，
-     * 因为「网络不好」不该让用户看到一个错误弹窗。
+     *
+     * [manual] 为真表示用户主动点了「检查更新」：此时必须给出可见结果，
+     * 因为静默失败在按钮上的表现是「点了没反应」。后台检查仍然保持安静 ——
+     * 网络不好不该让用户看到一个错误弹窗。
+     *
+     * 检查是**非破坏性**的：失败时保留已经发现的更新，不把 AVAILABLE 抹回 UP_TO_DATE。
+     * 会话中途会被响应头触发重查，抹掉状态等于让用户刚看到的更新提示消失。
      */
-    suspend fun check() {
-        if (status.stage == UpdateStage.CHECKING || status.stage == UpdateStage.DOWNLOADING) return
-        status = status.copy(stage = UpdateStage.CHECKING)
-        val result = runCatching {
-            withContext(Dispatchers.IO) {
-                api.bootstrap(installedVersionCode, Build.VERSION.SDK_INT, deviceIdStore.deviceId(), channel)
+    suspend fun check(manual: Boolean = false) {
+        if (status.stage == UpdateStage.DOWNLOADING) return
+        // tryLock 而不是 lock：重复触发直接丢弃，不排队。
+        if (!checkLock.tryLock()) return
+        try {
+            val previous = status
+            status = status.copy(stage = UpdateStage.CHECKING)
+            val result = runCatching {
+                withContext(Dispatchers.IO) {
+                    api.bootstrap(installedVersionCode, Build.VERSION.SDK_INT, deviceIdStore.deviceId(), channel)
+                }
+            }.getOrElse {
+                // 失败时回到检查前的状态，而不是造一个全新的 UP_TO_DATE。
+                status = if (previous.stage == UpdateStage.CHECKING) UpdateStatus(stage = UpdateStage.UP_TO_DATE) else previous
+                if (manual) manualResult = "检查更新失败，请稍后再试"
+                return
             }
-        }.getOrElse {
-            status = UpdateStatus(stage = UpdateStage.UP_TO_DATE)
-            return
-        }
 
-        withContext(Dispatchers.IO) { remoteConfig.save(result.config, result.configVersion) }
+            withContext(Dispatchers.IO) { remoteConfig.save(result.config, result.configVersion) }
 
-        val release = result.release
-        if (release == null || release.versionCode <= installedVersionCode) {
-            // 服务端不该下发不高于当前版本的包，真出现时按无更新处理，避免死循环提示。
-            status = UpdateStatus(stage = UpdateStage.UP_TO_DATE)
-            return
-        }
-        val ready = withContext(Dispatchers.IO) { downloader.completedApk(release) }
-        status = if (ready != null) {
-            UpdateStatus(stage = UpdateStage.READY, release = release, forced = result.forced, progressPercent = 100, apk = ready)
-        } else {
-            UpdateStatus(stage = UpdateStage.AVAILABLE, release = release, forced = result.forced)
+            val release = result.release
+            if (release == null || release.versionCode <= installedVersionCode) {
+                // 服务端不该下发不高于当前版本的包，真出现时按无更新处理，避免死循环提示。
+                status = UpdateStatus(stage = UpdateStage.UP_TO_DATE)
+                if (manual) manualResult = "已是最新版本 $installedVersionName"
+                return
+            }
+            // 用户划掉过这个版本就不再自动弹；手动检查视为明确想看，忽略这条记录。
+            if (!manual && !result.forced && release.versionCode == dismissedVersionCode()) {
+                status = UpdateStatus(stage = UpdateStage.UP_TO_DATE)
+                return
+            }
+            val ready = withContext(Dispatchers.IO) { downloader.completedApk(release) }
+            status = if (ready != null) {
+                UpdateStatus(stage = UpdateStage.READY, release = release, forced = result.forced, progressPercent = 100, apk = ready)
+            } else {
+                UpdateStatus(stage = UpdateStage.AVAILABLE, release = release, forced = result.forced)
+            }
+        } finally {
+            checkLock.unlock()
         }
     }
+
+    /**
+     * 响应头带回的版本号提示。
+     *
+     * 服务端在每个响应上下发当前全量可用的最高版本号，比本机高就去走一次正常检查 ——
+     * 这样长时间开着应用的用户也能发现更新，而不是只有冷启动才查一次。
+     * 头只是提示，是否真的要更新仍由 `/app/bootstrap` 判定。
+     */
+    suspend fun onLatestVersionHint(latestVersionCode: Long) {
+        if (latestVersionCode <= installedVersionCode) return
+        if (latestVersionCode == dismissedVersionCode()) return
+        // 已经发现同一个版本就不用再查了。
+        if (status.release?.versionCode == latestVersionCode) return
+        if (status.stage == UpdateStage.DOWNLOADING || status.stage == UpdateStage.READY) return
+        check()
+    }
+
+    fun consumeManualResult(): String? = manualResult?.also { manualResult = null }
 
     /** 下载安装包。完成后停在 [UpdateStage.READY]，由用户点击触发安装。 */
     suspend fun download() {
@@ -99,15 +151,21 @@ class UpdateManager(
         }
     }
 
-    /** 用户忽略本次可选更新；强制更新不允许忽略。 */
+    /**
+     * 用户忽略本次可选更新；强制更新不允许忽略。
+     * 记下版本号并持久化：否则会话中途的重查会让刚划掉的弹窗立刻复活。
+     */
     fun dismiss() {
         if (status.forced) return
+        status.release?.versionCode?.let { preferences.edit().putLong(KEY_DISMISSED, it).apply() }
         status = UpdateStatus(stage = UpdateStage.UP_TO_DATE)
     }
 
+    private fun dismissedVersionCode(): Long = preferences.getLong(KEY_DISMISSED, 0L)
+
     /** 失败后重试：已下载的分片会被续传复用。 */
     suspend fun retry() {
-        if (status.release == null) check() else download()
+        if (status.release == null) check(manual = true) else download()
     }
 
     private fun packageInfo(): PackageInfo? = runCatching {
@@ -118,5 +176,9 @@ class UpdateManager(
         info == null -> 0L
         Build.VERSION.SDK_INT >= Build.VERSION_CODES.P -> info.longVersionCode
         else -> @Suppress("DEPRECATION") info.versionCode.toLong()
+    }
+
+    private companion object {
+        const val KEY_DISMISSED = "dismissed_version_code"
     }
 }

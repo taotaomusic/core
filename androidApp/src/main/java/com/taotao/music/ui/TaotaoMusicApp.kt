@@ -251,6 +251,25 @@ fun TaotaoMusicApp() {
      */
     val updateManager = remember { UpdateManager(context, authSession) }
     LaunchedEffect(updateManager) { updateManager.check() }
+
+    /**
+     * 会话中途发现新版本。
+     *
+     * 服务端在每个响应上带回当前全量可用的最高版本号，比本机高就走一次正常检查。
+     * 回调来自请求线程，切回主线程再动状态；连接由 DisposableEffect 负责断开。
+     */
+    DisposableEffect(musicApi, updateManager) {
+        musicApi.onLatestVersion = { latest ->
+            scope.launch { updateManager.onLatestVersionHint(latest) }
+        }
+        onDispose { musicApi.onLatestVersion = null }
+    }
+
+    /** 手动检查更新的结果单独提示，后台检查保持安静。 */
+    LaunchedEffect(updateManager.manualResult) {
+        updateManager.consumeManualResult()?.let { message = it }
+    }
+
     val updateStatus = updateManager.status
     if (updateStatus.blocking) {
         ForceUpdatePage(
@@ -678,6 +697,9 @@ fun TaotaoMusicApp() {
                         signedIn = false
                     },
                     onOpenSettings = { showSettingsPage = true },
+                    versionName = updateManager.installedVersionName,
+                    checking = updateStatus.stage == UpdateStage.CHECKING,
+                    onCheckUpdate = { scope.launch { updateManager.check(manual = true) } },
                 )
             } else Column(Modifier.fillMaxSize().padding(horizontal = 22.dp)) {
                 Spacer(Modifier.height(24.dp))
@@ -830,7 +852,13 @@ private enum class QualitySheetKind { CURRENT_SONG, PLAYBACK_DEFAULT, DOWNLOAD_D
 }
 
 @Composable
-private fun MinePage(onLogout: () -> Unit, onOpenSettings: () -> Unit) {
+private fun MinePage(
+    onLogout: () -> Unit,
+    onOpenSettings: () -> Unit,
+    versionName: String,
+    checking: Boolean,
+    onCheckUpdate: () -> Unit,
+) {
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
     val crashReporter = remember { CrashReporter(context) }
@@ -865,6 +893,20 @@ private fun MinePage(onLogout: () -> Unit, onOpenSettings: () -> Unit) {
                 modifier = Modifier.weight(1f).padding(start = 12.dp),
                 color = if (crashLogs.isEmpty()) Color.Gray else Color.Unspecified,
             )
+        }
+        Spacer(Modifier.height(14.dp))
+        Row(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(Color.White)
+                .clickable(enabled = !checking, onClick = onCheckUpdate).padding(18.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Default.SystemUpdate, "检查更新", tint = TaotaoCoral)
+            Text("检查更新", modifier = Modifier.weight(1f).padding(start = 12.dp))
+            if (checking) {
+                CircularProgressIndicator(Modifier.size(16.dp), color = TaotaoCoral, strokeWidth = 2.dp)
+            } else {
+                Text("当前 $versionName", color = Color.Gray, fontSize = 12.sp)
+            }
         }
         Spacer(Modifier.height(14.dp))
         Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(Color.White).clickable(onClick = onLogout).padding(18.dp), verticalAlignment = Alignment.CenterVertically) {

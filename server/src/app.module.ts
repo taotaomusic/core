@@ -4,6 +4,7 @@ import { AuthModule } from "./auth/auth.module";
 import { AccessTokenGuard } from "./auth/guards/access-token.guard";
 import { AllExceptionsFilter } from "./common/filters/all-exceptions.filter";
 import { EnvelopeInterceptor } from "./common/interceptors/envelope.interceptor";
+import { LatestVersionHeaderInterceptor } from "./common/interceptors/latest-version-header.interceptor";
 import { SecurityHeadersInterceptor } from "./common/interceptors/security-headers.interceptor";
 import { RateLimitGuard } from "./common/rate-limit/rate-limit.guard";
 import { RateLimitService } from "./common/rate-limit/rate-limit.service";
@@ -12,6 +13,7 @@ import { DatabaseModule } from "./database/database.module";
 import { FavoritesModule } from "./favorites/favorites.module";
 import { HealthController } from "./health/health.controller";
 import { MusicModule } from "./music/music.module";
+import { LatestVersionModule } from "./release/latest-version.cache";
 import { ReleaseModule } from "./release/release.module";
 
 /**
@@ -25,6 +27,7 @@ import { ReleaseModule } from "./release/release.module";
   imports: [
     AppConfigModule,
     DatabaseModule,
+    LatestVersionModule,
     AuthModule,
     FavoritesModule,
     MusicModule,
@@ -36,6 +39,7 @@ import { ReleaseModule } from "./release/release.module";
     { provide: APP_GUARD, useClass: AccessTokenGuard },
     { provide: APP_GUARD, useClass: RateLimitGuard },
     { provide: APP_INTERCEPTOR, useClass: SecurityHeadersInterceptor },
+    { provide: APP_INTERCEPTOR, useClass: LatestVersionHeaderInterceptor },
     { provide: APP_INTERCEPTOR, useClass: EnvelopeInterceptor },
     { provide: APP_FILTER, useClass: AllExceptionsFilter },
   ],
