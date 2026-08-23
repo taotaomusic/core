@@ -13,6 +13,15 @@ import { ReleaseService } from "./release.service";
 const CONFIG_KEY_PATTERN = /^[a-z0-9_.-]{1,64}$/i;
 
 /**
+ * 「匹配所有版本」的哨兵，用于管理端列出全部配置项。
+ *
+ * 不能用 `Number.MAX_SAFE_INTEGER`：`min_version_code` / `max_version_code` 是 int4，
+ * PostgreSQL 绑定超出范围的值会直接报 22003（SQLite 会静默比较通过）。
+ * int4 上限已经远高于任何可能的 versionCode。
+ */
+const ALL_VERSIONS = 2_147_483_647;
+
+/**
  * 发布管理。
  *
  * 用 [Public] 跳过访问令牌，改由 [AdminTokenGuard] 校验请求头 `X-Admin-Token`：
@@ -65,7 +74,7 @@ export class ReleaseAdminController {
     if (!/^\d+(\.\d+)*$/.test(versionName)) throw ApiErrors.badRequest(4005, "versionName 不合法");
 
     const stored = await this.apk.store(request, channel, versionCode, (sha256 ?? "").trim());
-    this.releases.upsertRelease({
+    await this.releases.upsertRelease({
       channel,
       version_code: versionCode,
       version_name: versionName,
@@ -83,13 +92,15 @@ export class ReleaseAdminController {
 
   @Post("rollout")
   @HttpCode(HttpStatus.OK)
-  changeRollout(@Body() body: RolloutDto) {
+  async changeRollout(@Body() body: RolloutDto) {
     const channel = body.channel?.trim() || this.config.defaultChannel;
-    if (!this.releases.findRelease(channel, body.versionCode)) {
+    if (!(await this.releases.findRelease(channel, body.versionCode))) {
       throw ApiErrors.notFound(4041, "版本不存在");
     }
-    this.releases.updateRollout(channel, body.versionCode, this.clampPercent(body.percent));
-    if (body.enabled !== undefined) this.releases.setReleaseEnabled(channel, body.versionCode, body.enabled !== false);
+    await this.releases.updateRollout(channel, body.versionCode, this.clampPercent(body.percent));
+    if (body.enabled !== undefined) {
+      await this.releases.setReleaseEnabled(channel, body.versionCode, body.enabled !== false);
+    }
     return this.releases.findRelease(channel, body.versionCode);
   }
 
@@ -101,16 +112,16 @@ export class ReleaseAdminController {
    */
   @Post("min-version")
   @HttpCode(HttpStatus.OK)
-  setMinVersion(@Body() body: MinVersionDto) {
+  async setMinVersion(@Body() body: MinVersionDto) {
     const channel = body.channel?.trim() || this.config.defaultChannel;
-    const rescue = this.release.findRescueRelease(channel, body.versionCode);
+    const rescue = await this.release.findRescueRelease(channel, body.versionCode);
     if (body.versionCode > 0 && !rescue) {
       throw ApiErrors.conflict(
         4091,
         `不存在放量 100% 且版本号不低于 ${body.versionCode} 的发布，抬高下限会让客户端无法升级`,
       );
     }
-    this.releases.setMinSupportedVersionCode(channel, body.versionCode);
+    await this.releases.setMinSupportedVersionCode(channel, body.versionCode);
     return {
       channel,
       minSupportedVersionCode: body.versionCode,
@@ -120,24 +131,24 @@ export class ReleaseAdminController {
 
   @Get("config")
   listConfig() {
-    return this.releases.listConfig(Number.MAX_SAFE_INTEGER);
+    return this.releases.listConfig(ALL_VERSIONS);
   }
 
   @Post("config")
   @HttpCode(HttpStatus.OK)
-  changeConfig(@Body() body: RemoteConfigDto) {
+  async changeConfig(@Body() body: RemoteConfigDto) {
     if (!CONFIG_KEY_PATTERN.test(body.key)) throw ApiErrors.badRequest(4005, "配置键不合法");
     if (body.value === null) {
-      this.releases.deleteConfig(body.key);
+      await this.releases.deleteConfig(body.key);
       return { key: body.key, removed: true };
     }
-    this.releases.upsertConfig(
+    await this.releases.upsertConfig(
       body.key,
       String(body.value ?? ""),
       body.minVersionCode ?? null,
       body.maxVersionCode ?? null,
     );
-    return this.releases.listConfig(Number.MAX_SAFE_INTEGER);
+    return this.releases.listConfig(ALL_VERSIONS);
   }
 
   private clampPercent(value: unknown): number {

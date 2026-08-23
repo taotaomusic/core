@@ -32,16 +32,19 @@ export class ReleaseService {
    * 强制更新的目标一律取放量 100% 的版本，**绝不返回灰度包**：否则抬高最低可用版本后，
    * 不在灰度名单里的客户端会被拦住却拿不到升级包，直接变砖。
    */
-  resolveUpdate(
+  async resolveUpdate(
     request: Request,
     channel: string,
     versionCode: number,
     sdk: number,
     subject: string,
-  ): UpdateDescriptor {
-    const floor = this.releases.minSupportedVersionCode(channel);
+  ): Promise<UpdateDescriptor> {
+    const floor = await this.releases.minSupportedVersionCode(channel);
     const forced = versionCode < floor;
-    const candidates = this.releases.listUpgradeCandidates(channel, versionCode, sdk);
+    const candidates = await this.releases.listUpgradeCandidates(channel, versionCode, sdk);
+    // bucketOf 是同步的纯计算，所以下面这个 find 回调可以照常写。
+    // 若它哪天变成 async，回调返回的 Promise 恒为真值，find 会命中第一个候选版本，
+    // 灰度会静默失效成全量下发。
     const target = forced
       ? candidates.find((item) => item.rollout_percent >= 100)
       : candidates.find((item) => this.releases.bucketOf(item.id, subject) < item.rollout_percent);
@@ -72,10 +75,11 @@ export class ReleaseService {
    * 必须已经存在放量 100% 且不低于该下限的发布，否则被判定为强制更新的客户端
    * 会被拦在门外却拿不到升级包。从接口层面堵住这条变砖路径。
    */
-  findRescueRelease(channel: string, versionCode: number): ReleaseRecord | undefined {
-    return this.releases
-      .listReleases(channel)
-      .find((item) => item.enabled === 1 && item.rollout_percent >= 100 && item.version_code >= versionCode);
+  async findRescueRelease(channel: string, versionCode: number): Promise<ReleaseRecord | undefined> {
+    const releases = await this.releases.listReleases(channel);
+    return releases.find(
+      (item) => item.enabled === 1 && item.rollout_percent >= 100 && item.version_code >= versionCode,
+    );
   }
 
   /** 下载地址优先用配置的对外基地址；未配置时按请求推导，TLS 由 socket 或代理头判断。 */

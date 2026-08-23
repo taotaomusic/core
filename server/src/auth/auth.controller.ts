@@ -30,35 +30,37 @@ export class AuthController {
   @RateLimit("auth:register")
   @Post("register")
   @HttpCode(HttpStatus.CREATED)
-  register(@Body() body: Record<string, unknown>) {
+  async register(@Body() body: Record<string, unknown>) {
     const username = this.auth.textOf(body?.username, true);
     const password = this.auth.textOf(body?.password);
     if (!USERNAME_PATTERN.test(username) || password.length < MIN_PASSWORD_LENGTH) {
       throw ApiErrors.badRequest(4003, "用户名为3至32位，密码至少6位");
     }
-    if (this.users.findByUsername(username)) throw ApiErrors.conflict(4090, "用户名已存在");
+    // 这次查重只是为了在常见路径上给出准确的 409；真正的兜底是 users.create 里
+    // 对唯一约束冲突的翻译 —— 两步之间夹着约 100ms 的 scrypt，并发注册挡不住。
+    if (await this.users.findByUsername(username)) throw ApiErrors.conflict(4090, "用户名已存在");
 
     const credentials = this.auth.hashPassword(password);
-    const user = this.users.create(username, credentials.hash, credentials.salt);
+    const user = await this.users.create(username, credentials.hash, credentials.salt);
     // accessToken / refreshToken / expiresIn 必须与 user 平铺在同一层 data 下：
     // 客户端用 getString 硬取，包一层就会抛异常。
-    return { user, ...this.auth.issueTokens(user) };
+    return { user, ...(await this.auth.issueTokens(user)) };
   }
 
   @Public()
   @RateLimit("auth:login")
   @Post("login")
   @HttpCode(HttpStatus.OK)
-  login(@Body() body: Record<string, unknown>) {
+  async login(@Body() body: Record<string, unknown>) {
     const username = this.auth.textOf(body?.username, true);
     const password = this.auth.textOf(body?.password);
-    const user = this.users.findByUsername(username);
+    const user = await this.users.findByUsername(username);
     if (!user || !this.auth.verifyPassword(password, user.password_salt, user.password_hash)) {
       throw ApiErrors.unauthorized(4011, "用户名或密码错误");
     }
     return {
       user: { id: user.id, username: user.username, created_at: user.created_at },
-      ...this.auth.issueTokens(user),
+      ...(await this.auth.issueTokens(user)),
     };
   }
 
@@ -71,8 +73,8 @@ export class AuthController {
   @Public()
   @Post("refresh")
   @HttpCode(HttpStatus.OK)
-  refresh(@Body() body: Record<string, unknown>) {
-    const tokens = this.auth.rotate(this.auth.textOf(body?.refreshToken));
+  async refresh(@Body() body: Record<string, unknown>) {
+    const tokens = await this.auth.rotate(this.auth.textOf(body?.refreshToken));
     if (!tokens) throw ApiErrors.unauthorized(4012, "刷新令牌无效或已过期");
     return tokens;
   }
@@ -81,9 +83,9 @@ export class AuthController {
   @Public()
   @Post("logout")
   @HttpCode(HttpStatus.NO_CONTENT)
-  logout(@Body() body: Record<string, unknown>): void {
+  async logout(@Body() body: Record<string, unknown>): Promise<void> {
     const token = this.auth.textOf(body?.refreshToken);
-    if (token) this.auth.revokeRefreshToken(token);
+    if (token) await this.auth.revokeRefreshToken(token);
   }
 
   /** 当前登录用户。客户端目前未调用，保留给运维排查。 */

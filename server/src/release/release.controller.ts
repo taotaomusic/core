@@ -36,7 +36,7 @@ export class ReleaseController {
   @Public()
   @RateLimit("app")
   @Get("bootstrap")
-  bootstrap(
+  async bootstrap(
     @Req() request: Request,
     @CurrentUser() user: SessionUser | undefined,
     @Query("channel") channel?: string,
@@ -57,10 +57,15 @@ export class ReleaseController {
     // 保证同一个客户端在整个灰度周期里稳定落在同一个桶。
     const subject = user ? `user:${user.id}` : `device:${device || clientAddressOf(request)}`;
 
+    const [update, config, configVersion] = await Promise.all([
+      this.release.resolveUpdate(request, currentChannel, installedVersion, sdkLevel, subject),
+      this.releases.listConfig(installedVersion),
+      this.releases.configVersion(),
+    ]);
     return {
-      update: this.release.resolveUpdate(request, currentChannel, installedVersion, sdkLevel, subject),
-      config: Object.fromEntries(this.releases.listConfig(installedVersion).map((item) => [item.key, item.value])),
-      configVersion: this.releases.configVersion(),
+      update,
+      config: Object.fromEntries(config.map((item) => [item.key, item.value])),
+      configVersion,
     };
   }
 
@@ -73,8 +78,8 @@ export class ReleaseController {
     @Res() response: Response,
     @Param("versionCode", ParseIntPipe) versionCode: number,
     @Query("channel") channel?: string,
-  ): void {
-    this.serve(request, response, versionCode, channel);
+  ): Promise<void> {
+    return this.serve(request, response, versionCode, channel);
   }
 
   /** 客户端不发 HEAD，但保留它便于用 curl 排查。 */
@@ -87,12 +92,17 @@ export class ReleaseController {
     @Res() response: Response,
     @Param("versionCode", ParseIntPipe) versionCode: number,
     @Query("channel") channel?: string,
-  ): void {
-    this.serve(request, response, versionCode, channel);
+  ): Promise<void> {
+    return this.serve(request, response, versionCode, channel);
   }
 
-  private serve(request: Request, response: Response, versionCode: number, channel?: string): void {
-    const release = this.releases.findRelease(channel ?? this.config.defaultChannel, versionCode);
+  private async serve(
+    request: Request,
+    response: Response,
+    versionCode: number,
+    channel?: string,
+  ): Promise<void> {
+    const release = await this.releases.findRelease(channel ?? this.config.defaultChannel, versionCode);
     if (!release || !release.enabled) throw ApiErrors.notFound(4041, "版本不存在");
     this.apk.download(request, response, release);
   }

@@ -22,14 +22,14 @@ export class AccessTokenGuard implements CanActivate {
     private readonly auth: AuthService,
   ) {}
 
-  canActivate(context: ExecutionContext): boolean {
+  async canActivate(context: ExecutionContext): Promise<boolean> {
     if (context.getType() !== "http") return true;
     const isPublic = this.reflector.getAllAndOverride<boolean>(PUBLIC_METADATA_KEY, [
       context.getHandler(),
       context.getClass(),
     ]);
     const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
-    const user = this.auth.authenticate(request.headers.authorization);
+    const user = await this.auth.authenticate(request.headers.authorization);
 
     // 公开路由也尝试解析令牌：客户端引导接口需要「带了有效令牌就按用户分桶，
     // 否则退回设备号」，所以这里解析成功就挂上，失败也照样放行。

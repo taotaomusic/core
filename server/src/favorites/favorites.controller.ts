@@ -31,9 +31,9 @@ export class FavoritesController {
   }
 
   @Delete(":source/:songId")
-  remove(@CurrentUser() user: SessionUser, @Param("source") source: string, @Param("songId") songId: string) {
+  async remove(@CurrentUser() user: SessionUser, @Param("source") source: string, @Param("songId") songId: string) {
     this.assertIdentifiers(source, songId);
-    return { removed: this.favorites.remove(user.id, source.toLowerCase(), songId) };
+    return { removed: await this.favorites.remove(user.id, source.toLowerCase(), songId) };
   }
 
   private assertIdentifiers(source: string, songId: string): void {

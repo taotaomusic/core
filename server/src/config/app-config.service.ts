@@ -12,7 +12,12 @@ import { resolve } from "node:path";
 @Injectable()
 export class AppConfigService {
   readonly port: number;
-  readonly databasePath: string;
+
+  /**
+   * PostgreSQL 连接串，形如 `postgres://user:pass@host:5432/music`。
+   * 没有默认值 —— 网络数据库配错了应该启动即失败，而不是连上一个空库继续跑。
+   */
+  readonly databaseUrl: string;
 
   /** 访问令牌的 HMAC 签名密钥。生产环境的长度校验在配置加载阶段完成。 */
   readonly authSecret: string;
@@ -53,7 +58,7 @@ export class AppConfigService {
 
   constructor(config: ConfigService) {
     this.port = Number(config.get("PORT") ?? 4500);
-    this.databasePath = resolve(String(config.get("DATABASE_PATH") ?? "./data/music.sqlite"));
+    this.databaseUrl = String(config.get("DATABASE_URL") ?? "");
     this.authSecret = String(config.get("AUTH_SECRET") ?? "taotao-development-secret-change-me");
     this.adminToken = String(config.get("ADMIN_TOKEN") ?? "");
     this.apkDirectory = resolve(String(config.get("APK_DIR") ?? "./data/apk"));

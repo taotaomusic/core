@@ -1,8 +1,16 @@
 # 桃桃音乐后端服务
 
-NestJS + TypeScript 实现的无状态音乐接口适配服务。媒体、图片和歌词只做实时转发；SQLite 仅保存用户账号、刷新令牌哈希、收藏和热更新发布记录，不保存媒体内容。
+NestJS + TypeScript 实现的无状态音乐接口适配服务。媒体、图片和歌词只做实时转发；PostgreSQL 仅保存用户账号、刷新令牌哈希、收藏和热更新发布记录，不保存媒体内容。
 
 ## 启动
+
+先准备数据库（只需一次）：
+
+```powershell
+psql -U postgres -c "CREATE DATABASE music"
+```
+
+建表由服务启动时自动完成（幂等 DDL + 顾问锁），不需要手工执行迁移。然后：
 
 ```powershell
 npm install
@@ -20,6 +28,8 @@ npm run build
 1. 上传 `dist/` 整个目录和 `package-lock.json` 到服务器
 2. 在 `dist/` 同级执行 `npm install --omit=dev`（`dist/package.json` 只列出生产依赖）
 3. `node dist/main.js` 启动，或在 `dist/` 内 `npm start`
+
+**PostgreSQL 必须先于本服务启动。** 数据库换成独立进程后多了一种失败模式：机器重启时若 Node 先起来，连接会失败。启动时有 10 次 × 1 秒的重试兜底，超过就退出交给进程管理器；用 systemd 的话建议加 `After=postgresql.service`。
 
 > 迁移说明：早先用 esbuild 打成单文件 `dist/app.js`。NestJS 的构造器注入依赖
 > `emitDecoratorMetadata` 生成的 `design:paramtypes` 元数据，而 esbuild 没有类型检查器、
@@ -46,7 +56,7 @@ src/
     semaphore.ts            并发上限
 
   config/                 环境变量读取与校验
-  database/               SQLite 连接与建表迁移
+  database/               PostgreSQL 连接池与建表迁移
   auth/                   注册、登录、令牌轮换、访问令牌守卫
   favorites/              收藏
   upstream/               第三方接口适配（成功码、字段名、音质降级都收敛在此）
@@ -61,6 +71,20 @@ src/
 
 这替掉了早先「靠门禁那行代码的位置来保证鉴权」的隐式约定 —— 那种写法下，新增路由放错位置就是安全漏洞，且看代码不容易发现。现在漏标 `@Public()` 只会让接口意外要求登录（能被立刻发现），而不是意外裸奔。
 
+### 数据层的四条硬规矩
+
+从 SQLite 迁过来时踩到的坑，改 SQL 前先看这几条 —— 违反它们**不会报错**，只会让功能静默失效。
+
+**① 别名必须加双引号。** PostgreSQL 把不加引号的标识符折叠成小写，`AS songId` 得到的字段是 `songid`。客户端读不到 `songId` 后所有歌都显示未收藏，且没有任何报错。写 `AS "songId"`。
+
+**② 存 `Date.now()` 的列一律 `bigint`，其它整数一律 `integer`。** 毫秒时间戳约 1.7e12，超出 int4 的 21 亿上限；反过来 pg 默认把 int8 解析成**字符串**，所以 `database.service.ts` 里注册了 `INT8 → Number` 的解析器。这个解析器成立的前提是 bigint 列只存时间戳 —— 今后别把真正的 64 位 ID 放进 bigint 列。
+
+**③ `app_release.enabled` 是 `smallint` 0/1，不是 `boolean`。** 两个调用点写法不一致：`release.service.ts` 是 `enabled === 1`（严格等于数字），`release.controller.ts` 是 `!enabled`（真值判断）。改成 boolean 会让前者恒假，抬高最低可用版本的守卫就永远返回 409。
+
+**④ `bucketOf` 必须保持同步。** 它在 `Array.prototype.find` 的回调里被调用，一旦变成 async，回调返回的 Promise 恒为真值，`find` 会命中第一个候选版本 —— 灰度静默失效成全量下发。
+
+另外两处竞态是这次迁移顺带修掉的，别改回两步写法：刷新令牌的 `consume` 是**单条** `UPDATE … RETURNING`（拆成 SELECT + UPDATE 会让并发刷新双双成功，一次性令牌就不再一次性）；注册的唯一约束冲突在 `users.create` 里翻译成 409/4090（查重和插入之间夹着约 100ms 的 scrypt，连接池下挡不住并发，不翻译会漏成 502）。
+
 ## 配置
 
 服务启动时读取同目录的 `.env`（已存在的环境变量优先），可参考 `.env.example`。`.env` 保存密钥，不要提交到版本库。
@@ -68,7 +92,7 @@ src/
 | 变量 | 说明 |
 | --- | --- |
 | `PORT` | 监听端口，默认 `4500` |
-| `DATABASE_PATH` | SQLite 路径，默认 `./data/music.sqlite` |
+| `DATABASE_URL` | PostgreSQL 连接串，如 `postgres://postgres:密码@localhost:5432/music`。**没有默认值**，缺失或不是 `postgres://` 开头会启动即失败 |
 | `AUTH_SECRET` | 访问令牌签名密钥，生产环境必须为至少 32 位随机值（启动时校验） |
 | `ADMIN_TOKEN` | 发布管理令牌，留空则管理接口全部拒绝 |
 | `APK_DIR` | APK 存放目录，默认 `./data/apk` |
@@ -187,14 +211,22 @@ src/
 
 ## 契约验证
 
-线上有已安装的客户端，且 `/api/v1/app/bootstrap` 本身就是推送修复的通道，改动后必须逐项核对响应形状。用独立的临时数据库起一个实例，然后：
+线上有已安装的客户端，且 `/api/v1/app/bootstrap` 本身就是推送修复的通道，改动后必须逐项核对响应形状。用**独立的验证库**（不是正式库）起一个实例：
 
 ```powershell
-$env:PORT="4720"; $env:DATABASE_PATH="./tmp/verify.sqlite"; $env:APK_DIR="./tmp/apk"
+psql -U postgres -c "CREATE DATABASE music_verify"   # 只需一次
+node tools/reset-db.mjs postgres://postgres:密码@localhost:5432/music_verify
+
+$env:DATABASE_URL="postgres://postgres:密码@localhost:5432/music_verify"
+$env:PORT="4720"; $env:APK_DIR="./tmp/apk"
 $env:AUTH_SECRET="0123456789012345678901234567890123456789"; $env:ADMIN_TOKEN="verify-token"
 npm run dev
 # 另一个终端
 node tools/verify-contract.mjs http://127.0.0.1:4720 verify-token
 ```
 
-脚本会核对状态码、业务码、信封形状、NDJSON 行格式、字段类型（`data.id` 必须是 number、`songId` 必须是字符串）、纯文本歌词、Range 行为，以及「无效令牌访问 bootstrap 仍返回 200」这类红线。
+当前共 62 项，必须全绿。脚本会核对状态码、业务码、信封形状、NDJSON 行格式、字段类型（`data.id` 必须是 number、`songId` 必须是字符串、`createdAt` / `configVersion` / `apkSize` 必须是 number）、纯文本歌词、Range 行为，以及「无效令牌访问 bootstrap 仍返回 200」这类红线；最后一组专门覆盖上面「数据层的四条硬规矩」，包括并发注册、并发刷新同一令牌、停用版本不可下载、灰度分桶稳定。
+
+`reset-db.mjs` 会 `DROP SCHEMA public CASCADE`，所以它拒绝库名里不含 `verify` / `test` 的连接串 —— SQLite 时代「删掉那个文件」就够了，现在需要一个显式且带护栏的动作。
+
+类型检查能抓住绝大部分同步改异步的漏改（漏 `await` 会得到 `Promise<T>` 与 `T` 不匹配），但**抓不住 `.find()` / `.map()` 回调里的漏改**，改动数据层后除了 `npx tsc --noEmit` 还要人工看一遍这些回调。

@@ -3,8 +3,10 @@
 // 迁移到 NestJS 后逐项核对响应形状是否与旧实现一致 —— 线上有装机客户端，
 // 而 /api/v1/app/bootstrap 本身就是推送修复的通道，坏掉就没有补救手段了。
 //
-// 用法（需要先启动一个本地实例，建议用独立的临时数据库）：
-//   $env:PORT=4720; $env:DATABASE_PATH="./tmp/verify.sqlite"; $env:APK_DIR="./tmp/apk"
+// 用法（需要先启动一个本地实例，务必指向独立的验证库）：
+//   node tools/reset-db.mjs postgres://postgres:密码@localhost:5432/music_verify
+//   $env:DATABASE_URL="postgres://postgres:密码@localhost:5432/music_verify"
+//   $env:PORT=4720; $env:APK_DIR="./tmp/apk"
 //   $env:AUTH_SECRET="0123456789012345678901234567890123456789"; $env:ADMIN_TOKEN="verify-token"
 //   npm run dev
 //   node tools/verify-contract.mjs http://127.0.0.1:4720 verify-token
@@ -159,6 +161,117 @@ async function main() {
     body: JSON.stringify({ versionCode: 999999 }),
   });
   check("缺少全量版本时抬高下限被拒（409 / code 4091）", guard.status === 409 && (await guard.json()).code === 4091, `实际 ${guard.status}`);
+
+  section("PostgreSQL 迁移专项");
+  // 以下每一项都对应一处「SQLite 能过、PostgreSQL 会错」的差异，
+  // 迁移前这些路径都没有被覆盖。
+
+  // ① listConfig 的「所有版本」哨兵曾是 Number.MAX_SAFE_INTEGER，
+  //    与 int4 的 min_version_code 比较会让 PG 直接报 22003。
+  const adminConfig = await fetch(`${base}/api/v1/app/admin/config`, { headers: { "x-admin-token": adminToken } });
+  const adminConfigBody = await adminConfig.json();
+  check(
+    "管理端列配置 200（哨兵不能超出 int4 范围）",
+    adminConfig.status === 200 && adminConfigBody.code === 0,
+    `${adminConfig.status} ${JSON.stringify(adminConfigBody).slice(0, 120)}`,
+  );
+
+  const wroteConfig = await fetch(`${base}/api/v1/app/admin/config`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-admin-token": adminToken },
+    body: JSON.stringify({ key: "verify.flag", value: "on", minVersionCode: 1 }),
+  });
+  check("写入配置项 200", wroteConfig.status === 200, `实际 ${wroteConfig.status}`);
+
+  const configured = await (
+    await fetch(`${base}/api/v1/app/bootstrap?versionCode=60&sdk=36&deviceId=verify-device`)
+  ).json();
+  check("bootstrap 读回刚写的配置", configured.data?.config?.["verify.flag"] === "on", JSON.stringify(configured.data?.config));
+  // ② updated_at 是 bigint；pg 默认把 int8 解析成字符串。
+  check(
+    "configVersion 是 number（int8 不能回传成字符串）",
+    typeof configured.data?.configVersion === "number",
+    `${typeof configured.data?.configVersion}：${configured.data?.configVersion}`,
+  );
+
+  await fetch(`${base}/api/v1/favorites/tencent/97773`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}` },
+  });
+  const refetched = await (await fetch(`${base}/api/v1/favorites`, { headers: { authorization: `Bearer ${token}` } })).json();
+  check("收藏的 createdAt 是 number", typeof refetched.data?.[0]?.createdAt === "number", `${typeof refetched.data?.[0]?.createdAt}`);
+  // PG 会把不加引号的别名折叠成小写，songId 会变成 songid。
+  check("收藏的 songId 别名大小写正确", typeof refetched.data?.[0]?.songId === "string", JSON.stringify(refetched.data?.[0]));
+
+  // ③ 注册是「先查重、再哈希密码（约 100ms）、最后插入」，连接池下挡不住并发。
+  const raceName = `verify_${randomBytes(4).toString("hex")}`;
+  const raced = await Promise.all([
+    postJson("/api/v1/auth/register", { username: raceName, password: "pass123456" }),
+    postJson("/api/v1/auth/register", { username: raceName, password: "pass123456" }),
+  ]);
+  const accepted = raced.filter((item) => item.status === 201);
+  const refused = raced.filter((item) => item.status !== 201);
+  check("并发注册同名用户只成功一次", accepted.length === 1, raced.map((item) => item.status).join(" / "));
+  check(
+    "另一个是 409/4090（唯一约束冲突不能漏成 502）",
+    refused.length === 1 && refused[0].status === 409 && refused[0].body.code === 4090,
+    JSON.stringify(refused[0]?.body),
+  );
+
+  // ④ 刷新令牌必须是一次性的：consume 拆成 SELECT + UPDATE 时两个并发请求会双双成功。
+  const victim = await postJson("/api/v1/auth/register", {
+    username: `verify_${randomBytes(4).toString("hex")}`,
+    password: "pass123456",
+  });
+  const shared = victim.body.data.refreshToken;
+  const rotations = await Promise.all([
+    postJson("/api/v1/auth/refresh", { refreshToken: shared }),
+    postJson("/api/v1/auth/refresh", { refreshToken: shared }),
+  ]);
+  check(
+    "同一刷新令牌并发使用只成功一次",
+    rotations.filter((item) => item.status === 200).length === 1,
+    rotations.map((item) => item.status).join(" / "),
+  );
+
+  // ⑤ enabled 是 smallint 0/1；改成 boolean 会让 `enabled === 1` 恒假、`!enabled` 反转。
+  const placeholderApk = Buffer.from("PKtaotao-verify-placeholder");
+  const disabled = await fetch(
+    `${base}/api/v1/app/admin/releases?versionCode=999001&versionName=9.9.1&enabled=false`,
+    { method: "POST", headers: { "x-admin-token": adminToken }, body: placeholderApk },
+  );
+  check("登记一个 enabled=false 的版本", disabled.status === 201, `实际 ${disabled.status}`);
+  const disabledDownload = await fetch(`${base}/api/v1/app/apk/999001`);
+  check("停用版本下载返回 404", disabledDownload.status === 404, `实际 ${disabledDownload.status}`);
+
+  // ⑥ 灰度分桶依赖 bucketOf 保持同步：一旦变成 async，find 的回调恒为真值，
+  //    rollout=0 也会被下发。
+  await fetch(`${base}/api/v1/app/admin/releases?versionCode=999002&versionName=9.9.2&rollout=0`, {
+    method: "POST",
+    headers: { "x-admin-token": adminToken },
+    body: placeholderApk,
+  });
+  const notRolledOut = await (
+    await fetch(`${base}/api/v1/app/bootstrap?versionCode=999001&sdk=36&deviceId=verify-bucket`)
+  ).json();
+  check("rollout=0 的版本不下发", notRolledOut.data?.update?.available === false, JSON.stringify(notRolledOut.data?.update));
+
+  await fetch(`${base}/api/v1/app/admin/rollout`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-admin-token": adminToken },
+    body: JSON.stringify({ versionCode: 999002, percent: 100 }),
+  });
+  const offered = await Promise.all([
+    (await fetch(`${base}/api/v1/app/bootstrap?versionCode=999001&sdk=36&deviceId=verify-bucket`)).json(),
+    (await fetch(`${base}/api/v1/app/bootstrap?versionCode=999001&sdk=36&deviceId=verify-bucket`)).json(),
+  ]);
+  check("rollout=100 后下发该版本", offered[0].data?.update?.available === true, JSON.stringify(offered[0].data?.update));
+  check(
+    "同一 deviceId 两次结果一致（分桶必须稳定）",
+    offered[0].data?.update?.versionCode === offered[1].data?.update?.versionCode,
+    `${offered[0].data?.update?.versionCode} vs ${offered[1].data?.update?.versionCode}`,
+  );
+  check("apkSize 是 number", typeof offered[0].data?.update?.apkSize === "number", `${typeof offered[0].data?.update?.apkSize}`);
 
   console.log(`\n通过 ${passed} 项，失败 ${failed} 项`);
   process.exitCode = failed === 0 ? 0 : 1;

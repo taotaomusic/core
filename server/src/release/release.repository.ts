@@ -24,104 +24,127 @@ export type ConfigEntry = { key: string; value: string };
 export class ReleaseRepository {
   constructor(private readonly database: DatabaseService) {}
 
-  upsertRelease(release: Omit<ReleaseRecord, "id" | "published_at">): void {
-    this.database.connection
-      .prepare(
-        `INSERT INTO app_release (channel, version_code, version_name, apk_file, apk_size, apk_sha256, release_note, rollout_percent, min_sdk, enabled, published_at)
-         VALUES (@channel, @version_code, @version_name, @apk_file, @apk_size, @apk_sha256, @release_note, @rollout_percent, @min_sdk, @enabled, @published_at)
-         ON CONFLICT(channel, version_code) DO UPDATE SET
-           version_name = excluded.version_name, apk_file = excluded.apk_file, apk_size = excluded.apk_size,
-           apk_sha256 = excluded.apk_sha256, release_note = excluded.release_note, min_sdk = excluded.min_sdk,
-           enabled = excluded.enabled, published_at = excluded.published_at`,
-      )
-      .run({ ...release, published_at: Date.now() });
-  }
-
-  findRelease(channel: string, versionCode: number): ReleaseRecord | undefined {
-    return this.database.connection
-      .prepare("SELECT * FROM app_release WHERE channel = ? AND version_code = ?")
-      .get(channel, versionCode) as ReleaseRecord | undefined;
-  }
-
-  listReleases(channel: string): ReleaseRecord[] {
-    return this.database.connection
-      .prepare("SELECT * FROM app_release WHERE channel = ? ORDER BY version_code DESC")
-      .all(channel) as ReleaseRecord[];
-  }
-
-  /** 候选发布：同渠道、已启用、SDK 兼容且版本号高于客户端，按版本号降序。 */
-  listUpgradeCandidates(channel: string, versionCode: number, sdk: number): ReleaseRecord[] {
-    return this.database.connection
-      .prepare(
-        `SELECT * FROM app_release
-         WHERE channel = ? AND enabled = 1 AND min_sdk <= ? AND version_code > ?
-         ORDER BY version_code DESC`,
-      )
-      .all(channel, sdk, versionCode) as ReleaseRecord[];
-  }
-
-  updateRollout(channel: string, versionCode: number, percent: number): boolean {
-    return (
-      this.database.connection
-        .prepare("UPDATE app_release SET rollout_percent = ? WHERE channel = ? AND version_code = ?")
-        .run(percent, channel, versionCode).changes > 0
+  /**
+   * 登记或更新一个版本。
+   *
+   * `DO UPDATE SET` 里**刻意没有 `rollout_percent`**：重新上传同一个版本号时
+   * 要保留当前的放量比例，否则一次覆盖发布会把已经放到 100% 的版本打回 0。
+   */
+  async upsertRelease(release: Omit<ReleaseRecord, "id" | "published_at">): Promise<void> {
+    await this.database.run(
+      `INSERT INTO app_release (channel, version_code, version_name, apk_file, apk_size, apk_sha256, release_note, rollout_percent, min_sdk, enabled, published_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       ON CONFLICT (channel, version_code) DO UPDATE SET
+         version_name = excluded.version_name, apk_file = excluded.apk_file, apk_size = excluded.apk_size,
+         apk_sha256 = excluded.apk_sha256, release_note = excluded.release_note, min_sdk = excluded.min_sdk,
+         enabled = excluded.enabled, published_at = excluded.published_at`,
+      [
+        release.channel,
+        release.version_code,
+        release.version_name,
+        release.apk_file,
+        release.apk_size,
+        release.apk_sha256,
+        release.release_note,
+        release.rollout_percent,
+        release.min_sdk,
+        release.enabled,
+        Date.now(),
+      ],
     );
   }
 
-  setReleaseEnabled(channel: string, versionCode: number, enabled: boolean): void {
-    this.database.connection
-      .prepare("UPDATE app_release SET enabled = ? WHERE channel = ? AND version_code = ?")
-      .run(enabled ? 1 : 0, channel, versionCode);
+  findRelease(channel: string, versionCode: number): Promise<ReleaseRecord | undefined> {
+    return this.database.first<ReleaseRecord>(
+      "SELECT * FROM app_release WHERE channel = $1 AND version_code = $2",
+      [channel, versionCode],
+    );
   }
 
-  minSupportedVersionCode(channel: string): number {
-    const row = this.database.connection
-      .prepare("SELECT min_supported_version_code AS value FROM app_channel WHERE channel = ?")
-      .get(channel) as { value: number } | undefined;
+  listReleases(channel: string): Promise<ReleaseRecord[]> {
+    return this.database.all<ReleaseRecord>(
+      "SELECT * FROM app_release WHERE channel = $1 ORDER BY version_code DESC",
+      [channel],
+    );
+  }
+
+  /** 候选发布：同渠道、已启用、SDK 兼容且版本号高于客户端，按版本号降序。 */
+  listUpgradeCandidates(channel: string, versionCode: number, sdk: number): Promise<ReleaseRecord[]> {
+    return this.database.all<ReleaseRecord>(
+      `SELECT * FROM app_release
+       WHERE channel = $1 AND enabled = 1 AND min_sdk <= $2 AND version_code > $3
+       ORDER BY version_code DESC`,
+      [channel, sdk, versionCode],
+    );
+  }
+
+  async updateRollout(channel: string, versionCode: number, percent: number): Promise<boolean> {
+    const affected = await this.database.run(
+      "UPDATE app_release SET rollout_percent = $1 WHERE channel = $2 AND version_code = $3",
+      [percent, channel, versionCode],
+    );
+    return affected > 0;
+  }
+
+  async setReleaseEnabled(channel: string, versionCode: number, enabled: boolean): Promise<void> {
+    await this.database.run("UPDATE app_release SET enabled = $1 WHERE channel = $2 AND version_code = $3", [
+      enabled ? 1 : 0,
+      channel,
+      versionCode,
+    ]);
+  }
+
+  async minSupportedVersionCode(channel: string): Promise<number> {
+    const row = await this.database.first<{ value: number }>(
+      "SELECT min_supported_version_code AS value FROM app_channel WHERE channel = $1",
+      [channel],
+    );
     return row?.value ?? 0;
   }
 
-  setMinSupportedVersionCode(channel: string, versionCode: number): void {
-    this.database.connection
-      .prepare(
-        `INSERT INTO app_channel (channel, min_supported_version_code, updated_at) VALUES (?, ?, ?)
-         ON CONFLICT(channel) DO UPDATE SET
-           min_supported_version_code = excluded.min_supported_version_code, updated_at = excluded.updated_at`,
-      )
-      .run(channel, versionCode, Date.now());
+  async setMinSupportedVersionCode(channel: string, versionCode: number): Promise<void> {
+    await this.database.run(
+      `INSERT INTO app_channel (channel, min_supported_version_code, updated_at) VALUES ($1, $2, $3)
+       ON CONFLICT (channel) DO UPDATE SET
+         min_supported_version_code = excluded.min_supported_version_code, updated_at = excluded.updated_at`,
+      [channel, versionCode, Date.now()],
+    );
   }
 
-  /** 取对当前客户端版本生效的配置项。 */
-  listConfig(versionCode: number): ConfigEntry[] {
-    return this.database.connection
-      .prepare(
-        `SELECT key, value FROM app_config
-         WHERE (min_version_code IS NULL OR min_version_code <= ?) AND (max_version_code IS NULL OR max_version_code >= ?)
-         ORDER BY key`,
-      )
-      .all(versionCode, versionCode) as ConfigEntry[];
+  /** 取对当前客户端版本生效的配置项。上下界比较用的是同一个参数。 */
+  listConfig(versionCode: number): Promise<ConfigEntry[]> {
+    return this.database.all<ConfigEntry>(
+      `SELECT key, value FROM app_config
+       WHERE (min_version_code IS NULL OR min_version_code <= $1) AND (max_version_code IS NULL OR max_version_code >= $1)
+       ORDER BY key`,
+      [versionCode],
+    );
   }
 
   /** 配置版本号：取最大更新时间，供客户端跳过重复落盘。 */
-  configVersion(): number {
-    const row = this.database.connection
-      .prepare("SELECT COALESCE(MAX(updated_at), 0) AS value FROM app_config")
-      .get() as { value: number };
-    return row.value;
+  async configVersion(): Promise<number> {
+    const row = await this.database.first<{ value: number }>(
+      "SELECT COALESCE(MAX(updated_at), 0) AS value FROM app_config",
+    );
+    return row?.value ?? 0;
   }
 
-  upsertConfig(key: string, value: string, minVersionCode: number | null, maxVersionCode: number | null): void {
-    this.database.connection
-      .prepare(
-        `INSERT INTO app_config (key, value, min_version_code, max_version_code, updated_at) VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value, min_version_code = excluded.min_version_code,
-           max_version_code = excluded.max_version_code, updated_at = excluded.updated_at`,
-      )
-      .run(key, value, minVersionCode, maxVersionCode, Date.now());
+  async upsertConfig(
+    key: string,
+    value: string,
+    minVersionCode: number | null,
+    maxVersionCode: number | null,
+  ): Promise<void> {
+    await this.database.run(
+      `INSERT INTO app_config (key, value, min_version_code, max_version_code, updated_at) VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (key) DO UPDATE SET value = excluded.value, min_version_code = excluded.min_version_code,
+         max_version_code = excluded.max_version_code, updated_at = excluded.updated_at`,
+      [key, value, minVersionCode, maxVersionCode, Date.now()],
+    );
   }
 
-  deleteConfig(key: string): boolean {
-    return this.database.connection.prepare("DELETE FROM app_config WHERE key = ?").run(key).changes > 0;
+  async deleteConfig(key: string): Promise<boolean> {
+    return (await this.database.run("DELETE FROM app_config WHERE key = $1", [key])) > 0;
   }
 
   /**
@@ -129,6 +152,10 @@ export class ReleaseRepository {
    *
    * 混入发布 ID 是为了让每个版本得到互相独立的分桶，否则永远是同一批用户当小白鼠；
    * 用哈希而非随机数是为了对同一用户稳定，否则每次检查结果都会翻转，更新提示时有时无。
+   *
+   * **必须保持同步。** `ReleaseService.resolveUpdate` 在 `Array.prototype.find` 的回调里
+   * 调它，一旦返回 Promise，回调恒为真值，`.find()` 会命中第一个候选版本，
+   * 灰度直接失效变成全量下发。
    */
   bucketOf(releaseId: number, subject: string): number {
     return createHash("sha1").update(`${releaseId}:${subject}`).digest().readUInt32BE(0) % 100;

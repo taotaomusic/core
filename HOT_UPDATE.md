@@ -66,7 +66,9 @@ if (!authenticate(request)) return json(response, 401, { code: 4010, message: "�
 
 ### 3.1 数据模型
 
-在 `server/src/database.ts` 追加三张表，风格与现有 `better-sqlite3` 建表一致。
+追加三张表，与其它表放在一处。
+
+> 落地时的偏移：建表 SQL 现在集中在 `server/src/database/migrations.ts`，且数据库已从 SQLite 换成 PostgreSQL，下面的 DDL 是当初的 SQLite 版本，实际类型见该文件。
 
 ```sql
 -- 发布记录：一条 = 一个可下发的 APK
@@ -201,7 +203,9 @@ function bucketOf(releaseId: number, subject: string): number {
 
 ### 3.4 发布流程
 
-不做管理后台，用脚本操作 SQLite —— 与项目现有「本地构建 + 手工交付」的节奏一致，也不引入新的鉴权面。
+不做管理后台 —— 与项目现有「本地构建 + 手工交付」的节奏一致，也不引入新的鉴权面。
+
+> 落地时的偏移：当初设想的是本地脚本直连数据库，实际实现成了带 `X-Admin-Token` 的管理接口（见 `server/README.md` 的「热更新」一节），下面这几个脚本并不存在。
 
 ```powershell
 # 1. 构建

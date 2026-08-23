@@ -36,14 +36,14 @@ export class AuthService {
     }
   }
 
-  issueTokens(user: UserRecord): TokenPair {
+  async issueTokens(user: UserRecord): Promise<TokenPair> {
     const now = Math.floor(Date.now() / 1000);
     const payload = Buffer.from(
       JSON.stringify({ sub: user.id, iat: now, exp: now + this.config.accessLifetimeSeconds, typ: "access" }),
     ).toString("base64url");
     const accessToken = `${payload}.${this.sign(payload)}`;
     const refreshToken = randomBytes(48).toString("base64url");
-    this.refreshTokens.save(
+    await this.refreshTokens.save(
       user.id,
       this.hashToken(refreshToken),
       Date.now() + this.config.refreshLifetimeSeconds * 1000,
@@ -52,38 +52,38 @@ export class AuthService {
   }
 
   /** 用刷新令牌换取新的令牌对；令牌无效或已过期时返回 undefined。 */
-  rotate(refreshToken: string): TokenPair | undefined {
-    const record = this.refreshTokens.consume(this.hashToken(refreshToken));
-    const user = record && this.users.findById(record.user_id);
+  async rotate(refreshToken: string): Promise<TokenPair | undefined> {
+    const record = await this.refreshTokens.consume(this.hashToken(refreshToken));
+    const user = record && (await this.users.findById(record.user_id));
     return user ? this.issueTokens(user) : undefined;
   }
 
-  revokeRefreshToken(refreshToken: string): void {
-    this.refreshTokens.revoke(this.hashToken(refreshToken));
+  async revokeRefreshToken(refreshToken: string): Promise<void> {
+    await this.refreshTokens.revoke(this.hashToken(refreshToken));
   }
 
   /**
    * 校验访问令牌。返回 undefined 表示无效，调用方必须据此返回 **401**。
    * 客户端只对 401 触发续期重放，返回 403 会让自动续期彻底失效。
    */
-  authenticate(authorization: string | undefined): UserRecord | undefined {
+  async authenticate(authorization: string | undefined): Promise<UserRecord | undefined> {
     const token = (authorization ?? "").replace(/^Bearer\s+/i, "");
     const [payload, signature] = token.split(".");
     if (!payload || !signature) return undefined;
     const expected = this.sign(payload);
     if (signature.length !== expected.length) return undefined;
     if (!timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) return undefined;
+
+    // try 只包住解码：数据库异常绝不能被吞成 401，那会触发客户端的续期重放；
+    // 故障期间应该落到 5xx，客户端才会保留令牌稍后重试。
+    let data: { sub: number; exp: number; typ: string } | null;
     try {
-      const data = JSON.parse(Buffer.from(payload, "base64url").toString()) as {
-        sub: number;
-        exp: number;
-        typ: string;
-      };
-      if (data.typ !== "access" || data.exp <= Date.now() / 1000) return undefined;
-      return this.users.findById(data.sub);
+      data = JSON.parse(Buffer.from(payload, "base64url").toString());
     } catch {
       return undefined;
     }
+    if (!data || data.typ !== "access" || data.exp <= Date.now() / 1000) return undefined;
+    return this.users.findById(data.sub);
   }
 
   /** 请求体字段可能是任意类型，统一收敛成字符串再校验，与迁移前的 usernameOf/passwordOf 一致。 */
