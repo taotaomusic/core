@@ -231,3 +231,76 @@ ORDER BY api_key_id, state;
 - `FAILED` 是否标记为终态？
 - 图片地址是否为 HTTPS？
 - 是否运行数据库专项验证和完整契约验证？
+
+## 12. 任务状态机
+
+```mermaid
+stateDiagram-v2
+    [*] --> LOCAL_RESERVED: 原子预扣额度
+    LOCAL_RESERVED --> IN_PROGRESS: 上游创建成功并落库
+    LOCAL_RESERVED --> REFUNDED: 上游或落库失败
+    REFUNDED --> [*]
+    IN_PROGRESS --> IN_PROGRESS: 轮询仍在生成
+    IN_PROGRESS --> COMPLETED: 得到 image_url
+    IN_PROGRESS --> FAILED: 得到 error
+    COMPLETED --> [*]
+    FAILED --> [*]
+```
+
+数据库只保存 `IN_PROGRESS / COMPLETED / FAILED`，`LOCAL_RESERVED / REFUNDED` 是请求过程中的瞬时状态。
+
+状态更新是幂等的：同一个完成任务被客户端重复查询时，会再次写入相同的 `state、completed、image_url`。不要把重复轮询当成再次扣额。
+
+## 13. 创建失败边界
+
+| 失败位置 | 是否有上游任务 | 是否写任务表 | 是否归还本地额度 |
+| --- | --- | --- | --- |
+| 没有可用 Key | 否 | 否 | 未扣减 |
+| DTO 校验失败 | 否 | 否 | 未扣减 |
+| 连接/超时 | 未知 | 否 | 是 |
+| 上游明确返回错误 | 通常否 | 否 | 是 |
+| 上游成功体缺少 taskId | 可能有 | 否 | 是 |
+| 本地任务 INSERT 失败 | 是 | 否 | 是 |
+| 轮询失败 | 已有 | 保留原状态 | 不涉及额度 |
+
+网络超时无法证明上游一定没有创建任务，这是所有异步第三方接口都会遇到的不确定边界。若 ApiSweet 以后支持幂等键，应在创建请求中加入稳定幂等键，减少重复或孤儿任务。
+
+## 14. Key 轮换步骤
+
+正确做法：
+
+1. INSERT 新 Key 为新记录并设置额度。
+2. 把旧 Key 的 `quota` 调整为 0，停止创建新任务。
+3. 保留旧 Key 记录，让已有任务继续轮询。
+4. 确认关联旧 Key 的任务全部进入终态。
+5. 如确需删除，先确认外键引用为 0。
+
+检查旧 Key 任务：
+
+```sql
+SELECT state, count(*) AS count
+FROM image_generation_task
+WHERE api_key_id = 旧KeyID
+GROUP BY state;
+```
+
+不要直接 UPDATE 旧记录的 `key` 字段为新密钥，这会让历史任务使用错误凭据查询。
+
+## 15. 专项测试矩阵
+
+至少覆盖：
+
+| 场景 | 预期 |
+| --- | --- |
+| 单 Key、额度 1、创建成功 | quota 变 0，任务关联该 Key |
+| 单 Key、额度 0 | 503/5032，不请求上游 |
+| 多 Key 不同额度 | 选择额度最高的 Key |
+| 多请求并发竞争最后额度 | 成功数不超过额度 |
+| 上游 500 | 502/5021，额度恢复 |
+| 上游 401 | 不透传 401，额度恢复 |
+| 任务完成 | state=COMPLETED、completed=1、图片写入 |
+| 任务失败 | state=FAILED、completed=1、图片为空 |
+| 任务生成中 | state=IN_PROGRESS、completed=0 |
+| 查询不存在任务 | 本地直接 404/4042 |
+| 完成响应缺 image_url | 502，不写错误图片地址 |
+| 返回 task_id 与请求不一致 | 502，拒绝污染其它任务 |

@@ -212,3 +212,87 @@ git status --short
 - 数据层变化已经过独立 PostgreSQL 验证库验证。
 - 文档与错误提示使用简体中文。
 - 没有顺手提交工作区内其它模块的改动。
+
+## 11. 本地完整联调示例
+
+### 注册并取得访问令牌
+
+```powershell
+$base = "http://127.0.0.1:4500/api/v1"
+$register = Invoke-RestMethod -Method Post `
+  -Uri "$base/auth/register" `
+  -ContentType "application/json" `
+  -Body '{"username":"local_dev","password":"pass123456"}'
+$token = $register.data.accessToken
+```
+
+重复执行时用户名会冲突，可以改用户名或调用登录接口：
+
+```powershell
+$login = Invoke-RestMethod -Method Post `
+  -Uri "$base/auth/login" `
+  -ContentType "application/json" `
+  -Body '{"username":"local_dev","password":"pass123456"}'
+$token = $login.data.accessToken
+```
+
+### 调用鉴权接口
+
+```powershell
+$headers = @{ Authorization = "Bearer $token" }
+Invoke-RestMethod -Uri "$base/auth/me" -Headers $headers
+```
+
+### 验证搜索是裸 NDJSON
+
+```powershell
+curl.exe "$base/search?keyword=周杰伦&num=3" `
+  -H "Authorization: Bearer $token"
+```
+
+输出应该是一行一个 JSON 对象，而不是最外层 `{code,data}`。
+
+### 创建并轮询图片任务
+
+先按 [图片生成专题](05-image-generation.md) 向验证库添加测试 Key，再执行：
+
+```powershell
+$created = Invoke-RestMethod -Method Post `
+  -Uri "$base/draw/completions" `
+  -Headers $headers `
+  -ContentType "application/json" `
+  -Body '{"model":"gpt-image-2","prompt":"测试图片","aspectRatio":"1:1","imageSize":"1K","quality":"high"}'
+
+$taskId = $created.data.taskId
+Invoke-RestMethod -Uri "$base/draw/result/$taskId" -Headers $headers
+```
+
+真实 ApiSweet 请求会产生费用。本地开发优先使用假上游，并通过 `APISWEET_BASE_URL` 指向本地 HTTP 服务。
+
+## 12. 调试建议
+
+### 只验证类型
+
+```powershell
+npx tsc -p tsconfig.json --noEmit
+```
+
+正式交付仍要运行 `npm run build`，因为它还负责清理产物和复制生产清单。
+
+### 检查路由是否注册
+
+开发启动日志会输出每个 `Mapped {路径, 方法} route`。如果 Controller 已写但没有日志：
+
+- 检查 Controller 是否加入 Module。
+- 检查 Module 是否加入 `AppModule.imports`。
+- 检查文件是否位于 `tsconfig.json` 的 include 范围。
+
+### 检查环境变量覆盖
+
+系统环境变量优先于 `.env`。修改 `.env` 不生效时，检查当前 PowerShell 是否已有同名 `$env:` 变量，并重启开发进程。
+
+### 保持错误可复现
+
+- 记录 HTTP 状态码、业务码、路径和不含敏感信息的请求参数。
+- 不复制访问令牌、刷新令牌或 Key 到日志。
+- 数据问题在验证库构造最小数据，不直接修改正式库复现。

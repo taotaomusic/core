@@ -177,3 +177,90 @@ curl.exe -X POST "https://你的域名/api/v1/app/admin/min-version" `
 - 数据库迁移失败导致服务无法启动。
 
 数据库 DDL 回滚要单独评估。不要在没有备份和兼容方案时删除列或表。
+
+## 13. 反向代理要求
+
+nginx 示例骨架：
+
+```nginx
+location /api/ {
+    proxy_pass http://127.0.0.1:4500;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+
+    # 搜索由应用通过 X-Accel-Buffering: no 单独关闭缓冲。
+    proxy_read_timeout 120s;
+}
+
+location = /health {
+    proxy_pass http://127.0.0.1:4500/health;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+注意：
+
+- 不要在代理层把 `/search` 的 NDJSON 缓冲到完整响应后再发送。
+- APK 上传请求体可能超过默认限制，需要配置匹配实际 APK 大小的 `client_max_body_size`。
+- APK 和音频下载必须允许 Range 请求头和 206 响应。
+- 应正确传递 `X-Forwarded-Proto`，否则服务在未配置 `PUBLIC_BASE_URL` 时可能生成 HTTP 地址。
+- 外部必须使用 HTTPS，Android 默认会阻止明文资源。
+
+## 14. systemd 示例
+
+```ini
+[Unit]
+Description=Taotao Music Backend
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/taotao/server
+EnvironmentFile=/opt/taotao/server/.env
+ExecStart=/usr/bin/node /opt/taotao/server/dist/main.js
+Restart=always
+RestartSec=3
+User=taotao
+Group=taotao
+
+[Install]
+WantedBy=multi-user.target
+```
+
+目录和用户仅为示例。确保运行用户可读 `.env`、可写 `APK_DIR`，但其他系统用户不能读取密钥配置。
+
+## 15. 部署后冒烟测试
+
+按顺序执行：
+
+```powershell
+$origin = "https://你的域名"
+
+# 1. 健康
+curl.exe -i "$origin/health"
+
+# 2. 未登录门禁必须是 401，不是 403
+curl.exe -i "$origin/api/v1/favorites"
+
+# 3. bootstrap 必须公开
+curl.exe -i "$origin/api/v1/app/bootstrap?versionCode=1&sdk=36&deviceId=deploy-check"
+
+# 4. bootstrap 带假令牌仍不能 401
+curl.exe -i "$origin/api/v1/app/bootstrap?versionCode=1&sdk=36&deviceId=deploy-check" `
+  -H "Authorization: Bearer expired.token"
+```
+
+涉及真实账号、图片生成和发布管理的冒烟测试应使用专用测试账号，并避免在命令历史里写入令牌或 Key。
+
+## 16. 数据库发布注意事项
+
+- 先备份正式数据库。
+- 新版本首次启动会在监听端口前执行 DDL。
+- 多实例同时启动依赖顾问锁串行建表。
+- 新增表和索引通常可直接上线；破坏性结构变化必须分阶段。
+- 回滚旧代码前确认旧代码能忽略新表和新列。
+- 不要在部署脚本里调用 `reset-db.mjs`。

@@ -178,3 +178,53 @@ sequenceDiagram
 - 是否复制了已有 Client、Repository 或错误映射逻辑？
 - 是否更新对应专题文档？
 - 是否完成生产构建和 88 项契约验证？
+
+## 8. 应用启动生命周期
+
+启动不是“加载模块后立即监听端口”，实际顺序如下：
+
+```text
+读取 .env / 系统环境变量
+  → validateEnvironment 校验端口、AUTH_SECRET、DATABASE_URL
+  → NestFactory 创建应用（关闭默认 body parser）
+  → 实例化 Module 和 Provider
+  → DatabaseService 等待 PostgreSQL
+  → 获取顾问锁并执行幂等 DDL
+  → 注册按路由分流的 JSON parser
+  → 注册全局前缀和 ValidationPipe
+  → app.listen(PORT)
+```
+
+几个容易误判的点：
+
+- Provider 构造函数发生在数据库迁移之前，所以不能在构造函数查询表。
+- “Module dependencies initialized”不表示数据库已经就绪；要等“数据库已就绪”。
+- 数据库连接重试全部失败时，服务会退出，不会继续提供残缺接口。
+- 端口只有在迁移完成后才开始监听，因此健康检查成功意味着表结构也已初始化。
+
+## 9. 响应阶段顺序
+
+普通 Controller 返回领域对象后：
+
+1. `EnvelopeInterceptor` 包装 `{code,message,data}`。
+2. `LatestVersionHeaderInterceptor` 写入全量版本响应头。
+3. `SecurityHeadersInterceptor` 写入安全响应头。
+4. Express 序列化并发送响应。
+
+抛出异常时由 `AllExceptionsFilter` 接管。流式接口一旦已经发送响应头，就不能再改状态码或追加 JSON 错误体，只能结束连接。因此搜索会在 `writeHead` 前完成收藏批量查询等可能失败的操作。
+
+## 10. 外部系统边界
+
+| 外部系统 | 本服务保存什么 | 本服务不保存什么 |
+| --- | --- | --- |
+| 腾讯音乐接口 | 不持久化，仅做实时映射 | 音频文件、歌词文件、限时直链 |
+| ApiSweet | Key、任务元数据、结果 URL | 生成图片文件 |
+| PostgreSQL | 用户、令牌哈希、收藏、发布、配置、图片任务 | 用户密码明文、令牌明文 |
+| APK 文件目录 | 已登记的 APK 文件 | Android 构建工程状态 |
+
+外部 URL 返回客户端前要确认：
+
+- 使用 HTTPS。
+- 客户端访问时不需要桃桃音乐 Authorization。
+- 不包含服务端凭据。
+- 对限时地址明确生命周期，不写入长期队列或持久化状态。

@@ -52,3 +52,24 @@ curl.exe http://127.0.0.1:4500/health
 ```
 
 接口统一前缀是 `/api/v1`，只有健康检查保留在 `/health`。
+
+## 推荐阅读路径
+
+### 新后端开发者
+
+1. [架构](01-architecture.md)：先理解模块和全局请求链路。
+2. [开发环境](02-development.md)：启动本地数据库和服务。
+3. [接口契约](03-api-contracts.md)：了解不能改变的响应形状。
+4. [数据库](04-database.md)：开始写 Repository 前阅读类型与并发规则。
+
+### 图片生成功能维护者
+
+1. [图片生成](05-image-generation.md)：理解 Key 池、任务状态和额度边界。
+2. [数据库](04-database.md)：理解两张业务表及原子扣额 SQL。
+3. [故障排查](07-troubleshooting.md)：按 404/502/503 分类处理。
+
+### 发布维护者
+
+1. [发布与部署](06-release-deployment.md)。
+2. [项目发布手册](../../RELEASE.md)。
+3. [故障排查](07-troubleshooting.md)中的热更新章节。

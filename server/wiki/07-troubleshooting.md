@@ -221,3 +221,79 @@ ORDER BY quota DESC, id;
 - 剩余额度。
 - 上游 HTTP 状态码。
 - 不含凭据的任务 ID 和错误码。
+
+## 10. 状态码快速定位
+
+| HTTP/业务码 | 首先检查 |
+| --- | --- |
+| 400/4001 | 搜索关键词 |
+| 400/4005 | DTO、ParseIntPipe、query 参数 |
+| 400/4007 | 图片模型、提示词、URL、taskId |
+| 401/4010 | Authorization 是否缺失或过期 |
+| 401/4012 | 刷新令牌是否已轮换、撤销或过期 |
+| 401/4013 | `X-Admin-Token` |
+| 404/4040 | 路径和全局 `/api/v1` 前缀 |
+| 404/4042 | 本地图片任务表 |
+| 409/4090 | 用户名唯一约束 |
+| 409/4091 | 最低版本守卫和全量发布 |
+| 429/4290 | 本地通用限流桶 |
+| 429/4291 | ApiSweet 上游限流 |
+| 502/5020 | 腾讯音乐、流式代理或未知内部错误 |
+| 502/5021 | ApiSweet Key、余额或上游错误 |
+| 503/5031 | 图片任务关联 Key 不可用 |
+| 503/5032 | GPTIMAGE2 无 Key 或额度不足 |
+
+## 11. 只读诊断命令
+
+检查端口：
+
+```powershell
+Get-NetTCPConnection -State Listen | Where-Object LocalPort -In 4500,4720
+```
+
+检查 Node 进程：
+
+```powershell
+Get-Process node -ErrorAction SilentlyContinue
+```
+
+检查健康响应：
+
+```powershell
+curl.exe -i http://127.0.0.1:4500/health
+```
+
+检查数据库连通性：
+
+```powershell
+psql "$env:DATABASE_URL" -c "SELECT 1"
+```
+
+检查所需表是否存在，不读取业务数据：
+
+```sql
+SELECT table_name
+FROM information_schema.tables
+WHERE table_schema = 'public'
+ORDER BY table_name;
+```
+
+检查图片任务统计，不读取提示词和 Key：
+
+```sql
+SELECT channel, state, count(*) AS count
+FROM image_generation_task
+GROUP BY channel, state
+ORDER BY channel, state;
+```
+
+## 12. 何时停止自行处理
+
+遇到以下情况应暂停写操作并先备份或请求确认：
+
+- 连接串可能指向正式库，但无法确认。
+- 需要 DROP、TRUNCATE、删除 APK 或删除 Key。
+- 正式库表结构与当前迁移定义不一致。
+- 同一个 taskId 对应多个外部账单或疑似重复扣费。
+- 热更新最低版本已抬高但没有可下载的全量 APK。
+- 回滚需要恢复数据库结构而不仅是替换 `dist/`。

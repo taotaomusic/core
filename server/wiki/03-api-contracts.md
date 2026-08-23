@@ -240,3 +240,74 @@ APK 下载必须支持：
 - 是否需要独立限流桶？
 - 是否为新增行为补充契约验证？
 - 是否更新本专题和后端 README？
+
+## 11. 鉴权矩阵
+
+| 路由范围 | 桃桃访问令牌 | 管理令牌 | 备注 |
+| --- | --- | --- | --- |
+| `/auth/register`、`/login`、`/refresh`、`/logout` | 不要求 | 不要求 | 显式公开 |
+| `/auth/me` | 必须 | 不使用 | 标准用户接口 |
+| `/favorites/**` | 必须 | 不使用 | 标准用户接口 |
+| `/search`、`/songs/**` | 必须 | 不使用 | 音乐业务接口 |
+| `/draw/**` | 必须 | 不使用 | 图片任务属于当前登录用户调用会话，但任务表当前不存 user_id |
+| `/app/bootstrap`、`/app/apk/**` | 不要求 | 不要求 | 热更新通道必须公开 |
+| `/app/admin/**` | 不使用 | `X-Admin-Token` | 由 AdminTokenGuard 校验 |
+
+当前图片任务表没有 `user_id` 字段，因此知道合法 taskId 的任意已登录用户都能查询该任务。若产品需要任务归属隔离，必须先给任务表增加 `user_id` 外键，并在创建和查询路径同时校验，不能只在客户端隐藏 taskId。
+
+## 12. 重要响应头
+
+| 响应头 | 出现场景 | 用途 |
+| --- | --- | --- |
+| `X-Latest-Version-Code` | 所有可正常写头的响应 | 会话中途发现全量新版本 |
+| `X-Accel-Buffering: no` | 搜索 NDJSON | 禁止 nginx 缓冲 |
+| `Content-Range` | 音频和 APK Range | 断点续传范围 |
+| `Accept-Ranges: bytes` | 支持 Range 的资源 | 告知客户端下载能力 |
+| `ETag` | APK 下载 | 使用 APK sha256 标识内容 |
+| `Content-Type` | 所有响应 | 区分 JSON、NDJSON、文本和二进制 |
+
+新增拦截器或自行 `writeHead` 时，要确认不会覆盖已经由全局拦截器设置的响应头。
+
+## 13. 参数错误示例
+
+DTO 校验失败由全局过滤器压平：
+
+```json
+{
+  "code": 4005,
+  "message": "model must be equal to gpt-image-2；images must be a URL address"
+}
+```
+
+业务主动校验可以返回更精确业务码：
+
+```json
+{
+  "code": 4007,
+  "message": "图片生成提示词不能为空"
+}
+```
+
+Controller 不应返回 HTTP 200 加错误业务码；失败应同时使用正确 HTTP 状态和业务码。
+
+## 14. 兼容性变更分类
+
+### 通常安全
+
+- 在 `data` 中增加客户端会忽略的可选字段。
+- 增加新的独立路由。
+- 提升内部日志和超时处理，不改变响应。
+
+### 需要客户端同步
+
+- 字段重命名或类型变化。
+- 把可选字段变成必需字段。
+- 修改分页、默认音质或轮询节奏。
+
+### 禁止直接修改
+
+- 把 401 改成 403。
+- 给 `/search`、歌词文本或二进制接口套信封。
+- 改变令牌格式。
+- 改变 `accessToken/refreshToken/user` 的平铺结构。
+- 让 `/app/bootstrap` 要求登录。
