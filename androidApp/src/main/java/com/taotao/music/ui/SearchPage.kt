@@ -63,6 +63,9 @@ fun SearchPage(
     favoriteRevision: Int = 0,
     isFavorite: (Song) -> Boolean = { false },
     onToggleFavorite: ((Song) -> Unit)? = null,
+    /** 已下载列表变化后自增，理由同 [favoriteRevision]。 */
+    downloadedRevision: Int = 0,
+    isDownloaded: (Song) -> Boolean = { false },
     /** 滚到接近底部时回调，用来拉下一页。 */
     onLoadMore: () -> Unit = {},
     isLoadingMore: Boolean = false,
@@ -100,12 +103,27 @@ fun SearchPage(
                 )
             }
         }
-        // 结果现在是逐条到达的，已经有结果就不该再显示骨架屏，否则骨架和结果会同时出现。
-        if (isSearching && songs.isEmpty()) SearchSkeletonList()
-        if (hasSearched && !isSearching && !errorMessage.isNullOrBlank()) {
-            Text(errorMessage, color = TaotaoCoral, modifier = Modifier.padding(top = 28.dp))
+        // 骨架屏 / 错误 / 空态之间用淡入淡出切换，硬切会让内容"跳"一下。
+        // 结果已经到了就不再显示骨架屏，否则骨架和结果会同时出现。
+        AnimatedVisibility(
+            visible = isSearching && songs.isEmpty(),
+            enter = contentFadeIn(),
+            exit = contentFadeOut(),
+        ) {
+            SearchSkeletonList()
         }
-        if (hasSearched && !isSearching && songs.isEmpty() && errorMessage.isNullOrBlank()) {
+        AnimatedVisibility(
+            visible = hasSearched && !isSearching && !errorMessage.isNullOrBlank(),
+            enter = contentFadeIn(),
+            exit = contentFadeOut(),
+        ) {
+            Text(errorMessage.orEmpty(), color = TaotaoCoral, modifier = Modifier.padding(top = 28.dp))
+        }
+        AnimatedVisibility(
+            visible = hasSearched && !isSearching && songs.isEmpty() && errorMessage.isNullOrBlank(),
+            enter = contentFadeIn(),
+            exit = contentFadeOut(),
+        ) {
             EmptyStateView(title = "没有找到相关歌曲", description = "换个关键词再试试")
         }
         if (hasSearched) {
@@ -122,7 +140,7 @@ fun SearchPage(
             // 已经播过入场动画的歌。必须放在 LazyColumn **外面**：
             // LazyColumn 会销毁滚出屏幕的项，item 内部的 remember 随之重置，
             // 结果每次滚回来整屏都重新淡入一遍 —— 那就是滑动时看到的抖动来源。
-            val animated = remember(searchSession) { mutableSetOf<Long>() }
+            val animated = remember(searchSession) { mutableSetOf<String>() }
 
             LazyColumn(
                 Modifier.fillMaxSize(),
@@ -131,23 +149,25 @@ fun SearchPage(
             ) {
                 itemsIndexed(
                     songs,
-                    key = { index, song -> song.remoteId ?: -(index.toLong() + 1) },
+                    // 与 dedupeSongs 的判重口径一致，所以这里的 key 必然唯一。
+                    key = { _, song -> songKeyOf(song) },
                     contentType = { _, _ -> "song" },
                 ) { index, song ->
-                    val id = song.remoteId ?: -(index.toLong() + 1)
-                    val isNew = remember(id) { animated.add(id) }
-                    var visible by remember(id) { mutableStateOf(!isNew) }
-                    LaunchedEffect(id) { visible = true }
+                    val key = songKeyOf(song)
+                    val isNew = remember(key) { animated.add(key) }
+                    var visible by remember(key) { mutableStateOf(!isNew) }
+                    LaunchedEffect(key) { visible = true }
                     AnimatedVisibility(
                         visible = visible,
                         // 只有首次出现才错开延迟；回滚复用的项直接显示，不再重播动画。
                         enter = if (isNew) listItemEnter(index) else EnterTransition.None,
                     ) {
-                        val favorited = remember(id, favoriteRevision) { isFavorite(song) }
+                        val favorited = remember(key, favoriteRevision) { isFavorite(song) }
                         SongListItem(
                             song = song,
                             active = false,
                             favorited = favorited,
+                            downloaded = remember(key, downloadedRevision) { isDownloaded(song) },
                             onToggleFavorite = onToggleFavorite
                                 ?.takeIf { song.remoteId != null }
                                 ?.let { toggle -> { toggle(song) } },

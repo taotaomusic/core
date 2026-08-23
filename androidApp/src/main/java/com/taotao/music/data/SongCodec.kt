@@ -46,6 +46,7 @@ object SongCodec {
         put("type", song.type)
         put("vip", song.vip)
         put("favorited", song.favorited)
+        put("localQuality", song.localQuality)
     }
 
     private fun fromJson(data: JSONObject): Song = Song(
@@ -65,6 +66,7 @@ object SongCodec {
         type = if (data.has("type") && !data.isNull("type")) data.optInt("type") else null,
         vip = data.optBoolean("vip"),
         favorited = data.optBoolean("favorited"),
+        localQuality = if (data.has("localQuality") && !data.isNull("localQuality")) data.optInt("localQuality") else null,
     )
 
     /** 可空字段统一处理：JSONObject 存入 null 会写成 JSONObject.NULL，取出来是字符串 "null"。 */

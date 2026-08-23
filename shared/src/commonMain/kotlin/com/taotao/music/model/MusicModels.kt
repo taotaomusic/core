@@ -27,4 +27,9 @@ data class Song(
     val vip: Boolean = false,
     /** 是否已收藏。搜索结果里由服务端下发，是权威值。 */
     val favorited: Boolean = false,
+    /**
+     * 已下载到本地的那份是哪个音质档位。
+     * 只有离线歌曲才有值；为 null 表示这首歌不是本地文件，或是旧版本下载的没有记录。
+     */
+    val localQuality: Int? = null,
 )

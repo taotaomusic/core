@@ -5,6 +5,7 @@
     "dev": "node --watch --require ts-node/register src/main.ts",
     "build": "rimraf --glob dist/* && tsc -p tsconfig.json && node tools/copy-manifest.mjs",
     "start": "node dist/main.js",
+    "send-mail": "ts-node --project tools/tsconfig.json tools/send-outlook-mail.ts",
     "verify": "node tools/verify-contract.mjs"
   },
   "engines": {

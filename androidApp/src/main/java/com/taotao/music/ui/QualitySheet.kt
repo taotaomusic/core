@@ -126,16 +126,26 @@ fun formatBytes(bytes: Long): String = when {
     else -> "$bytes B"
 }
 
-/** 当前音质的小徽标，放在播放页当作可点入口。 */
+/**
+ * 当前音质的小徽标。
+ *
+ * [local] 为真时标明这份是本地文件的实际音质；[onClick] 为 null 表示不可点
+ * （本地文件换档要重新下载，不能就地切）。
+ */
 @Composable
-fun QualityChip(quality: Int, modifier: Modifier = Modifier, onClick: () -> Unit) {
+fun QualityChip(quality: Int, modifier: Modifier = Modifier, local: Boolean = false, onClick: (() -> Unit)? = null) {
     Box(
         modifier
             .clip(RoundedCornerShape(8.dp))
             .background(TaotaoCoral.copy(alpha = 0.12f))
-            .clickable(onClick = onClick)
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
             .padding(horizontal = 10.dp, vertical = 5.dp),
     ) {
-        Text(labelOfQuality(quality), color = TaotaoCoral, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+        Text(
+            if (local) "已下载 · ${labelOfQuality(quality)}" else labelOfQuality(quality),
+            color = TaotaoCoral,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Medium,
+        )
     }
 }

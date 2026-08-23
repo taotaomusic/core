@@ -1,5 +1,9 @@
 package com.taotao.music.ui
 
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -19,6 +23,7 @@ import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.OfflinePin
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
@@ -31,19 +36,23 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.taotao.music.model.Song
 
 /**
@@ -53,13 +62,20 @@ import com.taotao.music.model.Song
  * 造成重复定义（Kotlin 报 conflicting overloads）。统一收在这里，页面只负责组装。
  */
 
-/** 专辑封面：有图用图，没图退回带音符的色块。 */
+/**
+ * 专辑封面：有图用图，没图退回带音符的色块。
+ *
+ * 图片加淡入：不加的话图片是"啪"一下出现的，列表滚动时一片闪烁。
+ */
 @Composable
 fun AlbumArt(color: Color, size: Dp, iconSize: TextUnit, imageUri: String? = null) {
     val shape = if (size > 80.dp) CircleShape else RoundedCornerShape(12.dp)
     if (!imageUri.isNullOrBlank()) {
         AsyncImage(
-            model = imageUri,
+            model = ImageRequest.Builder(LocalContext.current)
+                .data(imageUri)
+                .crossfade(AnimationDurations.FADE)
+                .build(),
             contentDescription = "专辑封面",
             modifier = Modifier.size(size).clip(shape),
         )
@@ -75,12 +91,16 @@ fun AlbumArt(color: Color, size: Dp, iconSize: TextUnit, imageUri: String? = nul
  *
  * [favorited] / [onToggleFavorite] / [onDelete] 都带默认值：不传即维持原来的样子
  * （末尾是那个纯装饰的更多图标）。本地文件没有服务端 ID 时本来就不能收藏。
+ *
+ * [downloaded] 为真时加一个标记：搜索结果里看得见"这首已经下过了"，
+ * 才不会重复下载或以为在走流量。
  */
 @Composable
 fun SongListItem(
     song: Song,
     active: Boolean,
     favorited: Boolean = false,
+    downloaded: Boolean = false,
     onToggleFavorite: (() -> Unit)? = null,
     onDelete: (() -> Unit)? = null,
     onClick: () -> Unit,
@@ -100,19 +120,20 @@ fun SongListItem(
                 )
                 // 付费歌曲搜索结果里就有标记，不用等点开才发现放不出来。
                 if (song.vip) VipBadge(Modifier.padding(start = 6.dp))
+                if (downloaded) {
+                    Icon(
+                        Icons.Default.OfflinePin,
+                        "已下载",
+                        tint = TaotaoCoral,
+                        modifier = Modifier.padding(start = 6.dp).size(14.dp),
+                    )
+                }
             }
             Text(song.artist, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp, maxLines = 1, modifier = Modifier.padding(top = 3.dp))
         }
         Text(song.duration, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
         if (onToggleFavorite != null) {
-            IconButton(onClick = onToggleFavorite, modifier = Modifier.size(36.dp)) {
-                Icon(
-                    if (favorited) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                    if (favorited) "取消收藏" else "收藏",
-                    tint = if (favorited) TaotaoCoral else MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(20.dp),
-                )
-            }
+            FavoriteButton(favorited = favorited, onClick = onToggleFavorite, size = 20.dp)
         }
         if (onDelete != null) {
             IconButton(onClick = onDelete, modifier = Modifier.size(36.dp)) {
@@ -122,6 +143,56 @@ fun SongListItem(
         if (onToggleFavorite == null && onDelete == null) {
             Icon(Icons.Default.MoreVert, "更多", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 8.dp))
         }
+    }
+}
+
+/**
+ * 收藏按钮。
+ *
+ * 收藏是这个应用里反馈最需要即时的动作，所以做三件事：图标缩放弹一下、颜色渐变、
+ * 空心实心之间淡入淡出。原来是直接换图标换颜色，点下去像没反应。
+ */
+@Composable
+fun FavoriteButton(
+    favorited: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    size: Dp = 24.dp,
+) {
+    // 状态刚变时轻微放大再弹回，这个"顿一下"才是点赞的手感来源。
+    val scale by animateFloatAsState(
+        targetValue = if (favorited) 1.15f else 1f,
+        animationSpec = taotaoSpringSnappy(),
+        label = "收藏缩放",
+    )
+    val tint by animateColorAsState(
+        targetValue = if (favorited) TaotaoCoral else MaterialTheme.colorScheme.onSurfaceVariant,
+        animationSpec = taotaoTween(AnimationDurations.MICRO),
+        label = "收藏着色",
+    )
+    IconButton(onClick = onClick, enabled = enabled, modifier = modifier.size(size + 16.dp)) {
+        Crossfade(targetState = favorited, animationSpec = taotaoTween(AnimationDurations.MICRO), label = "收藏图标") { on ->
+            Icon(
+                if (on) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                if (on) "取消收藏" else "收藏",
+                tint = tint,
+                modifier = Modifier.size(size).scale(scale),
+            )
+        }
+    }
+}
+
+/** 播放 / 暂停按钮：两个图标之间淡入淡出，不再硬切。 */
+@Composable
+fun PlayPauseIcon(isPlaying: Boolean, modifier: Modifier = Modifier, tint: Color = Color.Unspecified) {
+    Crossfade(targetState = isPlaying, animationSpec = taotaoTween(AnimationDurations.MICRO), label = "播放图标") { playing ->
+        Icon(
+            if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
+            if (playing) "暂停" else "播放",
+            modifier = modifier,
+            tint = tint,
+        )
     }
 }
 
@@ -158,7 +229,7 @@ fun MiniPlayer(
             Text(song.artist, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, maxLines = 1)
         }
         IconButton(onClick = onPrevious) { Icon(Icons.Default.SkipPrevious, "上一首") }
-        IconButton(onClick = onTogglePlaying) { Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, "播放") }
+        IconButton(onClick = onTogglePlaying) { PlayPauseIcon(isPlaying) }
         IconButton(onClick = onNext) { Icon(Icons.Default.SkipNext, "下一首") }
     }
 }
@@ -250,17 +321,27 @@ fun EmptyStateView(title: String = "暂无数据", description: String? = null, 
     }
 }
 
-/** 分页指示器：几页就几个点，当前页用主色实心。 */
+/** 分页指示器：几页就几个点，当前页用主色实心。切换时尺寸与颜色都渐变。 */
 @Composable
 fun PagerDots(current: Int, total: Int, modifier: Modifier = Modifier) {
     Row(modifier, horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
         repeat(total) { index ->
-            Box(
-                Modifier
-                    .size(if (index == current) 8.dp else 6.dp)
-                    .clip(CircleShape)
-                    .background(if (index == current) TaotaoCoral else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)),
+            val selected = index == current
+            val size by animateDpAsState(
+                targetValue = if (selected) 8.dp else 6.dp,
+                animationSpec = taotaoSpring(),
+                label = "分页点尺寸",
             )
+            val color by animateColorAsState(
+                targetValue = if (selected) {
+                    TaotaoCoral
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
+                },
+                animationSpec = taotaoTween(AnimationDurations.MICRO),
+                label = "分页点着色",
+            )
+            Box(Modifier.size(size).clip(CircleShape).background(color))
         }
     }
 }

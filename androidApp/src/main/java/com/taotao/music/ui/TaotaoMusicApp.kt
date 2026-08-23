@@ -5,7 +5,9 @@ import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -14,6 +16,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.tween
@@ -32,11 +35,13 @@ import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.*
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
@@ -68,6 +73,7 @@ import com.taotao.music.data.SavedPlaybackState
 import com.taotao.music.player.AudioPlayer
 import com.taotao.music.update.UpdateManager
 import com.taotao.music.update.UpdateStage
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -142,6 +148,9 @@ fun TaotaoMusicApp() {
         AppearanceMode.DARK -> true
     }
 
+    /** 已下载歌曲的 ID 集合，用于在搜索结果里标出「已下载」。 */
+    val downloadedIds = remember(downloadedSongs) { downloadedSongs.mapNotNull { it.remoteId }.toSet() }
+
     /**
      * 临时切换当前这首歌的音质，不改默认设置。
      *
@@ -194,7 +203,9 @@ fun TaotaoMusicApp() {
                     // 歌词取带逐字时间轴的那份，两条轴都存下去，离线播放才和在线一致。
                     // 取不到不算失败：歌词是附加内容。
                     val lyric = runCatching { musicApi.requestRichLyric(song) }.getOrNull()
-                    downloadManager.download(song, link.url, lyric?.lrc, lyric?.yrc) { downloaded, total ->
+                    // 记实际拿到的档位而不是请求的档位：某首歌没有所选档时服务端会降级，
+                    // 记错了离线播放显示的音质就是假的。
+                    downloadManager.download(song, link.url, link.quality, lyric?.lrc, lyric?.yrc) { downloaded, total ->
                         downloadNotifier.progress(song.title, downloaded, total)
                     }
                 }
@@ -284,12 +295,16 @@ fun TaotaoMusicApp() {
 
     val updateStatus = updateManager.status
     if (updateStatus.blocking) {
-        ForceUpdatePage(
-            status = updateStatus,
-            onDownload = { scope.launch { updateManager.download() } },
-            onInstall = { updateManager.install() },
-            onRetry = { scope.launch { updateManager.retry() } },
-        )
+        // 必须自己套一层主题：这里在下面那个 TaotaoTheme 之前就 return 了，
+        // 不套的话页面会拿到 Material 的默认配色，暗色下更是白底白字。
+        TaotaoTheme(darkTheme = darkTheme) {
+            ForceUpdatePage(
+                status = updateStatus,
+                onDownload = { scope.launch { updateManager.download() } },
+                onInstall = { updateManager.install() },
+                onRetry = { scope.launch { updateManager.retry() } },
+            )
+        }
         return
     }
 
@@ -306,7 +321,7 @@ fun TaotaoMusicApp() {
     }
 
     if (!signedIn) {
-        AuthPage(musicApi) { tokens ->
+        AuthPage(musicApi, darkTheme) { tokens ->
             authSession.save(tokens)
             signedIn = true
         }
@@ -511,16 +526,23 @@ fun TaotaoMusicApp() {
             val isLocalFile = requestedSong.audioUri?.startsWith("file:") == true
             // remoteId 是别的模块的 public 属性，Kotlin 不做智能转换，先取成局部变量。
             val remoteId = requestedSong.remoteId
+            // 下载过就直接放本地文件。搜索结果里的歌与已下载的是同一个 remoteId，
+            // 不查这一步的话，明明下载过还是从云端拉流 —— 白费流量，离线也放不了。
+            val offline = if (!isLocalFile && remoteId != null) {
+                withContext(Dispatchers.IO) { downloadManager.findDownloaded(remoteId) }
+            } else {
+                null
+            }
             // 网络歌曲统一用占位地址入队，真正的上游直链在取流那一刻才解析 ——
             // 直链是限时的，存进队列后冷启动恢复时就失效了。
-            val playable = if (!isLocalFile && remoteId != null) {
-                requestedSong.copy(
+            val playable = when {
+                offline != null -> offline.copy(favorited = requestedSong.favorited)
+                !isLocalFile && remoteId != null -> requestedSong.copy(
                     audioUri = TencentMusicApi.placeholderUri(remoteId, qualityStore.playbackQuality().value),
                     lyricUri = requestedSong.lyricUri
                         ?: "${TencentMusicApi.ENDPOINT}/api/v1/songs/$remoteId/lyrics",
                 )
-            } else {
-                requestedSong
+                else -> requestedSong
             }
             if (playable.audioUri.isNullOrBlank()) {
                 message = "歌曲暂时没有可用播放链接"
@@ -553,7 +575,7 @@ fun TaotaoMusicApp() {
     }
 
     // 配色统一走 TaotaoTheme，避免和登录页各写一份 colorScheme 导致进入首页时突然换色。
-    TaotaoTheme {
+    TaotaoTheme(darkTheme = darkTheme) {
         // 可选更新提示：强制更新已在上面拦截返回，这里只处理用户可以忽略的情况。
         if (updateStatus.stage != UpdateStage.IDLE && updateStatus.stage != UpdateStage.CHECKING &&
             updateStatus.stage != UpdateStage.UP_TO_DATE && !updateStatus.forced
@@ -572,15 +594,27 @@ fun TaotaoMusicApp() {
                 snackbarHost = { SnackbarHost(snackbarHostState) },
                 bottomBar = {
                     Column {
-                    if (!showPlayerDetail && playbackSongs.isNotEmpty()) {
-                        MiniPlayer(
-                            playbackSongs[selectedIndex.coerceIn(playbackSongs.indices)],
-                            isPlaying,
-                            onOpen = { showPlayerDetail = true },
-                            onPrevious = { audioPlayer.previous() },
-                            onNext = { audioPlayer.next() },
-                        ) {
-                            togglePlayback()
+                    // 迷你播放器升起/落下要有过渡：原来是直接出现和消失，
+                    // 底部一整条突然多出来一块，视觉上很跳。
+                    AnimatedVisibility(
+                        visible = !showPlayerDetail && playbackSongs.isNotEmpty(),
+                        enter = riseIn(),
+                        exit = sinkOut(),
+                    ) {
+                        // 退出动画期间队列可能已被清空，用最后一次的快照撑到动画走完。
+                        val current = remember(playbackSongs, selectedIndex) {
+                            playbackSongs.getOrNull(selectedIndex.coerceIn(0, (playbackSongs.size - 1).coerceAtLeast(0)))
+                        }
+                        if (current != null) {
+                            MiniPlayer(
+                                current,
+                                isPlaying,
+                                onOpen = { showPlayerDetail = true },
+                                onPrevious = { audioPlayer.previous() },
+                                onNext = { audioPlayer.next() },
+                            ) {
+                                togglePlayback()
+                            }
                         }
                     }
                     NavigationBar {
@@ -604,11 +638,12 @@ fun TaotaoMusicApp() {
                     showPlayerDetail -> "detail"
                     showSettingsPage -> "settings"
                     showSearchPage -> "search"
+                    // 底部标签也参与：不带上它的话音乐 ⇄ 我的是硬切，
+                    // 而其它换页都有过渡，观感上很不一致。
+                    bottomTab == 1 -> "mine"
                     else -> "home"
                 },
-                transitionSpec = {
-                    (pageFadeIn() + pageSlideIn()) togetherWith (pageFadeOut() + pageSlideOut())
-                },
+                transitionSpec = { pageTransition() },
                 label = "页面切换",
             ) { page ->
             Box(Modifier.fillMaxSize().padding(innerPadding)) {
@@ -621,14 +656,12 @@ fun TaotaoMusicApp() {
                     onDownload = {
                         // 先在主线程取定目标歌曲，避免后台任务期间 selectedIndex 变化导致下错歌或越界。
                         val target = playbackSongs.getOrNull(selectedIndex)
-                        if (target == null) {
-                            message = "没有正在播放的歌曲"
-                        } else if (target.audioUri?.startsWith("file:") == true) {
-                            message = "这首歌已经下载过了"
-                        } else {
+                        when {
+                            target == null -> message = "没有正在播放的歌曲"
+                            target.audioUri?.startsWith("file:") == true -> message = "这首歌已经下载过了"
                             // 下载前先选音质：下载只花一次流量，值得让用户自己定，
                             // 面板里会显示各档的实际体积。
-                            downloadTarget = target to selectedIndex
+                            else -> downloadTarget = target to selectedIndex
                         }
                     },
                     musicApi = musicApi,
@@ -658,8 +691,7 @@ fun TaotaoMusicApp() {
                     onToggleFavorite = {
                         playbackSongs.getOrNull(selectedIndex)?.let { toggleFavorite(it) }
                     },
-                    playbackQuality = playbackSongs.getOrNull(selectedIndex)?.audioUri
-                        ?.let { TencentMusicApi.parsePlaceholder(it)?.second } ?: playbackQuality.value,
+                    playbackQuality = playbackQuality.value,
                     onPickQuality = { qualitySheet = QualitySheetKind.CURRENT_SONG },
                 )
             } else if (page == "search") {
@@ -683,6 +715,8 @@ fun TaotaoMusicApp() {
                     favoriteRevision = favoriteRevision,
                     isFavorite = { song -> favoritesStore.contains(song.remoteId) },
                     onToggleFavorite = { song -> toggleFavorite(song) },
+                    downloadedRevision = downloadedSongs.size,
+                    isDownloaded = { song -> song.remoteId != null && song.remoteId in downloadedIds },
                     onLoadMore = { loadMoreSearch() },
                     isLoadingMore = isLoadingMore,
                     hasMore = searchHasMore,
@@ -702,7 +736,7 @@ fun TaotaoMusicApp() {
                     },
                     onBack = { showSettingsPage = false },
                 )
-            } else if (bottomTab == 1) {
+            } else if (page == "mine") {
                 MinePage(
                     onLogout = {
                         audioPlayer.stop()
@@ -857,23 +891,21 @@ fun TaotaoMusicApp() {
 private enum class QualitySheetKind { CURRENT_SONG, PLAYBACK_DEFAULT, DOWNLOAD_DEFAULT }
 
 /**
- * 按歌曲 ID 去重，保留首次出现的顺序。
+ * 去掉重复条目，保留首次出现的顺序。
  *
- * 上游同一个关键词的相邻页之间会给出重复歌曲，同一页里也可能出现同一首歌的多个版本。
- * 重复本身只是噪音，但 `LazyColumn` 的 key 必须唯一 —— 重复 ID 会直接抛
- * `IllegalArgumentException: Key "..." was already used` 把界面搞崩。
+ * 判重用「ID + 标题 + 歌手」而不是只看 ID：上游偶尔会把同一行返回两遍（线上崩过一次，
+ * `LazyColumn` 对重复 key 直接抛 IllegalArgumentException），但同一个 ID 配不同标题
+ * 也是可能的，只看 ID 会把两首真正不同的歌合并成一条。
  *
- * 线上真的崩过一次：把列表 key 从「ID-标题」简化成裸 ID 的同时又加了分页，
- * 两个改动凑在一起才暴露。去重放在数据侧而不是靠 key 拼接来掩盖，
- * 因为同一首歌显示两遍本身就不对。
- *
- * `remoteId` 为空的本地歌全部保留：它们在列表里按下标取负数做 key，不会互相冲突。
+ * 列表的 key 用的是同一个组合，所以只要过了这一层，key 一定唯一。
  */
 private fun dedupeSongs(songs: List<Song>): List<Song> {
-    val seen = HashSet<Long>(songs.size)
-    // remoteId 是别的模块的 public 属性，Kotlin 不做智能转换，先取成局部变量。
-    return songs.filter { song -> song.remoteId?.let(seen::add) ?: true }
+    val seen = HashSet<String>(songs.size)
+    return songs.filter { seen.add(songKeyOf(it)) }
 }
+
+/** 列表项的稳定唯一键。必须与 [dedupeSongs] 的判重口径一致。 */
+fun songKeyOf(song: Song): String = "${song.remoteId ?: 0}#${song.title}#${song.artist}"
 
 @Composable private fun HomeHeader() {
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
@@ -977,10 +1009,28 @@ private fun MinePage(
 @Composable private fun CategoryTabs(selectedIndex: Int, onSelected: (Int) -> Unit) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         listOf("为你推荐", "每日推荐", "歌单").forEachIndexed { index, label ->
-            Text(label, fontSize = 16.sp,
-                fontWeight = if (selectedIndex == index) FontWeight.Bold else FontWeight.Normal,
-                color = if (selectedIndex == index) TaotaoCoral else MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.clickable { onSelected(index) }.padding(vertical = 8.dp))
+            val selected = selectedIndex == index
+            // 选中态渐变而不是硬切；字重没法插值，用缩放补上一点"被按下去"的层次。
+            val color by animateColorAsState(
+                targetValue = if (selected) TaotaoCoral else MaterialTheme.colorScheme.onSurfaceVariant,
+                animationSpec = taotaoTween(AnimationDurations.MICRO),
+                label = "标签着色",
+            )
+            val scale by animateFloatAsState(
+                targetValue = if (selected) 1.06f else 1f,
+                animationSpec = taotaoSpring(),
+                label = "标签缩放",
+            )
+            Text(
+                label,
+                fontSize = 16.sp,
+                fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                color = color,
+                modifier = Modifier
+                    .clickable { onSelected(index) }
+                    .padding(vertical = 8.dp)
+                    .scale(scale),
+            )
         }
     }
 }
@@ -1039,7 +1089,9 @@ private fun PlayerDetailPage(
     val actualPlaying = audioPlayer.isPlaying
     val detailScope = rememberCoroutineScope()
     val lifecycleOwner = LocalLifecycleOwner.current
-    val coverRotation = remember(song) { Animatable(0f) }
+    // key 必须是稳定的标识而不是整个 song：换音质或解析地址后队列里的 Song 会被换成新副本，
+    // 用 song 做 key 会重建 Animatable，封面转到一半突然弹回 0°。
+    val coverRotation = remember(song.remoteId, song.audioUri) { Animatable(0f) }
     LaunchedEffect(song.lyricUri, song.remoteId) {
         // 离线歌曲的行级与逐字时间轴分别存成两个文件，两个都要读 ——
         // 早先这里只读一个文本文件，离线播放于是永远没有逐字高亮。
@@ -1085,22 +1137,47 @@ private fun PlayerDetailPage(
     }
     // 时间文字只需要秒级精度。用派生状态挡住逐帧变化，避免每帧重新格式化字符串。
     val positionSeconds by remember { derivedStateOf { positionMs / 1000 } }
-    LaunchedEffect(song, isPlaying, lifecycleOwner) {
-        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
-            if (!isPlaying) return@repeatOnLifecycle
-            while (isActive) {
-                // 角度对 360 取模，避免长时间播放后累加成很大的数值。
-                coverRotation.snapTo(coverRotation.value % 360f)
-                coverRotation.animateTo(
-                    targetValue = coverRotation.value + 360f,
-                    animationSpec = tween(durationMillis = 20_000, easing = LinearEasing),
-                )
-            }
-        }
+
+    /** 本地文件与云端流的处理处处不同，取一次给下面复用。 */
+    val isLocalFile = song.audioUri?.startsWith("file:") == true
+
+    /**
+     * 界面上显示的音质。
+     *
+     * 本地文件取下载时记下的实际档位；云端流从占位地址里解析出请求的档位。
+     * 两者都拿不到时退回全局默认值 —— 只发生在旧版本下载的、没记音质的歌上。
+     */
+    val displayedQuality = when {
+        isLocalFile -> song.localQuality ?: playbackQuality
+        else -> song.audioUri?.let { TencentMusicApi.parsePlaceholder(it)?.second } ?: playbackQuality
     }
     // 详情页与歌词页做成左右两页，但只有中间区域参与滑动：
     // 顶栏、歌名、进度条和播放控制留在外层，切到歌词页时仍然可见可操作。
     val pagerState = rememberPagerState(pageCount = { 2 })
+
+    /**
+     * 封面旋转。
+     *
+     * 三个停止条件都必须有：暂停时停、页面不在前台时停、**滑到歌词页时也要停**。
+     * 少了最后一个，用户看歌词的整段时间里这个动画仍在每 16 毫秒请求一帧，
+     * 而封面那一页已经被 pager 销毁 —— 驱动的是一个没人读的值，纯耗电。
+     */
+    LaunchedEffect(song.remoteId, song.audioUri, isPlaying, lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            if (!isPlaying) return@repeatOnLifecycle
+            snapshotFlow { pagerState.settledPage == 0 }.collectLatest { onCoverPage ->
+                if (!onCoverPage) return@collectLatest
+                while (isActive) {
+                    // 角度对 360 取模，避免长时间播放后累加成很大的数值。
+                    coverRotation.snapTo(coverRotation.value % 360f)
+                    coverRotation.animateTo(
+                        targetValue = coverRotation.value + 360f,
+                        animationSpec = tween(AnimationDurations.COVER_SPIN, easing = LinearEasing),
+                    )
+                }
+            }
+        }
+    }
     // 在歌词页按返回先回到封面页，而不是直接关掉整个详情页。
     // 这个 BackHandler 比 TaotaoMusicApp 里那个更深，启用时优先生效。
     BackHandler(enabled = pagerState.currentPage > 0) {
@@ -1171,21 +1248,36 @@ private fun PlayerDetailPage(
                 }
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 5.dp)) {
                     Text(song.artist, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp, maxLines = 1)
-                    // 网络歌曲才有音质可言，本地文件的音质由文件本身决定。
-                    if (song.remoteId != null && song.audioUri?.startsWith("file:") != true) {
-                        QualityChip(playbackQuality, Modifier.padding(start = 10.dp), onPickQuality)
+                    if (song.remoteId != null) {
+                        // 本地文件也要显示音质：它是下载时记下来的实际档位。
+                        // 不显示的话用户没法知道手里这份是无损还是标准。
+                        QualityChip(
+                            quality = displayedQuality,
+                            modifier = Modifier.padding(start = 10.dp),
+                            local = isLocalFile,
+                            // 本地文件换档要重新下载，不能就地切，所以不给点。
+                            onClick = onPickQuality.takeIf { !isLocalFile },
+                        )
                     }
                 }
             }
-            IconButton(
+            FavoriteButton(
+                favorited = favorited,
+                onClick = onToggleFavorite,
                 // 收藏依赖服务端歌曲 ID，纯本地歌曲不提供该操作。
                 enabled = song.remoteId != null,
-                onClick = onToggleFavorite,
-            ) { Icon(if (favorited) Icons.Default.Favorite else Icons.Default.FavoriteBorder, "收藏", tint = TaotaoCoral) }
+            )
         }
         Spacer(Modifier.height(12.dp))
-        val progress = if (durationMs > 0) positionMs.toFloat() / durationMs else 0f
-        Slider(value = progress.coerceIn(0f, 1f), onValueChange = { dragging = true; positionMs = (it * durationMs).toInt() }, onValueChangeFinished = { dragging = false; audioPlayer.seekTo(positionMs) }, colors = SliderDefaults.colors(thumbColor = TaotaoCoral, activeTrackColor = TaotaoCoral))
+        // progress 用派生状态包起来：直接在 body 里读 positionMs 会让整个详情页
+        // 每帧全部失效 —— Slider、控制按钮、下载卡、歌词页都要重组一遍。
+        val progress by remember { derivedStateOf { if (durationMs > 0) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f } }
+        Slider(
+            value = progress,
+            onValueChange = { dragging = true; positionMs = (it * durationMs).toInt() },
+            onValueChangeFinished = { dragging = false; audioPlayer.seekTo(positionMs) },
+            colors = SliderDefaults.colors(thumbColor = TaotaoCoral, activeTrackColor = TaotaoCoral),
+        )
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(formatTime(positionSeconds * 1000), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
             Text(
@@ -1197,15 +1289,17 @@ private fun PlayerDetailPage(
         Spacer(Modifier.height(14.dp))
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceEvenly) {
             IconButton(onClick = onToggleRepeat) {
-                Icon(
-                    Icons.Default.Repeat,
-                    if (repeatMode == androidx.media3.common.Player.REPEAT_MODE_ONE) "单曲循环" else "循环",
-                    tint = if (repeatMode == androidx.media3.common.Player.REPEAT_MODE_ONE) TaotaoCoral else MaterialTheme.colorScheme.onSurfaceVariant,
+                val single = repeatMode == androidx.media3.common.Player.REPEAT_MODE_ONE
+                val tint by animateColorAsState(
+                    targetValue = if (single) TaotaoCoral else MaterialTheme.colorScheme.onSurfaceVariant,
+                    animationSpec = taotaoTween(AnimationDurations.MICRO),
+                    label = "循环着色",
                 )
+                Icon(Icons.Default.Repeat, if (single) "单曲循环" else "循环", tint = tint)
             }
             IconButton(onClick = onPrevious) { Icon(Icons.Default.SkipPrevious, "上一首", modifier = Modifier.size(34.dp)) }
             FilledIconButton(onClick = onTogglePlaying, modifier = Modifier.size(64.dp), colors = IconButtonDefaults.filledIconButtonColors(containerColor = TaotaoCoral)) {
-                Icon(if (actualPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, "播放", modifier = Modifier.size(34.dp))
+                PlayPauseIcon(actualPlaying, Modifier.size(34.dp))
             }
             IconButton(onClick = onNext) { Icon(Icons.Default.SkipNext, "下一首", modifier = Modifier.size(34.dp)) }
             IconButton(onClick = { showQueue = true }) {
@@ -1213,10 +1307,26 @@ private fun PlayerDetailPage(
             }
         }
         Spacer(Modifier.height(10.dp))
-        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.surface).clickable(onClick = onDownload).padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Default.MusicNote, null, tint = TaotaoCoral)
-            Text("下载歌曲、封面和歌词", modifier = Modifier.weight(1f).padding(start = 12.dp), fontWeight = FontWeight.Medium)
-            Icon(Icons.Default.Download, "下载", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        // 已下载的歌不再显示下载入口：可点却只会提示"已经下载过了"是白给的一次失望。
+        Row(
+            Modifier.fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .background(MaterialTheme.colorScheme.surface)
+                .then(if (isLocalFile) Modifier else Modifier.clickable(onClick = onDownload))
+                .padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                if (isLocalFile) Icons.Default.CheckCircle else Icons.Default.MusicNote,
+                null,
+                tint = TaotaoCoral,
+            )
+            Text(
+                if (isLocalFile) "已下载，正在播放本地文件" else "下载歌曲、封面和歌词",
+                modifier = Modifier.weight(1f).padding(start = 12.dp),
+                fontWeight = FontWeight.Medium,
+            )
+            if (!isLocalFile) Icon(Icons.Default.Download, "下载", tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Spacer(Modifier.height(16.dp))
     }

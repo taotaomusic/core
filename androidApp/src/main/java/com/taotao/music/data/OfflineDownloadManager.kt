@@ -28,6 +28,7 @@ class OfflineDownloadManager(context: Context, private val tokenProvider: TokenP
     fun download(
         song: Song,
         audioUrl: String,
+        quality: Int,
         lrc: String? = null,
         yrc: String? = null,
         onProgress: (downloaded: Long, total: Long) -> Unit = { _, _ -> },
@@ -36,7 +37,12 @@ class OfflineDownloadManager(context: Context, private val tokenProvider: TokenP
         val dir = File(root, id.toString()).apply { mkdirs() }
         val audio = audioUrl.takeIf { it.startsWith("http") }?.let {
             val extension = URL(it).path.substringAfterLast('.', "").lowercase().takeIf { value -> value in AUDIO_EXTENSIONS } ?: "mp3"
-            download(it.replaceFirst("http://", "https://"), File(dir, "audio.$extension"), onProgress)
+            val target = File(dir, "audio.$extension")
+            // 换音质重新下载时先清掉旧的音频文件：一首歌只留一个。
+            // 否则目录里会同时存在 audio.mp3 与 audio.flac，读取时只能任选一个，
+            // 于是「播的是哪一档」和 properties 里记的音质对不上。
+            audioFilesIn(dir).filter { file -> file != target }.forEach(File::delete)
+            download(it.replaceFirst("http://", "https://"), target, onProgress)
         }
         // 音频是离线播放的必要条件，失败直接抛出；封面和歌词属于附加内容，失败不影响下载结果。
         val cover = song.coverUri?.takeIf { it.startsWith("http") }
@@ -54,6 +60,9 @@ class OfflineDownloadManager(context: Context, private val tokenProvider: TokenP
             setProperty("album", song.album)
             setProperty("subtitle", song.subtitle)
             setProperty("releaseTime", song.releaseTime)
+            // 记下实际下载的音质，否则离线播放时无从得知手里这份是哪一档。
+            setProperty("quality", quality.toString())
+            if (song.vip) setProperty("vip", "true")
             // mid 与 type 要留着：离线歌重新联网想换音质时还得靠它们解析。
             song.mid?.let { setProperty("mid", it) }
             song.type?.let { setProperty("type", it.toString()) }
@@ -66,39 +75,55 @@ class OfflineDownloadManager(context: Context, private val tokenProvider: TokenP
             coverUri = cover?.toURI()?.toString() ?: song.coverUri,
             lyricUri = lyric?.toURI()?.toString() ?: song.lyricUri,
             lyricWordsUri = lyricWords?.toURI()?.toString(),
+            localQuality = quality,
         )
     }
 
     fun listDownloaded(): List<Song> = root.listFiles()
-        ?.filter { dir -> File(dir, "song.properties").isFile && dir.listFiles()?.any { it.name.startsWith("audio") && it.isFile && it.length() >= 4_096L } == true }
-        ?.mapNotNull { dir ->
-            runCatching {
-                val properties = Properties().apply { load(File(dir, "song.properties").inputStream()) }
-                val id = properties.getProperty("remoteId").toLong()
-                Song(
-                    title = properties.getProperty("title", "未知歌曲"),
-                    artist = properties.getProperty("artist", "未知歌手"),
-                    duration = properties.getProperty("duration", "网络歌曲"),
-                    color = properties.getProperty("color", "0xFFFFB4A2").toLong(),
-                    audioUri = dir.listFiles()!!
-                        .filter { it.name.startsWith("audio") && it.isFile && it.length() >= 4_096L }
-                        .sortedBy { it.name == "audio" }
-                        .first()
-                        .toURI()
-                        .toString(),
-                    remoteId = id,
-                    coverUri = File(dir, "cover").takeIf(File::isFile)?.toURI()?.toString(),
-                    lyricUri = File(dir, "lyric.txt").takeIf(File::isFile)?.toURI()?.toString(),
-                    // 早于本版本下载的歌没有 .yrc，逐字高亮会退化成整行高亮而不是报错。
-                    lyricWordsUri = File(dir, "lyric.yrc").takeIf(File::isFile)?.toURI()?.toString(),
-                    album = properties.getProperty("album", ""),
-                    subtitle = properties.getProperty("subtitle", ""),
-                    releaseTime = properties.getProperty("releaseTime", ""),
-                    mid = properties.getProperty("mid"),
-                    type = properties.getProperty("type")?.toIntOrNull(),
-                )
-            }.getOrNull()
-        }
+        ?.filter { dir -> File(dir, "song.properties").isFile && audioFilesIn(dir).isNotEmpty() }
+        ?.mapNotNull { dir -> runCatching { songIn(dir) }.getOrNull() }
+        .orEmpty()
+
+    /**
+     * 已下载的这首歌，没有则返回 null。
+     *
+     * 搜索结果里的歌与本地已下载的是同一个 `remoteId`，播放前必须先查这里 ——
+     * 否则明明下载过却还是从云端拉流，白费流量。
+     */
+    fun findDownloaded(remoteId: Long?): Song? {
+        val dir = File(root, (remoteId ?: return null).toString())
+        if (!File(dir, "song.properties").isFile || audioFilesIn(dir).isEmpty()) return null
+        return runCatching { songIn(dir) }.getOrNull()
+    }
+
+    private fun songIn(dir: File): Song {
+        val properties = Properties().apply { load(File(dir, "song.properties").inputStream()) }
+        return Song(
+            title = properties.getProperty("title", "未知歌曲"),
+            artist = properties.getProperty("artist", "未知歌手"),
+            duration = properties.getProperty("duration", "网络歌曲"),
+            color = properties.getProperty("color", "0xFFFFB4A2").toLong(),
+            // 一首歌只留一个音频文件，所以这里不存在"挑哪个"的问题。
+            audioUri = audioFilesIn(dir).first().toURI().toString(),
+            remoteId = properties.getProperty("remoteId").toLong(),
+            coverUri = File(dir, "cover").takeIf(File::isFile)?.toURI()?.toString(),
+            lyricUri = File(dir, "lyric.txt").takeIf(File::isFile)?.toURI()?.toString(),
+            // 早于本版本下载的歌没有 .yrc，逐字高亮会退化成整行高亮而不是报错。
+            lyricWordsUri = File(dir, "lyric.yrc").takeIf(File::isFile)?.toURI()?.toString(),
+            album = properties.getProperty("album", ""),
+            subtitle = properties.getProperty("subtitle", ""),
+            releaseTime = properties.getProperty("releaseTime", ""),
+            mid = properties.getProperty("mid"),
+            type = properties.getProperty("type")?.toIntOrNull(),
+            vip = properties.getProperty("vip") == "true",
+            // 旧版本下载的歌没有记音质，显示成未知而不是猜一个。
+            localQuality = properties.getProperty("quality")?.toIntOrNull(),
+        )
+    }
+
+    /** 目录里可用的音频文件。太小的当作写坏的残留忽略。 */
+    private fun audioFilesIn(dir: File): List<File> = dir.listFiles()
+        ?.filter { it.isFile && it.name.startsWith("audio") && !it.name.endsWith(".part") && it.length() >= 4_096L }
         .orEmpty()
 
     /**
