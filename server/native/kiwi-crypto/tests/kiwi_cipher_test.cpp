@@ -15,7 +15,19 @@ namespace {
 
 using taotao::crypto::KiwiCipher;
 using taotao::crypto::InMemoryReplayStore;
+using taotao::crypto::ReplayId;
+using taotao::crypto::ReplayStore;
 using taotao::crypto::decryptOnce;
+
+class RecordingReplayStore final : public ReplayStore {
+public:
+    bool consume(const ReplayId&, std::chrono::milliseconds validFor) override {
+        recordedValidFor = validFor;
+        return true;
+    }
+
+    std::chrono::milliseconds recordedValidFor{0};
+};
 
 void require(bool condition, const std::string& message) {
     if (!condition) {
@@ -151,6 +163,30 @@ int main() {
             "篡改 yuan 尾标识后仍能解密"
         );
 
+        auto appendedGarbage = first;
+        appendedGarbage.push_back('x');
+        requireRejected(
+            [&] { static_cast<void>(cipher.decrypt(appendedGarbage)); },
+            "yuan 后附加垃圾仍能解密"
+        );
+
+        auto appendedFakeTrailer = first;
+        appendedFakeTrailer.insert(
+            appendedFakeTrailer.end(),
+            {'x', 'y', 'u', 'a', 'n'}
+        );
+        requireRejected(
+            [&] { static_cast<void>(cipher.decrypt(appendedFakeTrailer)); },
+            "密文后附加伪造 yuan 仍能解密"
+        );
+
+        auto prependedGarbage = first;
+        prependedGarbage.insert(prependedGarbage.begin(), 'x');
+        requireRejected(
+            [&] { static_cast<void>(cipher.decrypt(prependedGarbage)); },
+            "tao 前附加垃圾仍能解密"
+        );
+
         auto modifiedVersion = first;
         modifiedVersion[3] ^= 0x01;
         requireRejected(
@@ -186,6 +222,21 @@ int main() {
                 routeContext
             ) == sample,
             "首次使用的一次性消息未能解密"
+        );
+
+        RecordingReplayStore recordingStore;
+        const auto ttlCiphertext = cipher.encrypt(sample, routeContext);
+        static_cast<void>(decryptOnce(
+            cipher,
+            recordingStore,
+            ttlCiphertext,
+            std::chrono::minutes(5),
+            routeContext,
+            std::chrono::seconds(30)
+        ));
+        require(
+            recordingStore.recordedValidFor == std::chrono::minutes(5) + std::chrono::seconds(30),
+            "Replay ID 有效期没有以服务端接收时间和允许时钟偏差计算"
         );
         requireRejected(
             [&] {
@@ -257,7 +308,8 @@ int main() {
                 expiringStore,
                 oneTimeCiphertext,
                 std::chrono::milliseconds(50),
-                routeContext
+                routeContext,
+                std::chrono::milliseconds(0)
             ) == sample,
             "短期一次性消息首次使用失败"
         );
@@ -269,7 +321,8 @@ int main() {
                     expiringStore,
                     oneTimeCiphertext,
                     std::chrono::milliseconds(50),
-                    routeContext
+                    routeContext,
+                    std::chrono::milliseconds(0)
                 ));
             },
             "超过最大年龄的消息仍被接受"

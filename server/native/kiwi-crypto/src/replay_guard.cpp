@@ -84,6 +84,35 @@ std::uint64_t issuedAtMillisOf(const KiwiCipher::Bytes& ciphertext) {
     return value;
 }
 
+std::uint64_t systemNowMillis() {
+    const auto nowDuration = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()
+    );
+    if (nowDuration.count() < 0) {
+        throw ReplayRejected();
+    }
+    return static_cast<std::uint64_t>(nowDuration.count());
+}
+
+void validateTimestamp(
+    std::uint64_t issuedAt,
+    std::uint64_t now,
+    std::chrono::milliseconds maximumAge,
+    std::chrono::milliseconds allowedFutureSkew
+) {
+    if (issuedAt > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
+        throw ReplayRejected();
+    }
+    const auto maximumAgeCount = static_cast<std::uint64_t>(maximumAge.count());
+    const auto futureSkewCount = static_cast<std::uint64_t>(allowedFutureSkew.count());
+    if (issuedAt > now && issuedAt - now > futureSkewCount) {
+        throw ReplayRejected();
+    }
+    if (now > issuedAt && now - issuedAt >= maximumAgeCount) {
+        throw ReplayRejected();
+    }
+}
+
 [[noreturn]] void clearAndReject(KiwiCipher::Bytes& plaintext) {
     OPENSSL_cleanse(plaintext.data(), plaintext.size());
     throw ReplayRejected();
@@ -196,32 +225,30 @@ KiwiCipher::Bytes decryptOnce(
         throw std::invalid_argument("允许的未来时钟偏差必须在 0 到 1 小时之间");
     }
 
-    KiwiCipher::Bytes plaintext = cipher.decrypt(ciphertext, additionalAuthenticatedData);
+    // 时间戳是公开但尚未认证的字段。先作只用于拒绝的廉价预筛，避免明显过期的
+    // 数据消耗 AEAD；通过预筛不代表消息可信，认证后必须再次校验。
+    if (ciphertext.size() < KiwiCipher::FORMAT_OVERHEAD) {
+        throw ReplayRejected();
+    }
     const std::uint64_t issuedAt = issuedAtMillisOf(ciphertext);
-    const auto nowDuration = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::system_clock::now().time_since_epoch()
-    );
-    if (nowDuration.count() < 0
-            || issuedAt > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
+    const std::uint64_t preflightNow = systemNowMillis();
+    validateTimestamp(issuedAt, preflightNow, maximumAge, allowedFutureSkew);
+
+    KiwiCipher::Bytes plaintext = cipher.decrypt(ciphertext, additionalAuthenticatedData);
+    try {
+        validateTimestamp(
+            issuedAt,
+            systemNowMillis(),
+            maximumAge,
+            allowedFutureSkew
+        );
+    } catch (const ReplayRejected&) {
         clearAndReject(plaintext);
     }
 
-    const auto now = static_cast<std::uint64_t>(nowDuration.count());
-    const auto maximumAgeCount = static_cast<std::uint64_t>(maximumAge.count());
-    const auto futureSkewCount = static_cast<std::uint64_t>(allowedFutureSkew.count());
-    if (issuedAt > now && issuedAt - now > futureSkewCount) {
-        clearAndReject(plaintext);
-    }
-
-    const std::uint64_t age = now > issuedAt ? now - issuedAt : 0;
-    if (age >= maximumAgeCount) {
-        clearAndReject(plaintext);
-    }
-
-    const std::uint64_t futureOffset = issuedAt > now ? issuedAt - now : 0;
-    const std::uint64_t remainingLifetime = maximumAgeCount - age + futureOffset;
     const ReplayId id = replayIdOf(ciphertext, additionalAuthenticatedData);
-    if (!store.consume(id, std::chrono::milliseconds(remainingLifetime))) {
+    // 存储有效期以服务端收到时间为基准，不信任客户端签发时间。
+    if (!store.consume(id, maximumAge + allowedFutureSkew)) {
         clearAndReject(plaintext);
     }
     return plaintext;

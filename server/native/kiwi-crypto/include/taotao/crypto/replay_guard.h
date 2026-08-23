@@ -60,7 +60,9 @@ public:
 /**
  * 认证并解密一条只能使用一次的消息。
  *
- * 只有通过 AEAD 认证后才计算 ReplayId 并调用 store.consume，避免无效输入占满缓存。
+ * 认证前仅使用公开时间戳作廉价拒绝预筛；时间戳通过预筛不代表可信。
+ * 只有通过 AEAD 认证并再次校验时间后才计算 ReplayId 并调用 store.consume，
+ * 避免无效输入占满缓存。存储有效期从服务端接收时刻开始计算。
  * 存储拒绝时会先清除已解密的明文，再抛出统一异常。
  */
 [[nodiscard]] KiwiCipher::Bytes decryptOnce(

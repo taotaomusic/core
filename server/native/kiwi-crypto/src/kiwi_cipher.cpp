@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <limits>
 #include <memory>
@@ -45,6 +46,8 @@ constexpr std::size_t NONCE_SIZE = 12;
 constexpr std::size_t TAG_SIZE = 16;
 constexpr std::size_t MIN_CIPHERTEXT_SIZE =
     HEADER_SIZE + SALT_SIZE + NONCE_SIZE + TAG_SIZE + TRAILER.size();
+
+std::atomic<std::uint64_t> saltSequence{0};
 
 static_assert(MIN_CIPHERTEXT_SIZE == KiwiCipher::FORMAT_OVERHEAD);
 
@@ -123,6 +126,35 @@ void requireSuccess(int result, const char* message) {
     if (result != 1) {
         throw std::runtime_error(message);
     }
+}
+
+std::uint64_t nextSaltSequence() {
+    std::uint64_t current = saltSequence.load(std::memory_order_relaxed);
+    for (;;) {
+        if (current == std::numeric_limits<std::uint64_t>::max()) {
+            throw std::runtime_error("随机盐序列已经耗尽");
+        }
+        if (saltSequence.compare_exchange_weak(
+                current,
+                current + 1,
+                std::memory_order_relaxed,
+                std::memory_order_relaxed)) {
+            return current + 1;
+        }
+    }
+}
+
+void mixSaltSequence(std::array<std::uint8_t, SALT_SIZE>& salt) {
+    const std::uint64_t sequence = nextSaltSequence();
+    constexpr std::size_t OFFSET = SALT_SIZE - sizeof(sequence);
+    for (std::size_t index = 0; index < sizeof(sequence); ++index) {
+        const std::size_t shift = (sizeof(sequence) - 1 - index) * 8;
+        salt[OFFSET + index] ^= static_cast<std::uint8_t>(sequence >> shift);
+    }
+}
+
+[[noreturn]] void rejectInvalidContainer() {
+    throw std::invalid_argument("密文容器无效");
 }
 
 int checkedSize(std::size_t size) {
@@ -394,6 +426,9 @@ KiwiCipher::Bytes KiwiCipher::encrypt(
     std::array<std::uint8_t, NONCE_SIZE> nonce{};
     requireSuccess(RAND_bytes(salt.data(), static_cast<int>(salt.size())), "无法生成安全随机盐");
     requireSuccess(RAND_bytes(nonce.data(), static_cast<int>(nonce.size())), "无法生成安全随机 nonce");
+    // 保留全部随机位，再混入进程内单调序列；即使随机源错误地重复输出，
+    // 同一进程生命周期内的消息子密钥仍不会随之重复。
+    mixSaltSequence(salt);
     CleansedKey messageKey = deriveMessageKey(key_->bytes(), salt);
 
     const EVP_CIPHER* cipher = cipherAlgorithm();
@@ -464,34 +499,34 @@ KiwiCipher::Bytes KiwiCipher::decrypt(
     const Bytes& additionalAuthenticatedData
 ) const {
     if (input.size() < MIN_CIPHERTEXT_SIZE) {
-        throw std::invalid_argument("密文太短");
+        rejectInvalidContainer();
     }
     if (input.size() > limits_.maxPlaintextSize + FORMAT_OVERHEAD) {
-        throw std::invalid_argument("密文超过配置的安全上限");
+        rejectInvalidContainer();
     }
     if (additionalAuthenticatedData.size()
             > limits_.maxAdditionalAuthenticatedDataSize) {
         throw std::invalid_argument("附加认证数据超过配置的安全上限");
     }
     if (!std::equal(MAGIC.begin(), MAGIC.end(), input.begin())) {
-        throw std::invalid_argument("无效的密文标识");
+        rejectInvalidContainer();
     }
     if (input[MAGIC.size()] != FORMAT_VERSION) {
-        throw std::invalid_argument("不支持的密文版本");
+        rejectInvalidContainer();
     }
     const std::uint8_t flags = input[MAGIC.size() + 1];
     if ((flags & static_cast<std::uint8_t>(~KNOWN_FLAGS)) != 0) {
-        throw std::invalid_argument("密文包含未知格式标志");
+        rejectInvalidContainer();
     }
     if (!std::equal(TRAILER.begin(), TRAILER.end(), input.end() - TRAILER.size())) {
-        throw std::invalid_argument("无效的密文尾标识");
+        rejectInvalidContainer();
     }
 
     std::array<std::uint8_t, HEADER_SIZE> header{};
     std::copy_n(input.data(), header.size(), header.data());
     const std::uint32_t originalSize = originalSizeOf(header);
     if (originalSize > limits_.maxPlaintextSize) {
-        throw std::invalid_argument("密文声明的原始长度超过安全上限");
+        rejectInvalidContainer();
     }
     checkedSize(additionalAuthenticatedData.size());
     const std::size_t saltOffset = HEADER_SIZE;

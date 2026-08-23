@@ -34,13 +34,15 @@ tao | version(1B) | flags(1B) | issuedAtMs(8B) | originalSize(4B)
 - `flags` 当前只定义 bit 0：`1` 表示 ciphertext 解密后是 Zstandard 帧。
 - `originalSize` 是压缩前长度，最大受 `KiwiCipher::Limits` 约束。
 - 任何头、时间、盐、nonce、密文、标签、尾或 AAD 的修改都会使认证失败。
+- 解析器只接受偏移 0 的 `tao`，并要求 `yuan` 恰好位于输入末尾；不搜索标识，也不忽略前置或尾随字节。
+- 密文段长度由容器总长度减去固定开销得到；压缩时不能用 `originalSize` 推算密文长度。
 - 版本 1、2 尚未上线，不保留兼容解密分支，避免长期携带旧协议攻击面。
 
 ## 加密链路
 
 ```text
 32 字节主密钥
-  + 16 字节随机盐
+  + 16 字节随机盐（后 8 字节混入进程内原子序列）
   + 固定域分离信息
           │
           ▼
@@ -56,7 +58,7 @@ tao | version(1B) | flags(1B) | issuedAtMs(8B) | originalSize(4B)
 版本 3 密文容器
 ```
 
-每条消息派生独立子密钥。GCM-SIV 能降低 nonce 意外复用的破坏，但不能代替正确随机数和密钥轮换。
+每条消息派生独立子密钥。GCM-SIV 能降低 nonce 意外复用的破坏，但不能代替正确随机数和密钥轮换。原子序列只提供同一进程生命周期内的随机盐重复回退，不保证跨进程或重启全局唯一；需要严格全局序号时由接口层持久化并通过 AAD 绑定。
 
 ## 可选压缩
 
@@ -84,11 +86,12 @@ taotao-api/v1|POST|/api/v1/example/submit
 
 执行顺序：
 
-1. 验证完整 AEAD 并解密；
-2. 检查签发时间未超过 `maximumAge`，未来时间未超过允许时钟偏差；
-3. 对 AAD 和完整密文计算 SHA-256 Replay ID；
-4. 通过 `ReplayStore::consume` 原子登记到消息真实过期时间；
-5. 只有首次登记成功才返回明文。
+1. 对公开、尚未认证的签发时间作廉价拒绝预筛；
+2. 验证完整 AEAD 并解密；
+3. 再次检查已经受认证的签发时间未超过 `maximumAge`，未来时间未超过允许时钟偏差；
+4. 对 AAD 和完整密文计算 SHA-256 Replay ID；
+5. 以服务端接收时间为基准，通过 `ReplayStore::consume` 原子登记 `maximumAge + allowedFutureSkew`；
+6. 只有首次登记成功才返回明文。
 
 `InMemoryReplayStore` 只适合单进程开发或单实例服务。生产多实例必须实现持久化存储：
 
@@ -97,6 +100,8 @@ INSERT INTO crypto_replay (replay_id, expires_at)
 VALUES ($1, $2)
 ON CONFLICT DO NOTHING;
 ```
+
+`expires_at` 必须由服务端当前时间加 `maximumAge + allowedFutureSkew` 计算，不能信任客户端 `issuedAtMs`。接口层必须把格式错误、认证失败、过期和重放统一映射为同一种外部错误，避免形成可区分的响应 oracle。
 
 必须根据受影响行数判断是否首次消费，不能先 `SELECT` 再 `INSERT`。Redis 可使用 `SET key value NX PX <毫秒>`。过期记录需要后台清理，但清理延迟不能让仍有效记录提前消失。
 
