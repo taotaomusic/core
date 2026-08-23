@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ModalBottomSheet
@@ -68,7 +69,7 @@ fun QualitySheet(
         Column(Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, bottom = 28.dp)) {
             Text(title, fontSize = 18.sp, fontWeight = FontWeight.Bold)
             if (!note.isNullOrBlank()) {
-                Text(note, color = Color.Gray, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+                Text(note, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
             }
             if (loading) {
                 Row(
@@ -77,7 +78,7 @@ fun QualitySheet(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     CircularProgressIndicator(Modifier.size(22.dp), color = TaotaoCoral)
-                    Text("正在查可用音质…", color = Color.Gray, fontSize = 13.sp, modifier = Modifier.padding(start = 10.dp))
+                    Text("正在查可用音质…", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp, modifier = Modifier.padding(start = 10.dp))
                 }
                 return@Column
             }
@@ -90,7 +91,7 @@ fun QualitySheet(
 
 @Composable
 private fun QualityRow(choice: QualityChoice, checked: Boolean, onClick: () -> Unit) {
-    val tint = if (choice.available) Color.Unspecified else Color.Gray
+    val tint = if (choice.available) Color.Unspecified else MaterialTheme.colorScheme.onSurfaceVariant
     Row(
         Modifier.fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
@@ -110,7 +111,7 @@ private fun QualityRow(choice: QualityChoice, checked: Boolean, onClick: () -> U
                 else -> null
             }
             if (detail != null) {
-                Text(detail, color = Color.Gray, fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp))
+                Text(detail, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp))
             }
         }
         if (checked) Icon(Icons.Default.Check, "已选择", tint = TaotaoCoral)

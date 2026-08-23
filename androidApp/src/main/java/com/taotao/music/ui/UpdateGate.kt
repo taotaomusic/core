@@ -14,6 +14,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.SystemUpdate
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
@@ -41,7 +42,7 @@ import com.taotao.music.update.UpdateStatus
 @Composable
 fun ForceUpdatePage(status: UpdateStatus, onDownload: () -> Unit, onInstall: () -> Unit, onRetry: () -> Unit) {
     Column(
-        modifier = Modifier.fillMaxSize().background(TaotaoBackground).padding(30.dp),
+        modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).padding(30.dp),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
@@ -50,14 +51,14 @@ fun ForceUpdatePage(status: UpdateStatus, onDownload: () -> Unit, onInstall: () 
         Text("需要更新后继续使用", fontSize = 22.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
         status.release?.let { release ->
             Spacer(Modifier.height(10.dp))
-            Text("新版本 ${release.versionName}", color = Color.Gray, fontSize = 14.sp)
+            Text("新版本 ${release.versionName}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
             if (release.releaseNote.isNotBlank()) {
                 Spacer(Modifier.height(18.dp))
                 Column(
-                    Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Color.White)
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.surface)
                         .heightIn(max = 220.dp).verticalScroll(rememberScrollState()).padding(16.dp),
                 ) {
-                    Text(release.releaseNote, color = Color.DarkGray, lineHeight = 22.sp, fontSize = 14.sp)
+                    Text(release.releaseNote, color = MaterialTheme.colorScheme.onSurface, lineHeight = 22.sp, fontSize = 14.sp)
                 }
             }
         }
@@ -82,7 +83,7 @@ fun OptionalUpdateDialog(
             Column(Modifier.heightIn(max = 300.dp).verticalScroll(rememberScrollState())) {
                 Text(
                     status.release?.releaseNote?.takeIf { it.isNotBlank() } ?: "建议更新到最新版本。",
-                    color = Color.DarkGray,
+                    color = MaterialTheme.colorScheme.onSurface,
                     lineHeight = 22.sp,
                 )
                 Spacer(Modifier.height(16.dp))
@@ -108,7 +109,7 @@ private fun UpdateActionArea(status: UpdateStatus, onDownload: () -> Unit, onIns
                 color = TaotaoCoral,
             )
             Spacer(Modifier.height(10.dp))
-            Text("正在下载 ${status.progressPercent}%", color = Color.Gray, fontSize = 13.sp)
+            Text("正在下载 ${status.progressPercent}%", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
         }
 
         UpdateStage.READY -> Button(onClick = onInstall, modifier = Modifier.fillMaxWidth()) { Text("立即安装") }

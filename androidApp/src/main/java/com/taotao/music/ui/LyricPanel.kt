@@ -15,6 +15,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -38,9 +39,6 @@ import com.taotao.music.model.Lyric
 import com.taotao.music.model.LyricLine
 import com.taotao.music.model.LyricWord
 
-/** 未唱到的字的颜色。比纯灰略暖，和高亮的珊瑚红同色系。 */
-private val DimText = Color(0xFFB9AEAB)
-
 /** 用户手动滚动后暂停自动跟随的时长，避免刚滑到别处就被拽回去。 */
 private const val ManualScrollGraceMs = 2_500L
 
@@ -60,8 +58,8 @@ fun LyricPane(
     if (lyric.isEmpty) {
         Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("♪", fontSize = 40.sp, color = DimText)
-                Text("暂无歌词", color = Color.Gray, fontSize = 14.sp, modifier = Modifier.padding(top = 10.dp))
+                Text("♪", fontSize = 40.sp, color = LyricDim)
+                Text("暂无歌词", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp, modifier = Modifier.padding(top = 10.dp))
             }
         }
         return
@@ -137,7 +135,7 @@ private fun LyricRow(
     }
     Text(
         text = line.text,
-        style = style.copy(color = if (active) TaotaoCoral else DimText),
+        style = style.copy(color = if (active) TaotaoCoral else LyricDim),
         modifier = rowModifier,
     )
 }
@@ -158,12 +156,15 @@ private fun KaraokeLine(
     style: TextStyle,
     modifier: Modifier = Modifier,
 ) {
+    // 主题色在这里取一次，别在每个字的循环里读 —— brushFor 不是 Composable。
+    val sung = MaterialTheme.colorScheme.primary
+    val unsung = LyricDim
     FlowRow(
         modifier = modifier,
         horizontalArrangement = if (style.textAlign == TextAlign.Center) Arrangement.Center else Arrangement.Start,
     ) {
         words.forEach { word ->
-            Text(text = word.text, style = style.copy(brush = brushFor(fractionOf(word, positionMs))))
+            Text(text = word.text, style = style.copy(brush = brushFor(fractionOf(word, positionMs), sung, unsung)))
         }
     }
 }
@@ -181,16 +182,19 @@ private fun fractionOf(word: LyricWord, positionMs: Int): Float = when {
  *
  * 渐变停靠点必须严格递增，底层 LinearGradient 不接受重复位置，所以用一个极小的
  * 间隔做硬边；两端的纯色情况单独用 SolidColor，避免比例贴边时算出非法停靠点。
+ *
+ * 颜色由调用方传入而不是在这里读主题：这不是 Composable，而且逐字循环里
+ * 每个字都读一次主题是白花开销。
  */
-private fun brushFor(fraction: Float): Brush {
+private fun brushFor(fraction: Float, sung: Color, unsung: Color): Brush {
     val edge = fraction.coerceIn(0f, 1f)
-    if (edge <= EdgeEpsilon) return SolidColor(DimText)
-    if (edge >= 1f - EdgeEpsilon) return SolidColor(TaotaoCoral)
+    if (edge <= EdgeEpsilon) return SolidColor(unsung)
+    if (edge >= 1f - EdgeEpsilon) return SolidColor(sung)
     return Brush.horizontalGradient(
-        0f to TaotaoCoral,
-        edge to TaotaoCoral,
-        (edge + EdgeEpsilon) to DimText,
-        1f to DimText,
+        0f to sung,
+        edge to sung,
+        (edge + EdgeEpsilon) to unsung,
+        1f to unsung,
     )
 }
 

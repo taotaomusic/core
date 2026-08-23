@@ -6,6 +6,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.animation.fadeIn
@@ -51,6 +52,8 @@ import coil.compose.AsyncImage
 import com.taotao.music.model.AudioQuality
 import com.taotao.music.model.LyricParser
 import com.taotao.music.model.Song
+import com.taotao.music.data.AppearanceMode
+import com.taotao.music.data.AppearanceStore
 import com.taotao.music.data.CrashLog
 import com.taotao.music.data.CrashReporter
 import com.taotao.music.data.DownloadNotifier
@@ -86,6 +89,8 @@ fun TaotaoMusicApp() {
     val favoritesStore = remember { FavoritesStore(context) }
     val qualityStore = remember { QualityStore(context) }
     val downloadNotifier = remember { DownloadNotifier(context) }
+    val appearanceStore = remember { AppearanceStore(context) }
+    var appearance by remember { mutableStateOf(appearanceStore.mode()) }
     val scope = rememberCoroutineScope()
     var playbackSongs by remember { mutableStateOf(emptyList<Song>()) }
     var searchResults by remember { mutableStateOf(emptyList<Song>()) }
@@ -129,6 +134,13 @@ fun TaotaoMusicApp() {
 
     /** 播放状态由播放器事件驱动，不再轮询播放服务。 */
     val isPlaying = audioPlayer.isPlaying
+
+    /** 外观：跟随系统时读系统设置，手动选择则覆盖它。 */
+    val darkTheme = when (appearance) {
+        AppearanceMode.FOLLOW_SYSTEM -> isSystemInDarkTheme()
+        AppearanceMode.LIGHT -> false
+        AppearanceMode.DARK -> true
+    }
 
     /**
      * 临时切换当前这首歌的音质，不改默认设置。
@@ -438,7 +450,7 @@ fun TaotaoMusicApp() {
                     musicApi.search(query, quality = qualityStore.playbackQuality().value) { partial ->
                         // 服务端逐行下发，这里收到一首就渲染一首。切回主线程赋值，
                         // 并再次校验代次：期间用户可能已经发起了新搜索。
-                        scope.launch { if (generation == searchGeneration) searchResults = partial }
+                        scope.launch { if (generation == searchGeneration) searchResults = dedupeSongs(partial) }
                     }
                 }
             }
@@ -446,7 +458,7 @@ fun TaotaoMusicApp() {
             if (generation != searchGeneration) return@launch
             result
                 .onSuccess { found ->
-                    searchResults = found.songs
+                    searchResults = dedupeSongs(found.songs)
                     searchHasMore = found.hasMore
                     searchTotal = found.total
                     mergeFavorites(found.songs)
@@ -474,14 +486,14 @@ fun TaotaoMusicApp() {
             val result = runCatching {
                 withContext(Dispatchers.IO) {
                     musicApi.search(query, page = nextPage, quality = qualityStore.playbackQuality().value) { partial ->
-                        scope.launch { if (generation == searchGeneration) searchResults = base + partial }
+                        scope.launch { if (generation == searchGeneration) searchResults = dedupeSongs(base + partial) }
                     }
                 }
             }
             if (generation != searchGeneration) return@launch
             result
                 .onSuccess { found ->
-                    searchResults = base + found.songs
+                    searchResults = dedupeSongs(base + found.songs)
                     searchPage = nextPage
                     // 上游可能给出空页却仍然说 hasMore，那样会无限拉；空页直接收口。
                     searchHasMore = found.hasMore && found.songs.isNotEmpty()
@@ -554,9 +566,9 @@ fun TaotaoMusicApp() {
                 onDismiss = { updateManager.dismiss() },
             )
         }
-        Surface(color = TaotaoBackground, modifier = Modifier.fillMaxSize()) {
+        Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize()) {
             Scaffold(
-                containerColor = TaotaoBackground,
+                containerColor = MaterialTheme.colorScheme.background,
                 snackbarHost = { SnackbarHost(snackbarHostState) },
                 bottomBar = {
                     Column {
@@ -681,8 +693,13 @@ fun TaotaoMusicApp() {
                 SettingsPage(
                     playbackQuality = playbackQuality,
                     downloadQuality = downloadQuality,
+                    appearance = appearance,
                     onPickPlaybackQuality = { qualitySheet = QualitySheetKind.PLAYBACK_DEFAULT },
                     onPickDownloadQuality = { qualitySheet = QualitySheetKind.DOWNLOAD_DEFAULT },
+                    onPickAppearance = { mode ->
+                        appearance = mode
+                        appearanceStore.setMode(mode)
+                    },
                     onBack = { showSettingsPage = false },
                 )
             } else if (bottomTab == 1) {
@@ -714,7 +731,7 @@ fun TaotaoMusicApp() {
                 if (selectedTab == 2) {
                     SectionTitle("本地音乐")
                     if (downloadedSongs.isEmpty()) {
-                        Text("还没有下载歌曲", color = Color.Gray)
+                        Text("还没有下载歌曲", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     } else {
                         downloadedSongs.forEachIndexed { index, song ->
                             SongListItem(
@@ -729,7 +746,7 @@ fun TaotaoMusicApp() {
                         }
                     }
                 }
-                Text("在线搜索歌曲，下载后可在无网络时播放", color = Color.Gray, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
+                Text("在线搜索歌曲，下载后可在无网络时播放", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
                 SectionTitle("今日推荐")
                 RecommendationCard()
                 Spacer(Modifier.height(10.dp))
@@ -839,10 +856,29 @@ fun TaotaoMusicApp() {
 /** 音质面板的三种用途。 */
 private enum class QualitySheetKind { CURRENT_SONG, PLAYBACK_DEFAULT, DOWNLOAD_DEFAULT }
 
+/**
+ * 按歌曲 ID 去重，保留首次出现的顺序。
+ *
+ * 上游同一个关键词的相邻页之间会给出重复歌曲，同一页里也可能出现同一首歌的多个版本。
+ * 重复本身只是噪音，但 `LazyColumn` 的 key 必须唯一 —— 重复 ID 会直接抛
+ * `IllegalArgumentException: Key "..." was already used` 把界面搞崩。
+ *
+ * 线上真的崩过一次：把列表 key 从「ID-标题」简化成裸 ID 的同时又加了分页，
+ * 两个改动凑在一起才暴露。去重放在数据侧而不是靠 key 拼接来掩盖，
+ * 因为同一首歌显示两遍本身就不对。
+ *
+ * `remoteId` 为空的本地歌全部保留：它们在列表里按下标取负数做 key，不会互相冲突。
+ */
+private fun dedupeSongs(songs: List<Song>): List<Song> {
+    val seen = HashSet<Long>(songs.size)
+    // remoteId 是别的模块的 public 属性，Kotlin 不做智能转换，先取成局部变量。
+    return songs.filter { song -> song.remoteId?.let(seen::add) ?: true }
+}
+
 @Composable private fun HomeHeader() {
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.weight(1f)) {
-            Text("早上好，桃桃", color = Color.Gray, fontSize = 14.sp)
+            Text("早上好，桃桃", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
             Text("听点喜欢的", fontSize = 28.sp, fontWeight = FontWeight.Bold)
         }
         IconButton(onClick = {}) { Icon(Icons.Default.NotificationsNone, "通知") }
@@ -872,31 +908,31 @@ private fun MinePage(
         Text("我的", fontSize = 30.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(28.dp))
         Row(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(Color.White)
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(MaterialTheme.colorScheme.surface)
                 .clickable(onClick = onOpenSettings).padding(18.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(Icons.Default.Person, null, tint = TaotaoCoral)
             Text("设置", modifier = Modifier.weight(1f).padding(start = 12.dp))
-            Text("音质与播放", color = Color.Gray, fontSize = 12.sp)
+            Text("音质与播放", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
         }
         Spacer(Modifier.height(14.dp))
         // 测试机无法连接 adb，崩溃堆栈只能在应用内查看和复制。
         Row(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(Color.White)
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(MaterialTheme.colorScheme.surface)
                 .clickable(enabled = crashLogs.isNotEmpty()) { showCrashLogs = true }.padding(18.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(Icons.Default.BugReport, "崩溃日志", tint = if (crashLogs.isEmpty()) Color.Gray else TaotaoCoral)
+            Icon(Icons.Default.BugReport, "崩溃日志", tint = if (crashLogs.isEmpty()) MaterialTheme.colorScheme.onSurfaceVariant else TaotaoCoral)
             Text(
                 if (crashLogs.isEmpty()) "崩溃日志（暂无记录）" else "崩溃日志（${crashLogs.size} 条）",
                 modifier = Modifier.weight(1f).padding(start = 12.dp),
-                color = if (crashLogs.isEmpty()) Color.Gray else Color.Unspecified,
+                color = if (crashLogs.isEmpty()) MaterialTheme.colorScheme.onSurfaceVariant else Color.Unspecified,
             )
         }
         Spacer(Modifier.height(14.dp))
         Row(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(Color.White)
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(MaterialTheme.colorScheme.surface)
                 .clickable(enabled = !checking, onClick = onCheckUpdate).padding(18.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -905,11 +941,11 @@ private fun MinePage(
             if (checking) {
                 CircularProgressIndicator(Modifier.size(16.dp), color = TaotaoCoral, strokeWidth = 2.dp)
             } else {
-                Text("当前 $versionName", color = Color.Gray, fontSize = 12.sp)
+                Text("当前 $versionName", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
             }
         }
         Spacer(Modifier.height(14.dp))
-        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(Color.White).clickable(onClick = onLogout).padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(MaterialTheme.colorScheme.surface).clickable(onClick = onLogout).padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.AutoMirrored.Filled.ExitToApp, "退出登录", tint = TaotaoCoral)
             Text("退出登录", modifier = Modifier.padding(start = 12.dp))
         }
@@ -943,7 +979,7 @@ private fun MinePage(
         listOf("为你推荐", "每日推荐", "歌单").forEachIndexed { index, label ->
             Text(label, fontSize = 16.sp,
                 fontWeight = if (selectedIndex == index) FontWeight.Bold else FontWeight.Normal,
-                color = if (selectedIndex == index) TaotaoCoral else Color.Gray,
+                color = if (selectedIndex == index) TaotaoCoral else MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.clickable { onSelected(index) }.padding(vertical = 8.dp))
         }
     }
@@ -958,7 +994,7 @@ private fun MinePage(
         Column(Modifier.weight(1f)) {
             Text("专属歌单", color = TaotaoCoral, fontSize = 13.sp, fontWeight = FontWeight.Bold)
             Text("给今天的你\n一点好心情", fontSize = 24.sp, fontWeight = FontWeight.Bold, lineHeight = 31.sp)
-            Text("20 首 · 精选推荐", color = Color.DarkGray, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
+            Text("20 首 · 精选推荐", color = MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
         }
         AlbumArt(Color(0xFFFFB4A2), 112.dp, 64.sp)
     }
@@ -1134,7 +1170,7 @@ private fun PlayerDetailPage(
                     if (song.vip) VipBadge(Modifier.padding(start = 8.dp))
                 }
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 5.dp)) {
-                    Text(song.artist, color = Color.Gray, fontSize = 14.sp, maxLines = 1)
+                    Text(song.artist, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp, maxLines = 1)
                     // 网络歌曲才有音质可言，本地文件的音质由文件本身决定。
                     if (song.remoteId != null && song.audioUri?.startsWith("file:") != true) {
                         QualityChip(playbackQuality, Modifier.padding(start = 10.dp), onPickQuality)
@@ -1151,10 +1187,10 @@ private fun PlayerDetailPage(
         val progress = if (durationMs > 0) positionMs.toFloat() / durationMs else 0f
         Slider(value = progress.coerceIn(0f, 1f), onValueChange = { dragging = true; positionMs = (it * durationMs).toInt() }, onValueChangeFinished = { dragging = false; audioPlayer.seekTo(positionMs) }, colors = SliderDefaults.colors(thumbColor = TaotaoCoral, activeTrackColor = TaotaoCoral))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(formatTime(positionSeconds * 1000), color = Color.Gray, fontSize = 12.sp)
+            Text(formatTime(positionSeconds * 1000), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
             Text(
                 formatTime(durationMs).takeIf { durationMs > 0 } ?: "--:--",
-                color = Color.Gray,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 12.sp,
             )
         }
@@ -1164,7 +1200,7 @@ private fun PlayerDetailPage(
                 Icon(
                     Icons.Default.Repeat,
                     if (repeatMode == androidx.media3.common.Player.REPEAT_MODE_ONE) "单曲循环" else "循环",
-                    tint = if (repeatMode == androidx.media3.common.Player.REPEAT_MODE_ONE) TaotaoCoral else Color.Gray,
+                    tint = if (repeatMode == androidx.media3.common.Player.REPEAT_MODE_ONE) TaotaoCoral else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             IconButton(onClick = onPrevious) { Icon(Icons.Default.SkipPrevious, "上一首", modifier = Modifier.size(34.dp)) }
@@ -1173,14 +1209,14 @@ private fun PlayerDetailPage(
             }
             IconButton(onClick = onNext) { Icon(Icons.Default.SkipNext, "下一首", modifier = Modifier.size(34.dp)) }
             IconButton(onClick = { showQueue = true }) {
-                Icon(Icons.AutoMirrored.Filled.QueueMusic, "播放队列", tint = if (queue.isEmpty()) Color.Gray else TaotaoCoral)
+                Icon(Icons.AutoMirrored.Filled.QueueMusic, "播放队列", tint = if (queue.isEmpty()) MaterialTheme.colorScheme.onSurfaceVariant else TaotaoCoral)
             }
         }
         Spacer(Modifier.height(10.dp))
-        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Color.White).clickable(onClick = onDownload).padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.surface).clickable(onClick = onDownload).padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Default.MusicNote, null, tint = TaotaoCoral)
             Text("下载歌曲、封面和歌词", modifier = Modifier.weight(1f).padding(start = 12.dp), fontWeight = FontWeight.Medium)
-            Icon(Icons.Default.Download, "下载", tint = Color.Gray)
+            Icon(Icons.Default.Download, "下载", tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Spacer(Modifier.height(16.dp))
     }
@@ -1206,14 +1242,14 @@ private fun PlaybackQueueSheet(
     onDismiss: () -> Unit,
     onItemClick: (Int) -> Unit,
 ) {
-    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = TaotaoBackground) {
+    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = MaterialTheme.colorScheme.background) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 22.dp)) {
             Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("播放队列", fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                Text("${queue.size} 首", color = Color.Gray, fontSize = 13.sp)
+                Text("${queue.size} 首", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
             }
             if (queue.isEmpty()) {
-                Text("队列为空", color = Color.Gray, modifier = Modifier.padding(vertical = 24.dp))
+                Text("队列为空", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(vertical = 24.dp))
             } else {
                 LazyColumn(Modifier.fillMaxWidth().heightIn(max = 420.dp)) {
                     itemsIndexed(queue) { index, item ->
@@ -1227,7 +1263,7 @@ private fun PlaybackQueueSheet(
                             } else {
                                 Text(
                                     "${index + 1}",
-                                    color = Color.Gray,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     fontSize = 13.sp,
                                     textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                                     modifier = Modifier.width(18.dp),
@@ -1240,9 +1276,9 @@ private fun PlaybackQueueSheet(
                                     color = if (index == currentIndex) TaotaoCoral else Color.Unspecified,
                                     maxLines = 1,
                                 )
-                                Text(item.artist, color = Color.Gray, fontSize = 12.sp, maxLines = 1)
+                                Text(item.artist, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, maxLines = 1)
                             }
-                            Text(item.duration, color = Color.Gray, fontSize = 12.sp)
+                            Text(item.duration, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
                         }
                     }
                 }

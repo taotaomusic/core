@@ -16,6 +16,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -93,7 +94,7 @@ fun SearchPage(
             history.forEach { item ->
                 ListItem(
                     headlineContent = { Text(item) },
-                    leadingContent = { Icon(Icons.Default.Search, null, tint = Color.Gray) },
+                    leadingContent = { Icon(Icons.Default.Search, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
                     trailingContent = { TextButton(onClick = { onHistoryRemove(item) }) { Text("删除") } },
                     modifier = Modifier.fillMaxWidth().clickable { onHistoryClick(item) },
                 )
@@ -161,14 +162,14 @@ fun SearchPage(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             CircularProgressIndicator(Modifier.size(20.dp), color = TaotaoCoral)
-                            Text("正在加载更多…", color = Color.Gray, fontSize = 13.sp, modifier = Modifier.padding(start = 10.dp))
+                            Text("正在加载更多…", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp, modifier = Modifier.padding(start = 10.dp))
                         }
                     }
                 } else if (songs.isNotEmpty() && !hasMore) {
                     item(key = "list-end") {
                         Text(
                             if (total > 0) "已显示全部 ${songs.size} 首（共搜到 $total 首）" else "没有更多了",
-                            color = Color.Gray,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontSize = 12.sp,
                             modifier = Modifier.fillMaxWidth().padding(vertical = 18.dp),
                             textAlign = TextAlign.Center,

@@ -1,6 +1,7 @@
 package com.taotao.music.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -71,7 +72,11 @@ private const val MIN_PASSWORD_LENGTH = 6
  * 注册模式额外要求确认密码，防止密码输错后账号再也进不去。
  */
 @Composable
-fun AuthPage(api: TencentMusicApi, onAuthenticated: (TencentMusicApi.TokenPair) -> Unit) {
+fun AuthPage(
+    api: TencentMusicApi,
+    darkTheme: Boolean = isSystemInDarkTheme(),
+    onAuthenticated: (TencentMusicApi.TokenPair) -> Unit,
+) {
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var confirmPassword by remember { mutableStateOf("") }
@@ -105,8 +110,8 @@ fun AuthPage(api: TencentMusicApi, onAuthenticated: (TencentMusicApi.TokenPair) 
         }
     }
 
-    TaotaoTheme {
-        Surface(color = TaotaoBackground, modifier = Modifier.fillMaxSize()) {
+    TaotaoTheme(darkTheme = darkTheme) {
+        Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize()) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -123,14 +128,14 @@ fun AuthPage(api: TencentMusicApi, onAuthenticated: (TencentMusicApi.TokenPair) 
                 Text("桃桃音乐", fontSize = 27.sp, fontWeight = FontWeight.Bold)
                 Text(
                     if (registerMode) "注册后即可收藏和离线下载" else "登录后同步你的收藏与下载",
-                    color = Color.Gray,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 14.sp,
                     textAlign = TextAlign.Center,
                     modifier = Modifier.padding(top = 8.dp),
                 )
                 Spacer(Modifier.height(30.dp))
                 Column(
-                    Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp)).background(Color.White).padding(20.dp),
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp)).background(MaterialTheme.colorScheme.surface).padding(20.dp),
                 ) {
                     OutlinedTextField(
                         value = username,

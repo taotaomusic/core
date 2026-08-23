@@ -24,6 +24,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
@@ -100,26 +101,26 @@ fun SongListItem(
                 // 付费歌曲搜索结果里就有标记，不用等点开才发现放不出来。
                 if (song.vip) VipBadge(Modifier.padding(start = 6.dp))
             }
-            Text(song.artist, color = Color.Gray, fontSize = 13.sp, maxLines = 1, modifier = Modifier.padding(top = 3.dp))
+            Text(song.artist, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp, maxLines = 1, modifier = Modifier.padding(top = 3.dp))
         }
-        Text(song.duration, color = Color.Gray, fontSize = 12.sp)
+        Text(song.duration, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
         if (onToggleFavorite != null) {
             IconButton(onClick = onToggleFavorite, modifier = Modifier.size(36.dp)) {
                 Icon(
                     if (favorited) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
                     if (favorited) "取消收藏" else "收藏",
-                    tint = if (favorited) TaotaoCoral else Color.Gray,
+                    tint = if (favorited) TaotaoCoral else MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(20.dp),
                 )
             }
         }
         if (onDelete != null) {
             IconButton(onClick = onDelete, modifier = Modifier.size(36.dp)) {
-                Icon(Icons.Default.DeleteOutline, "删除", tint = Color.Gray, modifier = Modifier.size(20.dp))
+                Icon(Icons.Default.DeleteOutline, "删除", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
             }
         }
         if (onToggleFavorite == null && onDelete == null) {
-            Icon(Icons.Default.MoreVert, "更多", tint = Color.Gray, modifier = Modifier.padding(start = 8.dp))
+            Icon(Icons.Default.MoreVert, "更多", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 8.dp))
         }
     }
 }
@@ -148,13 +149,13 @@ fun MiniPlayer(
     onTogglePlaying: () -> Unit,
 ) {
     Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(Color.White).clickable(onClick = onOpen).padding(10.dp),
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(MaterialTheme.colorScheme.surface).clickable(onClick = onOpen).padding(10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         AlbumArt(Color(song.color), 44.dp, 22.sp, song.coverUri)
         Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
             Text(song.title, fontWeight = FontWeight.Bold, maxLines = 1)
-            Text(song.artist, color = Color.Gray, fontSize = 12.sp, maxLines = 1)
+            Text(song.artist, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, maxLines = 1)
         }
         IconButton(onClick = onPrevious) { Icon(Icons.Default.SkipPrevious, "上一首") }
         IconButton(onClick = onTogglePlaying) { Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, "播放") }
@@ -182,7 +183,7 @@ fun MusicSearchBar(
                 .then(focusRequester?.let { Modifier.focusRequester(it) } ?: Modifier)
                 .onFocusChanged { if (it.isFocused) onFocus() },
             singleLine = true,
-            placeholder = { Text("搜索歌曲或歌手", color = Color.Gray) },
+            placeholder = { Text("搜索歌曲或歌手", color = MaterialTheme.colorScheme.onSurfaceVariant) },
             leadingIcon = { Icon(Icons.Default.Search, "搜索") },
         )
         TextButton(onClick = onSearch) { Text("搜索", color = TaotaoCoral) }
@@ -195,11 +196,11 @@ fun SearchSkeletonList() {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(top = 18.dp)) {
         repeat(6) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(48.dp).clip(RoundedCornerShape(12.dp)).background(TaotaoSkeleton))
+                Box(Modifier.size(48.dp).clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceVariant))
                 Column(Modifier.padding(start = 13.dp)) {
-                    Box(Modifier.width(150.dp).height(16.dp).clip(RoundedCornerShape(8.dp)).background(TaotaoSkeleton))
+                    Box(Modifier.width(150.dp).height(16.dp).clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.surfaceVariant))
                     Spacer(Modifier.height(8.dp))
-                    Box(Modifier.width(90.dp).height(12.dp).clip(RoundedCornerShape(6.dp)).background(TaotaoSkeleton))
+                    Box(Modifier.width(90.dp).height(12.dp).clip(RoundedCornerShape(6.dp)).background(MaterialTheme.colorScheme.surfaceVariant))
                 }
             }
         }
@@ -211,7 +212,7 @@ fun SearchSkeletonList() {
 fun PageTitle(title: String, subtitle: String? = null, modifier: Modifier = Modifier) {
     Column(modifier = modifier.padding(vertical = 16.dp)) {
         Text(title, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-        if (!subtitle.isNullOrBlank()) Text(subtitle, color = Color.Gray, fontSize = 14.sp)
+        if (!subtitle.isNullOrBlank()) Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
     }
 }
 
@@ -223,7 +224,7 @@ fun CardWithTitle(
     titleColor: Color = TaotaoCoral,
     content: @Composable () -> Unit,
 ) {
-    Column(modifier = modifier.clip(RoundedCornerShape(16.dp)).background(Color.White)) {
+    Column(modifier = modifier.clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.surface)) {
         Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(title, fontSize = 18.sp, fontWeight = FontWeight.Bold, color = titleColor)
         }
@@ -239,12 +240,12 @@ fun EmptyStateView(title: String = "暂无数据", description: String? = null, 
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        Text("♫", fontSize = 48.sp, color = Color.Gray)
+        Text("♫", fontSize = 48.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(12.dp))
-        Text(title, fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.Gray)
+        Text(title, fontSize = 18.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
         if (!description.isNullOrBlank()) {
             Spacer(Modifier.height(6.dp))
-            Text(description, color = Color.Gray, fontSize = 14.sp)
+            Text(description, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
         }
     }
 }
@@ -258,7 +259,7 @@ fun PagerDots(current: Int, total: Int, modifier: Modifier = Modifier) {
                 Modifier
                     .size(if (index == current) 8.dp else 6.dp)
                     .clip(CircleShape)
-                    .background(if (index == current) TaotaoCoral else Color.Gray.copy(alpha = 0.35f)),
+                    .background(if (index == current) TaotaoCoral else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)),
             )
         }
     }
