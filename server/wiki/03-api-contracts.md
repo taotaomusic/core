@@ -71,11 +71,13 @@ Content-Type: application/json
 ```json
 {
   "username": "用户名",
-  "password": "至少6位密码"
+  "password": "至少6位密码",
+  "email": "name@example.com",
+  "verificationCode": "123456"
 }
 ```
 
-成功 HTTP 201。`accessToken`、`refreshToken`、`expiresIn` 和 `user` 必须平铺在 `data` 下。
+成功 HTTP 201。新注册必须额外传 `email` 与 `verificationCode`；先调用 `POST /api/v1/auth/email-verification` 发送六位验证码。验证码仅存服务进程内存、10 分钟过期，校验成功即删除。`accessToken`、`refreshToken`、`expiresIn` 和 `user` 必须平铺在 `data` 下。
 
 ### 登录
 

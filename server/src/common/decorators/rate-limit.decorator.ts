@@ -6,6 +6,7 @@ export const RATE_LIMIT_METADATA_KEY = "taotao:rate-limit";
  * 限流分桶。
  *
  * - `auth:<scope>`：登录/注册，按来源地址 10 次 / 15 分钟
+ * - `email-verification`：发验证码，按来源地址 5 次 / 15 分钟
  * - `app`：客户端引导与安装包下载，按设备号 60 次 + 按来源地址 900 次 / 15 分钟
  * - `admin`：发布管理，按来源地址 60 次 / 15 分钟
  * - `image`：图片生成，按用户 10 次 + 按来源地址 60 次 / 15 分钟
@@ -14,6 +15,6 @@ export const RATE_LIMIT_METADATA_KEY = "taotao:rate-limit";
  * 各用途计数器必须互相独立：更新检查和图片轮询都是周期性调用，
  * 与登录或图片创建共用会烧掉其它用途的额度。
  */
-export type RateLimitBucket = `auth:${string}` | "app" | "admin" | "image" | "image-status";
+export type RateLimitBucket = `auth:${string}` | "email-verification" | "app" | "admin" | "image" | "image-status";
 
 export const RateLimit = (bucket: RateLimitBucket) => SetMetadata(RATE_LIMIT_METADATA_KEY, bucket);

@@ -6,10 +6,15 @@ import { RateLimit } from "../common/decorators/rate-limit.decorator";
 import type { SessionUser } from "../common/request.types";
 import { AuthService } from "./auth.service";
 import { UsersRepository } from "./users.repository";
+import { EmailVerificationService } from "./email-verification.service";
 
 /** 用户名 3 至 32 位，允许字母数字下划线与汉字。与迁移前完全一致。 */
 const USERNAME_PATTERN = /^[\w一-龥]{3,32}$/;
 const MIN_PASSWORD_LENGTH = 6;
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const VERIFICATION_CODE_PATTERN = /^\d{6}$/;
+/** 只接受常见 QQ 邮箱域名，避免任意自定义域名被用来批量注册。 */
+const ALLOWED_EMAIL_DOMAINS = new Set(["qq.com", "foxmail.com"]);
 
 /**
  * 认证接口。
@@ -24,7 +29,19 @@ export class AuthController {
   constructor(
     private readonly auth: AuthService,
     private readonly users: UsersRepository,
+    private readonly emailVerification: EmailVerificationService,
   ) {}
+
+  /** 向邮箱发送注册验证码。邮箱统一转小写，保证同一地址不会绕过冷却与唯一约束。 */
+  @Public()
+  @RateLimit("email-verification")
+  @Post("email-verification")
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async sendEmailVerification(@Body() body: Record<string, unknown>): Promise<void> {
+    const email = this.emailOf(body?.email);
+    if (!this.isAllowedEmail(email)) throw ApiErrors.badRequest(4008, "仅支持 QQ 邮箱（qq.com 或 foxmail.com）");
+    await this.emailVerification.send(email);
+  }
 
   @Public()
   @RateLimit("auth:register")
@@ -33,15 +50,21 @@ export class AuthController {
   async register(@Body() body: Record<string, unknown>) {
     const username = this.auth.textOf(body?.username, true);
     const password = this.auth.textOf(body?.password);
-    if (!USERNAME_PATTERN.test(username) || password.length < MIN_PASSWORD_LENGTH) {
-      throw ApiErrors.badRequest(4003, "用户名为3至32位，密码至少6位");
+    const email = this.emailOf(body?.email);
+    const verificationCode = this.auth.textOf(body?.verificationCode);
+    if (!USERNAME_PATTERN.test(username) || password.length < MIN_PASSWORD_LENGTH || !this.isAllowedEmail(email)) {
+      throw ApiErrors.badRequest(4003, "用户名为3至32位，密码至少6位，且须填写 QQ 邮箱");
     }
     // 这次查重只是为了在常见路径上给出准确的 409；真正的兜底是 users.create 里
     // 对唯一约束冲突的翻译 —— 两步之间夹着约 100ms 的 scrypt，并发注册挡不住。
     if (await this.users.findByUsername(username)) throw ApiErrors.conflict(4090, "用户名已存在");
+    if (await this.users.findByEmail(email)) throw ApiErrors.conflict(4092, "邮箱已注册");
+    if (!VERIFICATION_CODE_PATTERN.test(verificationCode) || !this.emailVerification.consume(email, verificationCode)) {
+      throw ApiErrors.badRequest(4009, "邮箱验证码错误或已过期");
+    }
 
     const credentials = this.auth.hashPassword(password);
-    const user = await this.users.create(username, credentials.hash, credentials.salt);
+    const user = await this.users.create(username, email, credentials.hash, credentials.salt);
     // accessToken / refreshToken / expiresIn 必须与 user 平铺在同一层 data 下：
     // 客户端用 getString 硬取，包一层就会抛异常。
     return { user, ...(await this.auth.issueTokens(user)) };
@@ -93,5 +116,14 @@ export class AuthController {
   me(@CurrentUser() user: SessionUser | undefined) {
     if (!user) throw ApiErrors.unauthorized(4010, "未登录");
     return user;
+  }
+
+  private emailOf(value: unknown): string {
+    return this.auth.textOf(value, true).toLowerCase();
+  }
+
+  private isAllowedEmail(email: string): boolean {
+    const domain = email.slice(email.lastIndexOf("@") + 1);
+    return EMAIL_PATTERN.test(email) && ALLOWED_EMAIL_DOMAINS.has(domain);
   }
 }

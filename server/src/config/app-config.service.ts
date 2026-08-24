@@ -44,6 +44,13 @@ export class AppConfigService {
   /** ApiSweet 图片生成服务地址。API Key 存在数据库的 api_key 表中。 */
   readonly apiSweetBaseUrl: string;
 
+  /** 注册验证码邮件的 SMTP 配置；缺失时注册会保持关闭，不能绕过邮箱验证。 */
+  readonly smtpHost: string;
+  readonly smtpPort: number;
+  readonly smtpUser: string;
+  readonly smtpPassword: string;
+  readonly smtpFrom: string;
+
   /**
    * 上游接口基地址。
    * 搜索与播放链接用 v3（v3 的路径里不带版本号前缀），歌词仍用 v2 ——
@@ -72,5 +79,15 @@ export class AppConfigService {
       /\/+$/,
       "",
     );
+    this.smtpHost = String(config.get("SMTP_HOST") ?? "");
+    this.smtpPort = Number(config.get("SMTP_PORT") ?? 587);
+    this.smtpUser = String(config.get("SMTP_USER") ?? "");
+    this.smtpPassword = String(config.get("SMTP_PASSWORD") ?? "");
+    this.smtpFrom = String(config.get("SMTP_FROM") ?? "");
+  }
+
+  /** 发信配置必须完整，避免错误部署时静默跳过邮箱验证。 */
+  get isSmtpConfigured(): boolean {
+    return !!this.smtpHost && !!this.smtpUser && !!this.smtpPassword && !!this.smtpFrom;
   }
 }

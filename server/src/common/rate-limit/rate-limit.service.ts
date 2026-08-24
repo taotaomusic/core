@@ -27,6 +27,11 @@ export class RateLimitService {
     return this.allow(`auth:${scope}:${address}`, 10, 15 * 60_000);
   }
 
+  /** 验证码邮件是有成本资源，单个来源地址每 15 分钟最多 5 次。 */
+  allowEmailVerification(address: string): boolean {
+    return this.allow(`email-verification:${address}`, 5, 15 * 60_000);
+  }
+
   /**
    * 客户端引导与安装包下载，两层：
    * 内层按设备号，防止单个客户端异常轮询；外层按来源地址兜底，防止伪造设备号刷接口。

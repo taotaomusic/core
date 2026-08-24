@@ -25,6 +25,10 @@ export class UsersRepository {
     );
   }
 
+  findByEmail(email: string): Promise<UserRecord | undefined> {
+    return this.database.first<UserRecord>(`SELECT id, username, ${CREATED_AT} FROM users WHERE email = $1`, [email]);
+  }
+
   findById(id: number): Promise<UserRecord | undefined> {
     return this.database.first<UserRecord>(`SELECT id, username, ${CREATED_AT} FROM users WHERE id = $1`, [id]);
   }
@@ -36,12 +40,12 @@ export class UsersRepository {
    * 最后插入，连接池下两个同名注册会双双通过查重，第二条 INSERT 撞约束。
    * 不翻译的话会被全局过滤器归成 502，而契约要求 409/4090。
    */
-  async create(username: string, passwordHash: string, passwordSalt: string): Promise<UserRecord> {
+  async create(username: string, email: string, passwordHash: string, passwordSalt: string): Promise<UserRecord> {
     try {
       const created = await this.database.first<UserRecord>(
-        `INSERT INTO users (username, password_hash, password_salt) VALUES ($1, $2, $3)
+        `INSERT INTO users (username, email, password_hash, password_salt) VALUES ($1, $2, $3, $4)
          RETURNING id, username, ${CREATED_AT}`,
-        [username, passwordHash, passwordSalt],
+        [username, email, passwordHash, passwordSalt],
       );
       return created!;
     } catch (error) {

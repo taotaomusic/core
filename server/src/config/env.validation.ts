@@ -23,5 +23,9 @@ export function validateEnvironment(config: Record<string, unknown>): Record<str
   if (!/^postgres(ql)?:\/\//.test(databaseUrl)) {
     throw new Error(`DATABASE_URL 必须是 postgres:// 或 postgresql:// 开头：${databaseUrl}`);
   }
+  const smtpPort = Number(config.SMTP_PORT ?? 587);
+  if (!Number.isInteger(smtpPort) || smtpPort <= 0 || smtpPort > 65535) {
+    throw new Error(`SMTP_PORT 不合法：${config.SMTP_PORT}`);
+  }
   return config;
 }

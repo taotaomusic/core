@@ -37,6 +37,11 @@ export async function runMigrations(pool: Pool): Promise<void> {
         created_at    timestamptz NOT NULL DEFAULT now()
       );
 
+      -- 旧账号没有邮箱也仍可登录；新注册账号必须在插入时写入已验证邮箱。
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS email text;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_unique
+        ON users (email) WHERE email IS NOT NULL;
+
       CREATE TABLE IF NOT EXISTS refresh_tokens (
         id         integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
         user_id    integer NOT NULL REFERENCES users(id) ON DELETE CASCADE,
