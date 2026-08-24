@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -86,26 +87,38 @@ fun AlbumArt(color: Color, size: Dp, iconSize: TextUnit, imageUri: String? = nul
 }
 
 /**
- * 歌曲列表项，搜索结果和本地音乐共用。
+ * 统一歌曲行。
  *
- * [favorited] / [onToggleFavorite] / [onDelete] 都带默认值：不传即维持原来的样子
- * （末尾是那个纯装饰的更多图标）。本地文件没有服务端 ID 时本来就不能收藏。
- *
- * [downloaded] 为真时加一个标记：搜索结果里看得见"这首已经下过了"，
- * 才不会重复下载或以为在走流量。
+ * 搜索、收藏、本地、历史记录和播放队列都使用这个骨架，避免封面大小、行高、标题层级和
+ * 选中颜色在不同页面逐渐分叉。各列表只通过 [subtitle] 和 [trailingContent] 注入自身语义。
  */
 @Composable
-fun SongListItem(
+fun SongRow(
     song: Song,
-    active: Boolean,
-    favorited: Boolean = false,
+    active: Boolean = false,
     downloaded: Boolean = false,
-    onToggleFavorite: (() -> Unit)? = null,
-    onDelete: (() -> Unit)? = null,
+    subtitle: String = song.artist,
+    modifier: Modifier = Modifier,
     onClick: () -> Unit,
+    trailingContent: @Composable RowScope.() -> Unit = {},
 ) {
+    val backgroundColor by animateColorAsState(
+        targetValue = if (active) TaotaoCoral.copy(alpha = 0.10f) else Color.Transparent,
+        animationSpec = taotaoTween(AnimationDurations.MICRO),
+        label = "歌曲行背景",
+    )
+    val titleColor by animateColorAsState(
+        targetValue = if (active) TaotaoCoral else MaterialTheme.colorScheme.onSurface,
+        animationSpec = taotaoTween(AnimationDurations.MICRO),
+        label = "歌曲行标题",
+    )
     Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).clickable(onClick = onClick).padding(vertical = 9.dp),
+        modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(backgroundColor)
+            .clickable(onClick = onClick)
+            .padding(vertical = 9.dp, horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         AlbumArt(Color(song.color), 48.dp, 24.sp, song.coverUri)
@@ -114,6 +127,7 @@ fun SongListItem(
                 Text(
                     song.title,
                     fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
+                    color = titleColor,
                     maxLines = 1,
                     modifier = Modifier.weight(1f, fill = false),
                 )
@@ -128,9 +142,30 @@ fun SongListItem(
                     )
                 }
             }
-            Text(song.artist, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp, maxLines = 1, modifier = Modifier.padding(top = 3.dp))
+            Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp, maxLines = 1, modifier = Modifier.padding(top = 3.dp))
         }
         Text(song.duration, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+        trailingContent()
+    }
+}
+
+/** 搜索与媒体库列表的兼容封装：收藏、删除等特有操作只在这里组合。 */
+@Composable
+fun SongListItem(
+    song: Song,
+    active: Boolean,
+    favorited: Boolean = false,
+    downloaded: Boolean = false,
+    onToggleFavorite: (() -> Unit)? = null,
+    onDelete: (() -> Unit)? = null,
+    onClick: () -> Unit,
+) {
+    SongRow(
+        song = song,
+        active = active,
+        downloaded = downloaded,
+        onClick = onClick,
+    ) {
         if (onToggleFavorite != null) {
             FavoriteButton(favorited = favorited, onClick = onToggleFavorite, size = 20.dp)
         }

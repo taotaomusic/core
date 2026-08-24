@@ -704,7 +704,18 @@ fun TaotaoMusicApp() {
         Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize()) {
             Scaffold(
                 containerColor = MaterialTheme.colorScheme.background,
-                snackbarHost = { SnackbarHost(snackbarHostState) },
+                // Material 3 默认 Snackbar 使用 inverseSurface；暗色主题下会变成浅色大块，
+                // 与应用的深色表面脱节。显式使用主题层级色，让所有全局反馈保持一致。
+                snackbarHost = {
+                    SnackbarHost(snackbarHostState) { snackbarData ->
+                        Snackbar(
+                            snackbarData = snackbarData,
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            contentColor = MaterialTheme.colorScheme.onSurface,
+                            actionColor = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                },
                 bottomBar = {
                     Column {
                     // 迷你播放器升起/落下要有过渡：原来是直接出现和消失，
@@ -1451,11 +1462,13 @@ private fun PlayerDetailPage(
     // 收藏状态由上层的本地缓存提供，不再每次进详情页就拉一遍完整收藏列表。
     // key 必须包含 song：positionMs / dragging 是 remember(song)，切歌后会换成新的 state 对象，
     // 若 ticker 不跟着重启，就会一直往已被丢弃的旧对象里写进度，界面上停在 0:00。
+    // 还必须包含 actualPlaying：队列最后一首结束后手动恢复时歌曲不变，只有播放态从
+    // false 变为 true；不重启 ticker 会出现音乐已经播放、详情页进度却停住的假象。
     //
     // 播放中按帧取进度而不是每 500 毫秒轮询一次：逐字高亮对延迟很敏感，
     // 500 毫秒的采样周期平均会慢上 250 毫秒，肉眼能明显看出歌词跟不上。
     // MediaController 的 currentPosition 是本地推算的，不走跨进程调用，逐帧读取代价很低。
-    LaunchedEffect(song, lifecycleOwner) {
+    LaunchedEffect(song, lifecycleOwner, actualPlaying) {
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
             while (isActive) {
                 if (audioPlayer.isPlaying) {
@@ -1751,115 +1764,115 @@ private fun PlaybackQueueSheet(
                 }
             }
             Spacer(Modifier.height(12.dp))
-            // 三类来源共享同一块面板区域；只做短促的透明度过渡，不让列表尺寸参与动画。
-            AnimatedContent(
-                targetState = selectedSource,
-                transitionSpec = { contentFadeIn() togetherWith contentFadeOut() using null },
-                label = "播放队列来源",
-            ) { source ->
-            when (source) {
-                1 -> PlaybackSourceList(
-                    songs = history.map { it.song },
-                    emptyText = "还没有播放记录",
-                    onItemClick = { index ->
-                        onDismiss()
-                        onPlayHistory(index)
-                    },
-                )
-                2 -> PlaybackSourceList(
-                    songs = localSongs,
-                    emptyText = "还没有本地歌曲",
-                    onItemClick = { index ->
-                        onDismiss()
-                        onPlayLocal(index)
-                    },
-                )
-                else -> {
-                    Row(
-                        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
-                            .background(MaterialTheme.colorScheme.surface).clickable(onClick = onCycleRepeat)
-                            .padding(horizontal = 14.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(
-                            if (repeatMode == androidx.media3.common.Player.REPEAT_MODE_ONE) Icons.Default.RepeatOne else Icons.Default.Repeat,
-                            null,
-                            tint = if (repeatMode == androidx.media3.common.Player.REPEAT_MODE_OFF) {
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                            } else {
-                                TaotaoCoral
+            /**
+             * 三类来源共享固定的正文视口，不能让空态、短列表和长列表反复改变 BottomSheet 高度。
+             * 顶部标题、Tab 和底部圆角的位置因而保持稳定；歌曲多时只在这块区域内滚动。
+             */
+            Box(Modifier.fillMaxWidth().height(PlaybackQueueContentHeight)) {
+                AnimatedContent(
+                    targetState = selectedSource,
+                    transitionSpec = { contentFadeIn() togetherWith contentFadeOut() using null },
+                    label = "播放队列来源",
+                ) { source ->
+                    when (source) {
+                        1 -> PlaybackSourceList(
+                            songs = history.map { it.song },
+                            emptyText = "还没有播放记录",
+                            onItemClick = { index ->
+                                onDismiss()
+                                onPlayHistory(index)
                             },
                         )
-                        Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
-                            Text(repeatModeTitle(repeatMode), fontWeight = FontWeight.Bold)
-                            Text(repeatModeDescription(repeatMode), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
-                        }
-                        Text("点击切换", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
+                        2 -> PlaybackSourceList(
+                            songs = localSongs,
+                            emptyText = "还没有本地歌曲",
+                            onItemClick = { index ->
+                                onDismiss()
+                                onPlayLocal(index)
+                            },
+                        )
+                        else -> CurrentPlaybackQueue(
+                            queue = queue,
+                            currentIndex = currentIndex,
+                            repeatMode = repeatMode,
+                            onCycleRepeat = onCycleRepeat,
+                            onItemClick = onItemClick,
+                            onRemoveItem = onRemoveItem,
+                        )
                     }
-                    Spacer(Modifier.height(8.dp))
-                    if (queue.isEmpty()) {
-                        Text("队列为空", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(vertical = 24.dp))
-                    } else {
-                        LazyColumn(Modifier.fillMaxWidth().heightIn(max = 360.dp)) {
-                            itemsIndexed(queue) { index, item ->
-                                val isCurrent = index == currentIndex
-                                val itemBackground by animateColorAsState(
-                                    targetValue = if (isCurrent) TaotaoCoral.copy(alpha = 0.10f) else Color.Transparent,
-                                    animationSpec = taotaoTween(AnimationDurations.MICRO),
-                                    label = "队列项背景",
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+        }
+    }
+}
+
+private val PlaybackQueueContentHeight = 360.dp
+
+@Composable
+private fun CurrentPlaybackQueue(
+    queue: List<Song>,
+    currentIndex: Int,
+    repeatMode: Int,
+    onCycleRepeat: () -> Unit,
+    onItemClick: (Int) -> Unit,
+    onRemoveItem: (Int) -> Unit,
+) {
+    Column(Modifier.fillMaxSize()) {
+        Row(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
+                .background(MaterialTheme.colorScheme.surface).clickable(onClick = onCycleRepeat)
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                if (repeatMode == androidx.media3.common.Player.REPEAT_MODE_ONE) Icons.Default.RepeatOne else Icons.Default.Repeat,
+                null,
+                tint = if (repeatMode == androidx.media3.common.Player.REPEAT_MODE_OFF) {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                } else {
+                    TaotaoCoral
+                },
+            )
+            Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                Text(repeatModeTitle(repeatMode), fontWeight = FontWeight.Bold)
+                Text(repeatModeDescription(repeatMode), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+            }
+            Text("点击切换", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
+        }
+        Spacer(Modifier.height(8.dp))
+        if (queue.isEmpty()) {
+            PlaybackQueueEmptyState("队列为空", Modifier.weight(1f))
+        } else {
+            LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
+                itemsIndexed(queue) { index, item ->
+                    val isCurrent = index == currentIndex
+                    SongRow(
+                        song = item,
+                        active = isCurrent,
+                        subtitle = if (isCurrent) "正在播放 · ${item.artist}" else item.artist,
+                        onClick = { onItemClick(index) },
+                    ) {
+                        if (isCurrent) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.VolumeUp,
+                                "正在播放",
+                                tint = TaotaoCoral,
+                                modifier = Modifier.padding(start = 8.dp).size(19.dp),
+                            )
+                        } else {
+                            IconButton(onClick = { onRemoveItem(index) }, modifier = Modifier.size(36.dp)) {
+                                Icon(
+                                    Icons.Default.Close,
+                                    "从播放列表移除",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(18.dp),
                                 )
-                                val itemTitleColor by animateColorAsState(
-                                    targetValue = if (isCurrent) TaotaoCoral else MaterialTheme.colorScheme.onSurface,
-                                    animationSpec = taotaoTween(AnimationDurations.MICRO),
-                                    label = "队列项标题",
-                                )
-                                Row(
-                                    Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp))
-                                        .background(itemBackground)
-                                        .clickable { onItemClick(index) }.padding(vertical = 8.dp, horizontal = 8.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    AlbumArt(Color(item.color), 42.dp, 20.sp, item.coverUri)
-                                    Column(Modifier.weight(1f).padding(start = 12.dp)) {
-                                        Text(
-                                            item.title,
-                                            fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
-                                            color = itemTitleColor,
-                                            maxLines = 1,
-                                        )
-                                        Text(
-                                            if (isCurrent) "正在播放 · ${item.artist}" else item.artist,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            fontSize = 12.sp,
-                                            maxLines = 1,
-                                        )
-                                    }
-                                    Text(item.duration, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
-                                    if (isCurrent) {
-                                        Icon(
-                                            Icons.AutoMirrored.Filled.VolumeUp,
-                                            "正在播放",
-                                            tint = TaotaoCoral,
-                                            modifier = Modifier.padding(start = 8.dp).size(19.dp),
-                                        )
-                                    } else {
-                                        IconButton(onClick = { onRemoveItem(index) }, modifier = Modifier.size(36.dp)) {
-                                            Icon(
-                                                Icons.Default.Close,
-                                                "从播放列表移除",
-                                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                modifier = Modifier.size(18.dp),
-                                            )
-                                        }
-                                    }
-                                }
                             }
                         }
                     }
                 }
             }
-            }
-            Spacer(Modifier.height(16.dp))
         }
     }
 }
@@ -1871,37 +1884,41 @@ private fun PlaybackSourceList(
     emptyText: String,
     onItemClick: (Int) -> Unit,
 ) {
-    if (songs.isEmpty()) {
-        Text(emptyText, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(vertical = 24.dp))
-        return
-    }
-    Text(
-        "点一首后，将按这个列表的顺序继续播放",
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        fontSize = 12.sp,
-        modifier = Modifier.padding(bottom = 6.dp),
-    )
-    LazyColumn(Modifier.fillMaxWidth().heightIn(max = 390.dp)) {
-        itemsIndexed(songs) { index, item ->
-            Row(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp))
-                    .clickable { onItemClick(index) }.padding(vertical = 8.dp, horizontal = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                AlbumArt(Color(item.color), 42.dp, 20.sp, item.coverUri)
-                Column(Modifier.weight(1f).padding(start = 12.dp)) {
-                    Text(item.title, fontWeight = FontWeight.Medium, maxLines = 1)
-                    Text(item.artist, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, maxLines = 1)
+    Column(Modifier.fillMaxSize()) {
+        // 说明区域无论有没有歌曲都保留，避免空态切到有内容时正文又向下移动一次。
+        Text(
+            "点一首后，将按这个列表的顺序继续播放",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 12.sp,
+            modifier = Modifier.padding(bottom = 6.dp),
+        )
+        if (songs.isEmpty()) {
+            PlaybackQueueEmptyState(emptyText, Modifier.weight(1f))
+        } else {
+            LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
+                itemsIndexed(songs) { index, item ->
+                    SongRow(song = item, onClick = { onItemClick(index) }) {
+                        Icon(
+                            Icons.Default.PlayArrow,
+                            "从这里播放",
+                            tint = TaotaoCoral,
+                            modifier = Modifier.padding(start = 8.dp).size(20.dp),
+                        )
+                    }
                 }
-                Text(item.duration, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
-                Icon(
-                    Icons.Default.PlayArrow,
-                    "从这里播放",
-                    tint = TaotaoCoral,
-                    modifier = Modifier.padding(start = 8.dp).size(20.dp),
-                )
             }
         }
+    }
+}
+
+/** 固定正文视口中的空态：信息在剩余空间居中，不影响 BottomSheet 的整体高度。 */
+@Composable
+private fun PlaybackQueueEmptyState(message: String, modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier.fillMaxWidth(),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(message, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
     }
 }
 

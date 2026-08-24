@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -130,23 +131,17 @@ fun PlaybackHistoryPage(
         } else {
             LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 itemsIndexed(history, key = { _, entry -> librarySongKey(entry.song) }) { index, entry ->
-                    Row(
-                        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp))
-                            .clickable { onSongClick(index) }.padding(vertical = 9.dp),
-                        verticalAlignment = Alignment.CenterVertically,
+                    SongRow(
+                        song = entry.song,
+                        subtitle = "${entry.song.artist} · ${formatHistoryTime(entry.playedAtMillis)}",
+                        onClick = { onSongClick(index) },
                     ) {
-                        AlbumArt(Color(entry.song.color), 48.dp, 24.sp, entry.song.coverUri)
-                        Column(Modifier.weight(1f).padding(start = 13.dp)) {
-                            Text(entry.song.title, fontWeight = FontWeight.Medium, maxLines = 1)
-                            Text(
-                                "${entry.song.artist} · ${formatHistoryTime(entry.playedAtMillis)}",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                fontSize = 12.sp,
-                                maxLines = 1,
-                                modifier = Modifier.padding(top = 3.dp),
-                            )
-                        }
-                        Icon(Icons.Default.PlayArrow, "重新播放", tint = TaotaoCoral)
+                        Icon(
+                            Icons.Default.PlayArrow,
+                            "重新播放",
+                            tint = TaotaoCoral,
+                            modifier = Modifier.padding(start = 8.dp).size(20.dp),
+                        )
                     }
                 }
                 item { Spacer(Modifier.height(18.dp)) }
