@@ -44,6 +44,7 @@ class HotfixStore(context: Context) {
             .putLong(KEY_TARGET, targetVersionCode)
             .putInt(KEY_ATTEMPTS, if (pendingAttempt) 1 else 0)
             .remove(KEY_FAILED)
+            .remove(KEY_FAILED_TARGET)
             .remove(KEY_REASON)
             .apply()
     }
@@ -67,19 +68,37 @@ class HotfixStore(context: Context) {
      *
      * 记下失败的版本号：服务端可能还在下发同一个补丁，不记住会陷入
      * 「下载 → 崩 → 回滚 → 再下载」的循环。
+     *
+     * 同时记下**它是给哪个宿主版本的**。补丁版本号是按宿主版本各自从 1 开始编的，
+     * 所以 vc71 的 v1 和 vc72 的 v1 是两个完全不同的补丁。只记版本号的话，
+     * 一个在旧宿主上失败过的 v1 会把新宿主上同名的 v1 一并拦掉 ——
+     * 而 SharedPreferences 跨升级保留，于是**每次升级都会撞**，
+     * 表现成"新版本装上了但补丁永远装不上，必须手动清一次失败记录"。
      */
     fun disable(patchVersion: Int, reason: String) {
+        // 先取出来：同一次编辑里 KEY_TARGET 会被删掉。
+        val failedTarget = targetVersionCode()
         preferences.edit()
             .remove(KEY_VERSION)
             .remove(KEY_TARGET)
             .putInt(KEY_ATTEMPTS, 0)
             .putInt(KEY_FAILED, patchVersion)
+            .putLong(KEY_FAILED_TARGET, failedTarget)
             .putString(KEY_REASON, reason)
             .apply()
     }
 
-    /** 已知加载失败过的补丁版本，不再重试。 */
-    fun failedPatchVersion(): Int = preferences.getInt(KEY_FAILED, 0)
+    /**
+     * 已知加载失败过的补丁版本，不再重试。
+     *
+     * [installedVersionCode] 用来判断这条记录还算不算数：宿主已经换版本了，
+     * 旧宿主上的失败记录不该影响新宿主上同名的补丁。
+     */
+    fun failedPatchVersion(installedVersionCode: Long): Int {
+        val failedTarget = preferences.getLong(KEY_FAILED_TARGET, 0L)
+        if (failedTarget != 0L && failedTarget != installedVersionCode) return 0
+        return preferences.getInt(KEY_FAILED, 0)
+    }
 
     fun failureReason(): String? = preferences.getString(KEY_REASON, null)
 
@@ -110,6 +129,7 @@ class HotfixStore(context: Context) {
     fun forgetFailure() {
         preferences.edit()
             .remove(KEY_FAILED)
+            .remove(KEY_FAILED_TARGET)
             .remove(KEY_REASON)
             .putString(KEY_OUTCOME, "已清除失败记录，下次检查更新会重新尝试")
             .putLong(KEY_OUTCOME_AT, System.currentTimeMillis())
@@ -124,6 +144,7 @@ class HotfixStore(context: Context) {
         const val KEY_TARGET = "target_version_code"
         const val KEY_ATTEMPTS = "load_attempts"
         const val KEY_FAILED = "failed_version"
+        const val KEY_FAILED_TARGET = "failed_target_version_code"
         const val KEY_REASON = "failure_reason"
         const val KEY_OUTCOME = "last_outcome"
         const val KEY_OUTCOME_AT = "last_outcome_at"

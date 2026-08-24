@@ -24,6 +24,7 @@ import kotlinx.coroutines.withContext
 class UpdateManager(
     context: Context,
     tokenProvider: TokenProvider?,
+    initialPatchVersion: Int = 0,
     private val channel: String = "release",
 ) {
     private val appContext = context.applicationContext
@@ -59,9 +60,15 @@ class UpdateManager(
     /**
      * 当前生效的热修复补丁版本，0 表示没有。
      *
-     * 初值由 Application 在启动时加载得到；会话中途装上新补丁后会更新。
+     * 初值来自 Application 启动时的加载结果，**必须在构造时就填上**：
+     * `check()` 是网络调用，可能比"平稳运行后确认"那个 5 秒延迟先跑完。
+     * 初值留 0 的话，启动时已经加载好的补丁会被判成"有新补丁"再下载一遍。
+     *
+     * **必须是 Compose 状态**：界面靠它的变化重新触发确认效果。做成普通 var 的话，
+     * 会话中途装上的补丁永远等不到确认 —— 尝试计数一直是 1，下次启动就被判成
+     * "加载后启动失败"而回滚。表现是"点重试能生效，但一重启就没了"。
      */
-    var activePatchVersion: Int = 0
+    var activePatchVersion by mutableStateOf(initialPatchVersion)
         private set
 
     /**

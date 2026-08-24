@@ -43,8 +43,9 @@ class HotfixInstaller(context: Context) {
             return false
         }
         // 加载失败过的补丁不再重试，否则会陷入「下载 → 崩 → 回滚 → 再下载」的循环。
-        // 但这条记忆必须能从设置页清掉，否则一次偶发失败会让补丁永久装不上。
-        if (patch.patchVersion == store.failedPatchVersion()) {
+        // 判断带上宿主版本：补丁号按宿主版本各自从 1 开始，旧宿主上失败的 v1
+        // 不该拦住新宿主上的 v1。
+        if (patch.patchVersion == store.failedPatchVersion(installedVersionCode)) {
             val message = "补丁 ${patch.patchVersion} 之前加载失败过（${store.failureReason() ?: "原因未记录"}），已停止重试。可在设置里清除失败记录"
             Log.w(TAG, message)
             store.note(message)
@@ -117,7 +118,7 @@ class HotfixInstaller(context: Context) {
         installedVersionCode = installedVersionCode,
         activePatchVersion = activePatchVersion,
         targetVersionCode = store.targetVersionCode(),
-        failedPatchVersion = store.failedPatchVersion(),
+        failedPatchVersion = store.failedPatchVersion(installedVersionCode),
         failureReason = store.failureReason(),
         lastOutcome = store.lastOutcome(),
         lastOutcomeAt = store.lastOutcomeAt(),

@@ -273,7 +273,13 @@ fun TaotaoMusicApp() {
      * 热更新检查。刻意放在登录门禁之前：最需要强制更新的场景恰恰是上一个版本把登录搞坏了，
      * 若要求先登录才能看到更新页，坏版本的用户就永远走不出来。
      */
-    val updateManager = remember { UpdateManager(context, authSession) }
+    val updateManager = remember {
+        UpdateManager(
+            context,
+            authSession,
+            initialPatchVersion = (context.applicationContext as? TaotaoApplication)?.activePatchVersion ?: 0,
+        )
+    }
     LaunchedEffect(updateManager) { updateManager.check() }
 
     /**
@@ -281,11 +287,14 @@ fun TaotaoMusicApp() {
      *
      * 刻意等到界面组合起来、再多等几秒才确认：加载补丁前记了尝试计数，只有走到这里
      * 才清零。太早确认等于把自愈机制关掉 —— 一个能让应用起不来的补丁必须能自己退回去。
+     *
+     * key 是 `activePatchVersion` 而不是 `Unit`：会话中途装上的补丁同样需要被确认。
+     * 用 Unit 的话这个效果只在启动时烧一次，中途装的补丁尝试计数永远停在 1，
+     * 下次启动被判成"加载后启动失败"而回滚 —— 表现是"点了能生效，一重启就没了"。
      */
-    LaunchedEffect(Unit) {
-        val active = (context.applicationContext as? TaotaoApplication)?.activePatchVersion ?: 0
+    LaunchedEffect(updateManager.activePatchVersion) {
         kotlinx.coroutines.delay(5_000)
-        updateManager.confirmPatch(active)
+        updateManager.confirmPatch(updateManager.activePatchVersion)
     }
 
     /**

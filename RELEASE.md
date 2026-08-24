@@ -222,6 +222,28 @@ curl.exe -X POST "https://music.xydaigua.cn/api/v1/app/admin/patch-rollout" `
 
 所以最坏情况是崩一次就自动回滚,而不是反复崩。
 
+### 5. 补丁 dex 必须是只读的(Android 14+)
+
+**这条踩过,而且症状极其隐蔽。**
+
+Android 14(API 34)的「Safer dynamic code loading」规定:`targetSdk ≥ 34` 时,所有动态加载的 dex/jar/apk **必须先标记只读**,否则构造类加载器时直接抛
+
+```
+SecurityException: Writable dex file '...' is not allowed
+```
+
+本项目 `targetSdk = 35`,所以这是硬性要求,不是可选的加固。`HotfixInstaller` 落盘后调 `setReadOnly()`,`HotfixLoader.load` 再兜一次底(旧版本装下的补丁文件可能还是可写的)。
+
+**为什么难查:** 下载、sha256 校验、`renameTo` 落盘全部成功,只在加载那一刻抛异常。异常被 `applyNow` 捕获后走 `store.disable()`,补丁被记为「失败过」而**永不重试**。表现是:不闪退、界面无变化、重启也没用、重新放量也没用。
+
+### 6. 补丁没生效时去哪里看
+
+**设置 → 热修复**。这张卡片显示本机版本号、补丁状态、补丁目标版本,以及链路最近一次的结论(人能直接读的一句话)。
+
+加它的原因:整条链路原本只往 logcat 写日志,而测试机连不上 adb。四种失败原因(版本号不匹配、下载失败、校验不符、加载抛异常)在界面上长得一模一样,只能靠猜。
+
+卡在「失败过所以不再重试」时,这张卡片上会出现**清除失败记录并重试**按钮 —— `failedPatchVersion` 原本没有任何清除入口,一次偶发失败会让补丁永久装不上。
+
 ---
 
 ## 六、服务端发布
