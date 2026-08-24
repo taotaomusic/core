@@ -19,6 +19,14 @@
 
 **有整包更新时服务端不下发补丁** —— 既然能装新版本就没必要打补丁,补丁只给"来不及发版或用户还没升级"兜底。
 
+### 两种操作方式:管理后台 或 curl
+
+下面所有发布动作都有两条路。**日常用管理后台**(浏览器打开服务根地址,如 `https://music.xydaigua.cn/`),它把三件事做成了界面:发布列表与放量、补丁列表与放量、强制更新下限。首次进入要填 `ADMIN_TOKEN`,只存在浏览器 localStorage。
+
+本文档保留 curl 版本,因为它们是**唯一能写进脚本、也唯一能在后台挂掉时兜底**的口径。两者打的是同一批接口。
+
+后台的实现要点见 [server/README.md](server/README.md#管理后台) —— 有一条不能踩的:静态资源靠 express 中间件在路由之前拦截,**绝不能改 `setGlobalPrefix` 的 `exclude`** 去让前端路由生效。
+
 ---
 
 ## 二、版本号的三条铁律
@@ -218,11 +226,11 @@ curl.exe -X POST "https://music.xydaigua.cn/api/v1/app/admin/patch-rollout" `
 
 ## 六、服务端发布
 
-产物是 `dist/` 目录树,不是单文件。
+产物是 `dist/` 目录树,不是单文件。**`dist/public/` 是管理后台的构建产物,必须一起上传**,否则根路径打开是 404(接口不受影响)。
 
 ```powershell
 cd server
-npm run build
+npm run build          # 先 tsc 再 vite build，两个产物都进 dist/
 # 上传 dist/ 与 package-lock.json，在 dist 同级执行：
 npm install --omit=dev
 node dist/main.js
@@ -233,7 +241,8 @@ node dist/main.js
 - **PostgreSQL 必须先于本服务启动。** 启动时有 10 次 × 1 秒的连接重试兜底,超过就退出交给进程管理器;systemd 建议加 `After=postgresql.service`。
 - **`DATABASE_URL` 没有默认值**,缺失或不是 `postgres://` 开头会启动即失败。
 - **不能用 esbuild / tsx 构建或跑开发。** 它们不支持 `emitDecoratorMetadata`,NestJS 的构造器注入拿不到 `design:paramtypes`,启动时报 `Cannot read properties of undefined`。构建用 `tsc`,开发用 `ts-node`。
-- **改动后必须跑契约脚本**,当前 82 项要全绿:
+- **`vue` / `element-plus` 在 `devDependencies` 里,这是刻意的。** 管理后台编译成自包含的静态文件,运行时不需要它们;放进 `dependencies` 会让服务器白装一套前端库。
+- **改动后必须跑契约脚本**,当前 88 项要全绿:
 
   ```powershell
   cd server

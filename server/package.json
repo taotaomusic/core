@@ -3,7 +3,9 @@
   "private": true,
   "scripts": {
     "dev": "node --watch --require ts-node/register src/main.ts",
-    "build": "rimraf --glob dist/* && tsc -p tsconfig.json && node tools/copy-manifest.mjs",
+    "dev:frontend": "vite",
+    "build": "rimraf --glob dist/* && tsc -p tsconfig.json && node tools/copy-manifest.mjs && npm run build:frontend",
+    "build:frontend": "vite build",
     "start": "node dist/main.js",
     "send-mail": "ts-node --project tools/tsconfig.json tools/send-outlook-mail.ts",
     "verify": "node tools/verify-contract.mjs"
@@ -18,18 +20,20 @@
     "@nestjs/platform-express": "^11.0.0",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.1",
-    "element-plus": "^2.14.5",
     "pg": "^8.13.1",
     "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.8.1",
-    "vue": "^3.5.41"
+    "rxjs": "^7.8.1"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",
     "@types/node": "^22.10.2",
     "@types/pg": "^8.11.10",
+    "@vitejs/plugin-vue": "^5.2.1",
+    "element-plus": "^2.14.5",
     "rimraf": "^6.0.1",
     "ts-node": "^10.9.2",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "vite": "^6.0.7",
+    "vue": "^3.5.41"
   }
 }

@@ -12,7 +12,7 @@ Kotlin Multiplatform 音乐播放器 + 自建后端。当前只有 Android 客�
 ```
 androidApp/   Android 应用：Compose 界面、Media3 播放、热更新、离线下载
 shared/       跨平台层：歌曲模型、歌词解析、音质档位定义（有单元测试）
-server/       NestJS 后端：账号、收藏、上游接口适配、热更新分发
+server/       NestJS 后端：账号、收藏、上游接口适配、热更新分发、管理后台
 patch/        热修复补丁：不打进 APK，需要发补丁时单独编译成几 KB 的 DEX
 build-logic/  热修复插桩插件：编译期给逻辑层方法插入补丁分发入口
 ```
@@ -43,7 +43,7 @@ build-logic/  热修复插桩插件：编译期给逻辑层方法插入补丁分
 
 **离线下载** —— 音频、封面、行级歌词与逐字歌词一并落到应用私有目录。下载前可选音质并看到体积,带系统通知显示进度。
 
-**热更新** —— 两条通道:整包 APK(支持灰度放量与强制更新下限)和**热修复补丁**(只含改动方法的 DEX,几 KB,立即生效不用重启,但只能改 `data`/`player`/`update` 包 —— Compose 界面不能插桩)。详见 [RELEASE.md](RELEASE.md)。
+**热更新** —— 两条通道:整包 APK(支持灰度放量与强制更新下限)和**热修复补丁**(只含改动方法的 DEX,几 KB,立即生效不用重启,但只能改 `data`/`player`/`update` 包 —— Compose 界面不能插桩)。两者都能在**管理后台**里操作(浏览器打开服务根地址),也都有对应的 curl 命令。详见 [RELEASE.md](RELEASE.md)。
 
 **崩溃日志** —— 测试机无法连 adb,崩溃堆栈写到本地并可在「我的」页内查看、复制,或导出成 `.log` 交给系统分享(多条堆栈叠起来轻易上万字符,剪贴板装不下)。
 
@@ -73,7 +73,9 @@ npm run dev
 
 建表由服务启动时自动完成(幂等 DDL + 顾问锁),不需要手工跑迁移。
 
-改完后端**必须跑契约验证**(当前 82 项):做法见 [RELEASE.md](RELEASE.md#四服务端发布)。线上有装机客户端,而 `/api/v1/app/bootstrap` 本身就是推修复的通道,坏掉就没有补救手段。
+**管理后台**在同一个端口的根路径上(`http://localhost:4500/`),用来发版、放量、发补丁、调强制更新下限。改后台界面时用 `npm run dev:frontend` 起独立的 vite 服务器(5173),它会把 `/api` 代理到本机后端;`npm run build` 会把后台一起编译进 `dist/public/`。
+
+改完后端**必须跑契约验证**(当前 88 项):做法见 [RELEASE.md](RELEASE.md#四服务端发布)。线上有装机客户端,而 `/api/v1/app/bootstrap` 本身就是推修复的通道,坏掉就没有补救手段。
 
 ## 几个反复踩过的坑
 
@@ -84,3 +86,4 @@ npm run dev
 - **新增整页要同步三处** —— `switchTab`、`AnimatedContent` 的 `targetState`、`BackHandler`。漏掉第一处的表现是"点了底部标签却还停在原页面"。
 - **`LazyColumn` 会销毁滚出屏幕的项** —— item 内部的 `remember` 随之重置,入场动画于是每次滚回来都重播。需要"只播一次"的状态要提到列表外面。
 - **Node 未处理的 promise rejection 会终止进程** —— 并发任务必须在**创建时**就挂上失败处理,留到循环里再 await 就晚了。同理 `pool.on("error")` 必须挂监听,否则数据库重启会直接带走 Node 进程。
+- **`setGlobalPrefix` 的 `exclude` 不能写通配符** —— 为了让管理后台落在根路径而写成 `exclude: ["health", "/*"]`,会把**所有**路由都从 `/api/v1` 前缀里豁免掉,接口全线 404。静态资源要用 express 中间件在路由之前拦截,不要动全局前缀。

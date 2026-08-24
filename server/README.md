@@ -25,9 +25,9 @@ npm run dev
 npm run build
 ```
 
-产物是 `dist/` 目录树（不是单文件）。**部署步骤**：
+产物是 `dist/` 目录树（不是单文件）。`npm run build` 会先 `tsc` 编译后端、再 `vite build` 把管理后台产到 `dist/public/`。**部署步骤**：
 
-1. 上传 `dist/` 整个目录和 `package-lock.json` 到服务器
+1. 上传 `dist/` 整个目录和 `package-lock.json` 到服务器（`dist/public/` 是管理后台，不带上去根路径就是 404，接口不受影响）
 2. 在 `dist/` 同级执行 `npm install --omit=dev`（`dist/package.json` 只列出生产依赖）
 3. `node dist/main.js` 启动，或在 `dist/` 内 `npm start`
 
@@ -66,7 +66,30 @@ src/
   image-generation/       gpt-image-2 图片生成任务适配
   release/                热更新：客户端引导、安装包分发、发布管理
   health/                 健康检查
+
+  frontend/               管理后台（Vue 3 + Element Plus，浏览器入口）
+    index.html              vite 入口，tsconfig 刻意 exclude 掉整个目录
+    src/api.ts              信封拆解、sha256、上传原始字节
+    src/App.vue             令牌输入与三个标签页
+    src/components/         发布管理 / 补丁管理 / 系统设置
 ```
+
+### 管理后台
+
+浏览器打开服务根地址即可(如 `http://localhost:4500/`)。首次进入填 `ADMIN_TOKEN`,只存在 localStorage。三个标签页分别覆盖发布放量、补丁放量、强制更新下限,打的是同一批 `/app/admin/*` 接口。
+
+```powershell
+npm run build:frontend    # 产出 dist/public/
+npm run dev:frontend      # 独立开发服务器（5173），API 代理到本机后端
+```
+
+**静态资源靠 express 中间件在路由之前拦截,不是 NestJS 控制器。** 这一点是踩出来的:
+
+`main.ts` 里 `setGlobalPrefix("api/v1", { exclude: [...] })` 的 `exclude` **只能列具体路径,绝不能写通配符**。曾经为了让一个前端控制器的 `@Get("*")` 落在根路径而写成 `exclude: ["health", "/*"]` —— 结果它把**所有**路由都从前缀里豁免掉了,`/api/v1/search`、`/api/v1/favorites`、`/api/v1/auth/me` 全部 404,装机客户端会瞬间全线失联。
+
+现在的做法没有这个风险:`express.static` 只响应磁盘上真实存在的文件,`/api/v1/...` 匹配不到任何文件就直接落到下一个中间件,所以不会遮住接口,也完全不用碰全局前缀。
+
+另外 `vue` / `element-plus` 放在 `devDependencies` 是刻意的 —— 后台编译成自包含静态文件,运行时不需要它们。
 
 ### 鉴权是显式白名单
 
