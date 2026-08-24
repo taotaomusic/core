@@ -2,6 +2,11 @@ package com.taotao.music.data
 
 import com.taotao.music.model.AudioQuality
 import com.taotao.music.model.Song
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URLEncoder
@@ -10,6 +15,7 @@ import java.net.URL
 /** 桃桃音乐后端客户端：移动端不直接请求第三方音乐接口。 */
 class TencentMusicApi(private val tokenProvider: TokenProvider) {
     data class TokenPair(val accessToken: String, val refreshToken: String, val expiresIn: Int)
+    data class FavoriteLibrary(val ids: Set<String>, val songs: List<Song>)
 
     /**
      * 响应头里带回的最新版本号的观察者。
@@ -120,14 +126,74 @@ class TencentMusicApi(private val tokenProvider: TokenProvider) {
         }
     }
 
-    /** 当前用户收藏的全部歌曲 ID，用于播种本地缓存。 */
-    fun favoriteIds(): Set<String> = authorized("/api/v1/favorites") { connection ->
+    /** 当前用户收藏的全部歌曲 ID，用于播种本地状态缓存。 */
+    fun favoriteIds(): Set<String> = favoriteSongIds().toSet()
+
+    /**
+     * 从既有收藏接口读取收藏顺序，再通过歌曲信息接口补全展示数据。
+     *
+     * 收藏关系只有服务端这一份权威数据；[knownSongs] 只是复用客户端已经拿到的歌曲元信息，
+     * 不再另建一套“收藏夹快照”。这样搜索页心形、收藏页和 `/favorites` 始终指向同一状态。
+     */
+    suspend fun favoriteLibrary(knownSongs: List<Song>, quality: Int = AudioQuality.Default.value): FavoriteLibrary {
+        val orderedIds = withContext(Dispatchers.IO) { favoriteSongIds() }
+        val knownById = knownSongs.mapNotNull { song -> song.remoteId?.let { it to song } }.toMap()
+        // 单曲信息接口最多四路并发，避免收藏较多时串行等待，同时不给上游制造瞬时洪峰。
+        val songs = orderedIds.chunked(FAVORITE_INFO_CONCURRENCY).flatMap { batch ->
+            coroutineScope {
+                batch.map { value ->
+                    async(Dispatchers.IO) {
+                        val remoteId = value.toLongOrNull() ?: return@async null
+                        knownById[remoteId]?.copy(favorited = true) ?: requestFavoriteSong(remoteId, quality)
+                    }
+                }.awaitAll().filterNotNull()
+            }
+        }
+        return FavoriteLibrary(orderedIds.toSet(), songs)
+    }
+
+    private fun favoriteSongIds(): List<String> = authorized("/api/v1/favorites") { connection ->
         val result = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
-        val favorites = result.optJSONArray("data") ?: return@authorized emptySet()
-        (0 until favorites.length()).mapNotNullTo(mutableSetOf()) { index ->
-            val item = favorites.optJSONObject(index) ?: return@mapNotNullTo null
+        val favorites = result.optJSONArray("data") ?: return@authorized emptyList()
+        (0 until favorites.length()).mapNotNull { index ->
+            val item = favorites.optJSONObject(index) ?: return@mapNotNull null
             item.optString("songId").takeIf { it.isNotBlank() && item.optString("source") == "tencent" }
         }
+    }
+
+    /** 单首补全失败时仍保留可播放占位项，不能让服务端已有收藏从页面上凭空消失。 */
+    private fun requestFavoriteSong(remoteId: Long, quality: Int): Song = runCatching {
+        authorized("/api/v1/songs/$remoteId/info") { connection ->
+            val result = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+            check(result.optInt("code") == 0) { result.optString("message", "无法获取收藏歌曲") }
+            val data = result.getJSONObject("data")
+            val seconds = data.optInt("durationSeconds")
+            Song(
+                title = data.optString("title", "未知歌曲"),
+                artist = data.optString("artist", "未知歌手"),
+                duration = if (seconds > 0) "%02d:%02d".format(seconds / 60, seconds % 60) else "网络歌曲",
+                color = 0xFFFFB4A2,
+                audioUri = placeholderUri(remoteId, quality),
+                remoteId = remoteId,
+                coverUri = data.optString("coverUrl").ifBlank { null },
+                lyricUri = "$ENDPOINT/api/v1/songs/$remoteId/lyrics",
+                album = data.optString("album", "未知专辑"),
+                mid = data.optString("mid").ifBlank { null },
+                vip = data.optBoolean("vip"),
+                favorited = true,
+            )
+        }
+    }.getOrElse {
+        Song(
+            title = "收藏歌曲 $remoteId",
+            artist = "歌曲信息暂不可用",
+            duration = "网络歌曲",
+            color = 0xFFFFB4A2,
+            audioUri = placeholderUri(remoteId, quality),
+            remoteId = remoteId,
+            lyricUri = "$ENDPOINT/api/v1/songs/$remoteId/lyrics",
+            favorited = true,
+        )
     }
 
     fun setFavorite(song: Song, favorite: Boolean) {
@@ -238,6 +304,7 @@ class TencentMusicApi(private val tokenProvider: TokenProvider) {
         /** 后端地址。热更新模块也要用，因此对包内公开，保持单一来源。 */
         const val ENDPOINT = "https://music.xydaigua.cn"
         private const val MAX_AUTH_ATTEMPTS = 2
+        private const val FAVORITE_INFO_CONCURRENCY = 4
 
         /** 音质取值上限。实测上游档位到 18（NAC）。 */
         const val MAX_QUALITY = 18

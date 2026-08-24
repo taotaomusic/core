@@ -127,6 +127,9 @@ fun TaotaoMusicApp() {
     var isLoadingMore by remember { mutableStateOf(false) }
     /** 收藏缓存被改动后自增，让读了它的界面重新组合 —— SharedPreferences 本身不是可观察的。 */
     var favoriteRevision by remember { mutableIntStateOf(0) }
+    var favoriteLibrarySongs by remember { mutableStateOf(emptyList<Song>()) }
+    var favoriteLibraryLoading by remember { mutableStateOf(false) }
+    var favoriteLibraryError by remember { mutableStateOf<String?>(null) }
     var showSettingsPage by remember { mutableStateOf(false) }
     var mineLibrarySection by remember { mutableStateOf<MineLibrarySection?>(null) }
     var playbackQuality by remember { mutableStateOf(qualityStore.playbackQuality()) }
@@ -248,15 +251,45 @@ fun TaotaoMusicApp() {
     fun toggleFavorite(song: Song) {
         val remoteId = song.remoteId ?: return
         val target = !favoritesStore.contains(remoteId)
-        favoritesStore.set(song, target)
+        val previousLibrary = favoriteLibrarySongs
+        favoritesStore.set(remoteId, target)
+        favoriteLibrarySongs = if (target) {
+            listOf(song.copy(favorited = true)) + favoriteLibrarySongs.filterNot { it.remoteId == remoteId }
+        } else {
+            favoriteLibrarySongs.filterNot { it.remoteId == remoteId }
+        }
         favoriteRevision++
         scope.launch {
             runCatching { withContext(Dispatchers.IO) { musicApi.setFavorite(song, target) } }
                 .onFailure {
-                    favoritesStore.set(song, !target)
+                    favoritesStore.set(remoteId, !target)
+                    favoriteLibrarySongs = previousLibrary
                     favoriteRevision++
                     message = it.message ?: "收藏操作失败，请稍后重试"
                 }
+        }
+    }
+
+    /**
+     * 收藏页直接读取账号收藏接口；本地只复用已经拿到的歌曲元信息，不再维护第二套收藏夹。
+     */
+    fun refreshFavoriteLibrary() {
+        if (favoriteLibraryLoading) return
+        favoriteLibraryLoading = true
+        favoriteLibraryError = null
+        val knownSongs = favoriteLibrarySongs + playbackSongs + searchResults +
+            playbackHistory.map { it.song } + downloadedSongs
+        scope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) { musicApi.favoriteLibrary(knownSongs, playbackQuality.value) }
+            }.onSuccess { library ->
+                favoritesStore.replaceAll(library.ids)
+                favoriteLibrarySongs = library.songs
+                favoriteRevision++
+            }.onFailure {
+                favoriteLibraryError = it.message ?: "收藏列表加载失败"
+            }
+            favoriteLibraryLoading = false
         }
     }
 
@@ -493,7 +526,7 @@ fun TaotaoMusicApp() {
     suspend fun mergeFavorites(songs: List<Song>) {
         val seen = songs.mapNotNull { it.remoteId?.toString() }.toSet()
         val favorited = songs.filter { it.favorited }.mapNotNull { it.remoteId?.toString() }.toSet()
-        withContext(Dispatchers.IO) { favoritesStore.merge(favorited, seen, songs) }
+        withContext(Dispatchers.IO) { favoritesStore.merge(favorited, seen) }
         favoriteRevision++
     }
 
@@ -830,17 +863,22 @@ fun TaotaoMusicApp() {
                     onBack = { showSettingsPage = false },
                 )
             } else if (page == "mine-favorites") {
-                val favoriteSongs = remember(favoriteRevision) { favoritesStore.songs() }
                 MusicLibraryPage(
                     title = "收藏夹",
-                    subtitle = "${favoriteSongs.size} 首已缓存歌曲",
-                    songs = favoriteSongs,
+                    subtitle = when {
+                        favoriteLibraryLoading -> "正在同步账号收藏…"
+                        else -> "${favoriteLibrarySongs.size} 首 · 与账号收藏同步"
+                    },
+                    songs = favoriteLibrarySongs,
                     emptyTitle = "收藏夹还是空的",
-                    emptyDescription = "收藏过的歌曲会在播放或搜索后显示在这里",
+                    emptyDescription = "点击歌曲旁的心形后，会通过收藏接口同步到这里",
                     onBack = { mineLibrarySection = null },
-                    onSongClick = { index -> playSong(favoriteSongs, index) },
+                    onSongClick = { index -> playSong(favoriteLibrarySongs, index) },
                     isFavorite = { song -> favoritesStore.contains(song.remoteId) },
                     onToggleFavorite = { song -> toggleFavorite(song) },
+                    loading = favoriteLibraryLoading,
+                    error = favoriteLibraryError,
+                    onRetry = { refreshFavoriteLibrary() },
                 )
             } else if (page == "mine-history") {
                 PlaybackHistoryPage(
@@ -874,6 +912,8 @@ fun TaotaoMusicApp() {
                         playbackHistory = emptyList()
                         // 收藏是账号状态，换账号不能沿用上一个人的。
                         favoritesStore.clear()
+                        favoriteLibrarySongs = emptyList()
+                        favoriteLibraryError = null
                         // 撤销刷新令牌需要访问网络，放到 IO 线程；本地会话已在 signOut 内同步清空。
                         scope.launch(Dispatchers.IO) { authSession.signOut() }
                         signedIn = false
@@ -883,10 +923,13 @@ fun TaotaoMusicApp() {
                     checking = updateStatus.stage == UpdateStage.CHECKING,
                     onCheckUpdate = { scope.launch { updateManager.check(manual = true) } },
                     onMessage = { message = it },
-                    favoriteCount = favoritesStore.songs().size,
+                    favoriteCount = remember(favoriteRevision) { favoritesStore.ids().size },
                     historyCount = playbackHistory.size,
                     localCount = downloadedSongs.size,
-                    onOpenFavorites = { mineLibrarySection = MineLibrarySection.FAVORITES },
+                    onOpenFavorites = {
+                        mineLibrarySection = MineLibrarySection.FAVORITES
+                        refreshFavoriteLibrary()
+                    },
                     onOpenHistory = { mineLibrarySection = MineLibrarySection.HISTORY },
                     onOpenLocal = { mineLibrarySection = MineLibrarySection.LOCAL },
                 )
@@ -1092,37 +1135,35 @@ private fun MinePage(
         }
         item { Text("我的音乐", fontSize = 17.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp)) }
         item {
-            MineActionRow(
-                icon = Icons.Default.Favorite,
-                iconDescription = "收藏夹",
-                title = "收藏夹",
-                subtitle = "$favoriteCount 首",
-                iconTint = TaotaoCoral,
-                trailing = { Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
-                onClick = onOpenFavorites,
-            )
-        }
-        item {
-            MineActionRow(
-                icon = Icons.Default.History,
-                iconDescription = "最近播放",
-                title = "最近播放",
-                subtitle = "$historyCount 首",
-                iconTint = TaotaoCoral,
-                trailing = { Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
-                onClick = onOpenHistory,
-            )
-        }
-        item {
-            MineActionRow(
-                icon = Icons.Default.DownloadDone,
-                iconDescription = "本地歌曲",
-                title = "本地歌曲",
-                subtitle = "$localCount 首 · 已下载到当前设备",
-                iconTint = TaotaoCoral,
-                trailing = { Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
-                onClick = onOpenLocal,
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                MineLibraryShortcut(
+                    icon = Icons.Default.Favorite,
+                    iconDescription = "收藏夹",
+                    title = "收藏夹",
+                    count = favoriteCount,
+                    onClick = onOpenFavorites,
+                    modifier = Modifier.weight(1f),
+                )
+                MineLibraryShortcut(
+                    icon = Icons.Default.History,
+                    iconDescription = "最近播放",
+                    title = "最近播放",
+                    count = historyCount,
+                    onClick = onOpenHistory,
+                    modifier = Modifier.weight(1f),
+                )
+                MineLibraryShortcut(
+                    icon = Icons.Default.DownloadDone,
+                    iconDescription = "本地歌曲",
+                    title = "本地歌曲",
+                    count = localCount,
+                    onClick = onOpenLocal,
+                    modifier = Modifier.weight(1f),
+                )
+            }
         }
         item { Text("应用", fontSize = 17.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 12.dp)) }
         item {
@@ -1212,6 +1253,39 @@ private fun MinePage(
                 }
             },
         )
+    }
+}
+
+/** “我的音乐”三个入口固定在同一行，数量与入口含义一眼即可比较。 */
+@Composable
+private fun MineLibraryShortcut(
+    icon: ImageVector,
+    iconDescription: String,
+    title: String,
+    count: Int,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier.height(118.dp).clip(RoundedCornerShape(18.dp))
+            .background(MaterialTheme.colorScheme.surface).clickable(onClick = onClick).padding(14.dp),
+        verticalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Box(
+            modifier = Modifier.size(34.dp).clip(CircleShape).background(TaotaoCoral.copy(alpha = 0.14f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(icon, iconDescription, tint = TaotaoCoral, modifier = Modifier.size(19.dp))
+        }
+        Column {
+            Text(title, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+            Text(
+                "$count 首",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 12.sp,
+                modifier = Modifier.padding(top = 3.dp),
+            )
+        }
     }
 }
 

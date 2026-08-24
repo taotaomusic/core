@@ -15,6 +15,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -51,15 +52,36 @@ fun MusicLibraryPage(
     isFavorite: ((Song) -> Boolean)? = null,
     onToggleFavorite: ((Song) -> Unit)? = null,
     onDelete: ((Song) -> Unit)? = null,
+    loading: Boolean = false,
+    error: String? = null,
+    onRetry: (() -> Unit)? = null,
 ) {
     Column(Modifier.fillMaxSize().padding(horizontal = 22.dp)) {
         LibraryPageHeader(title = title, subtitle = subtitle, onBack = onBack)
-        if (songs.isEmpty()) {
+        if (loading && songs.isEmpty()) {
+            Column(
+                modifier = Modifier.fillMaxSize(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
+                CircularProgressIndicator(color = TaotaoCoral)
+                Text(
+                    "正在读取账号收藏",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 14.dp),
+                )
+            }
+        } else if (songs.isEmpty()) {
             EmptyStateView(
-                title = emptyTitle,
-                description = emptyDescription,
+                title = if (error == null) emptyTitle else "收藏列表加载失败",
+                description = error ?: emptyDescription,
                 modifier = Modifier.weight(1f),
             )
+            if (error != null && onRetry != null) {
+                TextButton(onClick = onRetry, modifier = Modifier.align(Alignment.CenterHorizontally)) {
+                    Text("重新加载")
+                }
+            }
         } else {
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),

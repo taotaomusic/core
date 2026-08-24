@@ -1,7 +1,6 @@
 package com.taotao.music.data
 
 import android.content.Context
-import com.taotao.music.model.Song
 
 /**
  * 收藏状态本地缓存。
@@ -11,26 +10,24 @@ import com.taotao.music.model.Song
  * 这里只负责让状态在页面之间、以及重启之后保持一致。
  *
  * 权威来源始终是服务端：[replaceAll] 用收藏列表或搜索结果覆盖本地，
- * [toggle] 只做乐观更新，请求失败由调用方回滚。
+ * [set] 只做乐观更新，请求失败由调用方回滚。
  */
 class FavoritesStore(context: Context) {
     private val preferences = context.getSharedPreferences("favorites", Context.MODE_PRIVATE)
 
-    fun ids(): Set<String> = preferences.getStringSet(KEY_IDS, emptySet()).orEmpty()
+    init {
+        // 1.0.75 曾把歌曲快照写进收藏缓存，升级后立即清掉，避免它继续与账号收藏接口分叉。
+        preferences.edit().remove(LEGACY_KEY_SONGS).apply()
+    }
 
-    /** 收藏夹页面使用的歌曲快照；服务端目前只保存歌曲 ID，所以元信息在本机补齐。 */
-    fun songs(): List<Song> = SongCodec.decodeList(preferences.getString(KEY_SONGS, null))
+    fun ids(): Set<String> = preferences.getStringSet(KEY_IDS, emptySet()).orEmpty()
 
     fun contains(remoteId: Long?): Boolean = remoteId != null && ids().contains(remoteId.toString())
 
     /** 用服务端的全量收藏列表覆盖本地。 */
     fun replaceAll(remoteIds: Set<String>) {
         // 存进 SharedPreferences 的 Set 不能原地改，取出来的实例是内部引用，必须传新集合。
-        val retainedSongs = songs().filter { it.remoteId?.toString() in remoteIds }
-        preferences.edit()
-            .putStringSet(KEY_IDS, remoteIds.toSet())
-            .putString(KEY_SONGS, SongCodec.encodeList(retainedSongs))
-            .apply()
+        preferences.edit().putStringSet(KEY_IDS, remoteIds.toSet()).apply()
     }
 
     /**
@@ -38,49 +35,24 @@ class FavoritesStore(context: Context) {
      *
      * 只调整本次出现过的歌:没出现的歌不能因为「这次没提到」就被当成未收藏。
      */
-    fun merge(favoritedIds: Set<String>, seenIds: Set<String>, seenSongs: List<Song> = emptyList()) {
+    fun merge(favoritedIds: Set<String>, seenIds: Set<String>) {
         val merged = ids().toMutableSet()
         merged.removeAll(seenIds)
         merged.addAll(favoritedIds)
-        val refreshedIds = favoritedIds.toSet()
-        val refreshedSongs = seenSongs.filter { it.remoteId?.toString() in refreshedIds }
-        val cachedSongs = songs().filterNot { it.remoteId?.toString() in seenIds }
-        val songSnapshots = dedupeSongs(refreshedSongs + cachedSongs).filter { it.remoteId?.toString() in merged }
-        preferences.edit()
-            .putStringSet(KEY_IDS, merged)
-            .putString(KEY_SONGS, SongCodec.encodeList(songSnapshots))
-            .apply()
+        preferences.edit().putStringSet(KEY_IDS, merged).apply()
     }
 
-    fun set(song: Song, favorite: Boolean) {
-        val remoteId = song.remoteId ?: return
+    fun set(remoteId: Long, favorite: Boolean) {
         val updated = ids().toMutableSet()
         if (favorite) updated.add(remoteId.toString()) else updated.remove(remoteId.toString())
-        val songSnapshots = if (favorite) {
-            dedupeSongs(listOf(song) + songs())
-        } else {
-            songs().filterNot { it.remoteId == remoteId }
-        }
-        preferences.edit()
-            .putStringSet(KEY_IDS, updated)
-            .putString(KEY_SONGS, SongCodec.encodeList(songSnapshots))
-            .apply()
+        preferences.edit().putStringSet(KEY_IDS, updated).apply()
     }
 
     /** 退出登录时清空：收藏是账号状态，换账号不能沿用上一个人的。 */
-    fun clear() = preferences.edit().remove(KEY_IDS).remove(KEY_SONGS).apply()
-
-    private fun dedupeSongs(songs: List<Song>): List<Song> {
-        val seen = HashSet<String>(songs.size)
-        return songs.filter { song ->
-            val key = song.remoteId?.let { "remote:$it" }
-                ?: "local:${song.audioUri.orEmpty()}#${song.title}#${song.artist}"
-            seen.add(key)
-        }
-    }
+    fun clear() = preferences.edit().remove(KEY_IDS).remove(LEGACY_KEY_SONGS).apply()
 
     private companion object {
         const val KEY_IDS = "favorite_ids"
-        const val KEY_SONGS = "favorite_songs"
+        const val LEGACY_KEY_SONGS = "favorite_songs"
     }
 }
