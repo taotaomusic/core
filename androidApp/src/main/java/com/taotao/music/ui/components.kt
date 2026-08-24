@@ -228,9 +228,15 @@ fun MiniPlayer(
             Text(song.title, fontWeight = FontWeight.Bold, maxLines = 1)
             Text(song.artist, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, maxLines = 1)
         }
-        IconButton(onClick = onPrevious) { Icon(Icons.Default.SkipPrevious, "上一首") }
-        IconButton(onClick = onTogglePlaying) { PlayPauseIcon(isPlaying) }
-        IconButton(onClick = onNext) { Icon(Icons.Default.SkipNext, "下一首") }
+        IconButton(onClick = onPrevious) {
+            Icon(Icons.Default.SkipPrevious, "上一首", tint = MaterialTheme.colorScheme.onSurface)
+        }
+        IconButton(onClick = onTogglePlaying) {
+            PlayPauseIcon(isPlaying, tint = MaterialTheme.colorScheme.onSurface)
+        }
+        IconButton(onClick = onNext) {
+            Icon(Icons.Default.SkipNext, "下一首", tint = MaterialTheme.colorScheme.onSurface)
+        }
     }
 }
 

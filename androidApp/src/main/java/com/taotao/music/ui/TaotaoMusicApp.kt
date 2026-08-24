@@ -127,8 +127,9 @@ fun TaotaoMusicApp() {
     var isLoadingMore by remember { mutableStateOf(false) }
     /** 收藏缓存被改动后自增，让读了它的界面重新组合 —— SharedPreferences 本身不是可观察的。 */
     var favoriteRevision by remember { mutableIntStateOf(0) }
-    var favoriteLibrarySongs by remember { mutableStateOf(emptyList<Song>()) }
-    var favoriteLibraryLoading by remember { mutableStateOf(false) }
+    // 收藏页先同步读取本地展示缓存，页面打开时无需等待云端请求与加载动画。
+    var favoriteLibrarySongs by remember { mutableStateOf(favoritesStore.cachedSongs()) }
+    var favoriteLibrarySyncing by remember { mutableStateOf(false) }
     var favoriteLibraryError by remember { mutableStateOf<String?>(null) }
     var showSettingsPage by remember { mutableStateOf(false) }
     var mineLibrarySection by remember { mutableStateOf<MineLibrarySection?>(null) }
@@ -157,6 +158,8 @@ fun TaotaoMusicApp() {
 
     /** 已下载歌曲的 ID 集合，用于在搜索结果里标出「已下载」。 */
     val downloadedIds = remember(downloadedSongs) { downloadedSongs.mapNotNull { it.remoteId }.toSet() }
+    // SharedPreferences 不是可观察状态；把修订号纳入 remember，点击收藏后当前页面立刻重组。
+    val favoriteIds = remember(favoriteRevision) { favoritesStore.ids() }
 
     /**
      * 临时切换当前这首歌的音质，不改默认设置。
@@ -252,7 +255,7 @@ fun TaotaoMusicApp() {
         val remoteId = song.remoteId ?: return
         val target = !favoritesStore.contains(remoteId)
         val previousLibrary = favoriteLibrarySongs
-        favoritesStore.set(remoteId, target)
+        favoritesStore.set(remoteId, target, song)
         favoriteLibrarySongs = if (target) {
             listOf(song.copy(favorited = true)) + favoriteLibrarySongs.filterNot { it.remoteId == remoteId }
         } else {
@@ -262,7 +265,7 @@ fun TaotaoMusicApp() {
         scope.launch {
             runCatching { withContext(Dispatchers.IO) { musicApi.setFavorite(song, target) } }
                 .onFailure {
-                    favoritesStore.set(remoteId, !target)
+                    favoritesStore.set(remoteId, !target, song)
                     favoriteLibrarySongs = previousLibrary
                     favoriteRevision++
                     message = it.message ?: "收藏操作失败，请稍后重试"
@@ -271,11 +274,13 @@ fun TaotaoMusicApp() {
     }
 
     /**
-     * 收藏页直接读取账号收藏接口；本地只复用已经拿到的歌曲元信息，不再维护第二套收藏夹。
+     * 收藏页先展示本地缓存，再在后台用账号收藏接口校正。
+     *
+     * 缓存只负责首屏展示，收藏关系仍完全以服务端返回的 ID 为准，因此不会形成第二套收藏夹。
      */
     fun refreshFavoriteLibrary() {
-        if (favoriteLibraryLoading) return
-        favoriteLibraryLoading = true
+        if (favoriteLibrarySyncing) return
+        favoriteLibrarySyncing = true
         favoriteLibraryError = null
         val knownSongs = favoriteLibrarySongs + playbackSongs + searchResults +
             playbackHistory.map { it.song } + downloadedSongs
@@ -283,13 +288,13 @@ fun TaotaoMusicApp() {
             runCatching {
                 withContext(Dispatchers.IO) { musicApi.favoriteLibrary(knownSongs, playbackQuality.value) }
             }.onSuccess { library ->
-                favoritesStore.replaceAll(library.ids)
+                favoritesStore.replaceLibrary(library.ids, library.songs)
                 favoriteLibrarySongs = library.songs
                 favoriteRevision++
             }.onFailure {
                 favoriteLibraryError = it.message ?: "收藏列表加载失败"
             }
-            favoriteLibraryLoading = false
+            favoriteLibrarySyncing = false
         }
     }
 
@@ -414,8 +419,12 @@ fun TaotaoMusicApp() {
      */
     LaunchedEffect(signedIn) {
         if (!signedIn) return@LaunchedEffect
-        runCatching { withContext(Dispatchers.IO) { favoritesStore.replaceAll(musicApi.favoriteIds()) } }
-            .onSuccess { favoriteRevision++ }
+        runCatching { withContext(Dispatchers.IO) { musicApi.favoriteIds() } }
+            .onSuccess { remoteIds ->
+                favoritesStore.replaceAll(remoteIds)
+                favoriteLibrarySongs = favoritesStore.cachedSongs()
+                favoriteRevision++
+            }
     }
 
     LaunchedEffect(restoredPlayback) {
@@ -524,9 +533,7 @@ fun TaotaoMusicApp() {
 
     /** 把一页结果里的收藏状态同步进本地缓存。服务端给的是权威值。 */
     suspend fun mergeFavorites(songs: List<Song>) {
-        val seen = songs.mapNotNull { it.remoteId?.toString() }.toSet()
-        val favorited = songs.filter { it.favorited }.mapNotNull { it.remoteId?.toString() }.toSet()
-        withContext(Dispatchers.IO) { favoritesStore.merge(favorited, seen) }
+        withContext(Dispatchers.IO) { favoritesStore.merge(songs) }
         favoriteRevision++
     }
 
@@ -865,18 +872,14 @@ fun TaotaoMusicApp() {
             } else if (page == "mine-favorites") {
                 MusicLibraryPage(
                     title = "收藏夹",
-                    subtitle = when {
-                        favoriteLibraryLoading -> "正在同步账号收藏…"
-                        else -> "${favoriteLibrarySongs.size} 首 · 与账号收藏同步"
-                    },
+                    subtitle = "${favoriteLibrarySongs.size} 首 · 本地优先，后台同步账号收藏",
                     songs = favoriteLibrarySongs,
                     emptyTitle = "收藏夹还是空的",
                     emptyDescription = "点击歌曲旁的心形后，会通过收藏接口同步到这里",
                     onBack = { mineLibrarySection = null },
                     onSongClick = { index -> playSong(favoriteLibrarySongs, index) },
-                    isFavorite = { song -> favoritesStore.contains(song.remoteId) },
+                    isFavorite = { song -> song.remoteId?.toString() in favoriteIds },
                     onToggleFavorite = { song -> toggleFavorite(song) },
-                    loading = favoriteLibraryLoading,
                     error = favoriteLibraryError,
                     onRetry = { refreshFavoriteLibrary() },
                 )
@@ -899,7 +902,7 @@ fun TaotaoMusicApp() {
                     emptyDescription = "下载完成的音乐会集中显示在这里",
                     onBack = { mineLibrarySection = null },
                     onSongClick = { index -> playSong(downloadedSongs, index) },
-                    isFavorite = { song -> favoritesStore.contains(song.remoteId) },
+                    isFavorite = { song -> song.remoteId?.toString() in favoriteIds },
                     onToggleFavorite = { song -> toggleFavorite(song) },
                     onDelete = { song -> pendingDelete = song },
                 )
@@ -953,99 +956,102 @@ fun TaotaoMusicApp() {
         }
     }
 
-    pendingDelete?.let { target ->
-        AlertDialog(
-            onDismissRequest = { pendingDelete = null },
-            title = { Text("删除下载") },
-            text = { Text("将删除「${target.title}」的音频、封面和歌词，无法恢复。") },
-            confirmButton = {
-                TextButton(onClick = {
-                    pendingDelete = null
-                    deleteDownloaded(target)
-                }) { Text("删除", color = TaotaoCoral) }
-            },
-            dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("取消") } },
-        )
-    }
-
-    // 下载前的音质面板：查一次 /song/info 拿到这首歌真实存在的档位与体积。
-    val pendingDownload = downloadTarget
-    if (pendingDownload != null) {
-        LaunchedEffect(pendingDownload.first.remoteId) {
-            qualitiesLoading = true
-            songQualities = runCatching {
-                withContext(Dispatchers.IO) { musicApi.requestQualities(pendingDownload.first) }
-            }.map { options ->
-                options.map { QualityChoice(it.quality, it.label, it.size) }
-            }.getOrDefault(staticQualityChoices())
-            qualitiesLoading = false
+    // 弹窗和底部面板位于主 Surface 之后，必须显式继承当前外观主题；否则暗色模式会退回默认亮色。
+    TaotaoTheme(darkTheme = darkTheme) {
+        pendingDelete?.let { target ->
+            AlertDialog(
+                onDismissRequest = { pendingDelete = null },
+                title = { Text("删除下载") },
+                text = { Text("将删除「${target.title}」的音频、封面和歌词，无法恢复。") },
+                confirmButton = {
+                    TextButton(onClick = {
+                        pendingDelete = null
+                        deleteDownloaded(target)
+                    }) { Text("删除", color = TaotaoCoral) }
+                },
+                dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("取消") } },
+            )
         }
-        QualitySheet(
-            title = "下载音质",
-            choices = songQualities,
-            selected = downloadQuality.value,
-            loading = qualitiesLoading,
-            note = pendingDownload.first.title,
-            onPick = { picked ->
-                val (song, index) = pendingDownload
-                downloadTarget = null
-                startDownload(song, index, picked)
-            },
-            onDismiss = { downloadTarget = null },
-        )
-    }
 
-    when (qualitySheet) {
-        QualitySheetKind.CURRENT_SONG -> {
-            val current = playbackSongs.getOrNull(selectedIndex)
-            LaunchedEffect(current?.remoteId) {
-                if (current == null) return@LaunchedEffect
+        // 下载前的音质面板：查一次 /song/info 拿到这首歌真实存在的档位与体积。
+        val pendingDownload = downloadTarget
+        if (pendingDownload != null) {
+            LaunchedEffect(pendingDownload.first.remoteId) {
                 qualitiesLoading = true
                 songQualities = runCatching {
-                    withContext(Dispatchers.IO) { musicApi.requestQualities(current) }
-                }.map { options -> options.map { QualityChoice(it.quality, it.label, it.size) } }
-                    .getOrDefault(staticQualityChoices())
+                    withContext(Dispatchers.IO) { musicApi.requestQualities(pendingDownload.first) }
+                }.map { options ->
+                    options.map { QualityChoice(it.quality, it.label, it.size) }
+                }.getOrDefault(staticQualityChoices())
                 qualitiesLoading = false
             }
             QualitySheet(
-                title = "音质",
+                title = "下载音质",
                 choices = songQualities,
-                selected = current?.audioUri?.let { TencentMusicApi.parsePlaceholder(it)?.second }
-                    ?: playbackQuality.value,
+                selected = downloadQuality.value,
                 loading = qualitiesLoading,
-                note = "只对这一首生效，不改默认设置。",
+                note = pendingDownload.first.title,
                 onPick = { picked ->
+                    val (song, index) = pendingDownload
+                    downloadTarget = null
+                    startDownload(song, index, picked)
+                },
+                onDismiss = { downloadTarget = null },
+            )
+        }
+
+        when (qualitySheet) {
+            QualitySheetKind.CURRENT_SONG -> {
+                val current = playbackSongs.getOrNull(selectedIndex)
+                LaunchedEffect(current?.remoteId) {
+                    if (current == null) return@LaunchedEffect
+                    qualitiesLoading = true
+                    songQualities = runCatching {
+                        withContext(Dispatchers.IO) { musicApi.requestQualities(current) }
+                    }.map { options -> options.map { QualityChoice(it.quality, it.label, it.size) } }
+                        .getOrDefault(staticQualityChoices())
+                    qualitiesLoading = false
+                }
+                QualitySheet(
+                    title = "音质",
+                    choices = songQualities,
+                    selected = current?.audioUri?.let { TencentMusicApi.parsePlaceholder(it)?.second }
+                        ?: playbackQuality.value,
+                    loading = qualitiesLoading,
+                    note = "只对这一首生效，不改默认设置。",
+                    onPick = { picked ->
+                        qualitySheet = null
+                        switchCurrentQuality(picked)
+                    },
+                    onDismiss = { qualitySheet = null },
+                )
+            }
+            QualitySheetKind.PLAYBACK_DEFAULT -> QualitySheet(
+                title = "默认播放音质",
+                choices = staticQualityChoices(),
+                selected = playbackQuality.value,
+                note = "越高越费流量。某首歌没有所选档位时会自动降到最接近的可用档。",
+                onPick = { picked ->
+                    playbackQuality = AudioQuality.of(picked)
+                    qualityStore.setPlaybackQuality(playbackQuality)
                     qualitySheet = null
-                    switchCurrentQuality(picked)
                 },
                 onDismiss = { qualitySheet = null },
             )
+            QualitySheetKind.DOWNLOAD_DEFAULT -> QualitySheet(
+                title = "默认下载音质",
+                choices = staticQualityChoices(),
+                selected = downloadQuality.value,
+                note = "下载只花一次流量，可以选得比播放更高。",
+                onPick = { picked ->
+                    downloadQuality = AudioQuality.of(picked)
+                    qualityStore.setDownloadQuality(downloadQuality)
+                    qualitySheet = null
+                },
+                onDismiss = { qualitySheet = null },
+            )
+            null -> Unit
         }
-        QualitySheetKind.PLAYBACK_DEFAULT -> QualitySheet(
-            title = "默认播放音质",
-            choices = staticQualityChoices(),
-            selected = playbackQuality.value,
-            note = "越高越费流量。某首歌没有所选档位时会自动降到最接近的可用档。",
-            onPick = { picked ->
-                playbackQuality = AudioQuality.of(picked)
-                qualityStore.setPlaybackQuality(playbackQuality)
-                qualitySheet = null
-            },
-            onDismiss = { qualitySheet = null },
-        )
-        QualitySheetKind.DOWNLOAD_DEFAULT -> QualitySheet(
-            title = "默认下载音质",
-            choices = staticQualityChoices(),
-            selected = downloadQuality.value,
-            note = "下载只花一次流量，可以选得比播放更高。",
-            onPick = { picked ->
-                downloadQuality = AudioQuality.of(picked)
-                qualityStore.setDownloadQuality(downloadQuality)
-                qualitySheet = null
-            },
-            onDismiss = { qualitySheet = null },
-        )
-        null -> Unit
     }
 }
 
