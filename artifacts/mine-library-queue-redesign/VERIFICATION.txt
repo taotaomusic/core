@@ -1,0 +1,88 @@
+桃桃音乐“我的音乐库与播放列表来源”交付验证
+
+分支：codex/mine-library-queue-redesign
+基线提交：467c88644b59a895789219bf50a0babfe3da3879
+
+变更分支/字段：
+1. FavoritesStore：新增收藏歌曲快照缓存、可见歌曲合并、按 Song 收藏/取消收藏与清空缓存。
+2. TaotaoMusicApp：新增 mineLibrarySection 页面状态；“我的”页拆分收藏夹、最近播放、本地歌曲；播放列表增加当前/最近/本地来源标签，点击来源歌曲后按该列表顺序替换队列继续播放。
+3. MineLibraryPages：新增 MineLibrarySection、MusicLibraryPage、PlaybackHistoryPage，并同步 switchTab、AnimatedContent targetState、BackHandler 三处导航规则。
+
+四个交付物：
+MODIFIED_FILE=F:\music\artifacts\mine-library-queue-redesign\MODIFIED_FILE.zip
+DIFF_FILE=F:\music\artifacts\mine-library-queue-redesign\DIFF_FILE.patch
+VERIFICATION=F:\music\artifacts\mine-library-queue-redesign\VERIFICATION.txt
+ROLLBACK=F:\music\artifacts\mine-library-queue-redesign\ROLLBACK.sh
+
+源码 SHA-256（原始 -> 修改后）：
+androidApp/src/main/java/com/taotao/music/data/FavoritesStore.kt
+4bccc8812ba81a25eb307683f2018553b92b2fd5cee8711596171a13621374c6 -> b9ee41fac85ed6f7c06cc62a490ffc918a4be5ad20efc0d28ec725d2b7fc74a1
+androidApp/src/main/java/com/taotao/music/ui/TaotaoMusicApp.kt
+d5e3463d0ce8fa647cb5b0f05463036abbf1a0149c29273f38de5d60b8e8d66a -> b41f8993f165d76735aaa59cbd62bd40e03d739b824c75d5187e4152a225b822
+androidApp/src/main/java/com/taotao/music/ui/MineLibraryPages.kt
+原始状态：不存在 -> e065384919eb5a3d4497fdc8e6f09aaaf08d64b32d598840d07e5d76373d50a1
+
+BASELINE
+命令：.\gradlew.bat :androidApp:compileDebugKotlin --console=plain
+输入：提交 467c88644b59a895789219bf50a0babfe3da3879 的原始源码。
+字面输出/结果：
+BUILD SUCCESSFUL in 4s
+30 actionable tasks: 30 up-to-date
+EXIT_STATUS=0
+退出状态：0
+
+MODIFIED
+命令：.\gradlew.bat :androidApp:compileDebugKotlin --console=plain
+输入：FavoritesStore.kt、TaotaoMusicApp.kt 与新增 MineLibraryPages.kt 的修改后源码。
+字面输出/结果：
+BUILD SUCCESSFUL in 11s
+30 actionable tasks: 1 executed, 29 up-to-date
+EXIT_STATUS=0
+退出状态：0
+
+MODIFIED_TESTS
+命令：.\gradlew.bat :shared:test :androidApp:testDebugUnitTest :androidApp:compileDebugKotlin --console=plain
+输入：修改后源码与现有共享测试、Android 单元测试任务。
+字面输出/结果：
+BUILD SUCCESSFUL in 5s
+58 actionable tasks: 4 executed, 54 up-to-date
+EXIT_STATUS=0
+退出状态：0
+
+ROLLBACK
+命令：F:\Git\bin\bash.exe F:/music/artifacts/mine-library-queue-redesign/ROLLBACK.sh F:/music-rollback-check-20260824-1600
+输入：基线提交的独立工作树副本，先应用 DIFF_FILE.patch，再执行 ROLLBACK.sh。
+字面输出/结果：ROLLBACK_RESULT=mine library and queue source changes restored
+退出状态：0
+恢复状态：git status 为空；MineLibraryPages.kt 不存在；TaotaoMusicApp.kt、FavoritesStore.kt、components.kt 的 Git blob 分别恢复为 973b7ee197b221bde9da8d8d8feb5ac271701488、cb9346814e4563545912f8e06b3b482bd60735f0、7d58045c6aabb0f192fea0ff9082cc78ca183ce9。
+
+ROLLBACK_RESTORED_BUILD
+命令：.\gradlew.bat :androidApp:compileDebugKotlin --console=plain
+输入：执行回滚后的独立工作树副本，并复制本机 local.properties 以提供 Android SDK 路径。
+字面输出/结果：
+BUILD SUCCESSFUL in 15s
+30 actionable tasks: 26 executed, 4 up-to-date
+ROLLBACK_COMPILE_EXIT_STATUS=0
+退出状态：0
+恢复行为：回滚副本重新编译成功，恢复基线页面、收藏存储与播放列表行为；主工作树仍保留修改后状态。
+
+RELEASE
+命令：.\gradlew.bat :androidApp:assembleRelease --console=plain
+输入：修改后源码与本机 Release 签名配置。
+字面输出/结果：
+BUILD SUCCESSFUL in 1m 18s
+89 actionable tasks: 20 executed, 69 up-to-date
+EXIT_STATUS=0
+退出状态：0
+APK：F:\music\androidApp\build\outputs\apk\release\androidApp-release.apk
+版本：versionCode=76，versionName=1.0.75
+大小：14298937 字节
+SHA-256：f56a491385f5352f999b5e0d799dd0c74dd454ee191eb1ffcf22f6aaa5d795cf
+签名结果：Verifies；Verified using v2 scheme (APK Signature Scheme v2): true；Number of signers: 1；EXIT_STATUS=0。
+
+ONLINE_RELEASE
+登记结果：HTTP 201；versionCode=76；rollout_percent=0；enabled=1。
+下载结果：RANGE_HTTP=206；RANGE_SIZE=100；CONTENT_RANGE=Content-Range: bytes 100-199/14298937；OVERFLOW_HTTP=416；FULL_HTTP=200；HASH_MATCH=True。
+放量结果：HTTP 200；versionCode=76；rollout_percent=100；enabled=1。
+旧版结果：HTTP 200；versionCode=75；rollout_percent=0；enabled=0。
+引导检查：HTTP 200；available=true；versionCode=76；versionName=1.0.75；apkSha256=f56a491385f5352f999b5e0d799dd0c74dd454ee191eb1ffcf22f6aaa5d795cf。

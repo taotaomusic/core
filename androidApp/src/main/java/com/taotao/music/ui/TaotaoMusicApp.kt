@@ -16,7 +16,6 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.tween
@@ -42,7 +41,6 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
@@ -86,10 +84,6 @@ import kotlinx.coroutines.isActive
 import androidx.lifecycle.LifecycleEventObserver
 import android.net.Uri
 import java.io.File
-import java.text.SimpleDateFormat
-import java.util.Calendar
-import java.util.Date
-import java.util.Locale
 
 @Composable
 fun TaotaoMusicApp() {
@@ -111,7 +105,6 @@ fun TaotaoMusicApp() {
     var playbackSongs by remember { mutableStateOf(emptyList<Song>()) }
     var searchResults by remember { mutableStateOf(emptyList<Song>()) }
     var selectedIndex by remember { mutableIntStateOf(0) }
-    var selectedTab by remember { mutableIntStateOf(0) }
     var searchKeyword by remember { mutableStateOf("") }
     var showPlayerDetail by remember { mutableStateOf(false) }
     var showSearchPage by remember { mutableStateOf(false) }
@@ -135,6 +128,7 @@ fun TaotaoMusicApp() {
     /** 收藏缓存被改动后自增，让读了它的界面重新组合 —— SharedPreferences 本身不是可观察的。 */
     var favoriteRevision by remember { mutableIntStateOf(0) }
     var showSettingsPage by remember { mutableStateOf(false) }
+    var mineLibrarySection by remember { mutableStateOf<MineLibrarySection?>(null) }
     var playbackQuality by remember { mutableStateOf(qualityStore.playbackQuality()) }
     var downloadQuality by remember { mutableStateOf(qualityStore.downloadQuality()) }
     /** 待删除确认的已下载歌曲。删除是不可逆的，不做二次确认容易误触。 */
@@ -254,12 +248,12 @@ fun TaotaoMusicApp() {
     fun toggleFavorite(song: Song) {
         val remoteId = song.remoteId ?: return
         val target = !favoritesStore.contains(remoteId)
-        favoritesStore.set(remoteId, target)
+        favoritesStore.set(song, target)
         favoriteRevision++
         scope.launch {
             runCatching { withContext(Dispatchers.IO) { musicApi.setFavorite(song, target) } }
                 .onFailure {
-                    favoritesStore.set(remoteId, !target)
+                    favoritesStore.set(song, !target)
                     favoriteRevision++
                     message = it.message ?: "收藏操作失败，请稍后重试"
                 }
@@ -270,11 +264,12 @@ fun TaotaoMusicApp() {
      * 物理返回键：详情页先收起详情，搜索页先退出搜索，都不在时禁用拦截，
      * 交回系统默认行为（退出应用）—— 这样不必自己去拿 onBackPressedDispatcher。
      */
-    BackHandler(enabled = showPlayerDetail || showSearchPage || showSettingsPage) {
+    BackHandler(enabled = showPlayerDetail || showSearchPage || showSettingsPage || mineLibrarySection != null) {
         when {
             showPlayerDetail -> showPlayerDetail = false
             showSettingsPage -> showSettingsPage = false
             showSearchPage -> showSearchPage = false
+            mineLibrarySection != null -> mineLibrarySection = null
         }
     }
 
@@ -498,7 +493,7 @@ fun TaotaoMusicApp() {
     suspend fun mergeFavorites(songs: List<Song>) {
         val seen = songs.mapNotNull { it.remoteId?.toString() }.toSet()
         val favorited = songs.filter { it.favorited }.mapNotNull { it.remoteId?.toString() }.toSet()
-        withContext(Dispatchers.IO) { favoritesStore.merge(favorited, seen) }
+        withContext(Dispatchers.IO) { favoritesStore.merge(favorited, seen, songs) }
         favoriteRevision++
     }
 
@@ -704,6 +699,7 @@ fun TaotaoMusicApp() {
                             showPlayerDetail = false
                             showSearchPage = false
                             showSettingsPage = false
+                            mineLibrarySection = null
                         }
                         NavigationBarItem(bottomTab == 0, { switchTab(0) }, icon = { Icon(Icons.Default.MusicNote, "音乐") }, label = { Text("音乐") })
                         NavigationBarItem(bottomTab == 1, { switchTab(1) }, icon = { Icon(Icons.Default.Person, "我的") }, label = { Text("我的") })
@@ -716,6 +712,9 @@ fun TaotaoMusicApp() {
                     showPlayerDetail -> "detail"
                     showSettingsPage -> "settings"
                     showSearchPage -> "search"
+                    mineLibrarySection == MineLibrarySection.FAVORITES -> "mine-favorites"
+                    mineLibrarySection == MineLibrarySection.HISTORY -> "mine-history"
+                    mineLibrarySection == MineLibrarySection.LOCAL -> "mine-local"
                     // 底部标签也参与：不带上它的话音乐 ⇄ 我的是硬切，
                     // 而其它换页都有过渡，观感上很不一致。
                     bottomTab == 1 -> "mine"
@@ -764,6 +763,13 @@ fun TaotaoMusicApp() {
                     },
                     onRemoveQueueItem = { index -> audioPlayer.removeQueueItem(index) },
                     onKeepOnlyCurrent = { audioPlayer.keepOnlyCurrent() },
+                    history = playbackHistory,
+                    localSongs = downloadedSongs,
+                    onPlayHistory = { index ->
+                        val songs = playbackHistory.map { it.song }
+                        playSong(songs, index)
+                    },
+                    onPlayLocal = { index -> playSong(downloadedSongs, index) },
                     onMessage = { message = it },
                     favorited = remember(selectedIndex, favoriteRevision, playbackSongs) {
                         favoritesStore.contains(playbackSongs.getOrNull(selectedIndex)?.remoteId)
@@ -823,6 +829,42 @@ fun TaotaoMusicApp() {
                     },
                     onBack = { showSettingsPage = false },
                 )
+            } else if (page == "mine-favorites") {
+                val favoriteSongs = remember(favoriteRevision) { favoritesStore.songs() }
+                MusicLibraryPage(
+                    title = "收藏夹",
+                    subtitle = "${favoriteSongs.size} 首已缓存歌曲",
+                    songs = favoriteSongs,
+                    emptyTitle = "收藏夹还是空的",
+                    emptyDescription = "收藏过的歌曲会在播放或搜索后显示在这里",
+                    onBack = { mineLibrarySection = null },
+                    onSongClick = { index -> playSong(favoriteSongs, index) },
+                    isFavorite = { song -> favoritesStore.contains(song.remoteId) },
+                    onToggleFavorite = { song -> toggleFavorite(song) },
+                )
+            } else if (page == "mine-history") {
+                PlaybackHistoryPage(
+                    history = playbackHistory,
+                    onBack = { mineLibrarySection = null },
+                    onSongClick = { index -> playSong(playbackHistory.map { it.song }, index) },
+                    onClear = {
+                        playbackHistoryStore.clear()
+                        playbackHistory = emptyList()
+                    },
+                )
+            } else if (page == "mine-local") {
+                MusicLibraryPage(
+                    title = "本地歌曲",
+                    subtitle = "已下载到当前设备 · ${downloadedSongs.size} 首",
+                    songs = downloadedSongs,
+                    emptyTitle = "还没有本地歌曲",
+                    emptyDescription = "下载完成的音乐会集中显示在这里",
+                    onBack = { mineLibrarySection = null },
+                    onSongClick = { index -> playSong(downloadedSongs, index) },
+                    isFavorite = { song -> favoritesStore.contains(song.remoteId) },
+                    onToggleFavorite = { song -> toggleFavorite(song) },
+                    onDelete = { song -> pendingDelete = song },
+                )
             } else if (page == "mine") {
                 MinePage(
                     onLogout = {
@@ -841,12 +883,12 @@ fun TaotaoMusicApp() {
                     checking = updateStatus.stage == UpdateStage.CHECKING,
                     onCheckUpdate = { scope.launch { updateManager.check(manual = true) } },
                     onMessage = { message = it },
-                    history = playbackHistory.take(20),
-                    onHistoryClick = { song -> playSong(listOf(song), 0) },
-                    onHistoryClear = {
-                        playbackHistoryStore.clear()
-                        playbackHistory = emptyList()
-                    },
+                    favoriteCount = favoritesStore.songs().size,
+                    historyCount = playbackHistory.size,
+                    localCount = downloadedSongs.size,
+                    onOpenFavorites = { mineLibrarySection = MineLibrarySection.FAVORITES },
+                    onOpenHistory = { mineLibrarySection = MineLibrarySection.HISTORY },
+                    onOpenLocal = { mineLibrarySection = MineLibrarySection.LOCAL },
                 )
             } else Column(Modifier.fillMaxSize().padding(horizontal = 22.dp)) {
                 Spacer(Modifier.height(24.dp))
@@ -857,25 +899,6 @@ fun TaotaoMusicApp() {
                         startSearch()
                     }
                 }, onFocus = { openSearchPage() })
-                CategoryTabs(selectedTab) { selectedTab = it }
-                if (selectedTab == 2) {
-                    SectionTitle("本地音乐")
-                    if (downloadedSongs.isEmpty()) {
-                        Text("还没有下载歌曲", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    } else {
-                        downloadedSongs.forEachIndexed { index, song ->
-                            SongListItem(
-                                song = song,
-                                active = false,
-                                favorited = remember(song.remoteId, favoriteRevision) {
-                                    favoritesStore.contains(song.remoteId)
-                                },
-                                onToggleFavorite = song.remoteId?.let { { toggleFavorite(song) } },
-                                onDelete = { pendingDelete = song },
-                            ) { playSong(downloadedSongs, index) }
-                        }
-                    }
-                }
                 Text("在线搜索歌曲，下载后可在无网络时播放", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
                 SectionTitle("今日推荐")
                 RecommendationCard()
@@ -1023,9 +1046,12 @@ private fun MinePage(
     checking: Boolean,
     onCheckUpdate: () -> Unit,
     onMessage: (String) -> Unit,
-    history: List<PlaybackHistoryEntry>,
-    onHistoryClick: (Song) -> Unit,
-    onHistoryClear: () -> Unit,
+    favoriteCount: Int,
+    historyCount: Int,
+    localCount: Int,
+    onOpenFavorites: () -> Unit,
+    onOpenHistory: () -> Unit,
+    onOpenLocal: () -> Unit,
 ) {
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
@@ -1043,39 +1069,60 @@ private fun MinePage(
         item { Text("我的", fontSize = 30.sp, fontWeight = FontWeight.Bold) }
         item {
             Row(
-                modifier = Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 2.dp),
+                modifier = Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 8.dp)
+                    .clip(RoundedCornerShape(22.dp)).background(MaterialTheme.colorScheme.surface).padding(18.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Column(Modifier.weight(1f)) {
-                    Text("最近播放", fontSize = 21.sp, fontWeight = FontWeight.Bold)
+                Box(
+                    Modifier.size(62.dp).clip(CircleShape).background(TaotaoCoral.copy(alpha = 0.16f)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Default.Person, null, tint = TaotaoCoral, modifier = Modifier.size(30.dp))
+                }
+                Column(Modifier.weight(1f).padding(start = 15.dp)) {
+                    Text("桃桃音乐", fontSize = 18.sp, fontWeight = FontWeight.Bold)
                     Text(
-                        if (history.isEmpty()) "听过的歌曲会保存在这里" else "按最近播放时间排列 · ${history.size} 首",
+                        "收藏、播放记录和本地歌曲都在这里",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 12.sp,
+                        modifier = Modifier.padding(top = 4.dp),
                     )
                 }
-                if (history.isNotEmpty()) TextButton(onClick = onHistoryClear) { Text("清空") }
             }
         }
-        if (history.isEmpty()) {
-            item {
-                Row(
-                    Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp))
-                        .background(MaterialTheme.colorScheme.surface).padding(18.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(Icons.Default.History, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text(
-                        "还没有播放记录",
-                        modifier = Modifier.padding(start = 12.dp),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-        } else {
-            itemsIndexed(history, key = { _, entry -> playbackHistoryKeyOf(entry.song) }) { _, entry ->
-                PlaybackHistoryRow(entry = entry, onClick = { onHistoryClick(entry.song) })
-            }
+        item { Text("我的音乐", fontSize = 17.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp)) }
+        item {
+            MineActionRow(
+                icon = Icons.Default.Favorite,
+                iconDescription = "收藏夹",
+                title = "收藏夹",
+                subtitle = "$favoriteCount 首",
+                iconTint = TaotaoCoral,
+                trailing = { Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+                onClick = onOpenFavorites,
+            )
+        }
+        item {
+            MineActionRow(
+                icon = Icons.Default.History,
+                iconDescription = "最近播放",
+                title = "最近播放",
+                subtitle = "$historyCount 首",
+                iconTint = TaotaoCoral,
+                trailing = { Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+                onClick = onOpenHistory,
+            )
+        }
+        item {
+            MineActionRow(
+                icon = Icons.Default.DownloadDone,
+                iconDescription = "本地歌曲",
+                title = "本地歌曲",
+                subtitle = "$localCount 首 · 已下载到当前设备",
+                iconTint = TaotaoCoral,
+                trailing = { Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+                onClick = onOpenLocal,
+            )
         }
         item { Text("应用", fontSize = 17.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 12.dp)) }
         item {
@@ -1168,29 +1215,6 @@ private fun MinePage(
     }
 }
 
-/** 「我的」页的播放记录行，封面、歌曲信息和时间保持一条清晰的信息层级。 */
-@Composable
-private fun PlaybackHistoryRow(entry: PlaybackHistoryEntry, onClick: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).clickable(onClick = onClick)
-            .padding(vertical = 7.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        AlbumArt(Color(entry.song.color), 46.dp, 22.sp, entry.song.coverUri)
-        Column(Modifier.weight(1f).padding(start = 12.dp)) {
-            Text(entry.song.title, fontWeight = FontWeight.Medium, maxLines = 1)
-            Text(
-                "${entry.song.artist} · ${formatPlaybackTime(entry.playedAtMillis)}",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontSize = 12.sp,
-                maxLines = 1,
-                modifier = Modifier.padding(top = 3.dp),
-            )
-        }
-        Icon(Icons.Default.PlayArrow, "重新播放", tint = TaotaoCoral)
-    }
-}
-
 /** 设置、更新等入口使用同一套行组件，避免「我的」页出现四种不一致的卡片规则。 */
 @Composable
 private fun MineActionRow(
@@ -1219,27 +1243,6 @@ private fun MineActionRow(
     }
 }
 
-private fun formatPlaybackTime(timestamp: Long): String {
-    if (timestamp <= 0L) return "最近"
-    val now = Calendar.getInstance()
-    val todayStart = (now.clone() as Calendar).apply {
-        set(Calendar.HOUR_OF_DAY, 0)
-        set(Calendar.MINUTE, 0)
-        set(Calendar.SECOND, 0)
-        set(Calendar.MILLISECOND, 0)
-    }.timeInMillis
-    val pattern = when {
-        timestamp >= todayStart -> "今天 HH:mm"
-        timestamp >= todayStart - 24 * 60 * 60 * 1000L -> "昨天 HH:mm"
-        else -> "M月d日"
-    }
-    return SimpleDateFormat(pattern, Locale.SIMPLIFIED_CHINESE).format(Date(timestamp))
-}
-
-/** 本地同名歌曲也可能来自不同文件，历史列表的 key 必须带上文件地址。 */
-private fun playbackHistoryKeyOf(song: Song): String = song.remoteId?.let { "remote:$it" }
-    ?: "local:${song.audioUri.orEmpty()}#${song.title}#${song.artist}"
-
 /**
  * 把导出的日志文件交给系统分享面板。
  *
@@ -1262,35 +1265,6 @@ private fun shareLogFile(context: android.content.Context, file: java.io.File) {
         // 从非 Activity 上下文启动分享面板需要这个标记。
         addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
     })
-}
-
-@Composable private fun CategoryTabs(selectedIndex: Int, onSelected: (Int) -> Unit) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        listOf("为你推荐", "每日推荐", "歌单").forEachIndexed { index, label ->
-            val selected = selectedIndex == index
-            // 选中态渐变而不是硬切；字重没法插值，用缩放补上一点"被按下去"的层次。
-            val color by animateColorAsState(
-                targetValue = if (selected) TaotaoCoral else MaterialTheme.colorScheme.onSurfaceVariant,
-                animationSpec = taotaoTween(AnimationDurations.MICRO),
-                label = "标签着色",
-            )
-            val scale by animateFloatAsState(
-                targetValue = if (selected) 1.06f else 1f,
-                animationSpec = taotaoSpring(),
-                label = "标签缩放",
-            )
-            Text(
-                label,
-                fontSize = 16.sp,
-                fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-                color = color,
-                modifier = Modifier
-                    .clickable { onSelected(index) }
-                    .padding(vertical = 8.dp)
-                    .scale(scale),
-            )
-        }
-    }
 }
 
 @Composable private fun SectionTitle(title: String, modifier: Modifier = Modifier) {
@@ -1326,6 +1300,10 @@ private fun PlayerDetailPage(
     onQueueItemClick: (Int) -> Unit,
     onRemoveQueueItem: (Int) -> Unit,
     onKeepOnlyCurrent: () -> Unit,
+    history: List<PlaybackHistoryEntry>,
+    localSongs: List<Song>,
+    onPlayHistory: (Int) -> Unit,
+    onPlayLocal: (Int) -> Unit,
     onMessage: (String) -> Unit,
     favorited: Boolean,
     onToggleFavorite: () -> Unit,
@@ -1607,6 +1585,10 @@ private fun PlayerDetailPage(
             onCycleRepeat = onToggleRepeat,
             onRemoveItem = onRemoveQueueItem,
             onKeepOnlyCurrent = onKeepOnlyCurrent,
+            history = history,
+            localSongs = localSongs,
+            onPlayHistory = onPlayHistory,
+            onPlayLocal = onPlayLocal,
         )
     }
 }
@@ -1623,90 +1605,135 @@ private fun PlaybackQueueSheet(
     onCycleRepeat: () -> Unit,
     onRemoveItem: (Int) -> Unit,
     onKeepOnlyCurrent: () -> Unit,
+    history: List<PlaybackHistoryEntry>,
+    localSongs: List<Song>,
+    onPlayHistory: (Int) -> Unit,
+    onPlayLocal: (Int) -> Unit,
 ) {
+    var selectedSource by remember { mutableIntStateOf(0) }
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = MaterialTheme.colorScheme.background) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("播放列表", fontSize = 22.sp, fontWeight = FontWeight.Bold)
                     Text(
-                        if (queue.isEmpty()) "当前没有歌曲" else "第 ${(currentIndex + 1).coerceAtMost(queue.size)} 首 · 共 ${queue.size} 首",
+                        when (selectedSource) {
+                            1 -> "从最近播放重新开始"
+                            2 -> "从本地下载中选择"
+                            else -> if (queue.isEmpty()) "当前没有歌曲" else "第 ${(currentIndex + 1).coerceAtMost(queue.size)} 首 · 共 ${queue.size} 首"
+                        },
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 12.sp,
                     )
                 }
-                TextButton(onClick = onKeepOnlyCurrent, enabled = queue.size > 1) {
-                    Icon(Icons.Default.DeleteSweep, null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text("只留当前")
+                if (selectedSource == 0) {
+                    TextButton(onClick = onKeepOnlyCurrent, enabled = queue.size > 1) {
+                        Icon(Icons.Default.DeleteSweep, null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("只留当前")
+                    }
                 }
             }
-            Spacer(Modifier.height(14.dp))
-            Row(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
-                    .background(MaterialTheme.colorScheme.surface).clickable(onClick = onCycleRepeat)
-                    .padding(horizontal = 14.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
+            Spacer(Modifier.height(10.dp))
+            TabRow(
+                selectedTabIndex = selectedSource,
+                containerColor = MaterialTheme.colorScheme.background,
+                contentColor = TaotaoCoral,
             ) {
-                Icon(
-                    if (repeatMode == androidx.media3.common.Player.REPEAT_MODE_ONE) Icons.Default.RepeatOne else Icons.Default.Repeat,
-                    null,
-                    tint = if (repeatMode == androidx.media3.common.Player.REPEAT_MODE_OFF) {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    } else {
-                        TaotaoCoral
-                    },
-                )
-                Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
-                    Text(repeatModeTitle(repeatMode), fontWeight = FontWeight.Bold)
-                    Text(repeatModeDescription(repeatMode), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+                listOf("当前 ${queue.size}", "最近 ${history.size}", "本地 ${localSongs.size}").forEachIndexed { index, label ->
+                    Tab(
+                        selected = selectedSource == index,
+                        onClick = { selectedSource = index },
+                        text = { Text(label, fontSize = 13.sp, fontWeight = if (selectedSource == index) FontWeight.Bold else FontWeight.Normal) },
+                    )
                 }
-                Text("点击切换", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
             }
             Spacer(Modifier.height(12.dp))
-            if (queue.isEmpty()) {
-                Text("队列为空", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(vertical = 24.dp))
-            } else {
-                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 430.dp)) {
-                    itemsIndexed(queue) { index, item ->
-                        val isCurrent = index == currentIndex
-                        Row(
-                            Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp))
-                                .background(if (isCurrent) TaotaoCoral.copy(alpha = 0.10f) else Color.Transparent)
-                                .clickable { onItemClick(index) }.padding(vertical = 8.dp, horizontal = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            AlbumArt(Color(item.color), 42.dp, 20.sp, item.coverUri)
-                            Column(Modifier.weight(1f).padding(start = 12.dp)) {
-                                Text(
-                                    item.title,
-                                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
-                                    color = if (isCurrent) TaotaoCoral else Color.Unspecified,
-                                    maxLines = 1,
-                                )
-                                Text(
-                                    if (isCurrent) "正在播放 · ${item.artist}" else item.artist,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    fontSize = 12.sp,
-                                    maxLines = 1,
-                                )
-                            }
-                            Text(item.duration, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
-                            if (isCurrent) {
-                                Icon(
-                                    Icons.AutoMirrored.Filled.VolumeUp,
-                                    "正在播放",
-                                    tint = TaotaoCoral,
-                                    modifier = Modifier.padding(start = 8.dp).size(19.dp),
-                                )
+            when (selectedSource) {
+                1 -> PlaybackSourceList(
+                    songs = history.map { it.song },
+                    emptyText = "还没有播放记录",
+                    onItemClick = { index ->
+                        onDismiss()
+                        onPlayHistory(index)
+                    },
+                )
+                2 -> PlaybackSourceList(
+                    songs = localSongs,
+                    emptyText = "还没有本地歌曲",
+                    onItemClick = { index ->
+                        onDismiss()
+                        onPlayLocal(index)
+                    },
+                )
+                else -> {
+                    Row(
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
+                            .background(MaterialTheme.colorScheme.surface).clickable(onClick = onCycleRepeat)
+                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            if (repeatMode == androidx.media3.common.Player.REPEAT_MODE_ONE) Icons.Default.RepeatOne else Icons.Default.Repeat,
+                            null,
+                            tint = if (repeatMode == androidx.media3.common.Player.REPEAT_MODE_OFF) {
+                                MaterialTheme.colorScheme.onSurfaceVariant
                             } else {
-                                IconButton(onClick = { onRemoveItem(index) }, modifier = Modifier.size(36.dp)) {
-                                    Icon(
-                                        Icons.Default.Close,
-                                        "从播放列表移除",
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.size(18.dp),
-                                    )
+                                TaotaoCoral
+                            },
+                        )
+                        Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                            Text(repeatModeTitle(repeatMode), fontWeight = FontWeight.Bold)
+                            Text(repeatModeDescription(repeatMode), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+                        }
+                        Text("点击切换", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    if (queue.isEmpty()) {
+                        Text("队列为空", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(vertical = 24.dp))
+                    } else {
+                        LazyColumn(Modifier.fillMaxWidth().heightIn(max = 360.dp)) {
+                            itemsIndexed(queue) { index, item ->
+                                val isCurrent = index == currentIndex
+                                Row(
+                                    Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp))
+                                        .background(if (isCurrent) TaotaoCoral.copy(alpha = 0.10f) else Color.Transparent)
+                                        .clickable { onItemClick(index) }.padding(vertical = 8.dp, horizontal = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    AlbumArt(Color(item.color), 42.dp, 20.sp, item.coverUri)
+                                    Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                                        Text(
+                                            item.title,
+                                            fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
+                                            color = if (isCurrent) TaotaoCoral else Color.Unspecified,
+                                            maxLines = 1,
+                                        )
+                                        Text(
+                                            if (isCurrent) "正在播放 · ${item.artist}" else item.artist,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            fontSize = 12.sp,
+                                            maxLines = 1,
+                                        )
+                                    }
+                                    Text(item.duration, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+                                    if (isCurrent) {
+                                        Icon(
+                                            Icons.AutoMirrored.Filled.VolumeUp,
+                                            "正在播放",
+                                            tint = TaotaoCoral,
+                                            modifier = Modifier.padding(start = 8.dp).size(19.dp),
+                                        )
+                                    } else {
+                                        IconButton(onClick = { onRemoveItem(index) }, modifier = Modifier.size(36.dp)) {
+                                            Icon(
+                                                Icons.Default.Close,
+                                                "从播放列表移除",
+                                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.size(18.dp),
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -1714,6 +1741,47 @@ private fun PlaybackQueueSheet(
                 }
             }
             Spacer(Modifier.height(16.dp))
+        }
+    }
+}
+
+/** 最近播放和本地歌曲只是队列来源，点中后会用该来源的顺序替换当前列表。 */
+@Composable
+private fun PlaybackSourceList(
+    songs: List<Song>,
+    emptyText: String,
+    onItemClick: (Int) -> Unit,
+) {
+    if (songs.isEmpty()) {
+        Text(emptyText, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(vertical = 24.dp))
+        return
+    }
+    Text(
+        "点一首后，将按这个列表的顺序继续播放",
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        fontSize = 12.sp,
+        modifier = Modifier.padding(bottom = 6.dp),
+    )
+    LazyColumn(Modifier.fillMaxWidth().heightIn(max = 390.dp)) {
+        itemsIndexed(songs) { index, item ->
+            Row(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp))
+                    .clickable { onItemClick(index) }.padding(vertical = 8.dp, horizontal = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                AlbumArt(Color(item.color), 42.dp, 20.sp, item.coverUri)
+                Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                    Text(item.title, fontWeight = FontWeight.Medium, maxLines = 1)
+                    Text(item.artist, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, maxLines = 1)
+                }
+                Text(item.duration, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+                Icon(
+                    Icons.Default.PlayArrow,
+                    "从这里播放",
+                    tint = TaotaoCoral,
+                    modifier = Modifier.padding(start = 8.dp).size(20.dp),
+                )
+            }
         }
     }
 }
