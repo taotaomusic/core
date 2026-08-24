@@ -1751,7 +1751,13 @@ private fun PlaybackQueueSheet(
                 }
             }
             Spacer(Modifier.height(12.dp))
-            when (selectedSource) {
+            // 三类来源共享同一块面板区域；只做短促的透明度过渡，不让列表尺寸参与动画。
+            AnimatedContent(
+                targetState = selectedSource,
+                transitionSpec = { contentFadeIn() togetherWith contentFadeOut() using null },
+                label = "播放队列来源",
+            ) { source ->
+            when (source) {
                 1 -> PlaybackSourceList(
                     songs = history.map { it.song },
                     emptyText = "还没有播放记录",
@@ -1797,9 +1803,19 @@ private fun PlaybackQueueSheet(
                         LazyColumn(Modifier.fillMaxWidth().heightIn(max = 360.dp)) {
                             itemsIndexed(queue) { index, item ->
                                 val isCurrent = index == currentIndex
+                                val itemBackground by animateColorAsState(
+                                    targetValue = if (isCurrent) TaotaoCoral.copy(alpha = 0.10f) else Color.Transparent,
+                                    animationSpec = taotaoTween(AnimationDurations.MICRO),
+                                    label = "队列项背景",
+                                )
+                                val itemTitleColor by animateColorAsState(
+                                    targetValue = if (isCurrent) TaotaoCoral else MaterialTheme.colorScheme.onSurface,
+                                    animationSpec = taotaoTween(AnimationDurations.MICRO),
+                                    label = "队列项标题",
+                                )
                                 Row(
                                     Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp))
-                                        .background(if (isCurrent) TaotaoCoral.copy(alpha = 0.10f) else Color.Transparent)
+                                        .background(itemBackground)
                                         .clickable { onItemClick(index) }.padding(vertical = 8.dp, horizontal = 8.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
@@ -1808,7 +1824,7 @@ private fun PlaybackQueueSheet(
                                         Text(
                                             item.title,
                                             fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
-                                            color = if (isCurrent) TaotaoCoral else Color.Unspecified,
+                                            color = itemTitleColor,
                                             maxLines = 1,
                                         )
                                         Text(
@@ -1841,6 +1857,7 @@ private fun PlaybackQueueSheet(
                         }
                     }
                 }
+            }
             }
             Spacer(Modifier.height(16.dp))
         }

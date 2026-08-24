@@ -65,14 +65,18 @@ object AnimationCurves {
     /** 强调入场：先快后慢，元素利落地落位。 */
     val emphasizedIn: Easing = CubicBezierEasing(0.05f, 0.7f, 0.1f, 1f)
 
-    /** 强调离场：先慢后快，迅速让出空间。 */
-    val emphasizedOut: Easing = CubicBezierEasing(0.3f, 0f, 0.8f, 0.15f)
+    /**
+     * 离场也要快速起步：用户已经发起关闭或返回，动画不能先停顿再加速。
+     *
+     * 与强调入场共用明确曲线，保证进入和退出都立即响应；差异由位移方向和层级语义表达。
+     */
+    val emphasizedOut: Easing = CubicBezierEasing(0.05f, 0.7f, 0.1f, 1f)
 
-    /** 标准入场，用于不需要强调的过渡。 */
-    val standardIn: Easing = CubicBezierEasing(0f, 0f, 0.2f, 1f)
+    /** 标准入场，用于不需要额外强调的过渡。 */
+    val standardIn: Easing = CubicBezierEasing(0.05f, 0.7f, 0.1f, 1f)
 
-    /** 标准离场。 */
-    val standardOut: Easing = CubicBezierEasing(0.4f, 0f, 1f, 1f)
+    /** 标准离场：与其他离场一致立即启动，避免视觉迟滞。 */
+    val standardOut: Easing = CubicBezierEasing(0.05f, 0.7f, 0.1f, 1f)
 }
 
 /** 通用 tween。泛型让同一个函数既能驱动 Float（透明度）也能驱动 IntOffset（位移）。 */
@@ -91,9 +95,6 @@ fun <T> taotaoSpring(
     dampingRatio: Float = 0.75f,
     stiffness: Float = Spring.StiffnessMediumLow,
 ): SpringSpec<T> = spring(dampingRatio = dampingRatio, stiffness = stiffness)
-
-/** 点按反馈用的快弹簧：要立刻跟手，不能有拖尾。 */
-fun <T> taotaoSpringSnappy(): SpringSpec<T> = spring(dampingRatio = 0.6f, stiffness = Spring.StiffnessHigh)
 
 /**
  * 页面的层级深度，用来判断换页是"进"还是"退"。
@@ -117,7 +118,7 @@ fun pageDepthOf(page: String): Int = when (page) {
  *   和左右换页不是一回事，音乐类应用几乎都是这个手势语言。
  * - **进入下一层**（首页 → 搜索 / 设置）：新页从右侧滑入，旧页向左退出。
  *   方向必须区分，否则返回时没有任何空间线索，用户感觉不到自己"退回来了"。
- * - **同层之间**（音乐 ⇄ 我的）：没有进退可言，纯淡入淡出，别硬造一个方向。
+ * - **同层之间**（音乐 ⇄ 我的）：没有进退关系，直接完成切换，避免高频导航产生等待。
  *
  * 横向位移按容器宽度取比例而不是写死 dp：同一个数值在小屏和大屏上观感差别很大。
  */
@@ -130,8 +131,13 @@ fun AnimatedContentTransitionScope<String>.pageTransition(): ContentTransform {
                 animationSpec = taotaoTween(AnimationDurations.SHEET, easing = AnimationCurves.emphasizedIn),
             ) { height -> height } + fadeIn(animationSpec = taotaoTween(AnimationDurations.MICRO)),
             // 被盖住的那页轻微缩小并淡出，做出"被压到下面去"的层次。
-            initialContentExit = fadeOut(animationSpec = taotaoTween(AnimationDurations.PAGE)) +
-                scaleOut(targetScale = 0.94f, animationSpec = taotaoTween(AnimationDurations.SHEET)),
+            initialContentExit = fadeOut(
+                animationSpec = taotaoTween(AnimationDurations.PAGE, easing = AnimationCurves.standardOut),
+            ) +
+                scaleOut(
+                    targetScale = 0.94f,
+                    animationSpec = taotaoTween(AnimationDurations.SHEET, easing = AnimationCurves.emphasizedOut),
+                ),
             targetContentZIndex = 1f,
             sizeTransform = null,
         )
@@ -142,7 +148,9 @@ fun AnimatedContentTransitionScope<String>.pageTransition(): ContentTransform {
                 scaleIn(initialScale = 0.94f, animationSpec = taotaoTween(AnimationDurations.SHEET)),
             initialContentExit = slideOutVertically(
                 animationSpec = taotaoTween(AnimationDurations.SHEET, easing = AnimationCurves.emphasizedOut),
-            ) { height -> height } + fadeOut(animationSpec = taotaoTween(AnimationDurations.SHEET)),
+            ) { height -> height } + fadeOut(
+                animationSpec = taotaoTween(AnimationDurations.SHEET, easing = AnimationCurves.standardOut),
+            ),
             sizeTransform = null,
         )
     }
@@ -150,7 +158,7 @@ fun AnimatedContentTransitionScope<String>.pageTransition(): ContentTransform {
     val fromDepth = pageDepthOf(initialState)
     val toDepth = pageDepthOf(targetState)
     if (fromDepth == toDepth) {
-        return contentFadeIn() togetherWith contentFadeOut() using null
+        return EnterTransition.None togetherWith ExitTransition.None using null
     }
     val direction = if (toDepth > fromDepth) 1 else -1
     val enter = slideInHorizontally(
@@ -169,20 +177,6 @@ fun AnimatedContentTransitionScope<String>.pageTransition(): ContentTransform {
     return enter togetherWith exit using null
 }
 
-/**
- * 列表项入场。
- *
- * **刻意不按下标错开延迟。** 搜索结果是逐条流式到达的，不存在需要错开的同帧批次；
- * 按下标加延迟的结果是第 7 项之后每一项都固定晚 168 毫秒才开始淡入，
- * 表现为恒定的迟滞而不是瀑布感 —— 那正是"列表出现得很拖"的来源。
- *
- * 淡入加一点上移和缩放，短促收尾。
- */
-fun listItemEnter(@Suppress("UNUSED_PARAMETER") index: Int = 0): EnterTransition =
-    fadeIn(animationSpec = taotaoTween(AnimationDurations.SHORT, easing = AnimationCurves.standardIn)) +
-        slideInVertically(animationSpec = taotaoSpring(dampingRatio = 0.85f)) { height -> height / 6 } +
-        scaleIn(initialScale = 0.96f, animationSpec = taotaoSpring(dampingRatio = 0.85f))
-
 /** 从下方升起，用于迷你播放器一类贴边元素。 */
 fun riseIn(): EnterTransition =
     slideInVertically(animationSpec = taotaoSpring()) { height -> height } +
@@ -192,7 +186,7 @@ fun sinkOut(): ExitTransition =
     slideOutVertically(
         animationSpec = taotaoTween<IntOffset>(AnimationDurations.SHORT, easing = AnimationCurves.emphasizedOut),
     ) { height -> height } +
-        fadeOut(animationSpec = taotaoTween(AnimationDurations.MICRO))
+        fadeOut(animationSpec = taotaoTween(AnimationDurations.MICRO, easing = AnimationCurves.standardOut))
 
 /** 内容整体淡入淡出，用于骨架屏 → 结果 → 空态之间的切换。 */
 fun contentFadeIn(): EnterTransition = fadeIn(animationSpec = taotaoTween(AnimationDurations.FADE))

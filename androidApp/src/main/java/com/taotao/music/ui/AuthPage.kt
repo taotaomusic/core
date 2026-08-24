@@ -1,6 +1,10 @@
 package com.taotao.music.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
@@ -181,7 +185,24 @@ fun AuthPage(
                         ),
                         keyboardActions = KeyboardActions(onDone = { submit() }),
                     )
-                    AnimatedVisibility(visible = registerMode) {
+                    // 明确只使用透明度与位移：默认 AnimatedVisibility 会展开高度，表单布局会在输入时抖动。
+                    AnimatedVisibility(
+                        visible = registerMode,
+                        enter = fadeIn(animationSpec = taotaoTween(AnimationDurations.SHORT)) +
+                            slideInVertically(
+                                animationSpec = taotaoTween(
+                                    AnimationDurations.SHORT,
+                                    easing = AnimationCurves.emphasizedIn,
+                                ),
+                            ) { height -> height / 12 },
+                        exit = fadeOut(animationSpec = taotaoTween(AnimationDurations.MICRO)) +
+                            slideOutVertically(
+                                animationSpec = taotaoTween(
+                                    AnimationDurations.MICRO,
+                                    easing = AnimationCurves.emphasizedIn,
+                                ),
+                            ) { height -> height / 12 },
+                    ) {
                         Column {
                             Spacer(Modifier.height(10.dp))
                             OutlinedTextField(

@@ -1,6 +1,5 @@
 package com.taotao.music.ui
 
-import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
@@ -149,8 +148,8 @@ fun SongListItem(
 /**
  * 收藏按钮。
  *
- * 收藏是这个应用里反馈最需要即时的动作，所以做三件事：图标缩放弹一下、颜色渐变、
- * 空心实心之间淡入淡出。原来是直接换图标换颜色，点下去像没反应。
+ * 收藏是这个应用里反馈最需要即时的动作，所以保留图标的轻微缩放和颜色渐变。
+ * 图标按状态直接切换，避免快速点按时两个图标叠在一起。
  */
 @Composable
 fun FavoriteButton(
@@ -160,10 +159,10 @@ fun FavoriteButton(
     enabled: Boolean = true,
     size: Dp = 24.dp,
 ) {
-    // 状态刚变时轻微放大再弹回，这个"顿一下"才是点赞的手感来源。
+    // 收藏是高频操作，使用低回弹弹簧提供反馈，不能留下明显拖尾。
     val scale by animateFloatAsState(
-        targetValue = if (favorited) 1.15f else 1f,
-        animationSpec = taotaoSpringSnappy(),
+        targetValue = if (favorited) 1.08f else 1f,
+        animationSpec = taotaoSpring(dampingRatio = 0.85f),
         label = "收藏缩放",
     )
     val tint by animateColorAsState(
@@ -172,28 +171,24 @@ fun FavoriteButton(
         label = "收藏着色",
     )
     IconButton(onClick = onClick, enabled = enabled, modifier = modifier.size(size + 16.dp)) {
-        Crossfade(targetState = favorited, animationSpec = taotaoTween(AnimationDurations.MICRO), label = "收藏图标") { on ->
-            Icon(
-                if (on) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                if (on) "取消收藏" else "收藏",
-                tint = tint,
-                modifier = Modifier.size(size).scale(scale),
-            )
-        }
+        Icon(
+            if (favorited) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+            if (favorited) "取消收藏" else "收藏",
+            tint = tint,
+            modifier = Modifier.size(size).scale(scale),
+        )
     }
 }
 
-/** 播放 / 暂停按钮：两个图标之间淡入淡出，不再硬切。 */
+/** 播放 / 暂停按钮：高频控制即时切换，按压波纹提供点按反馈。 */
 @Composable
 fun PlayPauseIcon(isPlaying: Boolean, modifier: Modifier = Modifier, tint: Color = Color.Unspecified) {
-    Crossfade(targetState = isPlaying, animationSpec = taotaoTween(AnimationDurations.MICRO), label = "播放图标") { playing ->
-        Icon(
-            if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
-            if (playing) "暂停" else "播放",
-            modifier = modifier,
-            tint = tint,
-        )
-    }
+    Icon(
+        if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+        if (isPlaying) "暂停" else "播放",
+        modifier = modifier,
+        tint = tint,
+    )
 }
 
 /** VIP / 付费标记。 */

@@ -19,6 +19,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -26,6 +27,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.animation.animateColorAsState
 import com.taotao.music.model.AudioQuality
 import com.taotao.music.model.labelOfQuality
 
@@ -96,15 +98,25 @@ fun QualitySheet(
 
 @Composable
 private fun QualityRow(choice: QualityChoice, checked: Boolean, onClick: () -> Unit) {
-    val tint = when {
+    val targetTint = when {
         !choice.available -> MaterialTheme.colorScheme.onSurfaceVariant
         checked -> MaterialTheme.colorScheme.primary
         else -> MaterialTheme.colorScheme.onSurface
     }
+    val tint by animateColorAsState(
+        targetValue = targetTint,
+        animationSpec = taotaoTween(AnimationDurations.MICRO),
+        label = "音质选项着色",
+    )
+    val backgroundColor by animateColorAsState(
+        targetValue = if (checked) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f) else Color.Transparent,
+        animationSpec = taotaoTween(AnimationDurations.MICRO),
+        label = "音质选项背景",
+    )
     Row(
         Modifier.fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .background(if (checked) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f) else Color.Transparent)
+            .background(backgroundColor)
             .clickable(enabled = choice.available, onClick = onClick)
             .padding(vertical = 13.dp, horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,

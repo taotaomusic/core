@@ -19,9 +19,11 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -36,7 +38,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.taotao.music.model.Lyric
-import com.taotao.music.model.LyricLine
 import com.taotao.music.model.LyricWord
 
 /** 用户手动滚动后暂停自动跟随的时长，避免刚滑到别处就被拽回去。 */
@@ -67,6 +68,9 @@ fun LyricPane(
 
     val listState = rememberLazyListState()
     val currentIndex = lyric.indexAt(positionMs)
+    // 播放位置逐帧变化，但普通歌词行不需要订阅它。把它保存在稳定的 State 引用中，
+    // 只有当前逐字行读取该值，避免可见的普通行跟着每一帧重组。
+    val positionMsState = rememberUpdatedState(positionMs)
     var manualScrollAtMs by remember { mutableStateOf(0L) }
 
     // 记录用户最近一次手动滚动的时刻。用 snapshotFlow 而不是把 isScrollInProgress
@@ -96,49 +100,92 @@ fun LyricPane(
             verticalArrangement = Arrangement.spacedBy(20.dp),
         ) {
             itemsIndexed(lyric.lines) { index, line ->
-                LyricRow(
-                    line = line,
-                    active = lyric.synced && index == currentIndex,
-                    centered = lyric.synced,
-                    positionMs = positionMs,
-                    onClick = if (lyric.synced) ({ onSeek(line.timeMs) }) else null,
-                )
+                val active = lyric.synced && index == currentIndex
+                if (active && line.words.isNotEmpty()) {
+                    CurrentKaraokeLyricRow(
+                        words = line.words,
+                        centered = true,
+                        positionMsState = positionMsState,
+                        seekEnabled = true,
+                        timeMs = line.timeMs,
+                        onSeek = onSeek,
+                    )
+                } else {
+                    StaticLyricRow(
+                        text = line.text,
+                        active = active,
+                        centered = lyric.synced,
+                        seekEnabled = lyric.synced,
+                        timeMs = line.timeMs,
+                        onSeek = onSeek,
+                    )
+                }
             }
         }
     }
 }
 
 @Composable
-private fun LyricRow(
-    line: LyricLine,
+private fun StaticLyricRow(
+    text: String,
     active: Boolean,
     centered: Boolean,
-    positionMs: Int,
-    onClick: (() -> Unit)?,
+    seekEnabled: Boolean,
+    timeMs: Int,
+    onSeek: (Int) -> Unit,
 ) {
-    val style = TextStyle(
-        fontSize = if (active) 21.sp else 16.sp,
-        fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
-        lineHeight = if (active) 29.sp else 23.sp,
-        textAlign = if (centered) TextAlign.Center else TextAlign.Start,
-    )
-    val rowModifier = Modifier
-        .fillMaxWidth()
-        .clip(RoundedCornerShape(10.dp))
-        .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
-        .padding(horizontal = 8.dp, vertical = 2.dp)
-
-    // 只有当前行需要逐字推进；其余行整行一个颜色，省掉大量文本节点。
-    if (active && line.words.isNotEmpty()) {
-        KaraokeLine(words = line.words, positionMs = positionMs, style = style, modifier = rowModifier)
-        return
-    }
     Text(
-        text = line.text,
-        style = style.copy(color = if (active) TaotaoCoral else LyricDim),
-        modifier = rowModifier,
+        text = text,
+        style = lyricTextStyle(active = active, centered = centered)
+            .copy(color = if (active) TaotaoCoral else LyricDim),
+        modifier = lyricRowModifier(seekEnabled, timeMs, onSeek),
     )
 }
+
+/**
+ * 当前逐字行。它是歌词列表中唯一读取帧级播放位置的组件，避免普通行随进度重组。
+ */
+@Composable
+private fun CurrentKaraokeLyricRow(
+    words: List<LyricWord>,
+    centered: Boolean,
+    positionMsState: State<Int>,
+    seekEnabled: Boolean,
+    timeMs: Int,
+    onSeek: (Int) -> Unit,
+) {
+    val positionMs by positionMsState
+    KaraokeLine(
+        words = words,
+        positionMs = positionMs,
+        style = lyricTextStyle(active = true, centered = centered),
+        modifier = lyricRowModifier(seekEnabled, timeMs, onSeek),
+    )
+}
+
+/** 当前行只改变颜色和字重；字号与行高保持固定，防止 LazyColumn 在换句时跳动。 */
+private fun lyricTextStyle(active: Boolean, centered: Boolean) = TextStyle(
+    fontSize = 18.sp,
+    fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
+    lineHeight = 26.sp,
+    textAlign = if (centered) TextAlign.Center else TextAlign.Start,
+)
+
+private fun lyricRowModifier(
+    seekEnabled: Boolean,
+    timeMs: Int,
+    onSeek: (Int) -> Unit,
+): Modifier = Modifier
+    .fillMaxWidth()
+    .clip(RoundedCornerShape(10.dp))
+    .then(
+        if (seekEnabled) {
+            Modifier.clickable(onClickLabel = "跳转到此句") { onSeek(timeMs) }
+        } else {
+            Modifier
+        },
+    )
+    .padding(horizontal = 8.dp, vertical = 2.dp)
 
 /**
  * 逐字高亮的当前行。

@@ -1,7 +1,6 @@
 package com.taotao.music.ui
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.EnterTransition
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -27,20 +26,22 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.taotao.music.model.Song
 
-/** 搜索页面：负责关键词输入、结果展示和结果逐条入场动画。 */
+/** 搜索页面：负责关键词输入、结果展示和异步状态过渡。 */
 @Composable
 fun SearchPage(
     keyword: String,
@@ -71,7 +72,7 @@ fun SearchPage(
     isLoadingMore: Boolean = false,
     hasMore: Boolean = false,
     total: Int = 0,
-    /** 每次新搜索自增。用它重置「哪些项已经播过入场动画」的记录。 */
+    /** 保留兼容当前调用链；搜索结果不再需要逐条入场状态。 */
     searchSession: Int = 0,
 ) {
     val focusRequester = remember { FocusRequester() }
@@ -109,6 +110,10 @@ fun SearchPage(
             visible = isSearching && songs.isEmpty(),
             enter = contentFadeIn(),
             exit = contentFadeOut(),
+            modifier = Modifier.semantics(mergeDescendants = true) {
+                liveRegion = LiveRegionMode.Polite
+                contentDescription = "正在搜索音乐"
+            },
         ) {
             SearchSkeletonList()
         }
@@ -117,14 +122,22 @@ fun SearchPage(
             enter = contentFadeIn(),
             exit = contentFadeOut(),
         ) {
-            Text(errorMessage.orEmpty(), color = TaotaoCoral, modifier = Modifier.padding(top = 28.dp))
+            Text(
+                errorMessage.orEmpty(),
+                color = TaotaoCoral,
+                modifier = Modifier.padding(top = 28.dp).semantics { liveRegion = LiveRegionMode.Polite },
+            )
         }
         AnimatedVisibility(
             visible = hasSearched && !isSearching && songs.isEmpty() && errorMessage.isNullOrBlank(),
             enter = contentFadeIn(),
             exit = contentFadeOut(),
         ) {
-            EmptyStateView(title = "没有找到相关歌曲", description = "换个关键词再试试")
+            EmptyStateView(
+                title = "没有找到相关歌曲",
+                description = "换个关键词再试试",
+                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+            )
         }
         if (hasSearched) {
             val listState = rememberLazyListState()
@@ -136,11 +149,6 @@ fun SearchPage(
                 }
             }
             LaunchedEffect(shouldLoadMore) { if (shouldLoadMore) onLoadMore() }
-
-            // 已经播过入场动画的歌。必须放在 LazyColumn **外面**：
-            // LazyColumn 会销毁滚出屏幕的项，item 内部的 remember 随之重置，
-            // 结果每次滚回来整屏都重新淡入一遍 —— 那就是滑动时看到的抖动来源。
-            val animated = remember(searchSession) { mutableSetOf<String>() }
 
             LazyColumn(
                 Modifier.fillMaxSize(),
@@ -154,25 +162,16 @@ fun SearchPage(
                     contentType = { _, _ -> "song" },
                 ) { index, song ->
                     val key = songKeyOf(song)
-                    val isNew = remember(key) { animated.add(key) }
-                    var visible by remember(key) { mutableStateOf(!isNew) }
-                    LaunchedEffect(key) { visible = true }
-                    AnimatedVisibility(
-                        visible = visible,
-                        // 只有首次出现才错开延迟；回滚复用的项直接显示，不再重播动画。
-                        enter = if (isNew) listItemEnter(index) else EnterTransition.None,
-                    ) {
-                        val favorited = remember(key, favoriteRevision) { isFavorite(song) }
-                        SongListItem(
-                            song = song,
-                            active = false,
-                            favorited = favorited,
-                            downloaded = remember(key, downloadedRevision) { isDownloaded(song) },
-                            onToggleFavorite = onToggleFavorite
-                                ?.takeIf { song.remoteId != null }
-                                ?.let { toggle -> { toggle(song) } },
-                        ) { onSongClick(index, song) }
-                    }
+                    val favorited = remember(key, favoriteRevision) { isFavorite(song) }
+                    SongListItem(
+                        song = song,
+                        active = false,
+                        favorited = favorited,
+                        downloaded = remember(key, downloadedRevision) { isDownloaded(song) },
+                        onToggleFavorite = onToggleFavorite
+                            ?.takeIf { song.remoteId != null }
+                            ?.let { toggle -> { toggle(song) } },
+                    ) { onSongClick(index, song) }
                 }
                 if (isLoadingMore) {
                     item(key = "loading-more") {
