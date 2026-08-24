@@ -52,6 +52,7 @@ fun MusicLibraryPage(
     onSongClick: (Int) -> Unit,
     isFavorite: ((Song) -> Boolean)? = null,
     onToggleFavorite: ((Song) -> Unit)? = null,
+    onPlayNext: ((Song) -> Unit)? = null,
     onDelete: ((Song) -> Unit)? = null,
     loading: Boolean = false,
     error: String? = null,
@@ -95,6 +96,7 @@ fun MusicLibraryPage(
                         favorited = isFavorite?.invoke(song) == true,
                         downloaded = song.audioUri?.startsWith("file:") == true,
                         onToggleFavorite = onToggleFavorite?.let { callback -> { callback(song) } },
+                        onPlayNext = onPlayNext?.let { callback -> { callback(song) } },
                         onDelete = onDelete?.let { callback -> { callback(song) } },
                         onClick = { onSongClick(index) },
                     )
@@ -111,6 +113,9 @@ fun PlaybackHistoryPage(
     history: List<PlaybackHistoryEntry>,
     onBack: () -> Unit,
     onSongClick: (Int) -> Unit,
+    onPlayNext: (Song) -> Unit,
+    isFavorite: (Song) -> Boolean,
+    onToggleFavorite: (Song) -> Unit,
     onClear: () -> Unit,
 ) {
     Column(Modifier.fillMaxSize().padding(horizontal = 22.dp)) {
@@ -135,14 +140,11 @@ fun PlaybackHistoryPage(
                         song = entry.song,
                         subtitle = "${entry.song.artist} · ${formatHistoryTime(entry.playedAtMillis)}",
                         onClick = { onSongClick(index) },
-                    ) {
-                        Icon(
-                            Icons.Default.PlayArrow,
-                            "重新播放",
-                            tint = TaotaoCoral,
-                            modifier = Modifier.padding(start = 8.dp).size(20.dp),
-                        )
-                    }
+                        onPlayNext = { onPlayNext(entry.song) },
+                        favorited = isFavorite(entry.song),
+                        onToggleFavorite = onToggleFavorite.takeIf { entry.song.remoteId != null }
+                            ?.let { callback -> { callback(entry.song) } },
+                    )
                 }
                 item { Spacer(Modifier.height(18.dp)) }
             }

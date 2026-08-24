@@ -116,6 +116,12 @@ fun TaotaoMusicApp() {
     var bottomTab by remember { mutableIntStateOf(0) }
     var searchHistory by remember { mutableStateOf(searchHistoryStore.read()) }
     var signedIn by remember { mutableStateOf(authSession.isSignedIn) }
+    /** 资料只在内存中保留；退出登录立即清空邮箱与昵称。 */
+    var userProfile by remember { mutableStateOf<TencentMusicApi.UserProfile?>(null) }
+    var profileLoading by remember { mutableStateOf(false) }
+    var announcements by remember { mutableStateOf(emptyList<TencentMusicApi.Announcement>()) }
+    var showAccountDialog by remember { mutableStateOf(false) }
+    var showAnnouncementDialog by remember { mutableStateOf(false) }
     var restoredPlayback by remember { mutableStateOf<SavedPlaybackState?>(null) }
     var playbackHistory by remember { mutableStateOf(emptyList<PlaybackHistoryEntry>()) }
     var pendingResumePositionMs by remember { mutableIntStateOf(0) }
@@ -195,6 +201,8 @@ fun TaotaoMusicApp() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !downloadNotifier.canNotify()) {
             notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
+        // 公告免鉴权，启动时安静读取；网络异常不应阻断听歌或登录。
+        announcements = runCatching { withContext(Dispatchers.IO) { musicApi.announcements() } }.getOrDefault(emptyList())
     }
 
     /**
@@ -419,6 +427,11 @@ fun TaotaoMusicApp() {
      */
     LaunchedEffect(signedIn) {
         if (!signedIn) return@LaunchedEffect
+        profileLoading = true
+        runCatching { withContext(Dispatchers.IO) { musicApi.profile() } }
+            .onSuccess { userProfile = it }
+            .onFailure { message = it.message ?: "账号资料读取失败" }
+        profileLoading = false
         runCatching { withContext(Dispatchers.IO) { musicApi.favoriteIds() } }
             .onSuccess { remoteIds ->
                 favoritesStore.replaceAll(remoteIds)
@@ -671,6 +684,42 @@ fun TaotaoMusicApp() {
         }
     }
 
+    /**
+     * 将歌曲加入当前曲目的下一首。
+     *
+     * 与正常播放共用离线优先和占位地址规则，队列里永远不保存会过期的上游直链；没有已装载
+     * 队列时直接开始播放，避免菜单操作变成无反馈的空动作。
+     */
+    fun playNext(song: Song) {
+        scope.launch {
+            val remoteId = song.remoteId
+            val isLocalFile = song.audioUri?.startsWith("file:") == true
+            val offline = if (!isLocalFile && remoteId != null) {
+                withContext(Dispatchers.IO) { downloadManager.findDownloaded(remoteId) }
+            } else {
+                null
+            }
+            val playable = when {
+                offline != null -> offline.copy(favorited = song.favorited)
+                !isLocalFile && remoteId != null -> song.copy(
+                    audioUri = TencentMusicApi.placeholderUri(remoteId, qualityStore.playbackQuality().value),
+                    lyricUri = song.lyricUri ?: "${TencentMusicApi.ENDPOINT}/api/v1/songs/$remoteId/lyrics",
+                )
+                else -> song
+            }
+            if (playable.audioUri.isNullOrBlank()) {
+                message = "歌曲暂时没有可用播放链接"
+                return@launch
+            }
+            if (audioPlayer.hasMedia) {
+                audioPlayer.addNext(playable)
+                message = "已加入下一首"
+            } else {
+                playSong(listOf(playable), 0)
+            }
+        }
+    }
+
     fun togglePlayback() {
         if (playbackSongs.isEmpty()) return
         if (audioPlayer.isPlaying) {
@@ -821,6 +870,9 @@ fun TaotaoMusicApp() {
                         playSong(songs, index)
                     },
                     onPlayLocal = { index -> playSong(downloadedSongs, index) },
+                    onPlayNext = { song -> playNext(song) },
+                    isFavorite = { song -> favoritesStore.contains(song.remoteId) },
+                    onToggleSongFavorite = { song -> toggleFavorite(song) },
                     onMessage = { message = it },
                     favorited = remember(selectedIndex, favoriteRevision, playbackSongs) {
                         favoritesStore.contains(playbackSongs.getOrNull(selectedIndex)?.remoteId)
@@ -852,6 +904,7 @@ fun TaotaoMusicApp() {
                     favoriteRevision = favoriteRevision,
                     isFavorite = { song -> favoritesStore.contains(song.remoteId) },
                     onToggleFavorite = { song -> toggleFavorite(song) },
+                    onPlayNext = { song -> playNext(song) },
                     downloadedRevision = downloadedSongs.size,
                     isDownloaded = { song -> song.remoteId != null && song.remoteId in downloadedIds },
                     onLoadMore = { loadMoreSearch() },
@@ -891,6 +944,7 @@ fun TaotaoMusicApp() {
                     onSongClick = { index -> playSong(favoriteLibrarySongs, index) },
                     isFavorite = { song -> song.remoteId?.toString() in favoriteIds },
                     onToggleFavorite = { song -> toggleFavorite(song) },
+                    onPlayNext = { song -> playNext(song) },
                     error = favoriteLibraryError,
                     onRetry = { refreshFavoriteLibrary() },
                 )
@@ -899,6 +953,9 @@ fun TaotaoMusicApp() {
                     history = playbackHistory,
                     onBack = { mineLibrarySection = null },
                     onSongClick = { index -> playSong(playbackHistory.map { it.song }, index) },
+                    onPlayNext = { song -> playNext(song) },
+                    isFavorite = { song -> favoritesStore.contains(song.remoteId) },
+                    onToggleFavorite = { song -> toggleFavorite(song) },
                     onClear = {
                         playbackHistoryStore.clear()
                         playbackHistory = emptyList()
@@ -915,6 +972,7 @@ fun TaotaoMusicApp() {
                     onSongClick = { index -> playSong(downloadedSongs, index) },
                     isFavorite = { song -> song.remoteId?.toString() in favoriteIds },
                     onToggleFavorite = { song -> toggleFavorite(song) },
+                    onPlayNext = { song -> playNext(song) },
                     onDelete = { song -> pendingDelete = song },
                 )
             } else if (page == "mine") {
@@ -928,6 +986,7 @@ fun TaotaoMusicApp() {
                         favoritesStore.clear()
                         favoriteLibrarySongs = emptyList()
                         favoriteLibraryError = null
+                        userProfile = null
                         // 撤销刷新令牌需要访问网络，放到 IO 线程；本地会话已在 signOut 内同步清空。
                         scope.launch(Dispatchers.IO) { authSession.signOut() }
                         signedIn = false
@@ -946,10 +1005,16 @@ fun TaotaoMusicApp() {
                     },
                     onOpenHistory = { mineLibrarySection = MineLibrarySection.HISTORY },
                     onOpenLocal = { mineLibrarySection = MineLibrarySection.LOCAL },
+                    profile = userProfile,
+                    profileLoading = profileLoading,
+                    onOpenAccount = { showAccountDialog = true },
                 )
             } else Column(Modifier.fillMaxSize().padding(horizontal = 22.dp)) {
                 Spacer(Modifier.height(24.dp))
-                HomeHeader()
+                HomeHeader(onOpenAnnouncements = { showAnnouncementDialog = true })
+                if (announcements.isNotEmpty()) {
+                    AnnouncementPreview(announcements.first(), onClick = { showAnnouncementDialog = true })
+                }
                 MusicSearchBar(searchKeyword, onKeywordChanged = { searchKeyword = it }, onSearch = {
                     if (searchKeyword.isNotBlank()) {
                         openSearchPage()
@@ -969,6 +1034,18 @@ fun TaotaoMusicApp() {
 
     // 弹窗和底部面板位于主 Surface 之后，必须显式继承当前外观主题；否则暗色模式会退回默认亮色。
     TaotaoTheme(darkTheme = darkTheme) {
+        userProfile?.takeIf { showAccountDialog }?.let { profile ->
+            AccountDialog(
+                api = musicApi,
+                profile = profile,
+                onProfileChanged = { userProfile = it },
+                onMessage = { message = it },
+                onDismiss = { showAccountDialog = false },
+            )
+        }
+        if (showAnnouncementDialog) {
+            AnnouncementDialog(announcements = announcements, onDismiss = { showAnnouncementDialog = false })
+        }
         pendingDelete?.let { target ->
             AlertDialog(
                 onDismissRequest = { pendingDelete = null },
@@ -1086,13 +1163,13 @@ private fun dedupeSongs(songs: List<Song>): List<Song> {
 /** 列表项的稳定唯一键。必须与 [dedupeSongs] 的判重口径一致。 */
 fun songKeyOf(song: Song): String = "${song.remoteId ?: 0}#${song.title}#${song.artist}"
 
-@Composable private fun HomeHeader() {
+@Composable private fun HomeHeader(onOpenAnnouncements: () -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.weight(1f)) {
             Text("早上好，桃桃", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
             Text("听点喜欢的", fontSize = 28.sp, fontWeight = FontWeight.Bold)
         }
-        IconButton(onClick = {}) { Icon(Icons.Default.NotificationsNone, "通知") }
+        IconButton(onClick = onOpenAnnouncements) { Icon(Icons.Default.NotificationsNone, "公告") }
                 Spacer(Modifier.width(48.dp))
     }
     Spacer(Modifier.height(22.dp))
@@ -1112,6 +1189,9 @@ private fun MinePage(
     onOpenFavorites: () -> Unit,
     onOpenHistory: () -> Unit,
     onOpenLocal: () -> Unit,
+    profile: TencentMusicApi.UserProfile?,
+    profileLoading: Boolean,
+    onOpenAccount: () -> Unit,
 ) {
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
@@ -1131,6 +1211,7 @@ private fun MinePage(
             Row(
                 modifier = Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 8.dp)
                     .clip(RoundedCornerShape(22.dp)).background(MaterialTheme.colorScheme.surface).padding(18.dp),
+                // 资料卡是进入昵称与邮箱管理的唯一入口，整块可点更容易发现。
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Box(
@@ -1140,14 +1221,15 @@ private fun MinePage(
                     Icon(Icons.Default.Person, null, tint = TaotaoCoral, modifier = Modifier.size(30.dp))
                 }
                 Column(Modifier.weight(1f).padding(start = 15.dp)) {
-                    Text("桃桃音乐", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    Text(profile?.nickname ?: if (profileLoading) "正在读取资料…" else "桃桃音乐", fontSize = 18.sp, fontWeight = FontWeight.Bold)
                     Text(
-                        "收藏、播放记录和本地歌曲都在这里",
+                        profile?.email ?: "点击管理个人昵称与邮箱",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 12.sp,
                         modifier = Modifier.padding(top = 4.dp),
                     )
                 }
+                TextButton(onClick = onOpenAccount, enabled = profile != null && !profileLoading) { Text("管理") }
             }
         }
         item { Text("我的音乐", fontSize = 17.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp)) }
@@ -1410,6 +1492,9 @@ private fun PlayerDetailPage(
     localSongs: List<Song>,
     onPlayHistory: (Int) -> Unit,
     onPlayLocal: (Int) -> Unit,
+    onPlayNext: (Song) -> Unit,
+    isFavorite: (Song) -> Boolean,
+    onToggleSongFavorite: (Song) -> Unit,
     onMessage: (String) -> Unit,
     favorited: Boolean,
     onToggleFavorite: () -> Unit,
@@ -1704,6 +1789,9 @@ private fun PlayerDetailPage(
             localSongs = localSongs,
             onPlayHistory = onPlayHistory,
             onPlayLocal = onPlayLocal,
+            onPlayNext = onPlayNext,
+            isFavorite = isFavorite,
+            onToggleFavorite = onToggleSongFavorite,
         )
     }
 }
@@ -1724,6 +1812,9 @@ private fun PlaybackQueueSheet(
     localSongs: List<Song>,
     onPlayHistory: (Int) -> Unit,
     onPlayLocal: (Int) -> Unit,
+    onPlayNext: (Song) -> Unit,
+    isFavorite: (Song) -> Boolean,
+    onToggleFavorite: (Song) -> Unit,
 ) {
     var selectedSource by remember { mutableIntStateOf(0) }
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = MaterialTheme.colorScheme.background) {
@@ -1782,6 +1873,9 @@ private fun PlaybackQueueSheet(
                                 onDismiss()
                                 onPlayHistory(index)
                             },
+                            onPlayNext = onPlayNext,
+                            isFavorite = isFavorite,
+                            onToggleFavorite = onToggleFavorite,
                         )
                         2 -> PlaybackSourceList(
                             songs = localSongs,
@@ -1790,6 +1884,9 @@ private fun PlaybackQueueSheet(
                                 onDismiss()
                                 onPlayLocal(index)
                             },
+                            onPlayNext = onPlayNext,
+                            isFavorite = isFavorite,
+                            onToggleFavorite = onToggleFavorite,
                         )
                         else -> CurrentPlaybackQueue(
                             queue = queue,
@@ -1798,12 +1895,36 @@ private fun PlaybackQueueSheet(
                             onCycleRepeat = onCycleRepeat,
                             onItemClick = onItemClick,
                             onRemoveItem = onRemoveItem,
+                            isFavorite = isFavorite,
+                            onToggleFavorite = onToggleFavorite,
                         )
                     }
                 }
             }
             Spacer(Modifier.height(16.dp))
         }
+    }
+}
+
+/** 首页只占一行展示最新或置顶公告，详情放进弹层，避免正文挤占搜索与推荐内容。 */
+@Composable
+private fun AnnouncementPreview(announcement: TencentMusicApi.Announcement, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(top = 16.dp)
+            .clip(RoundedCornerShape(14.dp)).background(MaterialTheme.colorScheme.secondaryContainer)
+            .clickable(onClick = onClick).padding(horizontal = 14.dp, vertical = 11.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Default.Campaign, null, tint = MaterialTheme.colorScheme.onSecondaryContainer, modifier = Modifier.size(18.dp))
+        Text(
+            text = if (announcement.pinned) "置顶 · ${announcement.title}" else announcement.title,
+            color = MaterialTheme.colorScheme.onSecondaryContainer,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            modifier = Modifier.weight(1f).padding(start = 8.dp),
+        )
+        Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSecondaryContainer, modifier = Modifier.size(18.dp))
     }
 }
 
@@ -1817,6 +1938,8 @@ private fun CurrentPlaybackQueue(
     onCycleRepeat: () -> Unit,
     onItemClick: (Int) -> Unit,
     onRemoveItem: (Int) -> Unit,
+    isFavorite: (Song) -> Boolean,
+    onToggleFavorite: (Song) -> Unit,
 ) {
     Column(Modifier.fillMaxSize()) {
         Row(
@@ -1852,25 +1975,11 @@ private fun CurrentPlaybackQueue(
                         active = isCurrent,
                         subtitle = if (isCurrent) "正在播放 · ${item.artist}" else item.artist,
                         onClick = { onItemClick(index) },
-                    ) {
-                        if (isCurrent) {
-                            Icon(
-                                Icons.AutoMirrored.Filled.VolumeUp,
-                                "正在播放",
-                                tint = TaotaoCoral,
-                                modifier = Modifier.padding(start = 8.dp).size(19.dp),
-                            )
-                        } else {
-                            IconButton(onClick = { onRemoveItem(index) }, modifier = Modifier.size(36.dp)) {
-                                Icon(
-                                    Icons.Default.Close,
-                                    "从播放列表移除",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(18.dp),
-                                )
-                            }
-                        }
-                    }
+                        onDelete = { onRemoveItem(index) }.takeUnless { isCurrent },
+                        favorited = isFavorite(item),
+                        onToggleFavorite = onToggleFavorite.takeIf { item.remoteId != null }
+                            ?.let { callback -> { callback(item) } },
+                    )
                 }
             }
         }
@@ -1883,6 +1992,9 @@ private fun PlaybackSourceList(
     songs: List<Song>,
     emptyText: String,
     onItemClick: (Int) -> Unit,
+    onPlayNext: (Song) -> Unit,
+    isFavorite: (Song) -> Boolean,
+    onToggleFavorite: (Song) -> Unit,
 ) {
     Column(Modifier.fillMaxSize()) {
         // 说明区域无论有没有歌曲都保留，避免空态切到有内容时正文又向下移动一次。
@@ -1897,14 +2009,15 @@ private fun PlaybackSourceList(
         } else {
             LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
                 itemsIndexed(songs) { index, item ->
-                    SongRow(song = item, onClick = { onItemClick(index) }) {
-                        Icon(
-                            Icons.Default.PlayArrow,
-                            "从这里播放",
-                            tint = TaotaoCoral,
-                            modifier = Modifier.padding(start = 8.dp).size(20.dp),
-                        )
-                    }
+                    SongRow(
+                        song = item,
+                        downloaded = item.audioUri?.startsWith("file:") == true,
+                        onClick = { onItemClick(index) },
+                        onPlayNext = { onPlayNext(item) },
+                        favorited = isFavorite(item),
+                        onToggleFavorite = onToggleFavorite.takeIf { item.remoteId != null }
+                            ?.let { callback -> { callback(item) } },
+                    )
                 }
             }
         }

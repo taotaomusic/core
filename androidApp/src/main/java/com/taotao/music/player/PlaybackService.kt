@@ -2,6 +2,9 @@ package com.taotao.music.player
 
 import android.content.Intent
 import android.net.Uri
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -16,8 +19,12 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import com.taotao.music.data.AuthSession
+import com.taotao.music.data.SongCodec
 import com.taotao.music.data.TencentMusicApi
+import com.taotao.music.model.Song
+import java.io.File
 import java.io.IOException
+import java.util.concurrent.Executors
 
 /**
  * Media3 系统媒体服务，负责后台播放、锁屏控制和系统媒体通知。
@@ -30,11 +37,15 @@ import java.io.IOException
 class PlaybackService : MediaSessionService() {
     private var player: ExoPlayer? = null
     private var mediaSession: MediaSession? = null
+    private lateinit var musicApi: TencentMusicApi
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val lyricExecutor = Executors.newSingleThreadExecutor()
+    private var lyricRequestGeneration = 0L
 
     override fun onCreate() {
         super.onCreate()
         val authSession = AuthSession(this)
-        val musicApi = TencentMusicApi(authSession)
+        musicApi = TencentMusicApi(authSession)
         val upstreamFactory = DefaultDataSource.Factory(
             this,
             DefaultHttpDataSource.Factory().setAllowCrossProtocolRedirects(true),
@@ -100,6 +111,7 @@ class PlaybackService : MediaSessionService() {
                         val uri = mediaItem?.localConfiguration?.uri?.scheme?.lowercase()
                         val needsNetwork = uri == "http" || uri == "https"
                         setWakeMode(if (needsNetwork) C.WAKE_MODE_NETWORK else C.WAKE_MODE_LOCAL)
+                        publishOplusLyrics(mediaItem)
                     }
                 })
             }
@@ -125,6 +137,8 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        lyricRequestGeneration++
+        lyricExecutor.shutdownNow()
         runCatching { mediaSession?.release() }
         runCatching { player?.release() }
         mediaSession = null
@@ -133,7 +147,68 @@ class PlaybackService : MediaSessionService() {
         super.onDestroy()
     }
 
+    /**
+     * 异步取得当前歌曲的完整时间轴，再一次性发布到 MediaSession。
+     *
+     * 不在主线程请求歌词，也不按当前行高频刷新元数据；后者会让通知和 SystemUI 持续重建，
+     * 在 AOD 场景既费电又容易触发 ColorOS 的媒体元数据防抖。
+     */
+    private fun publishOplusLyrics(mediaItem: MediaItem?) {
+        val item = mediaItem ?: return
+        if (item.mediaMetadata.extras?.containsKey(OplusLyricMetadata.EXTRA_LYRIC_INFO) == true) return
+        val song = SongCodec.decode(item.mediaMetadata.extras?.getString(EXTRA_SONG)) ?: return
+        val generation = ++lyricRequestGeneration
+        lyricExecutor.execute {
+            val lyricInfo = runCatching {
+                val (lrc, yrc) = loadLyrics(song)
+                OplusLyricMetadata.build(song, lrc, yrc)
+            }.onFailure { error ->
+                Log.w(TAG, "获取 ColorOS 锁屏歌词失败：${song.title}", error)
+            }.getOrNull() ?: return@execute
+
+            mainHandler.post {
+                if (generation != lyricRequestGeneration) return@post
+                val activePlayer = player ?: return@post
+                val index = activePlayer.currentMediaItemIndex
+                if (index !in 0 until activePlayer.mediaItemCount) return@post
+                val current = activePlayer.getMediaItemAt(index)
+                if (current.mediaId != item.mediaId) return@post
+                val currentExtras = current.mediaMetadata.extras
+                if (currentExtras?.getString(OplusLyricMetadata.EXTRA_LYRIC_INFO) == lyricInfo) return@post
+                val updatedExtras = Bundle(currentExtras ?: Bundle.EMPTY).apply {
+                    putString(OplusLyricMetadata.EXTRA_LYRIC_INFO, lyricInfo)
+                }
+                val updatedMetadata = current.mediaMetadata.buildUpon()
+                    .setExtras(updatedExtras)
+                    .build()
+                activePlayer.replaceMediaItem(
+                    index,
+                    current.buildUpon().setMediaMetadata(updatedMetadata).build(),
+                )
+            }
+        }
+    }
+
+    private fun loadLyrics(song: Song): Pair<String?, String?> {
+        if (song.lyricUri?.startsWith("file:") == true) {
+            val lrc = fileText(song.lyricUri)
+            val yrc = fileText(song.lyricWordsUri)
+            return lrc to yrc
+        }
+        if (song.remoteId == null) return null to null
+        val rich = musicApi.requestRichLyric(song)
+        return rich.lrc to rich.yrc
+    }
+
+    private fun fileText(uri: String?): String? = uri
+        ?.let(Uri::parse)
+        ?.path
+        ?.let(::File)
+        ?.takeIf(File::isFile)
+        ?.readText()
+
     private companion object {
         const val TAG = "PlaybackService"
+        const val EXTRA_SONG = "com.taotao.music.SONG"
     }
 }

@@ -64,6 +64,8 @@ fun SearchPage(
     favoriteRevision: Int = 0,
     isFavorite: (Song) -> Boolean = { false },
     onToggleFavorite: ((Song) -> Unit)? = null,
+    /** 将歌曲插到当前曲目的下一首；没有活动队列时由上层直接开始播放。 */
+    onPlayNext: ((Song) -> Unit)? = null,
     /** 已下载列表变化后自增，理由同 [favoriteRevision]。 */
     downloadedRevision: Int = 0,
     isDownloaded: (Song) -> Boolean = { false },
@@ -171,6 +173,7 @@ fun SearchPage(
                         onToggleFavorite = onToggleFavorite
                             ?.takeIf { song.remoteId != null }
                             ?.let { toggle -> { toggle(song) } },
+                        onPlayNext = onPlayNext?.let { callback -> { callback(song) } },
                     ) { onSongClick(index, song) }
                 }
                 if (isLoadingMore) {

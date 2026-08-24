@@ -205,6 +205,18 @@ class AudioPlayer(context: Context) {
         activeController.play()
     }
 
+    /**
+     * 将一首已具备播放地址的歌曲插入当前曲目的下一首。
+     *
+     * 只交给 Media3 改时间线，随后 [listener] 会把最新队列同步回 Compose 状态，避免 UI
+     * 自己维护一份容易与通知栏脱节的副本。
+     */
+    fun addNext(song: Song) = submit { activeController ->
+        val insertIndex = (activeController.currentMediaItemIndex + 1)
+            .coerceIn(0, activeController.mediaItemCount)
+        activeController.addMediaItem(insertIndex, mediaItemOf(song))
+    }
+
     fun seekTo(positionMs: Int) = submit { activeController ->
         val duration = activeController.duration.takeIf { it > 0L } ?: return@submit
         activeController.seekTo(positionMs.toLong().coerceIn(0L, duration))

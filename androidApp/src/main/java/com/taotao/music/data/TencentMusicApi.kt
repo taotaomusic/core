@@ -16,6 +16,10 @@ import java.net.URL
 class TencentMusicApi(private val tokenProvider: TokenProvider) {
     data class TokenPair(val accessToken: String, val refreshToken: String, val expiresIn: Int)
     data class FavoriteLibrary(val ids: Set<String>, val songs: List<Song>)
+    /** 账号资料仅由本人读取；邮箱不写入本地持久化。 */
+    data class UserProfile(val username: String, val email: String?, val nickname: String, val avatarUrl: String?)
+    /** 首页公告为公开数据，按服务端置顶和发布时间排序。 */
+    data class Announcement(val id: Long, val title: String, val content: String, val pinned: Boolean, val publishedAt: Long)
 
     /**
      * 响应头里带回的最新版本号的观察者。
@@ -229,7 +233,46 @@ class TencentMusicApi(private val tokenProvider: TokenProvider) {
     }
 
     fun login(username: String, password: String): TokenPair = authenticate("/api/v1/auth/login", username, password)
-    fun register(username: String, password: String): TokenPair = authenticate("/api/v1/auth/register", username, password)
+    fun register(username: String, password: String, email: String, verificationCode: String): TokenPair =
+        authenticate("/api/v1/auth/register", username, password, email, verificationCode)
+
+    /** 注册前发送邮箱验证码；接口成功时返回 204，没有响应体。 */
+    fun sendRegistrationVerification(email: String) = publicJson("/api/v1/auth/email-verification", "POST", JSONObject().put("email", email))
+
+    fun profile(): UserProfile = authorized("/api/v1/auth/profile") { connection ->
+        connection.inputStream.bufferedReader().use { JSONObject(it.readText()) }.getJSONObject("data").toProfile()
+    }
+
+    fun updateNickname(nickname: String): UserProfile = authorizedJson(
+        "/api/v1/auth/profile", "PATCH", JSONObject().put("nickname", nickname),
+    ) { data -> data.toProfile() }
+
+    /** [change] 为 false 表示给旧账号补绑，为 true 表示换绑。 */
+    fun sendEmailBindingVerification(email: String, change: Boolean) = authorizedJson(
+        if (change) "/api/v1/auth/email/change-verification" else "/api/v1/auth/email/bind-verification",
+        "POST", JSONObject().put("email", email),
+    ) { Unit }
+
+    fun confirmEmailBinding(email: String, verificationCode: String, change: Boolean) = authorizedJson(
+        if (change) "/api/v1/auth/email/change" else "/api/v1/auth/email/bind",
+        "POST", JSONObject().put("email", email).put("verificationCode", verificationCode),
+    ) { Unit }
+
+    fun announcements(): List<Announcement> = publicGet("/api/v1/announcements") { connection ->
+        val data = connection.inputStream.bufferedReader().use { JSONObject(it.readText()) }.optJSONArray("data")
+            ?: return@publicGet emptyList()
+        (0 until data.length()).mapNotNull { index ->
+            data.optJSONObject(index)?.let { item ->
+                Announcement(
+                    id = item.optLong("id"),
+                    title = item.optString("title"),
+                    content = item.optString("content"),
+                    pinned = item.optInt("pinned") == 1,
+                    publishedAt = item.optLong("published_at"),
+                )
+            }
+        }
+    }
 
     /**
      * 发起需要访问令牌的请求：令牌被服务端拒绝时自动续期并重放一次。
@@ -261,8 +304,53 @@ class TencentMusicApi(private val tokenProvider: TokenProvider) {
         if (latest > 0) runCatching { onLatestVersion?.invoke(latest) }
     }
 
-    private fun authenticate(path: String, username: String, password: String): TokenPair =
-        postJson(path, JSONObject().put("username", username).put("password", password), "认证失败")
+    private fun authenticate(path: String, username: String, password: String, email: String? = null, verificationCode: String? = null): TokenPair =
+        postJson(path, JSONObject().put("username", username).put("password", password).apply {
+            email?.let { put("email", it) }
+            verificationCode?.let { put("verificationCode", it) }
+        }, "认证失败")
+
+    /** 带访问令牌的 JSON 写请求；认证过期时复用与普通读取一致的续期逻辑。 */
+    private fun <T> authorizedJson(path: String, method: String, body: JSONObject, read: (JSONObject) -> T): T {
+        var token = tokenProvider.validToken() ?: throw SessionExpiredException()
+        repeat(MAX_AUTH_ATTEMPTS) { attempt ->
+            val connection = open(path, method, token).apply {
+                doOutput = true
+                setRequestProperty("Content-Type", "application/json")
+            }
+            connection.outputStream.use { it.write(body.toString().toByteArray()) }
+            val code = connection.responseCode
+            if (code in 200..299) {
+                noteLatestVersion(connection)
+                val data = if (code == HttpURLConnection.HTTP_NO_CONTENT) JSONObject() else {
+                    connection.inputStream.bufferedReader().use { JSONObject(it.readText()) }.optJSONObject("data") ?: JSONObject()
+                }
+                return read(data)
+            }
+            if (code != HttpURLConnection.HTTP_UNAUTHORIZED || attempt == MAX_AUTH_ATTEMPTS - 1) {
+                throw IllegalStateException(messageOf(connection, "请求失败：HTTP $code"))
+            }
+            runCatching { connection.errorStream?.close() }
+            token = tokenProvider.renewToken(token) ?: throw SessionExpiredException()
+        }
+        throw SessionExpiredException()
+    }
+
+    private fun publicJson(path: String, method: String, body: JSONObject) {
+        val connection = open(path, method, null).apply {
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+        }
+        connection.outputStream.use { it.write(body.toString().toByteArray()) }
+        check(connection.responseCode in 200..299) { messageOf(connection, "请求失败") }
+        runCatching { connection.inputStream.close() }
+    }
+
+    private fun <T> publicGet(path: String, read: (HttpURLConnection) -> T): T {
+        val connection = open(path, "GET", null)
+        check(connection.responseCode in 200..299) { messageOf(connection, "请求失败") }
+        return read(connection)
+    }
 
     private fun open(path: String, method: String, token: String?): HttpURLConnection =
         (URL(ENDPOINT + path).openConnection() as HttpURLConnection).apply {
@@ -297,6 +385,13 @@ class TencentMusicApi(private val tokenProvider: TokenProvider) {
             favorited = optBoolean("favorited"),
         )
     }
+
+    private fun JSONObject.toProfile() = UserProfile(
+        username = optString("username"),
+        email = optString("email").ifBlank { null },
+        nickname = optString("nickname").ifBlank { optString("username") },
+        avatarUrl = optString("avatarUrl").ifBlank { null },
+    )
 
     private fun encode(value: String) = URLEncoder.encode(value, Charsets.UTF_8.name())
 

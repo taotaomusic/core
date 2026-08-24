@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -19,6 +18,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
@@ -30,6 +30,8 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
@@ -37,6 +39,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -90,7 +95,7 @@ fun AlbumArt(color: Color, size: Dp, iconSize: TextUnit, imageUri: String? = nul
  * 统一歌曲行。
  *
  * 搜索、收藏、本地、历史记录和播放队列都使用这个骨架，避免封面大小、行高、标题层级和
- * 选中颜色在不同页面逐渐分叉。各列表只通过 [subtitle] 和 [trailingContent] 注入自身语义。
+ * 选中颜色在不同页面逐渐分叉。右侧固定保留时长和更多菜单；各页面只注入可用的歌曲操作。
  */
 @Composable
 fun SongRow(
@@ -100,8 +105,12 @@ fun SongRow(
     subtitle: String = song.artist,
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
-    trailingContent: @Composable RowScope.() -> Unit = {},
+    favorited: Boolean = false,
+    onToggleFavorite: (() -> Unit)? = null,
+    onPlayNext: (() -> Unit)? = null,
+    onDelete: (() -> Unit)? = null,
 ) {
+    var showActions by remember { mutableStateOf(false) }
     val backgroundColor by animateColorAsState(
         targetValue = if (active) TaotaoCoral.copy(alpha = 0.10f) else Color.Transparent,
         animationSpec = taotaoTween(AnimationDurations.MICRO),
@@ -126,13 +135,18 @@ fun SongRow(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     song.title,
-                    fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.Bold,
                     color = titleColor,
                     maxLines = 1,
                     modifier = Modifier.weight(1f, fill = false),
                 )
-                // 付费歌曲搜索结果里就有标记，不用等点开才发现放不出来。
-                if (song.vip) VipBadge(Modifier.padding(start = 6.dp))
+            }
+            Row(
+                modifier = Modifier.padding(top = 3.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp, maxLines = 1)
                 if (downloaded) {
                     Icon(
                         Icons.Default.OfflinePin,
@@ -141,11 +155,47 @@ fun SongRow(
                         modifier = Modifier.padding(start = 6.dp).size(14.dp),
                     )
                 }
+                if (song.vip) VipBadge(Modifier.padding(start = 6.dp))
             }
-            Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp, maxLines = 1, modifier = Modifier.padding(top = 3.dp))
         }
         Text(song.duration, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
-        trailingContent()
+        Box {
+            IconButton(onClick = { showActions = true }, modifier = Modifier.size(36.dp)) {
+                Icon(Icons.Default.MoreVert, "更多操作", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            DropdownMenu(expanded = showActions, onDismissRequest = { showActions = false }) {
+                if (onDelete != null) {
+                    DropdownMenuItem(
+                        text = { Text("删除") },
+                        onClick = { showActions = false; onDelete() },
+                        leadingIcon = { Icon(Icons.Default.DeleteOutline, null) },
+                    )
+                }
+                if (onPlayNext != null) {
+                    DropdownMenuItem(
+                        text = { Text("下一首播放") },
+                        onClick = { showActions = false; onPlayNext() },
+                        leadingIcon = { Icon(Icons.AutoMirrored.Filled.PlaylistPlay, null) },
+                    )
+                }
+                if (onToggleFavorite != null) {
+                    DropdownMenuItem(
+                        text = { Text(if (favorited) "取消收藏" else "收藏") },
+                        onClick = { showActions = false; onToggleFavorite() },
+                        leadingIcon = {
+                            Icon(if (favorited) Icons.Default.Favorite else Icons.Default.FavoriteBorder, null)
+                        },
+                    )
+                }
+                if (onDelete == null && onPlayNext == null && onToggleFavorite == null) {
+                    DropdownMenuItem(
+                        text = { Text("暂无可用操作") },
+                        onClick = { showActions = false },
+                        enabled = false,
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -157,6 +207,7 @@ fun SongListItem(
     favorited: Boolean = false,
     downloaded: Boolean = false,
     onToggleFavorite: (() -> Unit)? = null,
+    onPlayNext: (() -> Unit)? = null,
     onDelete: (() -> Unit)? = null,
     onClick: () -> Unit,
 ) {
@@ -165,19 +216,11 @@ fun SongListItem(
         active = active,
         downloaded = downloaded,
         onClick = onClick,
-    ) {
-        if (onToggleFavorite != null) {
-            FavoriteButton(favorited = favorited, onClick = onToggleFavorite, size = 20.dp)
-        }
-        if (onDelete != null) {
-            IconButton(onClick = onDelete, modifier = Modifier.size(36.dp)) {
-                Icon(Icons.Default.DeleteOutline, "删除", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
-            }
-        }
-        if (onToggleFavorite == null && onDelete == null) {
-            Icon(Icons.Default.MoreVert, "更多", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 8.dp))
-        }
-    }
+        favorited = favorited,
+        onToggleFavorite = onToggleFavorite,
+        onPlayNext = onPlayNext,
+        onDelete = onDelete,
+    )
 }
 
 /**
