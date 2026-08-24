@@ -13,6 +13,6 @@ object GreetingFormatter {
         in 12..13 -> "中午好"
         in 14..18 -> "下午好"
         in 19..22 -> "晚上好"
-        else -> "夜深了"
+        else -> "你好"
     }
 }

@@ -1574,8 +1574,10 @@ private fun PlayerDetailPage(
         lyricText = loaded.first
         lyricWords = loaded.second
     }
-    // 时间文字只需要秒级精度。用派生状态挡住逐帧变化，避免每帧重新格式化字符串。
-    val positionSeconds by remember { derivedStateOf { positionMs / 1000 } }
+    // positionMs 是本次组合从播放器 State 读取出的普通值，不能再放进无 key 的
+    // remember/derivedStateOf：那会把首次进入页面时的数值闭包起来，后续进度不再刷新。
+    // 时间文字只按秒显示，直接计算即可；Compose 只会在播放器位置更新时重新组合。
+    val positionSeconds = positionMs / 1000
 
     /** 本地文件与云端流的处理处处不同，取一次给下面复用。 */
     val isLocalFile = song.audioUri?.startsWith("file:") == true
@@ -1708,9 +1710,13 @@ private fun PlayerDetailPage(
             )
         }
         Spacer(Modifier.height(12.dp))
-        // progress 用派生状态包起来：直接在 body 里读 positionMs 会让整个详情页
-        // 每帧全部失效 —— Slider、控制按钮、下载卡、歌词页都要重组一遍。
-        val progress by remember { derivedStateOf { if (durationMs > 0) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f } }
+        // positionMs 已在详情页顶部读取为播放器的唯一状态源。这里直接计算，避免
+        // 无 key 的 remember 捕获初始值而让进度条停在首次进入详情页的位置。
+        val progress = if (durationMs > 0) {
+            (positionMs.toFloat() / durationMs).coerceIn(0f, 1f)
+        } else {
+            0f
+        }
         Slider(
             value = progress,
             onValueChange = { dragging = true; draggedPositionMs = (it * durationMs).toInt() },
