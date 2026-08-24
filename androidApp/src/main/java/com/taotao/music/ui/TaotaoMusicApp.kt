@@ -84,6 +84,7 @@ import com.taotao.music.update.UpdateManager
 import com.taotao.music.update.UpdateStage
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.isActive
@@ -123,6 +124,8 @@ fun TaotaoMusicApp() {
     var message by remember { mutableStateOf<String?>(null) }
     var downloadedSongs by remember { mutableStateOf(emptyList<Song>()) }
     var bottomTab by remember { mutableIntStateOf(0) }
+    var imageTask by remember { mutableStateOf<TencentMusicApi.ImageTask?>(null) }
+    var imageGenerating by remember { mutableStateOf(false) }
     var searchHistory by remember { mutableStateOf(searchHistoryStore.read()) }
     var signedIn by remember { mutableStateOf(authSession.isSignedIn) }
     /** 资料只在内存中保留；退出登录立即清空邮箱与昵称。 */
@@ -831,6 +834,13 @@ fun TaotaoMusicApp() {
                         NavigationBarItem(
                             selected = bottomTab == 1,
                             onClick = { switchTab(1) },
+                            icon = { Icon(Icons.Default.AutoAwesome, "AI 工作台") },
+                            label = { Text("AI") },
+                            colors = navigationColors,
+                        )
+                        NavigationBarItem(
+                            selected = bottomTab == 2,
+                            onClick = { switchTab(2) },
                             icon = { Icon(Icons.Default.Person, "我的") },
                             label = { Text("我的") },
                             colors = navigationColors,
@@ -850,14 +860,41 @@ fun TaotaoMusicApp() {
                     mineLibrarySection == MineLibrarySection.LOCAL -> "mine-local"
                     // 底部标签也参与：不带上它的话音乐 ⇄ 我的是硬切，
                     // 而其它换页都有过渡，观感上很不一致。
-                    bottomTab == 1 -> "mine"
+                    bottomTab == 1 -> "ai"
+                    bottomTab == 2 -> "mine"
                     else -> "home"
                 },
                 transitionSpec = { pageTransition() },
                 label = "页面切换",
             ) { page ->
             Box(Modifier.fillMaxSize().padding(innerPadding)) {
-            if (page == "detail") {
+            if (page == "ai") {
+                AiStudioPage(
+                    signedIn = signedIn,
+                    submitting = imageGenerating,
+                    task = imageTask,
+                    onGenerate = { prompt, ratio, quality ->
+                        if (prompt.isBlank()) return@AiStudioPage
+                        imageGenerating = true
+                        imageTask = null
+                        scope.launch {
+                            runCatching {
+                                withContext(Dispatchers.IO) { musicApi.createImageTask(prompt, ratio, quality) }
+                            }.onSuccess { created ->
+                                imageTask = created
+                                while (created.taskId.isNotBlank() && imageTask?.state == "IN_PROGRESS") {
+                                    delay(3_000)
+                                    val latest = withContext(Dispatchers.IO) { musicApi.requestImageTask(created.taskId) }
+                                    imageTask = latest
+                                }
+                            }.onFailure { error ->
+                                message = error.message ?: "图片生成失败"
+                            }
+                            imageGenerating = false
+                        }
+                    },
+                )
+            } else if (page == "detail") {
                 if (playbackSongs.isNotEmpty()) PlayerDetailPage(
                     song = playbackSongs[selectedIndex.coerceIn(playbackSongs.indices)],
                     audioPlayer = audioPlayer,

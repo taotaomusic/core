@@ -23,6 +23,8 @@ class TencentMusicApi(
     data class UserProfile(val username: String, val email: String?, val nickname: String, val avatarUrl: String?)
     /** 首页公告为公开数据，按服务端置顶和发布时间排序。 */
     data class Announcement(val id: Long, val title: String, val content: String, val pinned: Boolean, val publishedAt: Long)
+    /** GPT Image 工作台的异步任务状态。图片 Key 始终只保留在服务端。 */
+    data class ImageTask(val taskId: String, val state: String, val progress: Int, val imageUrl: String?, val error: String?)
 
     /**
      * 响应头里带回的最新版本号的观察者。
@@ -248,6 +250,38 @@ class TencentMusicApi(
 
     fun profile(): UserProfile = authorized("/api/v1/auth/profile") { connection ->
         connection.inputStream.bufferedReader().use { JSONObject(it.readText()) }.getJSONObject("data").toProfile()
+    }
+
+    fun createImageTask(prompt: String, aspectRatio: String, quality: String): ImageTask =
+        authorizedJson(
+            "/api/v1/draw/completions",
+            "POST",
+            JSONObject()
+                .put("model", "gpt-image-2")
+                .put("prompt", prompt)
+                .put("aspectRatio", aspectRatio)
+                .put("imageSize", "1K")
+                .put("quality", quality),
+        ) { data ->
+            ImageTask(
+                taskId = data.optString("taskId"),
+                state = data.optString("status", "IN_PROGRESS"),
+                progress = 0,
+                imageUrl = null,
+                error = null,
+            )
+        }
+
+    fun requestImageTask(taskId: String): ImageTask = authorized("/api/v1/draw/result/${encode(taskId)}") { connection ->
+        val body = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+        val data = body.optJSONObject("data") ?: JSONObject()
+        ImageTask(
+            taskId = data.optString("taskId"),
+            state = data.optString("state", "FAILED"),
+            progress = data.optInt("progress", 0),
+            imageUrl = data.optJSONObject("result")?.optString("imageUrl")?.takeIf { it.isNotBlank() },
+            error = data.optJSONObject("error")?.optString("message")?.takeIf { it.isNotBlank() },
+        )
     }
 
     fun updateNickname(nickname: String): UserProfile = updateProfile(nickname = nickname)

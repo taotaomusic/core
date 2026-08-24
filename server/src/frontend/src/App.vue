@@ -20,6 +20,9 @@
           <el-tab-pane label="公告管理" name="announcements" lazy>
             <AnnouncementManager :admin-token="token" />
           </el-tab-pane>
+          <el-tab-pane label="后援团管理" name="supporters" lazy>
+            <SupporterKeyManager :admin-token="token" />
+          </el-tab-pane>
           <el-tab-pane label="系统设置" name="settings" lazy>
             <SystemSettings :admin-token="token" @forget-token="forgetToken" />
           </el-tab-pane>
@@ -59,6 +62,7 @@ import zhCn from "element-plus/es/locale/lang/zh-cn";
 import ReleaseManager from "./components/ReleaseManager.vue";
 import PatchManager from "./components/PatchManager.vue";
 import AnnouncementManager from "./components/AnnouncementManager.vue";
+import SupporterKeyManager from "./components/SupporterKeyManager.vue";
 import SystemSettings from "./components/SystemSettings.vue";
 
 const STORAGE_KEY = "taotao_admin_token";
