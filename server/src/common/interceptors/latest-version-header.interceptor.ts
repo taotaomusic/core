@@ -1,5 +1,5 @@
 import { type CallHandler, type ExecutionContext, Injectable, type NestInterceptor } from "@nestjs/common";
-import type { Response } from "express";
+import type { Request, Response } from "express";
 import type { Observable } from "rxjs";
 import { AppConfigService } from "../../config/app-config.service";
 import { LatestVersionCache } from "../../release/latest-version.cache";
@@ -42,7 +42,11 @@ export class LatestVersionHeaderInterceptor implements NestInterceptor {
     } else if (cached !== null) {
       context.switchToHttp().getResponse<Response>().setHeader("x-latest-version-code", String(cached));
     }
-    const versionCode = Number(context.switchToHttp().getRequest<Request>().header("x-app-version-code"));
+    const request = context.switchToHttp().getRequest<Request>();
+    // 使用 Node/Express 的标准 headers 映射；不能调用浏览器 Fetch Request 上不存在的
+    // header()，否则 tsc 无法生成线上要部署的 dist。
+    const appVersionHeader = request.headers["x-app-version-code"];
+    const versionCode = Number(Array.isArray(appVersionHeader) ? appVersionHeader[0] : appVersionHeader);
     if (Number.isSafeInteger(versionCode) && versionCode > 0) {
       const response = context.switchToHttp().getResponse<Response>();
       const patch = this.cache.patchFor(versionCode);
