@@ -42,6 +42,7 @@ class UpdateManager(
     /** 同一时刻只允许一次检查。原来靠读 status 判断，两个协程可能同时通过。 */
     private val checkLock = Mutex()
 
+
     var status by mutableStateOf(UpdateStatus())
         private set
 
@@ -150,8 +151,7 @@ class UpdateManager(
     /**
      * 响应头带回的版本号提示。
      *
-     * 服务端在每个响应上下发当前全量可用的最高版本号，比本机高就去走一次正常检查 ——
-     * 这样长时间开着应用的用户也能发现更新，而不是只有冷启动才查一次。
+     * 服务端在每个响应上下发当前全量可用的最高版本号，比本机高时才检查整包。
      * 头只是提示，是否真的要更新仍由 `/app/bootstrap` 判定。
      */
     suspend fun onLatestVersionHint(latestVersionCode: Long) {
@@ -160,6 +160,15 @@ class UpdateManager(
         // 已经发现同一个版本就不用再查了。
         if (status.release?.versionCode == latestVersionCode) return
         if (status.stage == UpdateStage.DOWNLOADING || status.stage == UpdateStage.READY) return
+        check()
+    }
+
+    /**
+     * 正常业务响应带回“本 APK 对应的最新补丁号”。只有它严格高于本地补丁时才检查，
+     * 所以每次请求只做两个整数比较，不会把 Bootstrap 变成高频轮询。
+     */
+    suspend fun onLatestPatchHint(latestPatchVersion: Int) {
+        if (latestPatchVersion <= activePatchVersion) return
         check()
     }
 

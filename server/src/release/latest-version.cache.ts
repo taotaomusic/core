@@ -16,6 +16,8 @@ import { Global, Injectable, Module } from "@nestjs/common";
 export class LatestVersionCache {
   /** undefined 表示还没查过;null 表示查过但没有可下发的版本。 */
   private value: number | null | undefined = undefined;
+  /** 宿主版本 → 已全量放量的最新补丁；同样供响应热路径同步读取。 */
+  private readonly patches = new Map<number, number | null>();
 
   get(): number | null | undefined {
     return this.value;
@@ -27,6 +29,15 @@ export class LatestVersionCache {
 
   invalidate(): void {
     this.value = undefined;
+    this.patches.clear();
+  }
+
+  patchFor(versionCode: number): number | null | undefined {
+    return this.patches.get(versionCode);
+  }
+
+  setPatch(versionCode: number, patchVersion: number | null): void {
+    this.patches.set(versionCode, patchVersion);
   }
 }
 

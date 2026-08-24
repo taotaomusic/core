@@ -98,7 +98,9 @@ fun TaotaoMusicApp() {
     val lifecycleOwner = LocalLifecycleOwner.current
     val authSession = remember { AuthSession(context) }
     val audioPlayer = remember { AudioPlayer(context) }
-    val musicApi = remember { TencentMusicApi(authSession) }
+    val musicApi = remember {
+        TencentMusicApi(authSession, context.packageManager.getPackageInfo(context.packageName, 0).longVersionCode)
+    }
     val downloadManager = remember { OfflineDownloadManager(context, authSession) }
     val playbackStateStore = remember { PlaybackStateStore(context) }
     val playbackHistoryStore = remember { PlaybackHistoryStore(context) }
@@ -365,7 +367,13 @@ fun TaotaoMusicApp() {
         musicApi.onLatestVersion = { latest ->
             scope.launch { updateManager.onLatestVersionHint(latest) }
         }
-        onDispose { musicApi.onLatestVersion = null }
+        musicApi.onLatestPatch = { latestPatch ->
+            scope.launch { updateManager.onLatestPatchHint(latestPatch) }
+        }
+        onDispose {
+            musicApi.onLatestVersion = null
+            musicApi.onLatestPatch = null
+        }
     }
 
     /** 手动检查更新的结果单独提示，后台检查保持安静。 */
@@ -1523,10 +1531,10 @@ private fun PlayerDetailPage(
     playbackQuality: Int,
     onPickQuality: () -> Unit,
 ) {
-    // 初值直接取播放器的当前进度，而不是 0：进详情页时若从 0 起再被 ticker 拉到真实位置，
-    // 进度条会明显地从头飞过去一次。
-    var positionMs by remember(song) { mutableIntStateOf(audioPlayer.currentPositionMs()) }
+    // 播放器维护唯一进度源；拖动期间才暂存本地位置，松手立即交回播放器同步。
+    var draggedPositionMs by remember(song) { mutableIntStateOf(audioPlayer.positionMs) }
     var dragging by remember(song) { mutableStateOf(false) }
+    val positionMs = if (dragging) draggedPositionMs else audioPlayer.positionMs
     // 这两组状态的 remember key 必须与下面对应 LaunchedEffect 的 key 一致：
     // 解析播放地址后队列里的 Song 会被换成新副本，song 变了但 remoteId / lyricUri 没变，
     // key 不一致就会出现「状态被清空、拉取逻辑却不重跑」的空白歌词和收藏状态丢失。
@@ -1565,28 +1573,6 @@ private fun PlayerDetailPage(
         }.getOrElse { null to null }
         lyricText = loaded.first
         lyricWords = loaded.second
-    }
-    // 收藏状态由上层的本地缓存提供，不再每次进详情页就拉一遍完整收藏列表。
-    // key 必须包含 song：positionMs / dragging 是 remember(song)，切歌后会换成新的 state 对象，
-    // 若 ticker 不跟着重启，就会一直往已被丢弃的旧对象里写进度，界面上停在 0:00。
-    // 还必须包含 actualPlaying：队列最后一首结束后手动恢复时歌曲不变，只有播放态从
-    // false 变为 true；不重启 ticker 会出现音乐已经播放、详情页进度却停住的假象。
-    //
-    // 播放中按帧取进度而不是每 500 毫秒轮询一次：逐字高亮对延迟很敏感，
-    // 500 毫秒的采样周期平均会慢上 250 毫秒，肉眼能明显看出歌词跟不上。
-    // MediaController 的 currentPosition 是本地推算的，不走跨进程调用，逐帧读取代价很低。
-    LaunchedEffect(song, lifecycleOwner, actualPlaying) {
-        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
-            while (isActive) {
-                if (audioPlayer.isPlaying) {
-                    withFrameMillis { }
-                } else {
-                    // 暂停时没有推进，降频到 300 毫秒，只为跟上外部（通知栏、耳机键）的跳转。
-                    kotlinx.coroutines.delay(300)
-                }
-                if (!dragging) positionMs = audioPlayer.currentPositionMs()
-            }
-        }
     }
     // 时间文字只需要秒级精度。用派生状态挡住逐帧变化，避免每帧重新格式化字符串。
     val positionSeconds by remember { derivedStateOf { positionMs / 1000 } }
@@ -1659,7 +1645,7 @@ private fun PlayerDetailPage(
                     lyric = lyric,
                     positionMs = positionMs,
                     onSeek = { target ->
-                        positionMs = target
+                        draggedPositionMs = target
                         audioPlayer.seekTo(target)
                     },
                 )
@@ -1727,8 +1713,11 @@ private fun PlayerDetailPage(
         val progress by remember { derivedStateOf { if (durationMs > 0) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f } }
         Slider(
             value = progress,
-            onValueChange = { dragging = true; positionMs = (it * durationMs).toInt() },
-            onValueChangeFinished = { dragging = false; audioPlayer.seekTo(positionMs) },
+            onValueChange = { dragging = true; draggedPositionMs = (it * durationMs).toInt() },
+            onValueChangeFinished = {
+                audioPlayer.seekTo(draggedPositionMs)
+                dragging = false
+            },
             colors = SliderDefaults.colors(thumbColor = TaotaoCoral, activeTrackColor = TaotaoCoral),
         )
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {

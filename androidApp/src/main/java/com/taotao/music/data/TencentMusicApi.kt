@@ -13,7 +13,10 @@ import java.net.URLEncoder
 import java.net.URL
 
 /** 桃桃音乐后端客户端：移动端不直接请求第三方音乐接口。 */
-class TencentMusicApi(private val tokenProvider: TokenProvider) {
+class TencentMusicApi(
+    private val tokenProvider: TokenProvider,
+    private val appVersionCode: Long = 0L,
+) {
     data class TokenPair(val accessToken: String, val refreshToken: String, val expiresIn: Int)
     data class FavoriteLibrary(val ids: Set<String>, val songs: List<Song>)
     /** 账号资料仅由本人读取；邮箱不写入本地持久化。 */
@@ -30,6 +33,10 @@ class TencentMusicApi(private val tokenProvider: TokenProvider) {
      */
     @Volatile
     var onLatestVersion: ((Long) -> Unit)? = null
+
+    /** 与当前 APK 精确匹配的最新补丁号。 */
+    @Volatile
+    var onLatestPatch: ((Int) -> Unit)? = null
 
     /**
      * 搜索歌曲。
@@ -306,8 +313,10 @@ class TencentMusicApi(private val tokenProvider: TokenProvider) {
 
     /** 把响应头里的最新版本号交给观察者。解析失败或没有这个头时什么都不做。 */
     private fun noteLatestVersion(connection: HttpURLConnection) {
-        val latest = connection.getHeaderField(HEADER_LATEST_VERSION)?.toLongOrNull() ?: return
-        if (latest > 0) runCatching { onLatestVersion?.invoke(latest) }
+        connection.getHeaderField(HEADER_LATEST_VERSION)?.toLongOrNull()?.takeIf { it > 0 }
+            ?.let { latest -> runCatching { onLatestVersion?.invoke(latest) } }
+        connection.getHeaderField(HEADER_LATEST_PATCH)?.toIntOrNull()?.takeIf { it > 0 }
+            ?.let { latestPatch -> runCatching { onLatestPatch?.invoke(latestPatch) } }
     }
 
     private fun authenticate(path: String, username: String, password: String, email: String? = null, verificationCode: String? = null): TokenPair =
@@ -365,6 +374,7 @@ class TencentMusicApi(private val tokenProvider: TokenProvider) {
             readTimeout = 60_000
             setRequestProperty("Accept", "application/x-ndjson, application/json")
             setRequestProperty("User-Agent", "TaotaoMusic/1.0")
+            appVersionCode.takeIf { it > 0 }?.let { setRequestProperty(HEADER_APP_VERSION, it.toString()) }
             token?.takeIf { it.isNotBlank() }?.let { setRequestProperty("Authorization", "Bearer $it") }
         }
 
@@ -416,6 +426,8 @@ class TencentMusicApi(private val tokenProvider: TokenProvider) {
 
         /** 服务端下发的当前全量可用最高版本号。 */
         const val HEADER_LATEST_VERSION = "x-latest-version-code"
+        const val HEADER_LATEST_PATCH = "x-latest-patch-version"
+        const val HEADER_APP_VERSION = "x-app-version-code"
 
         /**
          * 队列里存的占位地址。

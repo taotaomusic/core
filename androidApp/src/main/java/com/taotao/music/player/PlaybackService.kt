@@ -5,6 +5,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.Build
 import android.util.Log
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -45,7 +46,13 @@ class PlaybackService : MediaSessionService() {
     override fun onCreate() {
         super.onCreate()
         val authSession = AuthSession(this)
-        musicApi = TencentMusicApi(authSession)
+        val packageInfo = packageManager.getPackageInfo(packageName, 0)
+        val versionCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            packageInfo.longVersionCode
+        } else {
+            @Suppress("DEPRECATION") packageInfo.versionCode.toLong()
+        }
+        musicApi = TencentMusicApi(authSession, versionCode)
         val upstreamFactory = DefaultDataSource.Factory(
             this,
             DefaultHttpDataSource.Factory().setAllowCrossProtocolRedirects(true),

@@ -222,6 +222,20 @@ export class ReleaseRepository {
     );
   }
 
+  /** 响应头用：只提示所有用户都可拿到的最高补丁，灰度仍以 bootstrap 的分桶为准。 */
+  async latestFullyRolledOutPatch(channel: string, versionCode: number): Promise<number | null> {
+    const cached = this.latestVersion.patchFor(versionCode);
+    if (cached !== undefined) return cached;
+    const row = await this.database.first<{ value: number | null }>(
+      `SELECT MAX(patch_version) AS value FROM app_patch
+       WHERE channel = $1 AND target_version_code = $2 AND enabled = 1 AND rollout_percent >= 100`,
+      [channel, versionCode],
+    );
+    const value = row?.value ?? null;
+    this.latestVersion.setPatch(versionCode, value);
+    return value;
+  }
+
   findPatch(channel: string, targetVersionCode: number, patchVersion: number): Promise<PatchRecord | undefined> {
     return this.database.first<PatchRecord>(
       "SELECT * FROM app_patch WHERE channel = $1 AND target_version_code = $2 AND patch_version = $3",
@@ -258,6 +272,7 @@ export class ReleaseRepository {
         Date.now(),
       ],
     );
+    this.latestVersion.invalidate();
   }
 
   async updatePatchRollout(
@@ -272,6 +287,7 @@ export class ReleaseRepository {
        WHERE channel = $3 AND target_version_code = $4 AND patch_version = $5`,
       [percent, enabled === undefined ? null : enabled ? 1 : 0, channel, targetVersionCode, patchVersion],
     );
+    this.latestVersion.invalidate();
     return affected > 0;
   }
 }

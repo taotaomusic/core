@@ -42,6 +42,16 @@ export class LatestVersionHeaderInterceptor implements NestInterceptor {
     } else if (cached !== null) {
       context.switchToHttp().getResponse<Response>().setHeader("x-latest-version-code", String(cached));
     }
+    const versionCode = Number(context.switchToHttp().getRequest<Request>().header("x-app-version-code"));
+    if (Number.isSafeInteger(versionCode) && versionCode > 0) {
+      const response = context.switchToHttp().getResponse<Response>();
+      const patch = this.cache.patchFor(versionCode);
+      if (patch === undefined) {
+        void this.releases.latestFullyRolledOutPatch(this.config.defaultChannel, versionCode).catch(() => undefined);
+      } else if (patch !== null) {
+        response.setHeader("x-latest-patch-version", String(patch));
+      }
+    }
     return next.handle();
   }
 }

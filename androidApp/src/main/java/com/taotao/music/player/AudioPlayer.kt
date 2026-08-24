@@ -47,6 +47,23 @@ class AudioPlayer(context: Context) {
     /** 最近一次在主线程读到的播放进度，供非主线程调用时回退使用。 */
     private var lastKnownPositionMs = 0
 
+    /**
+     * 唯一的 UI 进度源。不能由播放详情页各自轮询：页面重建、最后一首结束后恢复播放时，
+     * 页面自己的协程可能仍在写旧 State，造成音频正常播放但进度锁死。
+     */
+    var positionMs by mutableIntStateOf(0)
+        private set
+
+    private val progressTicker = object : Runnable {
+        override fun run() {
+            val activeController = controller ?: return
+            if (activeController.isPlaying) {
+                updateProgress(activeController)
+                mainHandler.postDelayed(this, PROGRESS_REFRESH_INTERVAL_MILLIS)
+            }
+        }
+    }
+
     /** 正在播放。 */
     var isPlaying by mutableStateOf(false)
         private set
@@ -176,6 +193,7 @@ class AudioPlayer(context: Context) {
     fun resume() = submit { activeController ->
         if (activeController.playbackState == Player.STATE_ENDED) activeController.seekTo(0L)
         activeController.play()
+        updateProgress(activeController)
     }
 
     fun next() = submit { it.seekToNextMediaItem() }
@@ -235,7 +253,7 @@ class AudioPlayer(context: Context) {
      */
     fun currentPositionMs(): Int {
         if (!isMainThread()) return lastKnownPositionMs
-        lastKnownPositionMs = controller?.currentPosition?.coerceAtLeast(0L)?.toInt() ?: lastKnownPositionMs
+        controller?.let(::updateProgress)
         return lastKnownPositionMs
     }
 
@@ -259,9 +277,11 @@ class AudioPlayer(context: Context) {
         pendingCommand = null
         controllerFuture?.let(MediaController::releaseFuture)
         controllerFuture = null
+        mainHandler.removeCallbacks(progressTicker)
         isPlaying = false
         hasMedia = false
         durationMs = 0
+        positionMs = 0
     }
 
     /**
@@ -289,6 +309,7 @@ class AudioPlayer(context: Context) {
     private companion object {
         /** MediaMetadata extras 中存放整首歌 JSON 的键。 */
         const val EXTRA_SONG = "com.taotao.music.SONG"
+        const val PROGRESS_REFRESH_INTERVAL_MILLIS = 100L
     }
 
     private fun syncFrom(player: Player) {
@@ -296,8 +317,17 @@ class AudioPlayer(context: Context) {
         hasMedia = player.mediaItemCount > 0 && player.playbackState != Player.STATE_IDLE
         currentIndex = player.currentMediaItemIndex
         durationMs = player.duration.takeIf { it > 0L }?.toInt() ?: 0
+        updateProgress(player)
+        mainHandler.removeCallbacks(progressTicker)
+        if (player.isPlaying) mainHandler.post(progressTicker)
         repeatMode = player.repeatMode
         queue = readQueue(player)
+    }
+
+    private fun updateProgress(player: Player) {
+        lastKnownPositionMs = player.currentPosition.coerceAtLeast(0L).toInt()
+        positionMs = lastKnownPositionMs
+        player.duration.takeIf { it > 0L }?.toInt()?.let { durationMs = it }
     }
 
     /** 从播放器时间线还原队列：每个 MediaItem 的 extras 里带着完整的 Song。 */
