@@ -9,6 +9,7 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.animation.fadeIn
@@ -45,6 +46,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
@@ -84,6 +87,8 @@ import kotlinx.coroutines.isActive
 import androidx.lifecycle.LifecycleEventObserver
 import android.net.Uri
 import java.io.File
+import java.util.Calendar
+import kotlin.math.abs
 
 @Composable
 fun TaotaoMusicApp() {
@@ -862,6 +867,7 @@ fun TaotaoMusicApp() {
                         else playSong(playbackSongs, index)
                     },
                     onRemoveQueueItem = { index -> audioPlayer.removeQueueItem(index) },
+                    onMoveQueueItem = { from, to -> audioPlayer.moveQueueItem(from, to) },
                     onKeepOnlyCurrent = { audioPlayer.keepOnlyCurrent() },
                     history = playbackHistory,
                     localSongs = downloadedSongs,
@@ -1007,11 +1013,26 @@ fun TaotaoMusicApp() {
                     onOpenLocal = { mineLibrarySection = MineLibrarySection.LOCAL },
                     profile = userProfile,
                     profileLoading = profileLoading,
-                    onOpenAccount = { showAccountDialog = true },
+                    onOpenAccount = {
+                        if (userProfile != null) {
+                            showAccountDialog = true
+                        } else if (!profileLoading) {
+                            profileLoading = true
+                            scope.launch {
+                                runCatching { withContext(Dispatchers.IO) { musicApi.profile() } }
+                                    .onSuccess { userProfile = it; showAccountDialog = true }
+                                    .onFailure { message = it.readableMessage() }
+                                profileLoading = false
+                            }
+                        }
+                    },
                 )
             } else Column(Modifier.fillMaxSize().padding(horizontal = 22.dp)) {
                 Spacer(Modifier.height(24.dp))
-                HomeHeader(onOpenAnnouncements = { showAnnouncementDialog = true })
+                HomeHeader(
+                    userName = userProfile?.nickname ?: userProfile?.username ?: "音乐爱好者",
+                    onOpenAnnouncements = { showAnnouncementDialog = true },
+                )
                 if (announcements.isNotEmpty()) {
                     AnnouncementPreview(announcements.first(), onClick = { showAnnouncementDialog = true })
                 }
@@ -1035,7 +1056,7 @@ fun TaotaoMusicApp() {
     // 弹窗和底部面板位于主 Surface 之后，必须显式继承当前外观主题；否则暗色模式会退回默认亮色。
     TaotaoTheme(darkTheme = darkTheme) {
         userProfile?.takeIf { showAccountDialog }?.let { profile ->
-            AccountDialog(
+            AccountSheet(
                 api = musicApi,
                 profile = profile,
                 onProfileChanged = { userProfile = it },
@@ -1163,10 +1184,11 @@ private fun dedupeSongs(songs: List<Song>): List<Song> {
 /** 列表项的稳定唯一键。必须与 [dedupeSongs] 的判重口径一致。 */
 fun songKeyOf(song: Song): String = "${song.remoteId ?: 0}#${song.title}#${song.artist}"
 
-@Composable private fun HomeHeader(onOpenAnnouncements: () -> Unit) {
+@Composable
+private fun HomeHeader(userName: String, onOpenAnnouncements: () -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.weight(1f)) {
-            Text("早上好，桃桃", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
+            Text("${timeGreeting()}，$userName", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
             Text("听点喜欢的", fontSize = 28.sp, fontWeight = FontWeight.Bold)
         }
         IconButton(onClick = onOpenAnnouncements) { Icon(Icons.Default.NotificationsNone, "公告") }
@@ -1215,10 +1237,10 @@ private fun MinePage(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Box(
-                    Modifier.size(62.dp).clip(CircleShape).background(TaotaoCoral.copy(alpha = 0.16f)),
+                    Modifier.size(62.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primaryContainer),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Icon(Icons.Default.Person, null, tint = TaotaoCoral, modifier = Modifier.size(30.dp))
+                    Icon(Icons.Default.Person, null, tint = MaterialTheme.colorScheme.onPrimaryContainer, modifier = Modifier.size(30.dp))
                 }
                 Column(Modifier.weight(1f).padding(start = 15.dp)) {
                     Text(profile?.nickname ?: if (profileLoading) "正在读取资料…" else "桃桃音乐", fontSize = 18.sp, fontWeight = FontWeight.Bold)
@@ -1229,7 +1251,7 @@ private fun MinePage(
                         modifier = Modifier.padding(top = 4.dp),
                     )
                 }
-                TextButton(onClick = onOpenAccount, enabled = profile != null && !profileLoading) { Text("管理") }
+                TextButton(onClick = onOpenAccount, enabled = !profileLoading) { Text(if (profileLoading) "读取中" else "管理") }
             }
         }
         item { Text("我的音乐", fontSize = 17.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp)) }
@@ -1487,6 +1509,7 @@ private fun PlayerDetailPage(
     queueIndex: Int,
     onQueueItemClick: (Int) -> Unit,
     onRemoveQueueItem: (Int) -> Unit,
+    onMoveQueueItem: (Int, Int) -> Unit,
     onKeepOnlyCurrent: () -> Unit,
     history: List<PlaybackHistoryEntry>,
     localSongs: List<Song>,
@@ -1784,6 +1807,7 @@ private fun PlayerDetailPage(
             repeatMode = repeatMode,
             onCycleRepeat = onToggleRepeat,
             onRemoveItem = onRemoveQueueItem,
+            onMoveItem = onMoveQueueItem,
             onKeepOnlyCurrent = onKeepOnlyCurrent,
             history = history,
             localSongs = localSongs,
@@ -1807,6 +1831,7 @@ private fun PlaybackQueueSheet(
     repeatMode: Int,
     onCycleRepeat: () -> Unit,
     onRemoveItem: (Int) -> Unit,
+    onMoveItem: (Int, Int) -> Unit,
     onKeepOnlyCurrent: () -> Unit,
     history: List<PlaybackHistoryEntry>,
     localSongs: List<Song>,
@@ -1895,6 +1920,7 @@ private fun PlaybackQueueSheet(
                             onCycleRepeat = onCycleRepeat,
                             onItemClick = onItemClick,
                             onRemoveItem = onRemoveItem,
+                            onMoveItem = onMoveItem,
                             isFavorite = isFavorite,
                             onToggleFavorite = onToggleFavorite,
                         )
@@ -1904,6 +1930,16 @@ private fun PlaybackQueueSheet(
             Spacer(Modifier.height(16.dp))
         }
     }
+}
+
+/** 只依赖设备本地时区，离线时也能给出符合当前时段的问候。 */
+private fun timeGreeting(hour: Int = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)): String = when (hour) {
+    in 5..8 -> "早上好"
+    in 9..11 -> "上午好"
+    in 12..13 -> "中午好"
+    in 14..18 -> "下午好"
+    in 19..22 -> "晚上好"
+    else -> "夜深了"
 }
 
 /** 首页只占一行展示最新或置顶公告，详情放进弹层，避免正文挤占搜索与推荐内容。 */
@@ -1938,6 +1974,7 @@ private fun CurrentPlaybackQueue(
     onCycleRepeat: () -> Unit,
     onItemClick: (Int) -> Unit,
     onRemoveItem: (Int) -> Unit,
+    onMoveItem: (Int, Int) -> Unit,
     isFavorite: (Song) -> Boolean,
     onToggleFavorite: (Song) -> Unit,
 ) {
@@ -1967,6 +2004,9 @@ private fun CurrentPlaybackQueue(
         if (queue.isEmpty()) {
             PlaybackQueueEmptyState("队列为空", Modifier.weight(1f))
         } else {
+            var draggedIndex by remember { mutableIntStateOf(-1) }
+            var draggedDistance by remember { mutableFloatStateOf(0f) }
+            val dragStep = with(LocalDensity.current) { 52.dp.toPx() }
             LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
                 itemsIndexed(queue) { index, item ->
                     val isCurrent = index == currentIndex
@@ -1979,6 +2019,31 @@ private fun CurrentPlaybackQueue(
                         favorited = isFavorite(item),
                         onToggleFavorite = onToggleFavorite.takeIf { item.remoteId != null }
                             ?.let { callback -> { callback(item) } },
+                        dragHandle = { modifier ->
+                            Icon(
+                                Icons.Default.DragHandle,
+                                "长按拖动调整顺序",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = modifier.pointerInput(queue, index) {
+                                    detectDragGesturesAfterLongPress(
+                                        onDragStart = { draggedIndex = index; draggedDistance = 0f },
+                                        onDragEnd = { draggedIndex = -1; draggedDistance = 0f },
+                                        onDragCancel = { draggedIndex = -1; draggedDistance = 0f },
+                                    ) { change, dragAmount ->
+                                        change.consume()
+                                        if (draggedIndex !in queue.indices) return@detectDragGesturesAfterLongPress
+                                        draggedDistance += dragAmount.y
+                                        if (abs(draggedDistance) < dragStep) return@detectDragGesturesAfterLongPress
+                                        val destination = (draggedIndex + if (draggedDistance > 0f) 1 else -1).coerceIn(queue.indices)
+                                        if (destination != draggedIndex) {
+                                            onMoveItem(draggedIndex, destination)
+                                            draggedIndex = destination
+                                        }
+                                        draggedDistance = 0f
+                                    }
+                                },
+                            )
+                        },
                     )
                 }
             }

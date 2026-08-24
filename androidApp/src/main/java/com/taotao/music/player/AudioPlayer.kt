@@ -189,6 +189,13 @@ class AudioPlayer(context: Context) {
         activeController.removeMediaItem(index)
     }
 
+    /** 调整播放列表顺序；Media3 保持当前播放项不变，并自动同步它的新下标。 */
+    fun moveQueueItem(fromIndex: Int, toIndex: Int) = submit { activeController ->
+        val count = activeController.mediaItemCount
+        if (fromIndex !in 0 until count || toIndex !in 0 until count || fromIndex == toIndex) return@submit
+        activeController.moveMediaItem(fromIndex, toIndex)
+    }
+
     /** 清掉当前歌曲以外的项目，播放不中断，当前歌曲最终位于队列第 1 位。 */
     fun keepOnlyCurrent() = submit { activeController ->
         val current = activeController.currentMediaItemIndex

@@ -1,15 +1,9 @@
 package com.taotao.music.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -17,20 +11,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Person
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
+import androidx.compose.material.icons.filled.VerifiedUser
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -45,9 +28,13 @@ import kotlinx.coroutines.withContext
 
 private val QQ_EMAIL_PATTERN = Regex("^[^\\s@]+@(qq\\.com|foxmail\\.com)$", RegexOption.IGNORE_CASE)
 
-/** 账号资料与邮箱操作集中在一个弹层，避免把邮箱留在本地设置中造成隐私泄露。 */
+/**
+ * 账号资料用完整底部页承载，避免在窄小对话框里叠放三组输入与操作。
+ * 老账号 email 为 null 时明确走“补绑”，已有邮箱时才进入换绑流程。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AccountDialog(
+fun AccountSheet(
     api: TencentMusicApi,
     profile: TencentMusicApi.UserProfile,
     onProfileChanged: (TencentMusicApi.UserProfile) -> Unit,
@@ -60,6 +47,7 @@ fun AccountDialog(
     var loading by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val changingEmail = profile.email != null
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     fun launchRequest(work: suspend () -> Unit, successMessage: String) {
         loading = true
@@ -71,122 +59,156 @@ fun AccountDialog(
         }
     }
 
-    AlertDialog(
+    ModalBottomSheet(
         onDismissRequest = { if (!loading) onDismiss() },
-        icon = { Icon(Icons.Default.Person, null) },
-        title = { Text("账号资料") },
-        text = {
-            Column(
-                modifier = Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                Text("用户名：${profile.username}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
-                OutlinedTextField(
-                    value = nickname,
-                    onValueChange = { nickname = it.take(24) },
-                    label = { Text("个人昵称") },
-                    leadingIcon = { Icon(Icons.Default.Person, null) },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    enabled = !loading,
-                )
-                TextButton(
-                    enabled = !loading && nickname.trim().isNotEmpty() && nickname.trim() != profile.nickname,
-                    onClick = {
-                        loading = true
-                        scope.launch {
-                            runCatching { withContext(Dispatchers.IO) { api.updateNickname(nickname.trim()) } }
-                                .onSuccess {
-                                    onProfileChanged(it)
-                                    onMessage("昵称已更新")
-                                }
-                                .onFailure { onMessage(it.readableMessage()) }
-                            loading = false
-                        }
-                    },
-                ) { Text("保存昵称") }
-                HorizontalDivider()
-                Text(if (changingEmail) "已绑定邮箱：${profile.email}" else "尚未绑定邮箱", fontWeight = FontWeight.Medium)
-                OutlinedTextField(
-                    value = email,
-                    onValueChange = { email = it.trim(); verificationCode = "" },
-                    label = { Text(if (changingEmail) "新的 QQ 邮箱" else "QQ 邮箱") },
-                    leadingIcon = { Icon(Icons.Default.Email, null) },
-                    isError = email.isNotEmpty() && !QQ_EMAIL_PATTERN.matches(email),
-                    supportingText = { Text("仅支持 qq.com 或 foxmail.com") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    enabled = !loading,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
-                )
-                Row(verticalAlignment = Alignment.CenterVertically) {
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surface,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().heightIn(max = 720.dp).verticalScroll(rememberScrollState())
+                .padding(start = 22.dp, end = 22.dp, bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            AccountHeader(profile)
+            AccountSectionTitle("个人资料", "这些信息只在当前账号下展示")
+            ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     OutlinedTextField(
-                        value = verificationCode,
-                        onValueChange = { verificationCode = it.filter(Char::isDigit).take(6) },
-                        label = { Text("验证码") },
-                        modifier = Modifier.weight(1f),
-                        singleLine = true,
-                        enabled = !loading,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        value = nickname,
+                        onValueChange = { nickname = it.take(24) },
+                        label = { Text("个人昵称") },
+                        supportingText = { Text("1 至 24 个字符") },
+                        leadingIcon = { Icon(Icons.Default.Person, null) },
+                        modifier = Modifier.fillMaxWidth(), singleLine = true, enabled = !loading,
                     )
-                    Spacer(Modifier.width(6.dp))
-                    TextButton(
-                        enabled = !loading && QQ_EMAIL_PATTERN.matches(email),
+                    Button(
+                        enabled = !loading && nickname.trim().isNotEmpty() && nickname.trim() != profile.nickname,
                         onClick = {
-                            launchRequest(
-                                { api.sendEmailBindingVerification(email, changingEmail) },
-                                "验证码已发送，请查收邮箱",
-                            )
+                            loading = true
+                            scope.launch {
+                                runCatching { withContext(Dispatchers.IO) { api.updateNickname(nickname.trim()) } }
+                                    .onSuccess { onProfileChanged(it); onMessage("昵称已更新") }
+                                    .onFailure { onMessage(it.readableMessage()) }
+                                loading = false
+                            }
                         },
-                    ) { Text("发送验证码") }
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("保存昵称") }
                 }
-                TextButton(
-                    enabled = !loading && QQ_EMAIL_PATTERN.matches(email) && verificationCode.length == 6,
-                    onClick = {
-                        launchRequest({
-                            api.confirmEmailBinding(email, verificationCode, changingEmail)
-                            onProfileChanged(api.profile())
-                        }, if (changingEmail) "邮箱已更换" else "邮箱已绑定")
-                    },
-                ) { Text(if (changingEmail) "确认更换邮箱" else "确认绑定邮箱") }
             }
-        },
-        confirmButton = {
-            if (loading) CircularProgressIndicator(Modifier.padding(12.dp), strokeWidth = 2.dp)
-            else TextButton(onClick = onDismiss) { Text("完成") }
-        },
-    )
+            AccountSectionTitle("账号安全", "绑定邮箱后可用于账号验证")
+            ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    EmailBindingStatus(profile.email)
+                    HorizontalDivider()
+                    Text(
+                        if (changingEmail) "更换后，新邮箱将作为此账号的验证邮箱。" else "老账号尚未绑定邮箱，可直接在这里补绑。",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp,
+                    )
+                    OutlinedTextField(
+                        value = email,
+                        onValueChange = { email = it.trim(); verificationCode = "" },
+                        label = { Text(if (changingEmail) "新的 QQ 邮箱" else "QQ 邮箱") },
+                        leadingIcon = { Icon(Icons.Default.Email, null) },
+                        isError = email.isNotEmpty() && !QQ_EMAIL_PATTERN.matches(email),
+                        supportingText = { Text("仅支持 qq.com 或 foxmail.com") },
+                        modifier = Modifier.fillMaxWidth(), singleLine = true, enabled = !loading,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedTextField(
+                            value = verificationCode,
+                            onValueChange = { verificationCode = it.filter(Char::isDigit).take(6) },
+                            label = { Text("6 位验证码") }, modifier = Modifier.weight(1f), singleLine = true,
+                            enabled = !loading, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        TextButton(
+                            enabled = !loading && QQ_EMAIL_PATTERN.matches(email),
+                            onClick = { launchRequest({ api.sendEmailBindingVerification(email, changingEmail) }, "验证码已发送，请查收邮箱") },
+                        ) { Text("获取验证码") }
+                    }
+                    Button(
+                        enabled = !loading && QQ_EMAIL_PATTERN.matches(email) && verificationCode.length == 6,
+                        onClick = {
+                            launchRequest({
+                                api.confirmEmailBinding(email, verificationCode, changingEmail)
+                                onProfileChanged(api.profile())
+                            }, if (changingEmail) "邮箱已更换" else "邮箱已绑定")
+                        }, modifier = Modifier.fillMaxWidth(),
+                    ) { Text(if (changingEmail) "确认更换邮箱" else "确认绑定邮箱") }
+                }
+            }
+            if (loading) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary, strokeWidth = 2.dp)
+            }
+            TextButton(onClick = onDismiss, enabled = !loading, modifier = Modifier.align(Alignment.End)) { Text("完成") }
+        }
+    }
 }
 
-/** 公告列表仅展示服务端已启用的公开内容，服务端决定排序与置顶。 */
+@Composable
+private fun AccountHeader(profile: TencentMusicApi.UserProfile) {
+    Row(
+        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp))
+            .background(MaterialTheme.colorScheme.primaryContainer).padding(18.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier.size(48.dp).clip(CircleShape).background(MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.12f)),
+            contentAlignment = Alignment.Center,
+        ) { Icon(Icons.Default.Person, null, tint = MaterialTheme.colorScheme.onPrimaryContainer, modifier = Modifier.size(28.dp)) }
+        Column(Modifier.weight(1f).padding(start = 14.dp)) {
+            Text(profile.nickname, color = MaterialTheme.colorScheme.onPrimaryContainer, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+            Text("用户名 ${profile.username}", color = MaterialTheme.colorScheme.onPrimaryContainer, fontSize = 13.sp)
+        }
+    }
+}
+
+@Composable
+private fun AccountSectionTitle(title: String, subtitle: String) {
+    Column {
+        Text(title, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+        Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp))
+    }
+}
+
+@Composable
+private fun EmailBindingStatus(email: String?) {
+    val bound = email != null
+    val background = if (bound) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceVariant
+    val content = if (bound) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+    Row(
+        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(background).padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(if (bound) Icons.Default.VerifiedUser else Icons.Default.Email, null, tint = content)
+        Column(Modifier.padding(start = 10.dp)) {
+            Text(if (bound) "邮箱已绑定" else "邮箱未绑定", color = content, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+            Text(email ?: "绑定后可用于账号验证", color = content, fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp))
+        }
+    }
+}
+
+/** 公告列表只展示服务端已启用的公开内容，服务端决定排序与置顶。 */
 @Composable
 fun AnnouncementDialog(announcements: List<TencentMusicApi.Announcement>, onDismiss: () -> Unit) {
     AlertDialog(
-        onDismissRequest = onDismiss,
-        icon = { Icon(Icons.Default.Campaign, null) },
-        title = { Text("公告") },
+        onDismissRequest = onDismiss, icon = { Icon(Icons.Default.Campaign, null) }, title = { Text("公告") },
         text = {
             Column(Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState())) {
                 announcements.forEachIndexed { index, announcement ->
                     if (index > 0) HorizontalDivider(Modifier.padding(vertical = 12.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(announcement.title, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                        if (announcement.pinned) {
-                            Text(
-                                "置顶",
-                                color = MaterialTheme.colorScheme.primary,
-                                fontSize = 12.sp,
-                                modifier = Modifier.clip(RoundedCornerShape(8.dp))
-                                    .background(MaterialTheme.colorScheme.primaryContainer).padding(horizontal = 7.dp, vertical = 3.dp),
-                            )
-                        }
+                        if (announcement.pinned) Text(
+                            "置顶", color = MaterialTheme.colorScheme.primary, fontSize = 12.sp,
+                            modifier = Modifier.clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.primaryContainer)
+                                .padding(horizontal = 7.dp, vertical = 3.dp),
+                        )
                     }
-                    Text(
-                        announcement.content,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontSize = 14.sp,
-                        modifier = Modifier.padding(top = 6.dp),
-                    )
+                    Text(announcement.content, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp, modifier = Modifier.padding(top = 6.dp))
                 }
             }
         },

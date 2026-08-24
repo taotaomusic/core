@@ -109,6 +109,7 @@ fun SongRow(
     onToggleFavorite: (() -> Unit)? = null,
     onPlayNext: (() -> Unit)? = null,
     onDelete: (() -> Unit)? = null,
+    dragHandle: (@Composable (Modifier) -> Unit)? = null,
 ) {
     var showActions by remember { mutableStateOf(false) }
     val backgroundColor by animateColorAsState(
@@ -159,7 +160,9 @@ fun SongRow(
             }
         }
         Text(song.duration, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
-        Box {
+        if (dragHandle != null) {
+            dragHandle(Modifier.size(36.dp))
+        } else Box {
             IconButton(onClick = { showActions = true }, modifier = Modifier.size(36.dp)) {
                 Icon(Icons.Default.MoreVert, "更多操作", tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
