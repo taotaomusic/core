@@ -6,6 +6,7 @@ import android.os.Build
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.taotao.music.hotfix.HotfixDiagnostics
 import com.taotao.music.hotfix.HotfixInstaller
 import com.taotao.music.data.DeviceIdStore
 import com.taotao.music.data.RemoteConfigStore
@@ -68,10 +69,27 @@ class UpdateManager(
      *
      * 必须在应用**平稳跑起来之后**调用，不是刚启动就调 —— 这是自愈机制的另一半：
      * 加载前记了尝试计数，只有走到这里才清零；太早调等于把保护关掉。
+     *
+     * [activeVersion] 是**启动时**加载到的版本。会话中途装上的补丁不能被它覆盖回去，
+     * 所以这里取两者较大的那个。
      */
     fun confirmPatch(activeVersion: Int) {
-        activePatchVersion = activeVersion
+        activePatchVersion = maxOf(activePatchVersion, activeVersion)
         hotfix.confirm()
+    }
+
+    /** 热修复状态快照，供设置页展示。补丁没生效时这是唯一能看到原因的地方。 */
+    fun hotfixDiagnostics(): HotfixDiagnostics = hotfix.diagnose(installedVersionCode, activePatchVersion)
+
+    /**
+     * 清除"这个补丁失败过"的记忆并立刻重查一次。
+     *
+     * 没有这个出口的话，一次偶发失败会让补丁永久装不上：`failedPatchVersion`
+     * 原本没有任何清除入口，而用户看不到原因也没有重试手段。
+     */
+    suspend fun retryHotfix() {
+        hotfix.forgetFailure()
+        check(manual = true)
     }
 
     /**
@@ -106,13 +124,21 @@ class UpdateManager(
 
             // 热修复：服务端只在没有整包更新时才下发补丁，所以放在整包判断之前处理。
             // 补丁生效不需要重启，成功后把版本号暴露给界面。
+            //
+            // 补丁的提示要**攒着**，不能就地写 manualResult ——
+            // 下面「已是最新版本」那条分支会覆盖它，结果补丁装上了用户也只看到
+            // 「已是最新版本」。这个 bug 让一次真实排查完全失去了信号。
+            var patchMessage: String? = null
             result.patch?.let { patch ->
                 val ok = withContext(Dispatchers.IO) {
                     hotfix.install(patch, installedVersionCode, activePatchVersion)
                 }
                 if (ok) {
                     activePatchVersion = patch.patchVersion
-                    if (manual) manualResult = "已应用热修复补丁 ${patch.patchVersion}"
+                    patchMessage = "已应用热修复补丁 ${patch.patchVersion}"
+                } else {
+                    // 失败原因已经落盘，这里只给一句提示把人引到设置页去看详情。
+                    patchMessage = hotfix.diagnose(installedVersionCode, activePatchVersion).lastOutcome
                 }
             }
 
@@ -120,7 +146,7 @@ class UpdateManager(
             if (release == null || release.versionCode <= installedVersionCode) {
                 // 服务端不该下发不高于当前版本的包，真出现时按无更新处理，避免死循环提示。
                 status = UpdateStatus(stage = UpdateStage.UP_TO_DATE)
-                if (manual) manualResult = "已是最新版本 $installedVersionName"
+                if (manual) manualResult = patchMessage ?: "已是最新版本 $installedVersionName"
                 return
             }
             // 用户划掉过这个版本就不再自动弹；手动检查视为明确想看，忽略这条记录。

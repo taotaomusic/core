@@ -24,22 +24,34 @@ class HotfixInstaller(context: Context) {
     /**
      * 处理一个服务端下发的补丁。返回是否有新补丁生效。
      *
+     * 每个"不装"的分支都会 [HotfixStore.note] 一句人能读的结论 —— 原来它们只写
+     * `Log.w` 就静默返回，而测试机连不上 adb，表现成"点了检查更新什么也没发生"，
+     * 完全无法判断卡在哪一步。
+     *
      * @param installedVersionCode 本机 versionCode，必须与补丁的目标版本严格相等。
      * @param activePatchVersion 本次启动已生效的补丁版本，用于跳过重复下载。
      */
     fun install(patch: AvailablePatch, installedVersionCode: Long, activePatchVersion: Int): Boolean {
         if (patch.targetVersionCode != installedVersionCode) {
-            Log.i(TAG, "补丁 ${patch.patchVersion} 面向版本 ${patch.targetVersionCode}，本机 $installedVersionCode，忽略")
+            val message = "补丁 ${patch.patchVersion} 是给版本 ${patch.targetVersionCode} 的，本机是 $installedVersionCode，不适用"
+            Log.i(TAG, message)
+            store.note(message)
             return false
         }
-        if (patch.patchVersion <= activePatchVersion) return false
+        if (patch.patchVersion <= activePatchVersion) {
+            store.note("补丁 ${patch.patchVersion} 已经在生效中，无需重复安装")
+            return false
+        }
         // 加载失败过的补丁不再重试，否则会陷入「下载 → 崩 → 回滚 → 再下载」的循环。
+        // 但这条记忆必须能从设置页清掉，否则一次偶发失败会让补丁永久装不上。
         if (patch.patchVersion == store.failedPatchVersion()) {
-            Log.w(TAG, "补丁 ${patch.patchVersion} 之前加载失败过（${store.failureReason()}），不再重试")
+            val message = "补丁 ${patch.patchVersion} 之前加载失败过（${store.failureReason() ?: "原因未记录"}），已停止重试。可在设置里清除失败记录"
+            Log.w(TAG, message)
+            store.note(message)
             return false
         }
         if (patch.sha256.isBlank()) {
-            Log.w(TAG, "补丁 ${patch.patchVersion} 没有校验值，拒绝安装")
+            store.note("补丁 ${patch.patchVersion} 没有下发校验值，拒绝安装")
             return false
         }
 
@@ -50,15 +62,32 @@ class HotfixInstaller(context: Context) {
             download(patch.url, temporary)
             val actual = sha256Of(temporary)
             if (actual != patch.sha256) {
-                Log.w(TAG, "补丁 ${patch.patchVersion} 校验不一致，期望 ${patch.sha256}，实际 $actual")
+                val message = "补丁 ${patch.patchVersion} 校验不一致，期望 ${patch.sha256.take(12)}… 实际 ${actual.take(12)}…"
+                Log.w(TAG, message)
+                store.note(message)
                 return false
             }
             if (!temporary.renameTo(target)) {
-                Log.w(TAG, "补丁 ${patch.patchVersion} 无法落盘")
+                store.note("补丁 ${patch.patchVersion} 无法写入存储")
+                return false
+            }
+            // Android 14（API 34）的「Safer dynamic code loading」：targetSdk ≥ 34 时
+            // 所有动态加载的 dex/jar/apk **必须先标记只读**，否则加载时系统直接抛
+            //   SecurityException: Writable dex file '...' is not allowed
+            // 本项目 targetSdk = 35，所以这一步是必需的，不是可选的加固。
+            //
+            // 漏掉它的表现极其隐蔽：下载、校验、落盘全部成功，只在 DexClassLoader
+            // 构造时抛异常；异常被 applyNow 捕获后补丁被标记为「失败过」而永不重试，
+            // 界面上没有任何提示。真实踩过一次，查了很久。
+            if (!target.setReadOnly()) {
+                store.note("补丁 ${patch.patchVersion} 无法设为只读，Android 14+ 会拒绝加载可写的 dex")
+                target.delete()
                 return false
             }
         } catch (error: Throwable) {
-            Log.w(TAG, "补丁 ${patch.patchVersion} 下载失败", error)
+            val message = "补丁 ${patch.patchVersion} 下载失败：${error.message ?: error.javaClass.simpleName}"
+            Log.w(TAG, message, error)
+            store.note(message)
             return false
         } finally {
             temporary.delete()
@@ -67,7 +96,12 @@ class HotfixInstaller(context: Context) {
         // 先记状态再加载：pendingAttempt 为真意味着"这次加载还没被确认"，
         // 万一它把当前进程搞崩，下次启动就会立刻回滚。
         store.install(patch.patchVersion, patch.targetVersionCode, pendingAttempt = true)
-        return HotfixLoader.applyNow(appContext, patch.patchVersion)
+        val ok = HotfixLoader.applyNow(appContext, patch.patchVersion)
+        store.note(
+            if (ok) "补丁 ${patch.patchVersion} 已加载生效"
+            else "补丁 ${patch.patchVersion} 加载失败：${store.failureReason() ?: "原因未记录"}",
+        )
+        return ok
     }
 
     /**
@@ -77,6 +111,20 @@ class HotfixInstaller(context: Context) {
      * 太早调等于把保护关掉。
      */
     fun confirm() = store.confirm()
+
+    /** 当前状态快照，给设置页展示。 */
+    fun diagnose(installedVersionCode: Long, activePatchVersion: Int) = HotfixDiagnostics(
+        installedVersionCode = installedVersionCode,
+        activePatchVersion = activePatchVersion,
+        targetVersionCode = store.targetVersionCode(),
+        failedPatchVersion = store.failedPatchVersion(),
+        failureReason = store.failureReason(),
+        lastOutcome = store.lastOutcome(),
+        lastOutcomeAt = store.lastOutcomeAt(),
+    )
+
+    /** 清除"失败过"的记忆，让下次检查更新重新尝试同一个补丁。 */
+    fun forgetFailure() = store.forgetFailure()
 
     private fun download(url: String, target: File) {
         val connection = (URL(url).openConnection() as HttpURLConnection).apply {

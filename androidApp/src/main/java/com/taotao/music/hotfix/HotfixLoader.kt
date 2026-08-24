@@ -43,6 +43,7 @@ object HotfixLoader {
         if (store.attempts() > 0) {
             Log.w(TAG, "补丁 $version 上次加载后应用未能正常运行，已弃用")
             store.disable(version, "加载后启动失败")
+            store.note("补丁 $version 上次加载后应用没能平稳运行，已自动回滚")
             patchFile(context, version).delete()
             return 0
         }
@@ -51,6 +52,7 @@ object HotfixLoader {
         if (store.targetVersionCode() != installedVersionCode) {
             Log.i(TAG, "补丁 $version 是给版本 ${store.targetVersionCode()} 的，当前 $installedVersionCode，跳过")
             store.disable(version, "宿主版本已变更")
+            store.note("补丁 $version 是给版本 ${store.targetVersionCode()} 的，本机已升到 $installedVersionCode，已失效")
             patchFile(context, version).delete()
             return 0
         }
@@ -58,6 +60,7 @@ object HotfixLoader {
         val file = patchFile(context, version)
         if (!file.isFile || file.length() == 0L) {
             store.disable(version, "补丁文件缺失")
+            store.note("补丁 $version 的文件不见了，已弃用")
             return 0
         }
 
@@ -65,11 +68,14 @@ object HotfixLoader {
             store.beginAttempt()
             load(context, file)
             Log.i(TAG, "补丁 $version 已生效")
+            store.note("补丁 $version 启动时加载成功")
             version
         } catch (error: Throwable) {
             // 这里必须捕获 Throwable：补丁类里可能抛 NoSuchMethodError、VerifyError 之类。
+            val reason = error.message ?: error.javaClass.simpleName
             Log.e(TAG, "补丁 $version 加载失败", error)
-            store.disable(version, error.message ?: error.javaClass.simpleName)
+            store.disable(version, reason)
+            store.note("补丁 $version 启动时加载失败：$reason")
             file.delete()
             0
         }
@@ -95,6 +101,15 @@ object HotfixLoader {
     }
 
     private fun load(context: Context, file: File) {
+        // Android 14（API 34）起，动态加载的 dex 必须是**只读**的，否则构造类加载器时
+        // 直接抛 SecurityException。安装时已经设过一次，这里再兜一次底：旧版本装下的
+        // 补丁文件可能还是可写的，升级后第一次启动加载它会失败。
+        //
+        // 判断只读而不是无条件调用：setReadOnly 在已只读的文件上返回 true，但多一次
+        // 系统调用没必要，而且失败时要能区分"本来就设不上"和"刚才没设成"。
+        if (file.canWrite() && !file.setReadOnly()) {
+            error("补丁文件无法设为只读，Android 14+ 拒绝加载可写的 dex")
+        }
         // optimizedDirectory 传应用私有目录：Android 8 起这个参数被忽略，但传 null
         // 在部分低版本 ROM 上会落到 /data/dalvik-cache 取不到写权限。
         val optimized = File(context.filesDir, "hotfix/odex").apply { mkdirs() }

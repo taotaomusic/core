@@ -289,6 +289,16 @@ fun TaotaoMusicApp() {
     }
 
     /**
+     * 热修复状态,给设置页展示。
+     *
+     * 每次打开设置页都重新读一遍:补丁可能在会话中途才装上,缓存住的快照会显示过期状态。
+     */
+    var hotfixDiagnostics by remember { mutableStateOf(updateManager.hotfixDiagnostics()) }
+    LaunchedEffect(showSettingsPage) {
+        if (showSettingsPage) hotfixDiagnostics = updateManager.hotfixDiagnostics()
+    }
+
+    /**
      * 会话中途发现新版本。
      *
      * 服务端在每个响应上带回当前全量可用的最高版本号，比本机高就走一次正常检查。
@@ -741,11 +751,18 @@ fun TaotaoMusicApp() {
                     playbackQuality = playbackQuality,
                     downloadQuality = downloadQuality,
                     appearance = appearance,
+                    hotfix = hotfixDiagnostics,
                     onPickPlaybackQuality = { qualitySheet = QualitySheetKind.PLAYBACK_DEFAULT },
                     onPickDownloadQuality = { qualitySheet = QualitySheetKind.DOWNLOAD_DEFAULT },
                     onPickAppearance = { mode ->
                         appearance = mode
                         appearanceStore.setMode(mode)
+                    },
+                    onRetryHotfix = {
+                        scope.launch {
+                            updateManager.retryHotfix()
+                            hotfixDiagnostics = updateManager.hotfixDiagnostics()
+                        }
                     },
                     onBack = { showSettingsPage = false },
                 )

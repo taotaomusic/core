@@ -16,6 +16,12 @@ import android.content.Context
  * - 启动时发现计数已经不为 0，说明上一次加载后没能走到"平稳"，直接弃用该补丁
  *
  * 所以最坏情况是崩一次就自动回滚，而不是反复崩。
+ *
+ * ## 为什么要记「最近一次结果」
+ *
+ * 整条补丁链路原本只往 logcat 写日志。测试机连不上 adb，于是补丁没生效时
+ * **界面上没有任何信息**：不知道是版本号不匹配、下载失败、校验不符，还是加载抛异常。
+ * 真实发生过一次这样的排查，只能靠猜。所以每一步的结论都落盘，设置页直接读出来。
  */
 class HotfixStore(context: Context) {
     private val preferences = context.getSharedPreferences("hotfix", Context.MODE_PRIVATE)
@@ -77,6 +83,39 @@ class HotfixStore(context: Context) {
 
     fun failureReason(): String? = preferences.getString(KEY_REASON, null)
 
+    /**
+     * 记下链路里最近一次发生了什么，供设置页展示。
+     *
+     * 每一个「不装」的分支都要调它 —— 静默返回 false 是这套机制最难排查的地方：
+     * 界面上看不出区别，而 logcat 在测试机上取不到。
+     */
+    fun note(outcome: String) {
+        preferences.edit()
+            .putString(KEY_OUTCOME, outcome)
+            .putLong(KEY_OUTCOME_AT, System.currentTimeMillis())
+            .apply()
+    }
+
+    fun lastOutcome(): String? = preferences.getString(KEY_OUTCOME, null)
+
+    fun lastOutcomeAt(): Long = preferences.getLong(KEY_OUTCOME_AT, 0L)
+
+    /**
+     * 解除"这个补丁失败过"的记忆，让服务端下发的同一版本能被重新尝试。
+     *
+     * [failedPatchVersion] 原本没有任何清除入口：补丁一旦失败过一次就永久装不上，
+     * 而用户看不到原因也没有重试手段 —— 这是个死锁。所以设置页要有一个显式出口。
+     * 不清 [KEY_VERSION]：正在生效的补丁不该被这个动作弄掉。
+     */
+    fun forgetFailure() {
+        preferences.edit()
+            .remove(KEY_FAILED)
+            .remove(KEY_REASON)
+            .putString(KEY_OUTCOME, "已清除失败记录，下次检查更新会重新尝试")
+            .putLong(KEY_OUTCOME_AT, System.currentTimeMillis())
+            .apply()
+    }
+
     /** 换账号或宿主升级后清空，避免旧状态影响判断。 */
     fun clear() = preferences.edit().clear().apply()
 
@@ -86,5 +125,7 @@ class HotfixStore(context: Context) {
         const val KEY_ATTEMPTS = "load_attempts"
         const val KEY_FAILED = "failed_version"
         const val KEY_REASON = "failure_reason"
+        const val KEY_OUTCOME = "last_outcome"
+        const val KEY_OUTCOME_AT = "last_outcome_at"
     }
 }

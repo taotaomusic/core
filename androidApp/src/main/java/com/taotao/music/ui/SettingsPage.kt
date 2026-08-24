@@ -29,6 +29,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.taotao.music.data.AppearanceMode
+import com.taotao.music.hotfix.HotfixDiagnostics
 import com.taotao.music.model.AudioQuality
 
 /**
@@ -36,15 +37,20 @@ import com.taotao.music.model.AudioQuality
  *
  * 播放与下载的音质分开设置：流量敏感的是播放，下载一次的体积反而愿意换更好的音质，
  * 所以两者的默认值本来就不该一样。
+ *
+ * 末尾那张「热修复」卡片是排查用的：补丁没生效时，四种原因（版本号不匹配、下载失败、
+ * 校验不符、加载抛异常）在界面上原本长得一模一样，而测试机连不上 adb 拿不到 logcat。
  */
 @Composable
 fun SettingsPage(
     playbackQuality: AudioQuality,
     downloadQuality: AudioQuality,
     appearance: AppearanceMode,
+    hotfix: HotfixDiagnostics,
     onPickPlaybackQuality: () -> Unit,
     onPickDownloadQuality: () -> Unit,
     onPickAppearance: (AppearanceMode) -> Unit,
+    onRetryHotfix: () -> Unit,
     onBack: () -> Unit,
 ) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp)) {
@@ -93,7 +99,52 @@ fun SettingsPage(
                 }
             }
         }
+        CardWithTitle("热修复", Modifier.fillMaxWidth().padding(top = 14.dp)) {
+            Column(Modifier.padding(horizontal = 12.dp).padding(bottom = 12.dp)) {
+                DiagnosticRow("补丁状态", hotfix.summary)
+                DiagnosticRow("本机版本号", hotfix.installedVersionCode.toString())
+                if (hotfix.targetVersionCode != 0L) {
+                    DiagnosticRow("补丁目标版本", hotfix.targetVersionCode.toString())
+                }
+                hotfix.lastOutcome?.let { outcome ->
+                    Text(
+                        outcome,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                }
+                if (hotfix.lastOutcome == null) {
+                    Text(
+                        "还没有收到过补丁。补丁要求本机版本号与补丁的目标版本严格相等。",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                }
+                // 只在真的卡住时才显示 —— 平时不该引导用户点这个。
+                if (hotfix.isBlockedByFailure) {
+                    Box(
+                        Modifier.padding(top = 12.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(TaotaoCoral.copy(alpha = 0.12f))
+                            .clickable(onClick = onRetryHotfix)
+                            .padding(horizontal = 14.dp, vertical = 9.dp),
+                    ) {
+                        Text("清除失败记录并重试", color = TaotaoCoral, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                    }
+                }
+            }
+        }
         Spacer(Modifier.height(24.dp))
+    }
+}
+
+@Composable
+private fun DiagnosticRow(label: String, value: String) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp, modifier = Modifier.weight(1f))
+        Text(value, fontSize = 13.sp, fontWeight = FontWeight.Medium)
     }
 }
 
