@@ -1,0 +1,138 @@
+diff --git a/androidApp/src/main/java/com/taotao/music/ui/QualitySheet.kt b/androidApp/src/main/java/com/taotao/music/ui/QualitySheet.kt
+index 5089a80..cb3c4da 100644
+--- a/androidApp/src/main/java/com/taotao/music/ui/QualitySheet.kt
++++ b/androidApp/src/main/java/com/taotao/music/ui/QualitySheet.kt
+@@ -68 +68,6 @@ fun QualitySheet(
+-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState()) {
++    ModalBottomSheet(
++        onDismissRequest = onDismiss,
++        sheetState = rememberModalBottomSheetState(),
++        containerColor = MaterialTheme.colorScheme.surface,
++        contentColor = MaterialTheme.colorScheme.onSurface,
++    ) {
+@@ -70 +75 @@ fun QualitySheet(
+-            Text(title, fontSize = 18.sp, fontWeight = FontWeight.Bold)
++            Text(title, color = MaterialTheme.colorScheme.onSurface, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+@@ -80 +85 @@ fun QualitySheet(
+-                    CircularProgressIndicator(Modifier.size(22.dp), color = TaotaoCoral)
++                    CircularProgressIndicator(Modifier.size(22.dp), color = MaterialTheme.colorScheme.primary)
+@@ -94 +99,5 @@ private fun QualityRow(choice: QualityChoice, checked: Boolean, onClick: () -> U
+-    val tint = if (choice.available) Color.Unspecified else MaterialTheme.colorScheme.onSurfaceVariant
++    val tint = when {
++        !choice.available -> MaterialTheme.colorScheme.onSurfaceVariant
++        checked -> MaterialTheme.colorScheme.primary
++        else -> MaterialTheme.colorScheme.onSurface
++    }
+@@ -97,0 +107 @@ private fun QualityRow(choice: QualityChoice, checked: Boolean, onClick: () -> U
++            .background(if (checked) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f) else Color.Transparent)
+@@ -99 +109 @@ private fun QualityRow(choice: QualityChoice, checked: Boolean, onClick: () -> U
+-            .padding(vertical = 13.dp, horizontal = 4.dp),
++            .padding(vertical = 13.dp, horizontal = 12.dp),
+@@ -117 +127 @@ private fun QualityRow(choice: QualityChoice, checked: Boolean, onClick: () -> U
+-        if (checked) Icon(Icons.Default.Check, "已选择", tint = TaotaoCoral)
++        if (checked) Icon(Icons.Default.Check, "已选择", tint = MaterialTheme.colorScheme.primary)
+@@ -140 +150 @@ fun QualityChip(quality: Int, modifier: Modifier = Modifier, local: Boolean = fa
+-            .background(TaotaoCoral.copy(alpha = 0.12f))
++            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f))
+@@ -146 +156 @@ fun QualityChip(quality: Int, modifier: Modifier = Modifier, local: Boolean = fa
+-            color = TaotaoCoral,
++            color = MaterialTheme.colorScheme.primary,
+diff --git a/androidApp/src/main/java/com/taotao/music/ui/SettingsPage.kt b/androidApp/src/main/java/com/taotao/music/ui/SettingsPage.kt
+index a8baf8a..426599c 100644
+--- a/androidApp/src/main/java/com/taotao/music/ui/SettingsPage.kt
++++ b/androidApp/src/main/java/com/taotao/music/ui/SettingsPage.kt
+@@ -62 +62,5 @@ fun SettingsPage(
+-        CardWithTitle("音质", Modifier.fillMaxWidth().padding(top = 12.dp)) {
++        CardWithTitle(
++            "音质",
++            Modifier.fillMaxWidth().padding(top = 12.dp),
++            titleColor = MaterialTheme.colorScheme.primary,
++        ) {
+@@ -86 +90,5 @@ fun SettingsPage(
+-        CardWithTitle("外观", Modifier.fillMaxWidth().padding(top = 14.dp)) {
++        CardWithTitle(
++            "外观",
++            Modifier.fillMaxWidth().padding(top = 14.dp),
++            titleColor = MaterialTheme.colorScheme.primary,
++        ) {
+@@ -97 +105 @@ fun SettingsPage(
+-                        if (mode == appearance) Icon(Icons.Default.Check, "已选择", tint = TaotaoCoral)
++                        if (mode == appearance) Icon(Icons.Default.Check, "已选择", tint = MaterialTheme.colorScheme.primary)
+@@ -102 +110,5 @@ fun SettingsPage(
+-        CardWithTitle("热修复", Modifier.fillMaxWidth().padding(top = 14.dp)) {
++        CardWithTitle(
++            "热修复",
++            Modifier.fillMaxWidth().padding(top = 14.dp),
++            titleColor = MaterialTheme.colorScheme.primary,
++        ) {
+@@ -130 +142 @@ fun SettingsPage(
+-                            .background(TaotaoCoral.copy(alpha = 0.12f))
++                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f))
+@@ -134 +146,6 @@ fun SettingsPage(
+-                        Text("清除失败记录并重试", color = TaotaoCoral, fontSize = 13.sp, fontWeight = FontWeight.Medium)
++                        Text(
++                            "清除失败记录并重试",
++                            color = MaterialTheme.colorScheme.primary,
++                            fontSize = 13.sp,
++                            fontWeight = FontWeight.Medium,
++                        )
+@@ -166 +183 @@ private fun SettingRow(title: String, value: String, description: String, onClic
+-                .background(TaotaoCoral.copy(alpha = 0.12f))
++                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f))
+@@ -169 +186 @@ private fun SettingRow(title: String, value: String, description: String, onClic
+-            Text(value, color = TaotaoCoral, fontSize = 12.sp, fontWeight = FontWeight.Medium)
++            Text(value, color = MaterialTheme.colorScheme.primary, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+diff --git a/androidApp/src/main/java/com/taotao/music/ui/TaotaoMusicApp.kt b/androidApp/src/main/java/com/taotao/music/ui/TaotaoMusicApp.kt
+index 0da4df1..a6dda67 100644
+--- a/androidApp/src/main/java/com/taotao/music/ui/TaotaoMusicApp.kt
++++ b/androidApp/src/main/java/com/taotao/music/ui/TaotaoMusicApp.kt
+@@ -1349 +1349,5 @@ private fun shareLogFile(context: android.content.Context, file: java.io.File) {
+-    Row(Modifier.fillMaxWidth().height(164.dp).clip(RoundedCornerShape(22.dp)).background(Color(0xFFFFD8D0)).padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
++    Row(
++        Modifier.fillMaxWidth().height(164.dp).clip(RoundedCornerShape(22.dp))
++            .background(MaterialTheme.colorScheme.primaryContainer).padding(18.dp),
++        verticalAlignment = Alignment.CenterVertically,
++    ) {
+@@ -1351,3 +1355,14 @@ private fun shareLogFile(context: android.content.Context, file: java.io.File) {
+-            Text("专属歌单", color = TaotaoCoral, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+-            Text("给今天的你\n一点好心情", fontSize = 24.sp, fontWeight = FontWeight.Bold, lineHeight = 31.sp)
+-            Text("20 首 · 精选推荐", color = MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
++            Text("专属歌单", color = MaterialTheme.colorScheme.primary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
++            Text(
++                "给今天的你\n一点好心情",
++                color = MaterialTheme.colorScheme.onPrimaryContainer,
++                fontSize = 24.sp,
++                fontWeight = FontWeight.Bold,
++                lineHeight = 31.sp,
++            )
++            Text(
++                "20 首 · 精选推荐",
++                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.72f),
++                fontSize = 12.sp,
++                modifier = Modifier.padding(top = 8.dp),
++            )
+@@ -1355 +1370 @@ private fun shareLogFile(context: android.content.Context, file: java.io.File) {
+-        AlbumArt(Color(0xFFFFB4A2), 112.dp, 64.sp)
++        AlbumArt(MaterialTheme.colorScheme.primary.copy(alpha = 0.32f), 112.dp, 64.sp)
+@@ -1617,2 +1632,9 @@ private fun PlayerDetailPage(
+-            FilledIconButton(onClick = onTogglePlaying, modifier = Modifier.size(64.dp), colors = IconButtonDefaults.filledIconButtonColors(containerColor = TaotaoCoral)) {
+-                PlayPauseIcon(actualPlaying, Modifier.size(34.dp))
++            FilledIconButton(
++                onClick = onTogglePlaying,
++                modifier = Modifier.size(64.dp),
++                colors = IconButtonDefaults.filledIconButtonColors(
++                    containerColor = MaterialTheme.colorScheme.primary,
++                    contentColor = MaterialTheme.colorScheme.onPrimary,
++                ),
++            ) {
++                PlayPauseIcon(actualPlaying, Modifier.size(34.dp), tint = MaterialTheme.colorScheme.onPrimary)
+diff --git a/androidApp/src/main/java/com/taotao/music/ui/Theme.kt b/androidApp/src/main/java/com/taotao/music/ui/Theme.kt
+index faf286e..e7c4186 100644
+--- a/androidApp/src/main/java/com/taotao/music/ui/Theme.kt
++++ b/androidApp/src/main/java/com/taotao/music/ui/Theme.kt
+@@ -40,0 +41,2 @@ private val TaotaoLightColors = lightColorScheme(
++    primaryContainer = Color(0xFFFFD8D0),
++    onPrimaryContainer = Color(0xFF3A1512),
+@@ -52,0 +55,2 @@ private val TaotaoDarkColors = darkColorScheme(
++    primaryContainer = Color(0xFF4A2622),
++    onPrimaryContainer = Color(0xFFFFEDEA),

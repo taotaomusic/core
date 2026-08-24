@@ -59,7 +59,11 @@ fun SettingsPage(
             Text("设置", fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 4.dp))
         }
 
-        CardWithTitle("音质", Modifier.fillMaxWidth().padding(top = 12.dp)) {
+        CardWithTitle(
+            "音质",
+            Modifier.fillMaxWidth().padding(top = 12.dp),
+            titleColor = MaterialTheme.colorScheme.primary,
+        ) {
             Column(verticalArrangement = Arrangement.spacedBy(2.dp), modifier = Modifier.padding(bottom = 8.dp)) {
                 SettingRow(
                     title = "播放音质",
@@ -83,7 +87,11 @@ fun SettingsPage(
             modifier = Modifier.padding(top = 14.dp),
         )
 
-        CardWithTitle("外观", Modifier.fillMaxWidth().padding(top = 14.dp)) {
+        CardWithTitle(
+            "外观",
+            Modifier.fillMaxWidth().padding(top = 14.dp),
+            titleColor = MaterialTheme.colorScheme.primary,
+        ) {
             Column(Modifier.padding(bottom = 8.dp)) {
                 AppearanceMode.entries.forEach { mode ->
                     Row(
@@ -94,12 +102,16 @@ fun SettingsPage(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(mode.label, modifier = Modifier.weight(1f))
-                        if (mode == appearance) Icon(Icons.Default.Check, "已选择", tint = TaotaoCoral)
+                        if (mode == appearance) Icon(Icons.Default.Check, "已选择", tint = MaterialTheme.colorScheme.primary)
                     }
                 }
             }
         }
-        CardWithTitle("热修复", Modifier.fillMaxWidth().padding(top = 14.dp)) {
+        CardWithTitle(
+            "热修复",
+            Modifier.fillMaxWidth().padding(top = 14.dp),
+            titleColor = MaterialTheme.colorScheme.primary,
+        ) {
             Column(Modifier.padding(horizontal = 12.dp).padding(bottom = 12.dp)) {
                 DiagnosticRow("补丁状态", hotfix.summary)
                 DiagnosticRow("本机版本号", hotfix.installedVersionCode.toString())
@@ -127,11 +139,16 @@ fun SettingsPage(
                     Box(
                         Modifier.padding(top = 12.dp)
                             .clip(RoundedCornerShape(10.dp))
-                            .background(TaotaoCoral.copy(alpha = 0.12f))
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f))
                             .clickable(onClick = onRetryHotfix)
                             .padding(horizontal = 14.dp, vertical = 9.dp),
                     ) {
-                        Text("清除失败记录并重试", color = TaotaoCoral, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                        Text(
+                            "清除失败记录并重试",
+                            color = MaterialTheme.colorScheme.primary,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                        )
                     }
                 }
             }
@@ -163,10 +180,10 @@ private fun SettingRow(title: String, value: String, description: String, onClic
         }
         Box(
             Modifier.clip(RoundedCornerShape(8.dp))
-                .background(TaotaoCoral.copy(alpha = 0.12f))
+                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f))
                 .padding(horizontal = 10.dp, vertical = 5.dp),
         ) {
-            Text(value, color = TaotaoCoral, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+            Text(value, color = MaterialTheme.colorScheme.primary, fontSize = 12.sp, fontWeight = FontWeight.Medium)
         }
     }
 }

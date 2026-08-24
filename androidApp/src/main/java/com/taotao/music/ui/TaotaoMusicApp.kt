@@ -1346,13 +1346,28 @@ private fun shareLogFile(context: android.content.Context, file: java.io.File) {
 }
 
 @Composable private fun RecommendationCard() {
-    Row(Modifier.fillMaxWidth().height(164.dp).clip(RoundedCornerShape(22.dp)).background(Color(0xFFFFD8D0)).padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(
+        Modifier.fillMaxWidth().height(164.dp).clip(RoundedCornerShape(22.dp))
+            .background(MaterialTheme.colorScheme.primaryContainer).padding(18.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
         Column(Modifier.weight(1f)) {
-            Text("专属歌单", color = TaotaoCoral, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-            Text("给今天的你\n一点好心情", fontSize = 24.sp, fontWeight = FontWeight.Bold, lineHeight = 31.sp)
-            Text("20 首 · 精选推荐", color = MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
+            Text("专属歌单", color = MaterialTheme.colorScheme.primary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            Text(
+                "给今天的你\n一点好心情",
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                fontSize = 24.sp,
+                fontWeight = FontWeight.Bold,
+                lineHeight = 31.sp,
+            )
+            Text(
+                "20 首 · 精选推荐",
+                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.72f),
+                fontSize = 12.sp,
+                modifier = Modifier.padding(top = 8.dp),
+            )
         }
-        AlbumArt(Color(0xFFFFB4A2), 112.dp, 64.sp)
+        AlbumArt(MaterialTheme.colorScheme.primary.copy(alpha = 0.32f), 112.dp, 64.sp)
     }
 }
 
@@ -1614,8 +1629,15 @@ private fun PlayerDetailPage(
                 )
             }
             IconButton(onClick = onPrevious) { Icon(Icons.Default.SkipPrevious, "上一首", modifier = Modifier.size(34.dp)) }
-            FilledIconButton(onClick = onTogglePlaying, modifier = Modifier.size(64.dp), colors = IconButtonDefaults.filledIconButtonColors(containerColor = TaotaoCoral)) {
-                PlayPauseIcon(actualPlaying, Modifier.size(34.dp))
+            FilledIconButton(
+                onClick = onTogglePlaying,
+                modifier = Modifier.size(64.dp),
+                colors = IconButtonDefaults.filledIconButtonColors(
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                ),
+            ) {
+                PlayPauseIcon(actualPlaying, Modifier.size(34.dp), tint = MaterialTheme.colorScheme.onPrimary)
             }
             IconButton(onClick = onNext) { Icon(Icons.Default.SkipNext, "下一首", modifier = Modifier.size(34.dp)) }
             IconButton(onClick = { showQueue = true }) {

@@ -65,9 +65,14 @@ fun QualitySheet(
     onPick: (Int) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState()) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(),
+        containerColor = MaterialTheme.colorScheme.surface,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+    ) {
         Column(Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, bottom = 28.dp)) {
-            Text(title, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            Text(title, color = MaterialTheme.colorScheme.onSurface, fontSize = 18.sp, fontWeight = FontWeight.Bold)
             if (!note.isNullOrBlank()) {
                 Text(note, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
             }
@@ -77,7 +82,7 @@ fun QualitySheet(
                     horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    CircularProgressIndicator(Modifier.size(22.dp), color = TaotaoCoral)
+                    CircularProgressIndicator(Modifier.size(22.dp), color = MaterialTheme.colorScheme.primary)
                     Text("正在查可用音质…", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp, modifier = Modifier.padding(start = 10.dp))
                 }
                 return@Column
@@ -91,12 +96,17 @@ fun QualitySheet(
 
 @Composable
 private fun QualityRow(choice: QualityChoice, checked: Boolean, onClick: () -> Unit) {
-    val tint = if (choice.available) Color.Unspecified else MaterialTheme.colorScheme.onSurfaceVariant
+    val tint = when {
+        !choice.available -> MaterialTheme.colorScheme.onSurfaceVariant
+        checked -> MaterialTheme.colorScheme.primary
+        else -> MaterialTheme.colorScheme.onSurface
+    }
     Row(
         Modifier.fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
+            .background(if (checked) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f) else Color.Transparent)
             .clickable(enabled = choice.available, onClick = onClick)
-            .padding(vertical = 13.dp, horizontal = 4.dp),
+            .padding(vertical = 13.dp, horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
@@ -114,7 +124,7 @@ private fun QualityRow(choice: QualityChoice, checked: Boolean, onClick: () -> U
                 Text(detail, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp))
             }
         }
-        if (checked) Icon(Icons.Default.Check, "已选择", tint = TaotaoCoral)
+        if (checked) Icon(Icons.Default.Check, "已选择", tint = MaterialTheme.colorScheme.primary)
     }
 }
 
@@ -137,13 +147,13 @@ fun QualityChip(quality: Int, modifier: Modifier = Modifier, local: Boolean = fa
     Box(
         modifier
             .clip(RoundedCornerShape(8.dp))
-            .background(TaotaoCoral.copy(alpha = 0.12f))
+            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f))
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
             .padding(horizontal = 10.dp, vertical = 5.dp),
     ) {
         Text(
             if (local) "已下载 · ${labelOfQuality(quality)}" else labelOfQuality(quality),
-            color = TaotaoCoral,
+            color = MaterialTheme.colorScheme.primary,
             fontSize = 12.sp,
             fontWeight = FontWeight.Medium,
         )
