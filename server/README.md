@@ -146,6 +146,8 @@ npm run dev:frontend      # 独立开发服务器（5173），API 代理到本�
 
 - `POST /api/v1/auth/email-verification`，JSON：`{"email":"name@qq.com"}`，发送六位注册验证码，返回 **204**
 - `POST /api/v1/auth/register`，JSON：`{"username":"用户名","password":"至少6位密码","email":"name@qq.com","verificationCode":"六位验证码"}`，成功返回 **201**
+- `POST /api/v1/auth/email/bind-verification`、`POST /api/v1/auth/email/bind`：已登录的老账号补绑邮箱
+- `POST /api/v1/auth/email/change-verification`、`POST /api/v1/auth/email/change`：已绑定账号换绑新邮箱
 - `POST /api/v1/auth/login`，JSON：`{"username":"用户名","password":"密码"}`
 - `POST /api/v1/auth/refresh`，JSON：`{"refreshToken":"刷新令牌"}`
 - `POST /api/v1/auth/logout`，JSON：`{"refreshToken":"刷新令牌"}`，返回 **204** 空体

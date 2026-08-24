@@ -79,6 +79,10 @@ Content-Type: application/json
 
 成功 HTTP 201。新注册必须额外传 `email` 与 `verificationCode`；先调用 `POST /api/v1/auth/email-verification` 发送六位验证码。验证码仅存服务进程内存、10 分钟过期，校验成功即删除。`accessToken`、`refreshToken`、`expiresIn` 和 `user` 必须平铺在 `data` 下。
 
+### 绑定与换绑邮箱
+
+以下接口均需要访问令牌。老账号先调用 `POST /api/v1/auth/email/bind-verification`，再把同一个 `email` 与 `verificationCode` 提交到 `POST /api/v1/auth/email/bind`；已绑定账号则使用 `change-verification` 与 `change` 两个同形接口。两种验证码用途互不通用，防止把注册验证码用于篡改已登录账号的邮箱。
+
 ### 登录
 
 ```http

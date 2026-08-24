@@ -14,6 +14,7 @@ import { FavoritesModule } from "./favorites/favorites.module";
 import { HealthController } from "./health/health.controller";
 import { ImageGenerationModule } from "./image-generation/image-generation.module";
 import { MusicModule } from "./music/music.module";
+import { MailModule } from "./mail/mail.module";
 import { LatestVersionModule } from "./release/latest-version.cache";
 import { ReleaseModule } from "./release/release.module";
 
@@ -28,6 +29,7 @@ import { ReleaseModule } from "./release/release.module";
   imports: [
     AppConfigModule,
     DatabaseModule,
+    MailModule,
     LatestVersionModule,
     AuthModule,
     FavoritesModule,
