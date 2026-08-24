@@ -63,6 +63,10 @@ class AudioPlayer(context: Context) {
     var durationMs by mutableIntStateOf(0)
         private set
 
+    /** 播放顺序由播放器持有，界面重建后仍与通知栏和后台服务保持一致。 */
+    var repeatMode by mutableIntStateOf(Player.REPEAT_MODE_OFF)
+        private set
+
     /**
      * 播放器里的完整队列。
      * 界面被销毁重建（而播放服务仍在后台播放）时，队列从这里恢复，
@@ -176,7 +180,23 @@ class AudioPlayer(context: Context) {
 
     fun next() = submit { it.seekToNextMediaItem() }
     fun previous() = submit { it.seekToPreviousMediaItem() }
-    fun setRepeatMode(mode: Int) = submit { it.repeatMode = mode }
+    fun updateRepeatMode(mode: Int) = submit { it.repeatMode = mode }
+
+    /** 删除一首非当前歌曲；当前歌曲必须先切走，避免删除后播放指针跳到意外位置。 */
+    fun removeQueueItem(index: Int) = submit { activeController ->
+        if (index !in 0 until activeController.mediaItemCount) return@submit
+        if (index == activeController.currentMediaItemIndex) return@submit
+        activeController.removeMediaItem(index)
+    }
+
+    /** 清掉当前歌曲以外的项目，播放不中断，当前歌曲最终位于队列第 1 位。 */
+    fun keepOnlyCurrent() = submit { activeController ->
+        val current = activeController.currentMediaItemIndex
+        val count = activeController.mediaItemCount
+        if (current !in 0 until count) return@submit
+        if (current + 1 < count) activeController.removeMediaItems(current + 1, count)
+        if (current > 0) activeController.removeMediaItems(0, current)
+    }
 
     /** 从播放队列里直接跳到某一首，供播放队列面板使用。 */
     fun playAt(index: Int) = submit { activeController ->
@@ -257,6 +277,7 @@ class AudioPlayer(context: Context) {
         hasMedia = player.mediaItemCount > 0 && player.playbackState != Player.STATE_IDLE
         currentIndex = player.currentMediaItemIndex
         durationMs = player.duration.takeIf { it > 0L }?.toInt() ?: 0
+        repeatMode = player.repeatMode
         queue = readQueue(player)
     }
 
