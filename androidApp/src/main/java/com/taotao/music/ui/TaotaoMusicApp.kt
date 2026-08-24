@@ -796,7 +796,13 @@ fun TaotaoMusicApp() {
                             }
                         }
                     }
-                    NavigationBar {
+                    // Material 3 的默认底栏会取未配置的 surfaceContainer 色阶，容易回退成
+                    // 紫灰色，与桃桃的珊瑚主题割裂。显式使用主题语义色，亮暗主题和将来的
+                    // 配色调整都会从 ColorScheme 一处生效。
+                    NavigationBar(
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        contentColor = MaterialTheme.colorScheme.onSurface,
+                    ) {
                         // 切换底部标签时要收起详情页、搜索页和设置页，否则 AnimatedContent 仍停在
                         // 原来的分支，用户点了「音乐」却还留在设置里。新增页面时必须同步这里、
                         // AnimatedContent 的 targetState 和 BackHandler 三处。
@@ -808,8 +814,27 @@ fun TaotaoMusicApp() {
                             showProfilePage = false
                             mineLibrarySection = null
                         }
-                        NavigationBarItem(bottomTab == 0, { switchTab(0) }, icon = { Icon(Icons.Default.MusicNote, "音乐") }, label = { Text("音乐") })
-                        NavigationBarItem(bottomTab == 1, { switchTab(1) }, icon = { Icon(Icons.Default.Person, "我的") }, label = { Text("我的") })
+                        val navigationColors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                            selectedTextColor = MaterialTheme.colorScheme.primary,
+                            indicatorColor = MaterialTheme.colorScheme.primaryContainer,
+                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        NavigationBarItem(
+                            selected = bottomTab == 0,
+                            onClick = { switchTab(0) },
+                            icon = { Icon(Icons.Default.MusicNote, "音乐") },
+                            label = { Text("音乐") },
+                            colors = navigationColors,
+                        )
+                        NavigationBarItem(
+                            selected = bottomTab == 1,
+                            onClick = { switchTab(1) },
+                            icon = { Icon(Icons.Default.Person, "我的") },
+                            label = { Text("我的") },
+                            colors = navigationColors,
+                        )
                     }
                     }
                 },
