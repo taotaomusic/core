@@ -32,37 +32,34 @@ import com.taotao.music.hotfix.PatchEntry
  * - **改完补丁要同步改源码**。补丁只是让线上先不崩，下一个整包版本里真正的修复
  *   必须在原位置也做一遍，否则升级后 bug 回归。
  *
- * ## 当前内容：一个可验证生效的样例补丁
+ * ## 当前内容：问候语验证补丁
  *
- * 接管 `AppearanceMode.getLabel()`，在外观选项的文案后面加一个标记。
- * 装上补丁后进「我的 → 设置 → 外观」，三个选项会变成「跟随系统 · 补丁已生效」这样，
- * 一眼就能确认热修复真的跑起来了；而且它只改一个字符串，改错了也不会影响功能。
- *
- * 正式发补丁时把 [targets] / isSupport / dispatch 换成真实的修复内容。
+ * 接管 `GreetingFormatter.greetingForHour()`：仅把深夜默认文案改为「晚安」。首页的
+ * Compose 结构没有变化，适合作为数据层热修补的加载、即时生效与回退验证样例。
  */
 class PatchEntryImpl : PatchEntry {
 
-    override fun targets(): List<String> = listOf("com.taotao.music.data.AppearanceMode")
+    override fun targets(): List<String> = listOf("com.taotao.music.data.GreetingFormatter")
 
     override fun dispatcher(): PatchDispatcher = object : PatchDispatcher {
         override fun isSupport(methodKey: String): Boolean = methodKey == LABEL_KEY
 
         override fun dispatch(methodKey: String, receiver: Any?, args: Array<Any?>): Any? {
             check(methodKey == LABEL_KEY) { "补丁没有实现方法：$methodKey" }
-            // 不能调 receiver.getLabel()：那会再次命中插桩的判断，无限递归。
-            // 枚举常量名不受补丁影响，按它自己算出文案。
-            val name = (receiver as? Enum<*>)?.name
-            val label = when (name) {
-                "FOLLOW_SYSTEM" -> "跟随系统"
-                "LIGHT" -> "浅色"
-                "DARK" -> "深色"
-                else -> name ?: "未知"
+            // 不能调宿主的 greetingForHour()：那会再次命中分发器造成递归。
+            val hour = args.getOrNull(0) as? Int ?: return "夜深了"
+            return when (hour) {
+                in 5..8 -> "早上好"
+                in 9..11 -> "上午好"
+                in 12..13 -> "中午好"
+                in 14..18 -> "下午好"
+                in 19..22 -> "晚上好"
+                else -> "晚安"
             }
-            return "$label · 补丁已生效"
         }
     }
 
     private companion object {
-        const val LABEL_KEY = "com/taotao/music/data/AppearanceMode#getLabel()Ljava/lang/String;"
+        const val LABEL_KEY = "com/taotao/music/data/GreetingFormatter#greetingForHour(I)Ljava/lang/String;"
     }
 }

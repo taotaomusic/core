@@ -19,6 +19,8 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.background
@@ -67,6 +69,7 @@ import com.taotao.music.data.CrashLog
 import com.taotao.music.data.CrashReporter
 import com.taotao.music.data.DownloadNotifier
 import com.taotao.music.data.FavoritesStore
+import com.taotao.music.data.GreetingFormatter
 import com.taotao.music.data.OfflineDownloadManager
 import com.taotao.music.data.QualityStore
 import com.taotao.music.data.TencentMusicApi
@@ -88,7 +91,6 @@ import androidx.lifecycle.LifecycleEventObserver
 import android.net.Uri
 import java.io.File
 import java.util.Calendar
-import kotlin.math.abs
 
 @Composable
 fun TaotaoMusicApp() {
@@ -1229,7 +1231,15 @@ private fun MinePage(
                     Modifier.size(62.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primaryContainer),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Icon(Icons.Default.Person, null, tint = MaterialTheme.colorScheme.onPrimaryContainer, modifier = Modifier.size(30.dp))
+                    if (!profile?.avatarUrl.isNullOrBlank()) {
+                        AsyncImage(
+                            model = profile?.avatarUrl,
+                            contentDescription = "个人头像",
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    } else {
+                        Icon(Icons.Default.Person, null, tint = MaterialTheme.colorScheme.onPrimaryContainer, modifier = Modifier.size(30.dp))
+                    }
                 }
                 Column(Modifier.weight(1f).padding(start = 15.dp)) {
                     Text(profile?.nickname ?: if (profileLoading) "正在读取资料…" else "桃桃音乐", fontSize = 18.sp, fontWeight = FontWeight.Bold)
@@ -1922,14 +1932,8 @@ private fun PlaybackQueueSheet(
 }
 
 /** 只依赖设备本地时区，离线时也能给出符合当前时段的问候。 */
-private fun timeGreeting(hour: Int = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)): String = when (hour) {
-    in 5..8 -> "早上好"
-    in 9..11 -> "上午好"
-    in 12..13 -> "中午好"
-    in 14..18 -> "下午好"
-    in 19..22 -> "晚上好"
-    else -> "夜深了"
-}
+private fun timeGreeting(hour: Int = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)): String =
+    GreetingFormatter.greetingForHour(hour)
 
 /** 首页只占一行展示最新或置顶公告，详情放进弹层，避免正文挤占搜索与推荐内容。 */
 @Composable
@@ -1995,9 +1999,11 @@ private fun CurrentPlaybackQueue(
         } else {
             var draggedIndex by remember { mutableIntStateOf(-1) }
             var draggedDistance by remember { mutableFloatStateOf(0f) }
-            val dragStep = with(LocalDensity.current) { 52.dp.toPx() }
+            // 触发阈值低于行高，长按后会连续跟手；未用完的距离会保留，
+            // 避免每次换位都出现“吸回去再跳”的停顿。
+            val dragStep = with(LocalDensity.current) { 34.dp.toPx() }
             LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
-                itemsIndexed(queue) { index, item ->
+                itemsIndexed(queue, key = { index, item -> "${songKeyOf(item)}#$index" }) { index, item ->
                     val isCurrent = index == currentIndex
                     SongRow(
                         song = item,
@@ -2006,6 +2012,17 @@ private fun CurrentPlaybackQueue(
                         onClick = { onItemClick(index) },
                         onDelete = { onRemoveItem(index) }.takeUnless { isCurrent },
                         favorited = isFavorite(item),
+                        modifier = Modifier
+                            .animateItem(
+                                placementSpec = spring(
+                                    dampingRatio = Spring.DampingRatioNoBouncy,
+                                    stiffness = Spring.StiffnessMediumLow,
+                                ),
+                            )
+                            .graphicsLayer {
+                                // 手势是连续反馈，整行随手移动；其余行由 placement spring 让位。
+                                translationY = if (index == draggedIndex) draggedDistance else 0f
+                            },
                         onToggleFavorite = onToggleFavorite.takeIf { item.remoteId != null }
                             ?.let { callback -> { callback(item) } },
                         dragHandle = { modifier ->
@@ -2022,13 +2039,18 @@ private fun CurrentPlaybackQueue(
                                         change.consume()
                                         if (draggedIndex !in queue.indices) return@detectDragGesturesAfterLongPress
                                         draggedDistance += dragAmount.y
-                                        if (abs(draggedDistance) < dragStep) return@detectDragGesturesAfterLongPress
-                                        val destination = (draggedIndex + if (draggedDistance > 0f) 1 else -1).coerceIn(queue.indices)
-                                        if (destination != draggedIndex) {
+                                        while (kotlin.math.abs(draggedDistance) >= dragStep) {
+                                            val direction = if (draggedDistance > 0f) 1 else -1
+                                            val destination = (draggedIndex + direction).coerceIn(queue.indices)
+                                            if (destination == draggedIndex) {
+                                                // 到边界仍有阻尼，而不会把项目无限拖出列表。
+                                                draggedDistance *= 0.35f
+                                                break
+                                            }
                                             onMoveItem(draggedIndex, destination)
                                             draggedIndex = destination
+                                            draggedDistance -= direction * dragStep
                                         }
-                                        draggedDistance = 0f
                                     }
                                 },
                             )

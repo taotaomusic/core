@@ -23,6 +23,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.taotao.music.data.TencentMusicApi
 import coil.compose.AsyncImage
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -163,8 +164,15 @@ fun AccountProfilePage(
     var email by remember { mutableStateOf("") }
     var code by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(false) }
+    var resendRemainingSeconds by remember { mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
     val changingEmail = profile.email != null
+    LaunchedEffect(resendRemainingSeconds) {
+        if (resendRemainingSeconds > 0) {
+            delay(1_000)
+            resendRemainingSeconds -= 1
+        }
+    }
     fun request(work: suspend () -> Unit, success: String) {
         loading = true
         scope.launch {
@@ -182,7 +190,10 @@ fun AccountProfilePage(
             TextButton(onClick = onBack) { Text("返回") }
             Text("个人资料", fontSize = 22.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 6.dp))
         }
-        ElevatedCard(Modifier.fillMaxWidth()) {
+        ElevatedCard(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface),
+        ) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (profile.avatarUrl != null) {
@@ -210,15 +221,34 @@ fun AccountProfilePage(
                 ) { Text("保存个人资料") }
             }
         }
-        AccountSectionTitle("邮箱", "用于账号验证，仅支持 QQ 邮箱")
-        ElevatedCard(Modifier.fillMaxWidth()) {
+        AccountSectionTitle("邮箱", "用于账号验证")
+        ElevatedCard(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface),
+        ) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 EmailBindingStatus(profile.email)
                 Text(if (changingEmail) "当前邮箱已绑定，可验证新邮箱后换绑。" else "当前账号还未绑定邮箱，验证后即可完成补绑。", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
-                OutlinedTextField(value = email, onValueChange = { email = it.trim(); code = "" }, label = { Text(if (changingEmail) "新的 QQ 邮箱" else "QQ 邮箱") }, modifier = Modifier.fillMaxWidth(), singleLine = true, enabled = !loading, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email))
+                OutlinedTextField(value = email, onValueChange = { email = it.trim(); code = ""; resendRemainingSeconds = 0 }, label = { Text(if (changingEmail) "新的 QQ 邮箱" else "QQ 邮箱") }, modifier = Modifier.fillMaxWidth(), singleLine = true, enabled = !loading, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     OutlinedTextField(value = code, onValueChange = { code = it.filter(Char::isDigit).take(6) }, label = { Text("6 位验证码") }, modifier = Modifier.weight(1f), singleLine = true, enabled = !loading, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
-                    TextButton(enabled = !loading && QQ_EMAIL_PATTERN.matches(email), onClick = { request({ api.sendEmailBindingVerification(email, changingEmail) }, "验证码已发送") }) { Text("获取验证码") }
+                    TextButton(
+                        enabled = !loading && resendRemainingSeconds == 0 && QQ_EMAIL_PATTERN.matches(email),
+                        onClick = {
+                            loading = true
+                            scope.launch {
+                                runCatching { withContext(Dispatchers.IO) { api.sendEmailBindingVerification(email, changingEmail) } }
+                                    .onSuccess {
+                                        resendRemainingSeconds = EMAIL_RESEND_INTERVAL_SECONDS
+                                        onMessage("验证码已发送，请在 ${EMAIL_RESEND_INTERVAL_SECONDS} 秒内查收")
+                                    }
+                                    .onFailure { onMessage(it.readableMessage()) }
+                                loading = false
+                            }
+                        },
+                    ) {
+                        Text(if (resendRemainingSeconds > 0) "${resendRemainingSeconds} 秒后重发" else "获取验证码")
+                    }
                 }
                 Button(enabled = !loading && QQ_EMAIL_PATTERN.matches(email) && code.length == 6, onClick = {
                     request({ api.confirmEmailBinding(email, code, changingEmail); onProfileChanged(api.profile()) }, if (changingEmail) "邮箱已换绑" else "邮箱已绑定")
@@ -277,11 +307,21 @@ private fun EmailBindingStatus(email: String?) {
 @Composable
 fun AnnouncementDialog(announcements: List<TencentMusicApi.Announcement>, onDismiss: () -> Unit) {
     AlertDialog(
-        onDismissRequest = onDismiss, icon = { Icon(Icons.Default.Campaign, null) }, title = { Text("公告") },
+        onDismissRequest = onDismiss,
+        icon = { Icon(Icons.Default.Campaign, null) },
+        title = { Text("公告") },
+        // 默认的容器 token 在本项目未覆盖时会回退为 Material 紫灰；显式绑定主题卡片色。
+        containerColor = MaterialTheme.colorScheme.surface,
+        iconContentColor = MaterialTheme.colorScheme.primary,
+        titleContentColor = MaterialTheme.colorScheme.onSurface,
+        textContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
         text = {
             Column(Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState())) {
                 announcements.forEachIndexed { index, announcement ->
-                    if (index > 0) HorizontalDivider(Modifier.padding(vertical = 12.dp))
+                    if (index > 0) HorizontalDivider(
+                        modifier = Modifier.padding(vertical = 12.dp),
+                        color = MaterialTheme.colorScheme.outlineVariant,
+                    )
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(announcement.title, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                         if (announcement.pinned) Text(
@@ -297,3 +337,5 @@ fun AnnouncementDialog(announcements: List<TencentMusicApi.Announcement>, onDism
         confirmButton = { TextButton(onClick = onDismiss) { Text("知道了") } },
     )
 }
+
+private const val EMAIL_RESEND_INTERVAL_SECONDS = 60
