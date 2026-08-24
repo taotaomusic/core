@@ -34,7 +34,7 @@ import com.taotao.music.hotfix.PatchEntry
  *
  * ## 当前内容：问候语验证补丁
  *
- * 接管 `GreetingFormatter.greetingForHour()`：仅把深夜默认文案改为「晚安」。首页的
+ * 接管 `GreetingFormatter.greetingForHour()`：仅把深夜默认文案改为「你好」。首页的
  * Compose 结构没有变化，适合作为数据层热修补的加载、即时生效与回退验证样例。
  */
 class PatchEntryImpl : PatchEntry {
@@ -54,7 +54,7 @@ class PatchEntryImpl : PatchEntry {
                 in 12..13 -> "中午好"
                 in 14..18 -> "下午好"
                 in 19..22 -> "晚上好"
-                else -> "晚安"
+                else -> "你好"
             }
         }
     }
