@@ -22,6 +22,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.taotao.music.data.TencentMusicApi
+import coil.compose.AsyncImage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -145,6 +146,87 @@ fun AccountSheet(
             }
             TextButton(onClick = onDismiss, enabled = !loading, modifier = Modifier.align(Alignment.End)) { Text("完成") }
         }
+    }
+}
+
+/** 设置页中的独立个人资料页，资料与邮箱验证不再塞进“我的”页的临时弹层。 */
+@Composable
+fun AccountProfilePage(
+    api: TencentMusicApi,
+    profile: TencentMusicApi.UserProfile,
+    onProfileChanged: (TencentMusicApi.UserProfile) -> Unit,
+    onMessage: (String) -> Unit,
+    onBack: () -> Unit,
+) {
+    var nickname by remember(profile.nickname) { mutableStateOf(profile.nickname) }
+    var avatarUrl by remember(profile.avatarUrl) { mutableStateOf(profile.avatarUrl.orEmpty()) }
+    var email by remember { mutableStateOf("") }
+    var code by remember { mutableStateOf("") }
+    var loading by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val changingEmail = profile.email != null
+    fun request(work: suspend () -> Unit, success: String) {
+        loading = true
+        scope.launch {
+            runCatching { withContext(Dispatchers.IO) { work() } }
+                .onSuccess { onMessage(success) }
+                .onFailure { onMessage(it.readableMessage()) }
+            loading = false
+        }
+    }
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        Row(Modifier.fillMaxWidth().padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = onBack) { Text("返回") }
+            Text("个人资料", fontSize = 22.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 6.dp))
+        }
+        ElevatedCard(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (profile.avatarUrl != null) {
+                        AsyncImage(profile.avatarUrl, "头像", Modifier.size(56.dp).clip(CircleShape))
+                    } else {
+                        Box(Modifier.size(56.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primaryContainer), contentAlignment = Alignment.Center) {
+                            Icon(Icons.Default.Person, null, tint = MaterialTheme.colorScheme.onPrimaryContainer)
+                        }
+                    }
+                    Column(Modifier.padding(start = 12.dp)) {
+                        Text(profile.nickname, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                        Text("用户名 ${profile.username}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+                    }
+                }
+                OutlinedTextField(value = nickname, onValueChange = { nickname = it.take(24) }, label = { Text("昵称") }, modifier = Modifier.fillMaxWidth(), singleLine = true, enabled = !loading)
+                OutlinedTextField(value = avatarUrl, onValueChange = { avatarUrl = it.trim() }, label = { Text("头像 HTTPS 地址") }, supportingText = { Text("留空后保存即可清除头像") }, modifier = Modifier.fillMaxWidth(), singleLine = true, enabled = !loading, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
+                Button(
+                    enabled = !loading && nickname.isNotBlank() && (nickname != profile.nickname || avatarUrl != profile.avatarUrl.orEmpty()),
+                    onClick = {
+                        request({
+                            val updated = api.updateProfile(nickname.trim(), avatarUrl.takeIf { it.isNotBlank() }, clearAvatar = avatarUrl.isBlank())
+                            onProfileChanged(updated)
+                        }, "个人资料已保存")
+                    }, modifier = Modifier.fillMaxWidth(),
+                ) { Text("保存个人资料") }
+            }
+        }
+        AccountSectionTitle("邮箱", "用于账号验证，仅支持 QQ 邮箱")
+        ElevatedCard(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                EmailBindingStatus(profile.email)
+                Text(if (changingEmail) "当前邮箱已绑定，可验证新邮箱后换绑。" else "当前账号还未绑定邮箱，验证后即可完成补绑。", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+                OutlinedTextField(value = email, onValueChange = { email = it.trim(); code = "" }, label = { Text(if (changingEmail) "新的 QQ 邮箱" else "QQ 邮箱") }, modifier = Modifier.fillMaxWidth(), singleLine = true, enabled = !loading, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(value = code, onValueChange = { code = it.filter(Char::isDigit).take(6) }, label = { Text("6 位验证码") }, modifier = Modifier.weight(1f), singleLine = true, enabled = !loading, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+                    TextButton(enabled = !loading && QQ_EMAIL_PATTERN.matches(email), onClick = { request({ api.sendEmailBindingVerification(email, changingEmail) }, "验证码已发送") }) { Text("获取验证码") }
+                }
+                Button(enabled = !loading && QQ_EMAIL_PATTERN.matches(email) && code.length == 6, onClick = {
+                    request({ api.confirmEmailBinding(email, code, changingEmail); onProfileChanged(api.profile()) }, if (changingEmail) "邮箱已换绑" else "邮箱已绑定")
+                }, modifier = Modifier.fillMaxWidth()) { Text(if (changingEmail) "确认换绑" else "确认绑定") }
+            }
+        }
+        if (loading) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) { CircularProgressIndicator(strokeWidth = 2.dp) }
+        Spacer(Modifier.height(18.dp))
     }
 }
 

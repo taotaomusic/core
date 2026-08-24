@@ -243,8 +243,14 @@ class TencentMusicApi(private val tokenProvider: TokenProvider) {
         connection.inputStream.bufferedReader().use { JSONObject(it.readText()) }.getJSONObject("data").toProfile()
     }
 
-    fun updateNickname(nickname: String): UserProfile = authorizedJson(
-        "/api/v1/auth/profile", "PATCH", JSONObject().put("nickname", nickname),
+    fun updateNickname(nickname: String): UserProfile = updateProfile(nickname = nickname)
+
+    /** 资料接口支持按字段更新；头像传 null 表示清除，避免空字符串被服务端误作 URL。 */
+    fun updateProfile(nickname: String? = null, avatarUrl: String? = null, clearAvatar: Boolean = false): UserProfile = authorizedJson(
+        "/api/v1/auth/profile", "PATCH", JSONObject().apply {
+            nickname?.let { put("nickname", it) }
+            if (clearAvatar) put("avatarUrl", JSONObject.NULL) else avatarUrl?.let { put("avatarUrl", it) }
+        },
     ) { data -> data.toProfile() }
 
     /** [change] 为 false 表示给旧账号补绑，为 true 表示换绑。 */
@@ -388,10 +394,14 @@ class TencentMusicApi(private val tokenProvider: TokenProvider) {
 
     private fun JSONObject.toProfile() = UserProfile(
         username = optString("username"),
-        email = optString("email").ifBlank { null },
+        // org.json 会把 JSON null 读成字面字符串 "null"，必须先用 isNull 分支。
+        email = nullableString("email"),
         nickname = optString("nickname").ifBlank { optString("username") },
-        avatarUrl = optString("avatarUrl").ifBlank { null },
+        avatarUrl = nullableString("avatarUrl"),
     )
+
+    private fun JSONObject.nullableString(name: String): String? =
+        if (isNull(name)) null else optString(name).takeIf { it.isNotBlank() && it != "null" }
 
     private fun encode(value: String) = URLEncoder.encode(value, Charsets.UTF_8.name())
 

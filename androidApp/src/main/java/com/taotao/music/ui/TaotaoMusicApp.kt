@@ -125,7 +125,6 @@ fun TaotaoMusicApp() {
     var userProfile by remember { mutableStateOf<TencentMusicApi.UserProfile?>(null) }
     var profileLoading by remember { mutableStateOf(false) }
     var announcements by remember { mutableStateOf(emptyList<TencentMusicApi.Announcement>()) }
-    var showAccountDialog by remember { mutableStateOf(false) }
     var showAnnouncementDialog by remember { mutableStateOf(false) }
     var restoredPlayback by remember { mutableStateOf<SavedPlaybackState?>(null) }
     var playbackHistory by remember { mutableStateOf(emptyList<PlaybackHistoryEntry>()) }
@@ -143,6 +142,7 @@ fun TaotaoMusicApp() {
     var favoriteLibrarySyncing by remember { mutableStateOf(false) }
     var favoriteLibraryError by remember { mutableStateOf<String?>(null) }
     var showSettingsPage by remember { mutableStateOf(false) }
+    var showProfilePage by remember { mutableStateOf(false) }
     var mineLibrarySection by remember { mutableStateOf<MineLibrarySection?>(null) }
     var playbackQuality by remember { mutableStateOf(qualityStore.playbackQuality()) }
     var downloadQuality by remember { mutableStateOf(qualityStore.downloadQuality()) }
@@ -315,9 +315,10 @@ fun TaotaoMusicApp() {
      * 物理返回键：详情页先收起详情，搜索页先退出搜索，都不在时禁用拦截，
      * 交回系统默认行为（退出应用）—— 这样不必自己去拿 onBackPressedDispatcher。
      */
-    BackHandler(enabled = showPlayerDetail || showSearchPage || showSettingsPage || mineLibrarySection != null) {
+    BackHandler(enabled = showPlayerDetail || showSearchPage || showSettingsPage || showProfilePage || mineLibrarySection != null) {
         when {
             showPlayerDetail -> showPlayerDetail = false
+            showProfilePage -> showProfilePage = false
             showSettingsPage -> showSettingsPage = false
             showSearchPage -> showSearchPage = false
             mineLibrarySection != null -> mineLibrarySection = null
@@ -350,16 +351,6 @@ fun TaotaoMusicApp() {
     LaunchedEffect(updateManager.activePatchVersion) {
         kotlinx.coroutines.delay(5_000)
         updateManager.confirmPatch(updateManager.activePatchVersion)
-    }
-
-    /**
-     * 热修复状态,给设置页展示。
-     *
-     * 每次打开设置页都重新读一遍:补丁可能在会话中途才装上,缓存住的快照会显示过期状态。
-     */
-    var hotfixDiagnostics by remember { mutableStateOf(updateManager.hotfixDiagnostics()) }
-    LaunchedEffect(showSettingsPage) {
-        if (showSettingsPage) hotfixDiagnostics = updateManager.hotfixDiagnostics()
     }
 
     /**
@@ -804,6 +795,7 @@ fun TaotaoMusicApp() {
                             showPlayerDetail = false
                             showSearchPage = false
                             showSettingsPage = false
+                            showProfilePage = false
                             mineLibrarySection = null
                         }
                         NavigationBarItem(bottomTab == 0, { switchTab(0) }, icon = { Icon(Icons.Default.MusicNote, "音乐") }, label = { Text("音乐") })
@@ -815,6 +807,7 @@ fun TaotaoMusicApp() {
             AnimatedContent(
                 targetState = when {
                     showPlayerDetail -> "detail"
+                    showProfilePage -> "profile"
                     showSettingsPage -> "settings"
                     showSearchPage -> "search"
                     mineLibrarySection == MineLibrarySection.FAVORITES -> "mine-favorites"
@@ -919,23 +912,40 @@ fun TaotaoMusicApp() {
                     total = searchTotal,
                     searchSession = searchGeneration,
                 )
+            } else if (page == "profile") {
+                userProfile?.let { profile ->
+                    AccountProfilePage(
+                        api = musicApi,
+                        profile = profile,
+                        onProfileChanged = { userProfile = it },
+                        onMessage = { message = it },
+                        onBack = { showProfilePage = false },
+                    )
+                }
             } else if (page == "settings") {
                 SettingsPage(
                     playbackQuality = playbackQuality,
                     downloadQuality = downloadQuality,
                     appearance = appearance,
-                    hotfix = hotfixDiagnostics,
+                    profile = userProfile,
+                    profileLoading = profileLoading,
+                    onOpenProfile = {
+                        if (userProfile != null) showProfilePage = true
+                        else if (!profileLoading) {
+                            profileLoading = true
+                            scope.launch {
+                                runCatching { withContext(Dispatchers.IO) { musicApi.profile() } }
+                                    .onSuccess { userProfile = it; showProfilePage = true }
+                                    .onFailure { message = it.readableMessage() }
+                                profileLoading = false
+                            }
+                        }
+                    },
                     onPickPlaybackQuality = { qualitySheet = QualitySheetKind.PLAYBACK_DEFAULT },
                     onPickDownloadQuality = { qualitySheet = QualitySheetKind.DOWNLOAD_DEFAULT },
                     onPickAppearance = { mode ->
                         appearance = mode
                         appearanceStore.setMode(mode)
-                    },
-                    onRetryHotfix = {
-                        scope.launch {
-                            updateManager.retryHotfix()
-                            hotfixDiagnostics = updateManager.hotfixDiagnostics()
-                        }
                     },
                     onBack = { showSettingsPage = false },
                 )
@@ -1013,19 +1023,7 @@ fun TaotaoMusicApp() {
                     onOpenLocal = { mineLibrarySection = MineLibrarySection.LOCAL },
                     profile = userProfile,
                     profileLoading = profileLoading,
-                    onOpenAccount = {
-                        if (userProfile != null) {
-                            showAccountDialog = true
-                        } else if (!profileLoading) {
-                            profileLoading = true
-                            scope.launch {
-                                runCatching { withContext(Dispatchers.IO) { musicApi.profile() } }
-                                    .onSuccess { userProfile = it; showAccountDialog = true }
-                                    .onFailure { message = it.readableMessage() }
-                                profileLoading = false
-                            }
-                        }
-                    },
+                    onOpenAccount = { showSettingsPage = true },
                 )
             } else Column(Modifier.fillMaxSize().padding(horizontal = 22.dp)) {
                 Spacer(Modifier.height(24.dp))
@@ -1033,9 +1031,6 @@ fun TaotaoMusicApp() {
                     userName = userProfile?.nickname ?: userProfile?.username ?: "音乐爱好者",
                     onOpenAnnouncements = { showAnnouncementDialog = true },
                 )
-                if (announcements.isNotEmpty()) {
-                    AnnouncementPreview(announcements.first(), onClick = { showAnnouncementDialog = true })
-                }
                 MusicSearchBar(searchKeyword, onKeywordChanged = { searchKeyword = it }, onSearch = {
                     if (searchKeyword.isNotBlank()) {
                         openSearchPage()
@@ -1043,6 +1038,9 @@ fun TaotaoMusicApp() {
                     }
                 }, onFocus = { openSearchPage() })
                 Text("在线搜索歌曲，下载后可在无网络时播放", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp, modifier = Modifier.padding(top = 8.dp))
+                if (announcements.isNotEmpty()) {
+                    AnnouncementPreview(announcements.first(), onClick = { showAnnouncementDialog = true })
+                }
                 SectionTitle("今日推荐")
                 RecommendationCard()
                 Spacer(Modifier.height(10.dp))
@@ -1055,15 +1053,6 @@ fun TaotaoMusicApp() {
 
     // 弹窗和底部面板位于主 Surface 之后，必须显式继承当前外观主题；否则暗色模式会退回默认亮色。
     TaotaoTheme(darkTheme = darkTheme) {
-        userProfile?.takeIf { showAccountDialog }?.let { profile ->
-            AccountSheet(
-                api = musicApi,
-                profile = profile,
-                onProfileChanged = { userProfile = it },
-                onMessage = { message = it },
-                onDismiss = { showAccountDialog = false },
-            )
-        }
         if (showAnnouncementDialog) {
             AnnouncementDialog(announcements = announcements, onDismiss = { showAnnouncementDialog = false })
         }
@@ -1251,7 +1240,7 @@ private fun MinePage(
                         modifier = Modifier.padding(top = 4.dp),
                     )
                 }
-                TextButton(onClick = onOpenAccount, enabled = !profileLoading) { Text(if (profileLoading) "读取中" else "管理") }
+                TextButton(onClick = onOpenAccount, enabled = !profileLoading) { Text(if (profileLoading) "读取中" else "设置") }
             }
         }
         item { Text("我的音乐", fontSize = 17.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp)) }
@@ -1865,7 +1854,7 @@ private fun PlaybackQueueSheet(
                     }
                 }
             }
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(6.dp))
             TabRow(
                 selectedTabIndex = selectedSource,
                 containerColor = MaterialTheme.colorScheme.background,
@@ -1879,7 +1868,7 @@ private fun PlaybackQueueSheet(
                     )
                 }
             }
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(8.dp))
             /**
              * 三类来源共享固定的正文视口，不能让空态、短列表和长列表反复改变 BottomSheet 高度。
              * 顶部标题、Tab 和底部圆角的位置因而保持稳定；歌曲多时只在这块区域内滚动。
@@ -1946,21 +1935,21 @@ private fun timeGreeting(hour: Int = Calendar.getInstance().get(Calendar.HOUR_OF
 @Composable
 private fun AnnouncementPreview(announcement: TencentMusicApi.Announcement, onClick: () -> Unit) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(top = 16.dp)
-            .clip(RoundedCornerShape(14.dp)).background(MaterialTheme.colorScheme.secondaryContainer)
+        modifier = Modifier.fillMaxWidth().padding(top = 14.dp, bottom = 2.dp)
+            .clip(RoundedCornerShape(14.dp)).background(MaterialTheme.colorScheme.primaryContainer)
             .clickable(onClick = onClick).padding(horizontal = 14.dp, vertical = 11.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(Icons.Default.Campaign, null, tint = MaterialTheme.colorScheme.onSecondaryContainer, modifier = Modifier.size(18.dp))
+        Icon(Icons.Default.Campaign, null, tint = MaterialTheme.colorScheme.onPrimaryContainer, modifier = Modifier.size(18.dp))
         Text(
             text = if (announcement.pinned) "置顶 · ${announcement.title}" else announcement.title,
-            color = MaterialTheme.colorScheme.onSecondaryContainer,
+            color = MaterialTheme.colorScheme.onPrimaryContainer,
             fontSize = 13.sp,
             fontWeight = FontWeight.Medium,
             maxLines = 1,
             modifier = Modifier.weight(1f).padding(start = 8.dp),
         )
-        Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSecondaryContainer, modifier = Modifier.size(18.dp))
+        Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onPrimaryContainer, modifier = Modifier.size(18.dp))
     }
 }
 
@@ -1982,7 +1971,7 @@ private fun CurrentPlaybackQueue(
         Row(
             Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
                 .background(MaterialTheme.colorScheme.surface).clickable(onClick = onCycleRepeat)
-                .padding(horizontal = 14.dp, vertical = 12.dp),
+                .padding(horizontal = 14.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(
@@ -2000,7 +1989,7 @@ private fun CurrentPlaybackQueue(
             }
             Text("点击切换", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
         }
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(4.dp))
         if (queue.isEmpty()) {
             PlaybackQueueEmptyState("队列为空", Modifier.weight(1f))
         } else {

@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -52,6 +53,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
@@ -113,33 +115,38 @@ fun SongRow(
 ) {
     var showActions by remember { mutableStateOf(false) }
     val backgroundColor by animateColorAsState(
-        targetValue = if (active) TaotaoCoral.copy(alpha = 0.10f) else Color.Transparent,
+        targetValue = if (active) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
         animationSpec = taotaoTween(AnimationDurations.MICRO),
         label = "歌曲行背景",
     )
     val titleColor by animateColorAsState(
-        targetValue = if (active) TaotaoCoral else MaterialTheme.colorScheme.onSurface,
+        targetValue = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
         animationSpec = taotaoTween(AnimationDurations.MICRO),
         label = "歌曲行标题",
     )
+    // 服务端个别歌曲元数据曾携带换行/空白字符；列表项必须保持紧凑，不能由一条脏数据撑开整行。
+    val displayTitle = song.title.replace(Regex("\\s+"), " ").trim()
+    val displaySubtitle = subtitle.replace(Regex("\\s+"), " ").trim()
     Row(
         modifier
             .fillMaxWidth()
+            .heightIn(min = 64.dp, max = 72.dp)
             .clip(RoundedCornerShape(14.dp))
             .background(backgroundColor)
             .clickable(onClick = onClick)
-            .padding(vertical = 9.dp, horizontal = 8.dp),
+            .padding(vertical = 7.dp, horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         AlbumArt(Color(song.color), 48.dp, 24.sp, song.coverUri)
         Column(Modifier.weight(1f).padding(start = 13.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    song.title,
+                    displayTitle,
                     fontSize = 17.sp,
                     fontWeight = FontWeight.Bold,
                     color = titleColor,
                     maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false),
                 )
             }
@@ -147,7 +154,13 @@ fun SongRow(
                 modifier = Modifier.padding(top = 3.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp, maxLines = 1)
+                Text(
+                    displaySubtitle,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 13.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
                 if (downloaded) {
                     Icon(
                         Icons.Default.OfflinePin,
@@ -164,9 +177,13 @@ fun SongRow(
             dragHandle(Modifier.size(36.dp))
         } else Box {
             IconButton(onClick = { showActions = true }, modifier = Modifier.size(36.dp)) {
-                Icon(Icons.Default.MoreVert, "更多操作", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Icon(Icons.Default.MoreVert, "更多操作", tint = MaterialTheme.colorScheme.primary)
             }
-            DropdownMenu(expanded = showActions, onDismissRequest = { showActions = false }) {
+            DropdownMenu(
+                expanded = showActions,
+                onDismissRequest = { showActions = false },
+                containerColor = MaterialTheme.colorScheme.surface,
+            ) {
                 if (onDelete != null) {
                     DropdownMenuItem(
                         text = { Text("删除") },

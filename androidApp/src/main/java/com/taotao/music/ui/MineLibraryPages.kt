@@ -160,7 +160,8 @@ private fun LibraryPageHeader(
     action: (@Composable () -> Unit)? = null,
 ) {
     Row(
-        Modifier.fillMaxWidth().padding(top = 18.dp, bottom = 18.dp),
+        // 列表页的标题只承担导航和摘要；过大的上下留白会把第一首歌推得太远。
+        Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") }
