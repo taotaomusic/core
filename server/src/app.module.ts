@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from "@nestjs/core";
 import { AuthModule } from "./auth/auth.module";
+import { AnnouncementModule } from "./announcement/announcement.module";
 import { AccessTokenGuard } from "./auth/guards/access-token.guard";
 import { AllExceptionsFilter } from "./common/filters/all-exceptions.filter";
 import { EnvelopeInterceptor } from "./common/interceptors/envelope.interceptor";
@@ -32,6 +33,7 @@ import { ReleaseModule } from "./release/release.module";
     MailModule,
     LatestVersionModule,
     AuthModule,
+    AnnouncementModule,
     FavoritesModule,
     MusicModule,
     ImageGenerationModule,

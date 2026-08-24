@@ -142,6 +142,11 @@ npm run dev:frontend      # 独立开发服务器（5173），API 代理到本�
 
 ## 接口
 
+### 公告
+
+- `GET /api/v1/announcements`：公开读取最新 20 条已发布公告，置顶公告始终排在最前。
+- 管理端使用 `GET/POST /api/v1/app/admin/announcements` 读取、发布公告；`POST /api/v1/app/admin/announcements/{id}` 编辑，`POST /api/v1/app/admin/announcements/{id}/enabled` 上下线，`POST /api/v1/app/admin/announcements/{id}/pinned` 置顶/取消置顶，`DELETE /api/v1/app/admin/announcements/{id}` 删除。均需 `X-Admin-Token`。
+
 ### 认证
 
 - `POST /api/v1/auth/email-verification`，JSON：`{"email":"name@qq.com"}`，发送六位注册验证码，返回 **204**

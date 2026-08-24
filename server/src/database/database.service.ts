@@ -1,5 +1,5 @@
 import { Injectable, Logger, type OnModuleDestroy, type OnModuleInit } from "@nestjs/common";
-import { Pool, types, type QueryResultRow } from "pg";
+import { Pool, types, type PoolClient, type QueryResultRow } from "pg";
 import { AppConfigService } from "../config/app-config.service";
 import { runMigrations } from "./migrations";
 
@@ -65,6 +65,22 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   /** 执行写操作，返回受影响行数。pg 的 rowCount 可能是 null，这里归一成 number。 */
   async run(sql: string, params: unknown[] = []): Promise<number> {
     return (await this.pool.query(sql, params)).rowCount ?? 0;
+  }
+
+  /** 少量需要「先清旧状态、再写新状态」原子性的业务操作使用此事务入口。 */
+  async transaction<T>(action: (client: PoolClient) => Promise<T>): Promise<T> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await action(client);
+      await client.query("COMMIT");
+      return result;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   /** 就绪探测。数据库现在是独立进程，健康检查不能只报告自己还活着。 */

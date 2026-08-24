@@ -40,6 +40,13 @@ export function apiPostJson<T>(path: string, adminToken: string, payload: unknow
   }).then(unwrap<T>);
 }
 
+/** 管理端删除资源。204 无响应体，因此不能走 JSON 信封解包。 */
+export async function apiDelete(path: string, adminToken: string): Promise<void> {
+  const response = await fetch(`${BASE}${path}`, { method: "DELETE", headers: { "X-Admin-Token": adminToken } });
+  if (response.status === 204) return;
+  await unwrap<unknown>(response);
+}
+
 /**
  * 上传原始字节。
  *

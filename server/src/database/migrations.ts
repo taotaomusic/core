@@ -95,6 +95,19 @@ export async function runMigrations(pool: Pool): Promise<void> {
         updated_at       bigint NOT NULL
       );
 
+      -- 公告独立于热更新配置：公告需要保留历史、支持上下线，不适合塞进单值键值表。
+      CREATE TABLE IF NOT EXISTS app_announcement (
+        id           integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        title        text NOT NULL,
+        content      text NOT NULL,
+        enabled      smallint NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+        published_at bigint NOT NULL,
+        updated_at   bigint NOT NULL
+      );
+      ALTER TABLE app_announcement ADD COLUMN IF NOT EXISTS pinned smallint NOT NULL DEFAULT 0;
+      CREATE INDEX IF NOT EXISTS idx_app_announcement_visible
+        ON app_announcement (enabled, pinned DESC, published_at DESC);
+
       CREATE TABLE IF NOT EXISTS api_key (
         id      integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
         channel text NOT NULL,
