@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Post } from "@nestjs/common";
+import { Body, Controller, Get, HttpCode, HttpStatus, Patch, Post } from "@nestjs/common";
 import { ApiErrors } from "../common/api.exception";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
 import { Public } from "../common/decorators/public.decorator";
@@ -15,6 +15,8 @@ const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const VERIFICATION_CODE_PATTERN = /^\d{6}$/;
 /** 只接受常见 QQ 邮箱域名，避免任意自定义域名被用来批量注册。 */
 const ALLOWED_EMAIL_DOMAINS = new Set(["qq.com", "foxmail.com"]);
+const MAX_NICKNAME_LENGTH = 24;
+const MAX_AVATAR_URL_LENGTH = 2_048;
 
 /**
  * 认证接口。
@@ -119,6 +121,24 @@ export class AuthController {
     return user;
   }
 
+  /** 读取当前用户的可编辑资料；邮箱仅返回给账号本人。 */
+  @Get("profile")
+  async profile(@CurrentUser() user: SessionUser | undefined) {
+    return this.requireProfile(user);
+  }
+
+  /** 更新昵称和头像。头像只接受 HTTPS URL，允许传 null 清除头像。 */
+  @Patch("profile")
+  async updateProfile(@CurrentUser() user: SessionUser | undefined, @Body() body: Record<string, unknown>) {
+    const nickname = this.optionalNickname(body?.nickname);
+    const avatarUrl = this.optionalAvatarUrl(body?.avatarUrl);
+    if (nickname === undefined && avatarUrl === undefined) {
+      throw ApiErrors.badRequest(4000, "请至少提供昵称或头像");
+    }
+    const current = await this.requireProfile(user);
+    return (await this.users.updateProfile(current.id, nickname, avatarUrl))!;
+  }
+
   /** 老账号补绑邮箱：仅允许当前尚未绑定邮箱的已登录用户使用。 */
   @RateLimit("email-verification")
   @Post("email/bind-verification")
@@ -190,5 +210,34 @@ export class AuthController {
     const current = await this.users.findByIdWithEmail(user.id);
     if (!current) throw ApiErrors.unauthorized(4010, "未登录");
     return current;
+  }
+
+  private async requireProfile(user: SessionUser | undefined) {
+    if (!user) throw ApiErrors.unauthorized(4010, "未登录");
+    const profile = await this.users.findProfileById(user.id);
+    if (!profile) throw ApiErrors.unauthorized(4010, "未登录");
+    return profile;
+  }
+
+  private optionalNickname(value: unknown): string | undefined {
+    if (value === undefined) return undefined;
+    const nickname = this.auth.textOf(value, true);
+    if (!nickname || nickname.length > MAX_NICKNAME_LENGTH || /[\u0000-\u001F\u007F]/.test(nickname)) {
+      throw ApiErrors.badRequest(4000, `昵称须为 1 至 ${MAX_NICKNAME_LENGTH} 个非控制字符`);
+    }
+    return nickname;
+  }
+
+  private optionalAvatarUrl(value: unknown): string | null | undefined {
+    if (value === undefined) return undefined;
+    if (value === null || value === "") return null;
+    const avatarUrl = this.auth.textOf(value, true);
+    const parsed = (() => {
+      try { return new URL(avatarUrl); } catch { return null; }
+    })();
+    if (!parsed || parsed.protocol !== "https:" || avatarUrl.length > MAX_AVATAR_URL_LENGTH) {
+      throw ApiErrors.badRequest(4000, "头像必须是 HTTPS 图片地址，且不超过 2048 个字符");
+    }
+    return avatarUrl;
   }
 }

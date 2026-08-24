@@ -41,6 +41,8 @@ export async function runMigrations(pool: Pool): Promise<void> {
       ALTER TABLE users ADD COLUMN IF NOT EXISTS email text;
       CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_unique
         ON users (email) WHERE email IS NOT NULL;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS nickname text;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url text;
 
       CREATE TABLE IF NOT EXISTS refresh_tokens (
         id         integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

@@ -6,6 +6,7 @@ import { isUniqueViolation } from "../database/pg-errors";
 /** 用户表对外暴露的字段。密码哈希与盐只在校验时读取，不进入响应。 */
 export type UserRecord = { id: number; username: string; created_at: string };
 export type UserWithEmail = UserRecord & { email: string | null };
+export type UserProfile = UserRecord & { email: string | null; nickname: string; avatarUrl: string | null };
 export type UserCredentials = UserRecord & { password_hash: string; password_salt: string };
 
 /**
@@ -36,6 +37,25 @@ export class UsersRepository {
 
   findByIdWithEmail(id: number): Promise<UserWithEmail | undefined> {
     return this.database.first<UserWithEmail>(`SELECT id, username, email, ${CREATED_AT} FROM users WHERE id = $1`, [id]);
+  }
+
+  findProfileById(id: number): Promise<UserProfile | undefined> {
+    return this.database.first<UserProfile>(
+      `SELECT id, username, email, COALESCE(nickname, username) AS nickname, avatar_url AS "avatarUrl", ${CREATED_AT}
+       FROM users WHERE id = $1`,
+      [id],
+    );
+  }
+
+  async updateProfile(userId: number, nickname: string | undefined, avatarUrl: string | null | undefined): Promise<UserProfile | undefined> {
+    return this.database.first<UserProfile>(
+      `UPDATE users
+       SET nickname = CASE WHEN $2::boolean THEN $3 ELSE nickname END,
+           avatar_url = CASE WHEN $4::boolean THEN $5 ELSE avatar_url END
+       WHERE id = $1
+       RETURNING id, username, email, COALESCE(nickname, username) AS nickname, avatar_url AS "avatarUrl", ${CREATED_AT}`,
+      [userId, nickname !== undefined, nickname ?? null, avatarUrl !== undefined, avatarUrl ?? null],
+    );
   }
 
   async bindEmail(userId: number, email: string): Promise<boolean> {

@@ -152,6 +152,7 @@ npm run dev:frontend      # 独立开发服务器（5173），API 代理到本�
 - `POST /api/v1/auth/refresh`，JSON：`{"refreshToken":"刷新令牌"}`
 - `POST /api/v1/auth/logout`，JSON：`{"refreshToken":"刷新令牌"}`，返回 **204** 空体
 - `GET /api/v1/auth/me`，需要访问令牌
+- `GET /api/v1/auth/profile`：读取当前账号的昵称、头像和邮箱；`PATCH /api/v1/auth/profile`：更新 `nickname` 与 `avatarUrl`（头像可传 `null` 清除）
 
 密码使用随机盐和高成本 scrypt 哈希，不保存明文。新注册账号必须完成 QQ 邮箱（`qq.com` 或 `foxmail.com`）验证码校验，验证码仅保存于服务进程内存、10 分钟过期、校验成功即删除；服务重启后未使用验证码也会失效。发码按来源地址限流，单邮箱 60 秒内不能重复发码。访问令牌有效期 15 分钟，刷新令牌 30 天；刷新令牌只保存 SHA-256 哈希，**刷新时轮换**，注销后立即失效。登录和注册按来源地址限流。
 

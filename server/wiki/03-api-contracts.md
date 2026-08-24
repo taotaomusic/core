@@ -83,6 +83,10 @@ Content-Type: application/json
 
 以下接口均需要访问令牌。老账号先调用 `POST /api/v1/auth/email/bind-verification`，再把同一个 `email` 与 `verificationCode` 提交到 `POST /api/v1/auth/email/bind`；已绑定账号则使用 `change-verification` 与 `change` 两个同形接口。两种验证码用途互不通用，防止把注册验证码用于篡改已登录账号的邮箱。
 
+### 用户资料
+
+`GET /api/v1/auth/profile` 返回当前账号的 `username`、`nickname`、`avatarUrl`、`email` 与 `created_at`。`PATCH /api/v1/auth/profile` 接收一个或两个字段：`nickname` 为 1–24 个非控制字符，`avatarUrl` 必须为 HTTPS 地址；传 `{"avatarUrl":null}` 可以清除头像。邮箱只在本人资料接口中返回，不对外暴露。
+
 ### 登录
 
 ```http
