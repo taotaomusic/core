@@ -57,7 +57,8 @@ class PlaybackHistoryStore(context: Context) {
 
     private companion object {
         const val KEY_ENTRIES = "entries"
-        const val MAX_ENTRIES = 50
+        /** 最近播放保留 500 首；同曲会原地更新，不会随暂停/续播无限膨胀。 */
+        const val MAX_ENTRIES = 500
     }
 }
 
