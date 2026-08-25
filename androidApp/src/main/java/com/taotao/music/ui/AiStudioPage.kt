@@ -31,7 +31,9 @@ import com.taotao.music.data.AiChatStore
 import com.taotao.music.data.SavedAiChatMessage
 import com.taotao.music.data.SavedAiConversation
 import com.taotao.music.data.TencentMusicApi
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
 
 private data class AiChatMessage(val role: AiChatRole, val text: String, val taskId: String? = null, val progress: Int = 0, val imageUrl: String? = null, val error: String? = null)
 private enum class AiChatRole { USER, ASSISTANT }
@@ -40,7 +42,13 @@ private enum class AiQuality(val label: String, val apiName: String) { LOW("低"
 
 /** 支持多会话的 GPT Image 对话工作台，所有会话保存在设备本地。 */
 @Composable
-fun AiStudioPage(signedIn: Boolean, submitting: Boolean, task: TencentMusicApi.ImageTask?, onGenerate: (String, String, String, String, String, String) -> Unit) {
+fun AiStudioPage(
+    signedIn: Boolean,
+    submitting: Boolean,
+    task: TencentMusicApi.ImageTask?,
+    onQueryTask: suspend (String) -> TencentMusicApi.ImageTask,
+    onGenerate: (String, String, String, String, String, String) -> Unit,
+) {
     val context = LocalContext.current
     val store = remember(context) { AiChatStore(context) }
     var conversations by remember { mutableStateOf(store.readConversations().ifEmpty { listOf(store.newConversation()) }) }
@@ -63,6 +71,40 @@ fun AiStudioPage(signedIn: Boolean, submitting: Boolean, task: TencentMusicApi.I
         }
     }
     LaunchedEffect(conversations) { store.saveConversations(conversations) }
+    // 进程被系统杀掉或用户冷启动时，服务端任务仍在继续。重新发现本地的任务 ID 后
+    // 主动恢复轮询，不能只恢复“正在创作”的文案，否则它会永久卡住。
+    LaunchedEffect(Unit) {
+        conversations.flatMap { conversation -> conversation.messages }
+            .filter { it.taskId != null && it.imageUrl == null && it.error == null }
+            .mapNotNull { it.taskId }
+            .distinct()
+            .forEach { pendingTaskId ->
+                launch {
+                    val latest = try {
+                        var latest = onQueryTask(pendingTaskId)
+                        while (latest.state == "IN_PROGRESS") {
+                            delay(3_000)
+                            latest = onQueryTask(pendingTaskId)
+                        }
+                        latest
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (error: Throwable) {
+                        conversations = conversations.map { conversation ->
+                            conversation.copy(messages = conversation.messages.map { message ->
+                                if (message.taskId == pendingTaskId) message.copy(error = error.message ?: "任务查询失败") else message
+                            })
+                        }
+                        return@launch
+                    }
+                    conversations = conversations.map { conversation ->
+                        conversation.copy(messages = conversation.messages.map { message ->
+                            if (message.taskId == pendingTaskId) latest.toSavedMessage(message.text) else message
+                        })
+                    }
+                }
+            }
+    }
     LaunchedEffect(task?.taskId, task?.state, task?.progress, task?.imageUrl, task?.error, selected.id) {
         val current = task ?: return@LaunchedEffect
         val index = messages.indexOfLast { it.taskId == current.taskId }.takeIf { it >= 0 }
@@ -203,3 +245,15 @@ private fun AiConversationDrawer(
 
 private fun SavedAiChatMessage.toChatMessage() = AiChatMessage(if (role == "user") AiChatRole.USER else AiChatRole.ASSISTANT, text, taskId, progress, imageUrl, error)
 private fun AiChatMessage.toSavedMessage() = SavedAiChatMessage(if (role == AiChatRole.USER) "user" else "assistant", text, taskId, progress, imageUrl, error)
+private fun TencentMusicApi.ImageTask.toSavedMessage(@Suppress("UNUSED_PARAMETER") fallbackText: String) = SavedAiChatMessage(
+    role = "assistant",
+    text = when {
+        imageUrl != null -> "创作完成，喜欢这张图吗？"
+        state == "FAILED" -> "这次创作没有完成。"
+        else -> "正在根据你的描述创作…"
+    },
+    taskId = taskId,
+    progress = progress,
+    imageUrl = imageUrl,
+    error = error,
+)

@@ -880,21 +880,21 @@ fun TaotaoMusicApp() {
                     signedIn = signedIn,
                     submitting = imageGenerating,
                     task = imageTask,
+                    onQueryTask = { taskId -> withContext(Dispatchers.IO) { musicApi.requestImageTask(taskId) } },
                     onGenerate = { model, prompt, ratio, imageSize, quality, _ ->
                         if (prompt.isBlank()) return@AiStudioPage
                         imageGenerating = true
                         imageTask = null
                         scope.launch {
-                            runCatching {
-                                withContext(Dispatchers.IO) { musicApi.createImageTask(model, prompt, ratio, imageSize, quality) }
-                            }.onSuccess { created ->
+                            try {
+                                val created = withContext(Dispatchers.IO) { musicApi.createImageTask(model, prompt, ratio, imageSize, quality) }
                                 imageTask = created
                                 while (created.taskId.isNotBlank() && imageTask?.state == "IN_PROGRESS") {
                                     delay(3_000)
                                     val latest = withContext(Dispatchers.IO) { musicApi.requestImageTask(created.taskId) }
                                     imageTask = latest
                                 }
-                            }.onFailure { error ->
+                            } catch (error: Throwable) {
                                 message = error.message ?: "图片生成失败"
                             }
                             imageGenerating = false
