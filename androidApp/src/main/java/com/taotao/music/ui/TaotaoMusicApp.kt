@@ -1,6 +1,7 @@
 package com.taotao.music.ui
 
 import android.Manifest
+import android.provider.Settings
 import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -96,6 +97,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import android.net.Uri
 import java.io.File
 import java.util.Calendar
+import java.util.UUID
 
 @Composable
 fun TaotaoMusicApp() {
@@ -113,6 +115,10 @@ fun TaotaoMusicApp() {
     val favoritesStore = remember { FavoritesStore(context) }
     val qualityStore = remember { QualityStore(context) }
     val downloadNotifier = remember { DownloadNotifier(context) }
+    val playbackDeviceId = remember {
+        Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
+            ?.takeIf { it.isNotBlank() } ?: UUID.randomUUID().toString()
+    }
     val appearanceStore = remember { AppearanceStore(context) }
     var appearance by remember { mutableStateOf(appearanceStore.mode()) }
     val scope = rememberCoroutineScope()
@@ -322,6 +328,26 @@ fun TaotaoMusicApp() {
         }
     }
 
+    /** 最近播放沿用收藏夹的本地优先同步：网络不可用或服务端未部署时不动本地列表。 */
+    fun refreshPlaybackHistory() {
+        val knownSongs = playbackHistory.map { it.song } + playbackSongs + searchResults +
+            favoriteLibrarySongs + downloadedSongs
+        scope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    musicApi.recentPlaybackLibrary(knownSongs, playbackQuality.value)
+                }
+            }.onSuccess { remoteHistory ->
+                if (remoteHistory.isEmpty()) return@onSuccess
+                val merged = (remoteHistory + playbackHistory)
+                    .sortedByDescending { it.playedAtMillis }
+                    .distinctBy { entry -> entry.song.remoteId ?: entry.song.audioUri }
+                    .take(500)
+                playbackHistory = withContext(Dispatchers.IO) { playbackHistoryStore.replace(merged) }
+            }
+        }
+    }
+
     /**
      * 物理返回键：详情页先收起详情，搜索页先退出搜索，都不在时禁用拦截，
      * 交回系统默认行为（退出应用）—— 这样不必自己去拿 onBackPressedDispatcher。
@@ -516,6 +542,25 @@ fun TaotaoMusicApp() {
         if (!audioPlayer.isPlaying) return@LaunchedEffect
         val played = activePlayerSong ?: return@LaunchedEffect
         playbackHistory = withContext(Dispatchers.IO) { playbackHistoryStore.record(played) }
+        // 满 3 秒后才上报；服务端按 sessionId 幂等合并，接口未部署或失败不影响本地记录。
+        val remoteId = played.remoteId ?: return@LaunchedEffect
+        val sessionId = UUID.randomUUID().toString()
+        val startedAt = System.currentTimeMillis()
+        delay(3_000)
+        if (audioPlayer.isPlaying && audioPlayer.queue.getOrNull(audioPlayer.currentIndex)?.remoteId == remoteId) {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    musicApi.reportPlayback(
+                        sessionId = sessionId,
+                        deviceId = playbackDeviceId,
+                        songId = remoteId,
+                        startedAt = startedAt,
+                        listenedMs = 3_000,
+                        durationSeconds = audioPlayer.durationMs.takeIf { it > 0 }?.div(1_000),
+                    )
+                }
+            }
+        }
     }
 
     /** 播放进度按曲目变化保存整条队列，替代原先每两秒一次的主线程写盘。 */
@@ -1044,6 +1089,7 @@ fun TaotaoMusicApp() {
                     onRetry = { refreshFavoriteLibrary() },
                 )
             } else if (page == "mine-history") {
+                LaunchedEffect(page) { refreshPlaybackHistory() }
                 PlaybackHistoryPage(
                     history = playbackHistory,
                     onBack = { mineLibrarySection = null },
@@ -1054,6 +1100,9 @@ fun TaotaoMusicApp() {
                     onClear = {
                         playbackHistoryStore.clear()
                         playbackHistory = emptyList()
+                        scope.launch {
+                            runCatching { withContext(Dispatchers.IO) { musicApi.clearRecentPlayback() } }
+                        }
                     },
                 )
             } else if (page == "mine-local") {
@@ -2082,14 +2131,24 @@ private fun CurrentPlaybackQueue(
             val settleOffset = remember { Animatable(0f) }
             val dragScope = rememberCoroutineScope()
             val reduceMotion = LocalReduceMotion.current
-            // 触发阈值低于行高，长按后会连续跟手；未用完的距离会保留，
-            // 避免每次换位都出现“吸回去再跳”的停顿。
-            val dragStep = with(LocalDensity.current) { 34.dp.toPx() }
+            val rowHeightPx = with(LocalDensity.current) { 64.dp.toPx() }
+            val reorderThresholdPx = rowHeightPx / 2f
+            // 同一首歌可能被重复加入队列：出现次数既保证 key 唯一，也不会因其他歌曲换位而改变。
+            // 稳定 key 能保住 LazyColumn 中正在进行的指针手势和项目位移动画。
+            val occurrences = mutableMapOf<String, Int>()
+            val queueItemKeys = queue.map { song ->
+                val songKey = songKeyOf(song)
+                val occurrence = occurrences.getOrDefault(songKey, 0)
+                occurrences[songKey] = occurrence + 1
+                "$songKey#$occurrence"
+            }
             LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
-                itemsIndexed(queue, key = { index, item -> "${songKeyOf(item)}#$index" }) { index, item ->
+                itemsIndexed(queue, key = { index, _ -> queueItemKeys[index] }) { index, item ->
                     val isCurrent = index == currentIndex
+                    val isDragged = index == draggedIndex
+                    val itemKey = queueItemKeys[index]
                     val rowOffsetY = when {
-                        index != draggedIndex -> 0f
+                        !isDragged -> 0f
                         settling -> settleOffset.value
                         else -> draggedDistance
                     }
@@ -2102,10 +2161,15 @@ private fun CurrentPlaybackQueue(
                         favorited = isFavorite(item),
                         modifier = Modifier
                             .animateItem(
-                                placementSpec = spring(
-                                    dampingRatio = Spring.DampingRatioNoBouncy,
-                                    stiffness = Spring.StiffnessMediumLow,
-                                ),
+                                // 被拖行直接跟随手指；只让让位的相邻行补间，避免两套位移互相拉扯。
+                                placementSpec = if (isDragged) {
+                                    null
+                                } else {
+                                    spring(
+                                        dampingRatio = Spring.DampingRatioNoBouncy,
+                                        stiffness = Spring.StiffnessMediumLow,
+                                    )
+                                },
                             )
                             .graphicsLayer { translationY = rowOffsetY },
                         onToggleFavorite = onToggleFavorite.takeIf { item.remoteId != null }
@@ -2115,7 +2179,7 @@ private fun CurrentPlaybackQueue(
                                 Icons.Default.DragHandle,
                                 "长按拖动调整顺序",
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = modifier.pointerInput(queue, index) {
+                                modifier = modifier.pointerInput(itemKey) {
                                     detectDragGesturesAfterLongPress(
                                         onDragStart = {
                                             draggedIndex = index
@@ -2148,7 +2212,7 @@ private fun CurrentPlaybackQueue(
                                         change.consume()
                                         if (draggedIndex !in queue.indices) return@detectDragGesturesAfterLongPress
                                         draggedDistance += dragAmount.y
-                                        while (kotlin.math.abs(draggedDistance) >= dragStep) {
+                                        while (kotlin.math.abs(draggedDistance) >= reorderThresholdPx) {
                                             val direction = if (draggedDistance > 0f) 1 else -1
                                             val destination = (draggedIndex + direction).coerceIn(queue.indices)
                                             if (destination == draggedIndex) {
@@ -2158,7 +2222,8 @@ private fun CurrentPlaybackQueue(
                                             }
                                             onMoveItem(draggedIndex, destination)
                                             draggedIndex = destination
-                                            draggedDistance -= direction * dragStep
+                                            // 基准位置换到相邻行后反向扣除完整行高，屏幕坐标保持连续。
+                                            draggedDistance -= direction * rowHeightPx
                                         }
                                     }
                                 },

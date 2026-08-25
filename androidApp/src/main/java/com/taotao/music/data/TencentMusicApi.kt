@@ -2,6 +2,7 @@ package com.taotao.music.data
 
 import com.taotao.music.model.AudioQuality
 import com.taotao.music.model.Song
+import com.taotao.music.data.PlaybackHistoryEntry
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -25,6 +26,8 @@ class TencentMusicApi(
     data class Announcement(val id: Long, val title: String, val content: String, val pinned: Boolean, val publishedAt: Long)
     /** GPT Image 工作台的异步任务状态。图片 Key 始终只保留在服务端。 */
     data class ImageTask(val taskId: String, val state: String, val progress: Int, val imageUrl: String?, val error: String?)
+    /** 云端最近播放只持久化来源、歌曲 ID 与时间；展示资料由歌曲信息接口补全。 */
+    data class RecentPlayback(val source: String, val songId: String, val playedAtMillis: Long)
 
     /**
      * 响应头里带回的最新版本号的观察者。
@@ -157,7 +160,7 @@ class TencentMusicApi(
                 batch.map { value ->
                     async(Dispatchers.IO) {
                         val remoteId = value.toLongOrNull() ?: return@async null
-                        knownById[remoteId]?.copy(favorited = true) ?: requestFavoriteSong(remoteId, quality)
+                        knownById[remoteId]?.copy(favorited = true) ?: requestSongInfo(remoteId, quality, favorited = true)
                     }
                 }.awaitAll().filterNotNull()
             }
@@ -174,8 +177,71 @@ class TencentMusicApi(
         }
     }
 
-    /** 单首补全失败时仍保留可播放占位项，不能让服务端已有收藏从页面上凭空消失。 */
-    private fun requestFavoriteSong(remoteId: Long, quality: Int): Song = runCatching {
+    /**
+     * 与收藏夹相同的本地优先同步方式读取最近播放；目前只有腾讯歌曲能通过歌曲资料接口补全。
+     */
+    suspend fun recentPlaybackLibrary(
+        knownSongs: List<Song>,
+        quality: Int = AudioQuality.Default.value,
+    ): List<PlaybackHistoryEntry> {
+        val records = withContext(Dispatchers.IO) { recentPlaybackRecords() }
+        val knownById = knownSongs.mapNotNull { song -> song.remoteId?.let { it to song } }.toMap()
+        return records.filter { it.source == "tencent" }.chunked(FAVORITE_INFO_CONCURRENCY).flatMap { batch ->
+            coroutineScope {
+                batch.map { record ->
+                    async(Dispatchers.IO) {
+                        val remoteId = record.songId.toLongOrNull() ?: return@async null
+                        val song = knownById[remoteId] ?: requestSongInfo(remoteId, quality, favorited = false)
+                        PlaybackHistoryEntry(song, record.playedAtMillis)
+                    }
+                }.awaitAll().filterNotNull()
+            }
+        }
+    }
+
+    fun reportPlayback(
+        sessionId: String,
+        deviceId: String,
+        songId: Long,
+        startedAt: Long,
+        listenedMs: Long,
+        durationSeconds: Int?,
+        completed: Boolean = false,
+    ) {
+        authorizedJson(
+            "/api/v1/playback/sessions",
+            "POST",
+            JSONObject()
+                .put("sessionId", sessionId)
+                .put("deviceId", deviceId)
+                .put("source", "tencent")
+                .put("songId", songId.toString())
+                .put("startedAt", startedAt)
+                .put("lastPlayedAt", System.currentTimeMillis())
+                .put("listenedMs", listenedMs.coerceAtLeast(0L))
+                .put("completed", completed)
+                .put("durationSeconds", durationSeconds),
+        ) { Unit }
+    }
+
+    fun clearRecentPlayback() {
+        authorized("/api/v1/playback/recent", "DELETE") { connection -> connection.inputStream.close() }
+    }
+
+    private fun recentPlaybackRecords(): List<RecentPlayback> = authorized("/api/v1/playback/recent?limit=500") { connection ->
+        val result = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+        val records = result.optJSONArray("data") ?: return@authorized emptyList()
+        (0 until records.length()).mapNotNull { index ->
+            records.optJSONObject(index)?.let { item ->
+                val source = item.optString("source")
+                val songId = item.optString("songId")
+                if (source.isBlank() || songId.isBlank()) null else RecentPlayback(source, songId, item.optLong("lastPlayedAt"))
+            }
+        }
+    }
+
+    /** 单首补全失败时仍保留可播放占位项，不能让服务端历史从页面上凭空消失。 */
+    private fun requestSongInfo(remoteId: Long, quality: Int, favorited: Boolean): Song = runCatching {
         authorized("/api/v1/songs/$remoteId/info") { connection ->
             val result = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
             check(result.optInt("code") == 0) { result.optString("message", "无法获取收藏歌曲") }
@@ -193,19 +259,19 @@ class TencentMusicApi(
                 album = data.optString("album", "未知专辑"),
                 mid = data.optString("mid").ifBlank { null },
                 vip = data.optBoolean("vip"),
-                favorited = true,
+                favorited = favorited,
             )
         }
     }.getOrElse {
         Song(
-            title = "收藏歌曲 $remoteId",
+            title = "歌曲 $remoteId",
             artist = "歌曲信息暂不可用",
             duration = "网络歌曲",
             color = 0xFFFFB4A2,
             audioUri = placeholderUri(remoteId, quality),
             remoteId = remoteId,
             lyricUri = "$ENDPOINT/api/v1/songs/$remoteId/lyrics",
-            favorited = true,
+            favorited = favorited,
         )
     }
 

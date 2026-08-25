@@ -40,6 +40,19 @@ class PlaybackHistoryStore(context: Context) {
         preferences.edit().remove(KEY_ENTRIES).apply()
     }
 
+    /** 云端同步后覆盖本地展示缓存；仍由同一首歌去重规则保证历史不会重复。 */
+    fun replace(entries: List<PlaybackHistoryEntry>): List<PlaybackHistoryEntry> {
+        val unique = entries.sortedByDescending { it.playedAtMillis }
+            .fold(linkedMapOf<String, PlaybackHistoryEntry>()) { result, entry ->
+                result.putIfAbsent(keyOf(entry.song), entry)
+                result
+            }
+            .values
+            .take(MAX_ENTRIES)
+        write(unique)
+        return unique
+    }
+
     private fun write(entries: List<PlaybackHistoryEntry>) {
         val encoded = JSONArray().apply {
             entries.forEach { entry ->
