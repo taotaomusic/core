@@ -62,6 +62,15 @@ const QUALITY_LADDER = [14, 11, 10, 8, 4, 0];
 /** 最多尝试几档。每档都是一次网络请求，档数太多会把搜索拖慢。 */
 const MAX_QUALITY_ATTEMPTS = 4;
 
+/**
+ * v3 播放链接接口的风控码：cookie 异常导致整首歌都拿不到地址。
+ *
+ * 这不是「某一档不存在」（那是 size 为 0、报 110000 的情形），而是上游账号整体被风控，
+ * 继续在 v3 上逐档重试没有意义 —— 同一首歌走旧版 v2 的 geturl 往往仍能给出可播直链，
+ * 所以命中这个码时优先回退 v2，v2 也拿不到才继续沿阶梯降级。
+ */
+const CODE_LINK_RISK_CONTROL = 110001;
+
 @Injectable()
 export class TencentClient {
   constructor(private readonly config: AppConfigService) {}
@@ -118,6 +127,9 @@ export class TencentClient {
    *
    * [available] 是 `/song/info` 给出的可用档位集合，传了就只试这些档 ——
    * 能把最坏情况从 4 次请求降到 1 次，也不会再把请求打在必定失败的档位上。
+   *
+   * 命中风控码 110001 时 v3 整体不可用：回退 v2 geturl 拿一次地址，
+   * 拿不到再继续走阶梯（后续档大概率同样风控，但保持行为一致、错误信息也完整）。
    */
   async resolveLink(
     key: { id?: number; mid?: string; type?: number },
@@ -130,10 +142,14 @@ export class TencentClient {
     let lastError = "播放地址不可用";
     for (const attempt of this.qualityLadderFrom(quality, available)) {
       try {
-        const data = this.unwrap(
-          await this.requestJson(`${this.config.upstreamV3BaseUrl}/song/link?${identity}&quality=${attempt}${typeParam}`),
-          "播放地址不可用",
+        const payload = await this.requestJson(
+          `${this.config.upstreamV3BaseUrl}/song/link?${identity}&quality=${attempt}${typeParam}`,
         );
+        if (Number(payload?.code) === CODE_LINK_RISK_CONTROL && key.id && key.id > 0) {
+          const rescued = await this.resolveLinkViaV2(key.id);
+          if (rescued) return rescued;
+        }
+        const data = this.unwrap(payload, "播放地址不可用");
         const url = String(data.url ?? "").replace(/^http:/, "https:");
         if (!url) {
           lastError = `音质 ${attempt} 无可用地址`;
@@ -149,6 +165,28 @@ export class TencentClient {
       }
     }
     throw ApiErrors.upstream(lastError);
+  }
+
+  /**
+   * 从 v2 的 geturl 接口兜底拿播放地址。
+   *
+   * v3 的 /song/link 偶发 cookie 风控（code=110001），同一首歌走旧版 geturl
+   * 往往仍能给出可播直链。v2 不分音质档，给的多是低码率试听链，
+   * 所以 quality 按最低档 0 上报，避免客户端把未知档位记成高音质。
+   * 拿不到（风控、无 url、网络错误）时返回 undefined，让调用方继续沿阶梯降级。
+   */
+  private async resolveLinkViaV2(id: number): Promise<UpstreamLink | undefined> {
+    try {
+      const data = this.unwrap(
+        await this.requestJson(`${this.config.upstreamV2BaseUrl}/geturl?id=${id}`),
+        "播放地址不可用",
+      );
+      const url = String(data.url ?? "").replace(/^http:/, "https:");
+      if (!url) return undefined;
+      return { url, kbps: String(data.kbps ?? ""), quality: 0 };
+    } catch {
+      return undefined;
+    }
   }
 
   /** 歌词（v2）。v3 没有等价接口，且只有 v2 同时给出逐字时间轴与翻译。 */
