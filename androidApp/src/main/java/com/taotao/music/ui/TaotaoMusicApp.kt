@@ -873,13 +873,13 @@ fun TaotaoMusicApp() {
                     signedIn = signedIn,
                     submitting = imageGenerating,
                     task = imageTask,
-                    onGenerate = { prompt, ratio, quality ->
+                    onGenerate = { prompt, ratio, imageSize, quality ->
                         if (prompt.isBlank()) return@AiStudioPage
                         imageGenerating = true
                         imageTask = null
                         scope.launch {
                             runCatching {
-                                withContext(Dispatchers.IO) { musicApi.createImageTask(prompt, ratio, quality) }
+                                withContext(Dispatchers.IO) { musicApi.createImageTask(prompt, ratio, imageSize, quality) }
                             }.onSuccess { created ->
                                 imageTask = created
                                 while (created.taskId.isNotBlank() && imageTask?.state == "IN_PROGRESS") {

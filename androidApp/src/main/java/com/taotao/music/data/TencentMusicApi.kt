@@ -252,7 +252,7 @@ class TencentMusicApi(
         connection.inputStream.bufferedReader().use { JSONObject(it.readText()) }.getJSONObject("data").toProfile()
     }
 
-    fun createImageTask(prompt: String, aspectRatio: String, quality: String): ImageTask =
+    fun createImageTask(prompt: String, aspectRatio: String, imageSize: String, quality: String): ImageTask =
         authorizedJson(
             "/api/v1/draw/completions",
             "POST",
@@ -260,7 +260,7 @@ class TencentMusicApi(
                 .put("model", "gpt-image-2")
                 .put("prompt", prompt)
                 .put("aspectRatio", aspectRatio)
-                .put("imageSize", "1K")
+                .put("imageSize", imageSize)
                 .put("quality", quality),
         ) { data ->
             ImageTask(

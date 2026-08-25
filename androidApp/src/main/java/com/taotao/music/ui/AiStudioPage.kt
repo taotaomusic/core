@@ -45,11 +45,12 @@ fun AiStudioPage(
     signedIn: Boolean,
     submitting: Boolean,
     task: TencentMusicApi.ImageTask?,
-    onGenerate: (String, String, String) -> Unit,
+    onGenerate: (String, String, String, String) -> Unit,
 ) {
     var prompt by remember { mutableStateOf("") }
     var ratio by remember { mutableStateOf("1:1") }
-    var quality by remember { mutableStateOf("medium") }
+    var imageSize by remember { mutableStateOf("1K") }
+    var quality by remember { mutableStateOf("low") }
     Column(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(22.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -61,11 +62,6 @@ fun AiStudioPage(
                 Text("使用 GPT Image 创作音乐灵感视觉", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
-        Text(
-            "创作请求由服务端安全转发，API Key 不会保存到设备。",
-            modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(16.dp)).padding(14.dp),
-            color = MaterialTheme.colorScheme.onPrimaryContainer,
-        )
         OutlinedTextField(
             value = prompt,
             onValueChange = { prompt = it },
@@ -81,14 +77,20 @@ fun AiStudioPage(
                 FilterChip(selected = ratio == item, onClick = { ratio = item }, label = { Text(item) })
             }
         }
-        Text("清晰度", fontWeight = FontWeight.SemiBold)
+        Text("图片尺寸", fontWeight = FontWeight.SemiBold)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf("low" to "快速", "medium" to "标准", "high" to "精细").forEach { (value, label) ->
+            listOf("1K", "2K", "4K").forEach { value ->
+                FilterChip(selected = imageSize == value, onClick = { imageSize = value }, label = { Text(value) })
+            }
+        }
+        Text("生成质量", fontWeight = FontWeight.SemiBold)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf("low" to "低", "medium" to "中", "high" to "高").forEach { (value, label) ->
                 FilterChip(selected = quality == value, onClick = { quality = value }, label = { Text(label) })
             }
         }
         Button(
-            onClick = { onGenerate(prompt.trim(), ratio, quality) },
+            onClick = { onGenerate(prompt.trim(), ratio, imageSize, quality) },
             enabled = signedIn && prompt.isNotBlank() && !submitting,
             modifier = Modifier.fillMaxWidth(),
         ) {
