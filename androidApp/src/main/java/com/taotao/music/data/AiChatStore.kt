@@ -16,7 +16,7 @@ class AiChatStore(context: Context) {
                 val item = items.optJSONObject(index) ?: continue
                 val id = item.optString("id").takeIf { it.isNotBlank() } ?: continue
                 val messages = decodeMessages(item.optJSONArray("messages") ?: JSONArray())
-                if (messages.isNotEmpty()) add(SavedAiConversation(id, item.optString("title").ifBlank { "新对话" }, messages))
+                if (messages.isNotEmpty()) add(SavedAiConversation(id, item.optString("title").ifBlank { "新对话" }, item.optBoolean("pinned"), messages))
             }
         }
     }.getOrDefault(emptyList()).takeLast(MAX_CONVERSATIONS)
@@ -28,13 +28,13 @@ class AiChatStore(context: Context) {
             conversation.messages.takeLast(MAX_MESSAGES_PER_CONVERSATION).forEach { message ->
                 messages.put(JSONObject().put("role", message.role).put("text", message.text).put("taskId", message.taskId).put("progress", message.progress).put("imageUrl", message.imageUrl).put("error", message.error))
             }
-            array.put(JSONObject().put("id", conversation.id).put("title", conversation.title).put("messages", messages))
+            array.put(JSONObject().put("id", conversation.id).put("title", conversation.title).put("pinned", conversation.pinned).put("messages", messages))
         }
         preferences.edit().putString(KEY_CONVERSATIONS, array.toString()).apply()
     }
 
     fun newConversation(): SavedAiConversation = SavedAiConversation(
-        UUID.randomUUID().toString(), "新对话",
+        UUID.randomUUID().toString(), "新对话", false,
         listOf(SavedAiChatMessage("assistant", "你好，我可以把你的音乐灵感变成一张图片。告诉我你想看到的画面吧。", null, 0, null, null)),
     )
 
@@ -48,10 +48,10 @@ class AiChatStore(context: Context) {
 
     private companion object {
         const val KEY_CONVERSATIONS = "conversations"
-        const val MAX_CONVERSATIONS = 30
+        const val MAX_CONVERSATIONS = 200
         const val MAX_MESSAGES_PER_CONVERSATION = 80
     }
 }
 
-data class SavedAiConversation(val id: String, val title: String, val messages: List<SavedAiChatMessage>)
+data class SavedAiConversation(val id: String, val title: String, val pinned: Boolean, val messages: List<SavedAiChatMessage>)
 data class SavedAiChatMessage(val role: String, val text: String, val taskId: String?, val progress: Int, val imageUrl: String?, val error: String?)

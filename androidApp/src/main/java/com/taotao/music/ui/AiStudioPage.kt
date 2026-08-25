@@ -1,6 +1,7 @@
 package com.taotao.music.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -12,6 +13,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -26,6 +31,7 @@ import com.taotao.music.data.AiChatStore
 import com.taotao.music.data.SavedAiChatMessage
 import com.taotao.music.data.SavedAiConversation
 import com.taotao.music.data.TencentMusicApi
+import kotlinx.coroutines.launch
 
 private data class AiChatMessage(val role: AiChatRole, val text: String, val taskId: String? = null, val progress: Int = 0, val imageUrl: String? = null, val error: String? = null)
 private enum class AiChatRole { USER, ASSISTANT }
@@ -45,14 +51,15 @@ fun AiStudioPage(signedIn: Boolean, submitting: Boolean, task: TencentMusicApi.I
     var imageSize by remember { mutableStateOf("1K") }
     var quality by remember { mutableStateOf(AiQuality.LOW) }
     var thinking by remember { mutableStateOf("标准") }
-    var conversationMenu by remember { mutableStateOf(false) }
     val selected = conversations.firstOrNull { it.id == selectedId } ?: conversations.last()
     val messages = selected.messages.map { it.toChatMessage() }
     val listState = rememberLazyListState()
+    val drawerState = rememberDrawerState(DrawerValue.Closed)
+    val scope = rememberCoroutineScope()
 
     fun replaceSelected(newMessages: List<AiChatMessage>, title: String = selected.title) {
         conversations = conversations.map { conversation ->
-            if (conversation.id == selected.id) SavedAiConversation(conversation.id, title, newMessages.map { it.toSavedMessage() }) else conversation
+            if (conversation.id == selected.id) SavedAiConversation(conversation.id, title, conversation.pinned, newMessages.map { it.toSavedMessage() }) else conversation
         }
     }
     LaunchedEffect(conversations) { store.saveConversations(conversations) }
@@ -71,19 +78,30 @@ fun AiStudioPage(signedIn: Boolean, submitting: Boolean, task: TencentMusicApi.I
         listState.animateScrollToItem(updated.lastIndex)
     }
 
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        drawerContent = {
+            AiConversationDrawer(
+                conversations = conversations,
+                selectedId = selectedId,
+                onSelect = { id -> selectedId = id; scope.launch { drawerState.close() } },
+                onNew = { val fresh = store.newConversation(); conversations = conversations + fresh; selectedId = fresh.id; scope.launch { drawerState.close() } },
+                onTogglePinned = { id -> conversations = conversations.map { if (it.id == id) it.copy(pinned = !it.pinned) else it } },
+                onDelete = { id ->
+                    val remaining = conversations.filterNot { it.id == id }
+                    val safe = remaining.ifEmpty { listOf(store.newConversation()) }
+                    conversations = safe
+                    if (selectedId == id) selectedId = safe.last().id
+                },
+            )
+        },
+    ) {
     Column(Modifier.fillMaxSize().padding(horizontal = 18.dp)) {
         Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(38.dp).background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(14.dp)), contentAlignment = Alignment.Center) { Icon(Icons.Default.AutoAwesome, null, tint = MaterialTheme.colorScheme.onPrimaryContainer) }
-            Box(Modifier.weight(1f).padding(start = 10.dp)) {
-                TextButton(onClick = { conversationMenu = true }, contentPadding = PaddingValues(0.dp)) {
-                    Column(horizontalAlignment = Alignment.Start) {
-                        Row(verticalAlignment = Alignment.CenterVertically) { Text(selected.title, fontSize = 20.sp, fontWeight = FontWeight.Bold); Icon(Icons.Default.KeyboardArrowDown, null) }
-                        Text("GPT Image 创作对话", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
-                    }
-                }
-                DropdownMenu(expanded = conversationMenu, onDismissRequest = { conversationMenu = false }, containerColor = MaterialTheme.colorScheme.surface) {
-                    conversations.asReversed().forEach { conversation -> DropdownMenuItem(text = { Text(conversation.title) }, onClick = { selectedId = conversation.id; conversationMenu = false }) }
-                }
+            IconButton(onClick = { scope.launch { drawerState.open() } }) { Icon(Icons.Default.Menu, "打开会话列表") }
+            Column(Modifier.weight(1f).padding(start = 8.dp)) {
+                Text(selected.title, fontSize = 20.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                Text("GPT Image 创作对话", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
             }
             IconButton(onClick = { val fresh = store.newConversation(); conversations = conversations + fresh; selectedId = fresh.id }) { Icon(Icons.Default.Add, "新建对话", tint = MaterialTheme.colorScheme.primary) }
         }
@@ -105,6 +123,60 @@ fun AiStudioPage(signedIn: Boolean, submitting: Boolean, task: TencentMusicApi.I
                 replaceSelected(messages + AiChatMessage(AiChatRole.USER, prompt) + AiChatMessage(AiChatRole.ASSISTANT, "正在提交创作请求…"), prompt.take(16))
                 draft = ""; onGenerate(model.apiName, prompt, ratio, imageSize, quality.apiName, thinking)
             }, enabled = signedIn && draft.isNotBlank() && !submitting, modifier = Modifier.padding(start = 8.dp).background(MaterialTheme.colorScheme.primary, RoundedCornerShape(18.dp))) { Icon(Icons.Default.Send, "发送", tint = MaterialTheme.colorScheme.onPrimary) }
+        }
+    }
+    }
+}
+
+/** DeepSeek 式会话抽屉：可搜索、置顶、删除并切换任意本地历史会话。 */
+@Composable
+private fun AiConversationDrawer(
+    conversations: List<SavedAiConversation>,
+    selectedId: String,
+    onSelect: (String) -> Unit,
+    onNew: () -> Unit,
+    onTogglePinned: (String) -> Unit,
+    onDelete: (String) -> Unit,
+) {
+    var keyword by remember { mutableStateOf("") }
+    ModalDrawerSheet(drawerContainerColor = MaterialTheme.colorScheme.surface) {
+        Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+            Row(Modifier.fillMaxWidth().padding(top = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("对话", Modifier.weight(1f), fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                FilledTonalButton(onClick = onNew) { Icon(Icons.Default.Add, null); Text(" 新对话") }
+            }
+            OutlinedTextField(
+                value = keyword,
+                onValueChange = { keyword = it },
+                placeholder = { Text("搜索对话内容") },
+                modifier = Modifier.fillMaxWidth().padding(vertical = 14.dp),
+                singleLine = true,
+            )
+            val filtered = conversations.filter { conversation ->
+                keyword.isBlank() || conversation.title.contains(keyword, true) || conversation.messages.any { it.text.contains(keyword, true) }
+            }.sortedWith(compareByDescending<SavedAiConversation> { it.pinned }.thenByDescending { it.id })
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.weight(1f)) {
+                itemsIndexed(filtered, key = { _, item -> item.id }) { _, conversation ->
+                    var menu by remember(conversation.id) { mutableStateOf(false) }
+                    Row(
+                        Modifier.fillMaxWidth()
+                            .background(if (conversation.id == selectedId) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface, RoundedCornerShape(12.dp))
+                            .padding(start = 12.dp, top = 7.dp, bottom = 7.dp, end = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(conversation.title, Modifier.weight(1f).clickable { onSelect(conversation.id) }, maxLines = 1, color = if (conversation.id == selectedId) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurface)
+                        if (conversation.pinned) Icon(Icons.Default.PushPin, "已置顶", Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
+                        Box {
+                            IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, "更多") }
+                            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, containerColor = MaterialTheme.colorScheme.surface) {
+                                DropdownMenuItem(text = { Text(if (conversation.pinned) "取消置顶" else "置顶") }, leadingIcon = { Icon(Icons.Default.PushPin, null) }, onClick = { onTogglePinned(conversation.id); menu = false })
+                                DropdownMenuItem(text = { Text("删除", color = MaterialTheme.colorScheme.error) }, leadingIcon = { Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error) }, onClick = { onDelete(conversation.id); menu = false })
+                            }
+                        }
+                    }
+                }
+            }
+            Text("本地保存 ${conversations.size} 个对话", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.padding(vertical = 14.dp))
         }
     }
 }
