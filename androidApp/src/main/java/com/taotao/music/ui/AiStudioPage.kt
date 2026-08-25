@@ -1,5 +1,10 @@
 package com.taotao.music.ui
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -9,9 +14,15 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
@@ -26,7 +37,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.core.content.ContextCompat
 import coil.compose.AsyncImage
+import com.taotao.music.data.AiImageSaver
 import com.taotao.music.data.AiChatStore
 import com.taotao.music.data.SavedAiChatMessage
 import com.taotao.music.data.SavedAiConversation
@@ -34,6 +48,8 @@ import com.taotao.music.data.TencentMusicApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 private data class AiChatMessage(val role: AiChatRole, val text: String, val taskId: String? = null, val progress: Int = 0, val imageUrl: String? = null, val error: String? = null)
 private enum class AiChatRole { USER, ASSISTANT }
@@ -59,11 +75,38 @@ fun AiStudioPage(
     var imageSize by remember { mutableStateOf("1K") }
     var quality by remember { mutableStateOf(AiQuality.LOW) }
     var thinking by remember { mutableStateOf("标准") }
+    var previewImageUrl by remember { mutableStateOf<String?>(null) }
+    var saveMessage by remember { mutableStateOf<String?>(null) }
+    var pendingSaveUrl by remember { mutableStateOf<String?>(null) }
     val selected = conversations.firstOrNull { it.id == selectedId } ?: conversations.last()
     val messages = selected.messages.map { it.toChatMessage() }
     val listState = rememberLazyListState()
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
+    val reduceMotion = LocalReduceMotion.current
+
+    fun saveImage(imageUrl: String) {
+        scope.launch {
+            saveMessage = try {
+                withContext(Dispatchers.IO) { AiImageSaver.save(context, imageUrl) }
+            } catch (error: Throwable) {
+                error.message ?: "图片保存失败"
+            }
+        }
+    }
+    val legacyStoragePermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        val imageUrl = pendingSaveUrl
+        pendingSaveUrl = null
+        if (granted && imageUrl != null) saveImage(imageUrl) else if (!granted) saveMessage = "请允许存储权限后再保存图片"
+    }
+    fun requestSave(imageUrl: String) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q || ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED) {
+            saveImage(imageUrl)
+        } else {
+            pendingSaveUrl = imageUrl
+            legacyStoragePermission.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+        }
+    }
 
     fun replaceSelected(newMessages: List<AiChatMessage>, title: String = selected.title) {
         conversations = conversations.map { conversation ->
@@ -148,8 +191,42 @@ fun AiStudioPage(
             IconButton(onClick = { val fresh = store.newConversation(); conversations = conversations + fresh; selectedId = fresh.id }) { Icon(Icons.Default.Add, "新建对话", tint = MaterialTheme.colorScheme.primary) }
         }
         LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            itemsIndexed(messages) { _, message -> AiChatBubble(message) }
-            if (submitting && messages.lastOrNull()?.taskId == null) item { AiChatBubble(AiChatMessage(AiChatRole.ASSISTANT, "正在提交创作请求…")) }
+            itemsIndexed(messages) { _, message ->
+                AiChatBubble(
+                    message = message,
+                    reduceMotion = reduceMotion,
+                    onPreview = { previewImageUrl = it },
+                    onSave = ::requestSave,
+                )
+            }
+            if (submitting && messages.lastOrNull()?.taskId == null) {
+                item {
+                    AnimatedVisibility(
+                        visible = true,
+                        enter = if (reduceMotion) {
+                            fadeIn(taotaoTween(AnimationDurations.MICRO))
+                        } else {
+                            fadeIn(taotaoTween(AnimationDurations.SHORT)) + scaleIn(
+                                initialScale = 0.97f,
+                                animationSpec = taotaoTween(AnimationDurations.SHORT),
+                            )
+                        },
+                        exit = if (reduceMotion) {
+                            fadeOut(taotaoTween(AnimationDurations.MICRO, easing = AnimationCurves.standardOut))
+                        } else {
+                            fadeOut(taotaoTween(AnimationDurations.MICRO)) + scaleOut(
+                                targetScale = 0.97f,
+                                animationSpec = taotaoTween(AnimationDurations.MICRO, easing = AnimationCurves.standardOut),
+                            )
+                        },
+                    ) {
+                        AiChatBubble(
+                            message = AiChatMessage(AiChatRole.ASSISTANT, "正在提交创作请求…"),
+                            reduceMotion = reduceMotion,
+                        )
+                    }
+                }
+            }
         }
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             AiOptionPicker("模型", model.title, AiModel.entries.toList(), { it.title }) { model = it }
@@ -165,6 +242,29 @@ fun AiStudioPage(
                 replaceSelected(messages + AiChatMessage(AiChatRole.USER, prompt) + AiChatMessage(AiChatRole.ASSISTANT, "正在提交创作请求…"), prompt.take(16))
                 draft = ""; onGenerate(model.apiName, prompt, ratio, imageSize, quality.apiName, thinking)
             }, enabled = signedIn && draft.isNotBlank() && !submitting, modifier = Modifier.padding(start = 8.dp).background(MaterialTheme.colorScheme.primary, RoundedCornerShape(18.dp))) { Icon(Icons.Default.Send, "发送", tint = MaterialTheme.colorScheme.onPrimary) }
+        }
+        saveMessage?.let { text ->
+            Text(
+                text,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 12.sp,
+                modifier = Modifier.padding(start = 12.dp, bottom = 4.dp),
+            )
+        }
+    }
+    previewImageUrl?.let { imageUrl ->
+        Dialog(onDismissRequest = { previewImageUrl = null }) {
+            Surface(shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.surface) {
+                Column(Modifier.padding(12.dp)) {
+                    AsyncImage(imageUrl, "AI 图片预览", Modifier.fillMaxWidth())
+                    TextButton(
+                        onClick = { requestSave(imageUrl) },
+                    ) {
+                        Icon(Icons.Default.Download, null)
+                        Text(" 保存到本地")
+                    }
+                }
+            }
         }
     }
     }
@@ -231,13 +331,51 @@ private fun AiConversationDrawer(
     }
 }
 
-@Composable private fun AiChatBubble(message: AiChatMessage) {
+@Composable
+private fun AiChatBubble(
+    message: AiChatMessage,
+    reduceMotion: Boolean = false,
+    onPreview: (String) -> Unit = {},
+    onSave: (String) -> Unit = {},
+) {
     val mine = message.role == AiChatRole.USER
     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start) {
         Column(Modifier.fillMaxWidth(if (mine) 0.78f else 0.88f).background(if (mine) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(20.dp)).padding(14.dp)) {
             Text(message.text, color = if (mine) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant)
-            if (message.progress > 0) Row(Modifier.padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp); Text(" ${message.progress.coerceIn(0, 100)}%", Modifier.padding(start = 8.dp)) }
-            message.imageUrl?.let { AsyncImage(it, "AI 生成图片", Modifier.fillMaxWidth().padding(top = 10.dp).background(MaterialTheme.colorScheme.surface, RoundedCornerShape(14.dp))) }
+            if (message.progress > 0 && message.imageUrl == null && message.error == null) {
+                Row(Modifier.padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                    Text(" ${message.progress.coerceIn(0, 100)}%", Modifier.padding(start = 8.dp))
+                }
+            }
+            message.imageUrl?.let { imageUrl ->
+                AnimatedVisibility(
+                    visible = true,
+                    enter = if (reduceMotion) {
+                        fadeIn(taotaoTween(AnimationDurations.MICRO))
+                    } else {
+                        fadeIn(taotaoTween(AnimationDurations.SHORT)) + scaleIn(
+                            initialScale = 0.97f,
+                            animationSpec = taotaoTween(AnimationDurations.SHORT),
+                        )
+                    },
+                ) {
+                    Column {
+                        AsyncImage(
+                            imageUrl,
+                            "AI 生成图片，点击预览",
+                            Modifier.fillMaxWidth()
+                                .padding(top = 10.dp)
+                                .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(14.dp))
+                                .clickable { onPreview(imageUrl) },
+                        )
+                        TextButton(onClick = { onSave(imageUrl) }) {
+                            Icon(Icons.Default.Download, null)
+                            Text(" 保存到本地")
+                        }
+                    }
+                }
+            }
             message.error?.let { Text(it, Modifier.padding(top = 8.dp), color = MaterialTheme.colorScheme.error) }
         }
     }
