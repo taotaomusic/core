@@ -22,6 +22,10 @@ class PlaybackHistoryStore(context: Context) {
             PlaybackHistoryEntry(
                 song = song,
                 playedAtMillis = item.optLong("playedAtMillis").coerceAtLeast(0L),
+                firstPlayedAtMillis = item.optLong("firstPlayedAtMillis").coerceAtLeast(0L),
+                playCount = item.optInt("playCount", 0).coerceAtLeast(0),
+                completedCount = item.optInt("completedCount", 0).coerceAtLeast(0),
+                totalListenedMs = item.optLong("totalListenedMs", 0).coerceAtLeast(0L),
             )
         }
     }.getOrDefault(emptyList())
@@ -59,6 +63,10 @@ class PlaybackHistoryStore(context: Context) {
                 put(JSONObject().apply {
                     put("song", SongCodec.encode(entry.song))
                     put("playedAtMillis", entry.playedAtMillis)
+                    put("firstPlayedAtMillis", entry.firstPlayedAtMillis)
+                    put("playCount", entry.playCount)
+                    put("completedCount", entry.completedCount)
+                    put("totalListenedMs", entry.totalListenedMs)
                 })
             }
         }
@@ -78,4 +86,8 @@ class PlaybackHistoryStore(context: Context) {
 data class PlaybackHistoryEntry(
     val song: Song,
     val playedAtMillis: Long,
+    val firstPlayedAtMillis: Long = 0,
+    val playCount: Int = 0,
+    val completedCount: Int = 0,
+    val totalListenedMs: Long = 0,
 )

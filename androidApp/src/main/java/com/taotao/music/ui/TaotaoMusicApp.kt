@@ -1,7 +1,7 @@
 package com.taotao.music.ui
 
 import android.Manifest
-import android.provider.Settings
+import android.os.SystemClock
 import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -83,6 +83,9 @@ import com.taotao.music.data.AuthSession
 import com.taotao.music.data.PlaybackStateStore
 import com.taotao.music.data.PlaybackHistoryEntry
 import com.taotao.music.data.PlaybackHistoryStore
+import com.taotao.music.data.PlaybackSyncStore
+import com.taotao.music.data.PendingPlaybackSnapshot
+import com.taotao.music.data.DeviceIdStore
 import com.taotao.music.data.SavedPlaybackState
 import com.taotao.music.player.AudioPlayer
 import com.taotao.music.update.UpdateManager
@@ -111,14 +114,12 @@ fun TaotaoMusicApp() {
     val downloadManager = remember { OfflineDownloadManager(context, authSession) }
     val playbackStateStore = remember { PlaybackStateStore(context) }
     val playbackHistoryStore = remember { PlaybackHistoryStore(context) }
+    val playbackSyncStore = remember { PlaybackSyncStore(context) }
     val searchHistoryStore = remember { SearchHistoryStore(context) }
     val favoritesStore = remember { FavoritesStore(context) }
     val qualityStore = remember { QualityStore(context) }
     val downloadNotifier = remember { DownloadNotifier(context) }
-    val playbackDeviceId = remember {
-        Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
-            ?.takeIf { it.isNotBlank() } ?: UUID.randomUUID().toString()
-    }
+    val playbackDeviceId = remember { DeviceIdStore(context).deviceId() }
     val appearanceStore = remember { AppearanceStore(context) }
     var appearance by remember { mutableStateOf(appearanceStore.mode()) }
     val scope = rememberCoroutineScope()
@@ -145,6 +146,8 @@ fun TaotaoMusicApp() {
     var showAnnouncementDialog by remember { mutableStateOf(false) }
     var restoredPlayback by remember { mutableStateOf<SavedPlaybackState?>(null) }
     var playbackHistory by remember { mutableStateOf(emptyList<PlaybackHistoryEntry>()) }
+    var playbackSession by remember { mutableStateOf<PendingPlaybackSnapshot?>(null) }
+    var playbackHistoryClearEpoch by remember { mutableIntStateOf(0) }
     var pendingResumePositionMs by remember { mutableIntStateOf(0) }
     var searchGeneration by remember { mutableIntStateOf(0) }
     /** 分页状态。服务端一直在返回 hasMore / total，客户端以前直接丢掉。 */
@@ -328,24 +331,60 @@ fun TaotaoMusicApp() {
         }
     }
 
+    /**
+     * 先同步清空命令，再同步各会话最新快照。任一步失败都保留在本地 outbox，下一次启动、
+     * 进入最近播放或新的播放快照到来时重试；网络失败绝不吞掉用户动作。
+     */
+    suspend fun syncPendingPlayback() {
+        withContext(Dispatchers.IO) {
+            if (playbackSyncStore.isClearPending()) {
+                musicApi.clearRecentPlayback()
+                playbackSyncStore.confirmClear()
+            }
+            playbackSyncStore.snapshots().forEach { snapshot ->
+                musicApi.reportPlayback(
+                    sessionId = snapshot.sessionId,
+                    deviceId = playbackDeviceId,
+                    songId = snapshot.songId,
+                    startedAt = snapshot.startedAt,
+                    lastPlayedAt = snapshot.lastPlayedAt,
+                    listenedMs = snapshot.listenedMs,
+                    durationSeconds = snapshot.durationSeconds,
+                    completed = snapshot.completed,
+                )
+                playbackSyncStore.remove(snapshot.sessionId)
+            }
+        }
+    }
+
     /** 最近播放沿用收藏夹的本地优先同步：网络不可用或服务端未部署时不动本地列表。 */
     fun refreshPlaybackHistory() {
         val knownSongs = playbackHistory.map { it.song } + playbackSongs + searchResults +
             favoriteLibrarySongs + downloadedSongs
         scope.launch {
+            // 补传失败不妨碍拉取远端权威快照，否则跨设备清空会被离线会话阻塞。
+            runCatching { syncPendingPlayback() }
             runCatching {
-                withContext(Dispatchers.IO) {
-                    musicApi.recentPlaybackLibrary(knownSongs, playbackQuality.value)
-                }
+                withContext(Dispatchers.IO) { musicApi.recentPlaybackLibrary(knownSongs, playbackQuality.value) }
             }.onSuccess { remoteHistory ->
-                if (remoteHistory.isEmpty()) return@onSuccess
-                val merged = (remoteHistory + playbackHistory)
+                // 空数组同样是权威结果；只有尚待上传的本地会话才应保留在 UI 中。
+                val pendingBySongId = playbackSyncStore.snapshots().associateBy { it.songId }
+                val localUnsynced = playbackHistory.filter { entry ->
+                    entry.song.remoteId?.let(pendingBySongId::get)?.lastPlayedAt
+                        ?.let { it > remoteHistory.clearedBeforeMillis } == true
+                }
+                val merged = (remoteHistory.entries + localUnsynced)
                     .sortedByDescending { it.playedAtMillis }
                     .distinctBy { entry -> entry.song.remoteId ?: entry.song.audioUri }
                     .take(500)
                 playbackHistory = withContext(Dispatchers.IO) { playbackHistoryStore.replace(merged) }
             }
         }
+    }
+
+    // 冷启动就先补发上次进程退出前保存的快照，不必等用户再点进「最近播放」。
+    LaunchedEffect(signedIn) {
+        if (signedIn) runCatching { syncPendingPlayback() }
     }
 
     /**
@@ -503,6 +542,10 @@ fun TaotaoMusicApp() {
                 if (audioPlayer.hasMedia && queue.isNotEmpty()) {
                     playbackStateStore.save(queue, latestSelectedIndex.value, audioPlayer.currentPositionMs())
                 }
+                playbackSession?.takeIf { it.listenedMs > 0 }?.let { snapshot ->
+                    playbackSyncStore.put(snapshot)
+                    scope.launch { runCatching { syncPendingPlayback() } }
+                }
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -534,31 +577,68 @@ fun TaotaoMusicApp() {
     }
 
     /**
-     * 只在歌曲真正开始播放时记历史；冷启动只是恢复到暂停位置，不应伪造一次播放。
-     * 同一首歌暂停后继续播放会被存储层合并并移到最前，不会刷出重复行。
+     * 用单调时钟累计一次稳定播放会话。暂停/恢复复用同一 sessionId；每 15 秒、暂停、切歌、
+     * 完成与离开组合时把最新快照写进 outbox，因此弱网和进程被杀都不会丢失统计。
      */
     val activePlayerSong = audioPlayer.queue.getOrNull(audioPlayer.currentIndex)
-    LaunchedEffect(activePlayerSong?.remoteId, activePlayerSong?.audioUri, audioPlayer.isPlaying) {
-        if (!audioPlayer.isPlaying) return@LaunchedEffect
+    LaunchedEffect(activePlayerSong?.remoteId, activePlayerSong?.audioUri, audioPlayer.isPlaying, playbackHistoryClearEpoch) {
         val played = activePlayerSong ?: return@LaunchedEffect
-        playbackHistory = withContext(Dispatchers.IO) { playbackHistoryStore.record(played) }
-        // 满 3 秒后才上报；服务端按 sessionId 幂等合并，接口未部署或失败不影响本地记录。
-        val remoteId = played.remoteId ?: return@LaunchedEffect
-        val sessionId = UUID.randomUUID().toString()
-        val startedAt = System.currentTimeMillis()
-        delay(3_000)
-        if (audioPlayer.isPlaying && audioPlayer.queue.getOrNull(audioPlayer.currentIndex)?.remoteId == remoteId) {
-            runCatching {
-                withContext(Dispatchers.IO) {
-                    musicApi.reportPlayback(
-                        sessionId = sessionId,
-                        deviceId = playbackDeviceId,
-                        songId = remoteId,
-                        startedAt = startedAt,
-                        listenedMs = 3_000,
-                        durationSeconds = audioPlayer.durationMs.takeIf { it > 0 }?.div(1_000),
-                    )
+        val remoteId = played.remoteId
+        // 本地歌曲同样听满三秒才进入最近播放，和云端歌曲保持同一准入规则。
+        if (remoteId == null) {
+            if (!audioPlayer.isPlaying) return@LaunchedEffect
+            delay(3_000)
+            if (audioPlayer.isPlaying && audioPlayer.queue.getOrNull(audioPlayer.currentIndex) == played) {
+                playbackHistory = withContext(Dispatchers.IO) { playbackHistoryStore.record(played) }
+            }
+            return@LaunchedEffect
+        }
+        var session = playbackSession?.takeIf { it.songId == remoteId } ?: run {
+            if (!audioPlayer.isPlaying) return@LaunchedEffect
+            PendingPlaybackSnapshot(
+                sessionId = UUID.randomUUID().toString(),
+                songId = remoteId,
+                startedAt = System.currentTimeMillis(),
+                lastPlayedAt = System.currentTimeMillis(),
+                listenedMs = 0,
+                durationSeconds = audioPlayer.durationMs.takeIf { it > 0 }?.div(1_000),
+                completed = false,
+            )
+        }
+        playbackSession = session
+        if (!audioPlayer.isPlaying) {
+            if (session.listenedMs > 0) withContext(Dispatchers.IO) { playbackSyncStore.put(session) }
+            return@LaunchedEffect
+        }
+        var lastElapsed = SystemClock.elapsedRealtime()
+        try {
+            while (audioPlayer.isPlaying && audioPlayer.queue.getOrNull(audioPlayer.currentIndex)?.remoteId == remoteId) {
+                delay(1_000)
+                val nowElapsed = SystemClock.elapsedRealtime()
+                val increment = (nowElapsed - lastElapsed).coerceIn(0L, 2_000L)
+                lastElapsed = nowElapsed
+                val reachedHistoryThreshold = session.listenedMs < 3_000 && session.listenedMs + increment >= 3_000
+                val completed = audioPlayer.durationMs > 0 && audioPlayer.positionMs >= audioPlayer.durationMs - 500
+                session = session.copy(
+                    listenedMs = session.listenedMs + increment,
+                    lastPlayedAt = System.currentTimeMillis(),
+                    durationSeconds = audioPlayer.durationMs.takeIf { it > 0 }?.div(1_000) ?: session.durationSeconds,
+                    completed = session.completed || completed,
+                )
+                playbackSession = session
+                if (reachedHistoryThreshold) {
+                    playbackHistory = withContext(Dispatchers.IO) { playbackHistoryStore.record(played) }
                 }
+                val reachedPeriodicSync = session.listenedMs >= 15_000 && session.listenedMs % 15_000 < increment
+                if (reachedHistoryThreshold || reachedPeriodicSync) {
+                    withContext(Dispatchers.IO) { playbackSyncStore.put(session) }
+                    runCatching { syncPendingPlayback() }
+                }
+            }
+        } finally {
+            if (session.listenedMs > 0) {
+                withContext(Dispatchers.IO) { playbackSyncStore.put(session) }
+                runCatching { syncPendingPlayback() }
             }
         }
     }
@@ -1098,11 +1178,13 @@ fun TaotaoMusicApp() {
                     isFavorite = { song -> favoritesStore.contains(song.remoteId) },
                     onToggleFavorite = { song -> toggleFavorite(song) },
                     onClear = {
+                        playbackSyncStore.markClearPending()
+                        playbackSyncStore.discardSnapshots()
+                        playbackSession = null
+                        playbackHistoryClearEpoch += 1
                         playbackHistoryStore.clear()
                         playbackHistory = emptyList()
-                        scope.launch {
-                            runCatching { withContext(Dispatchers.IO) { musicApi.clearRecentPlayback() } }
-                        }
+                        scope.launch { runCatching { syncPendingPlayback() } }
                     },
                 )
             } else if (page == "mine-local") {

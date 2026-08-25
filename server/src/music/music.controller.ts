@@ -13,6 +13,7 @@ import { StreamService } from "./stream.service";
 /** 搜索单页默认条数。客户端会显式要 60，这里的默认值只对手工调试生效。 */
 const DEFAULT_PAGE_SIZE = 60;
 const MAX_PAGE_SIZE = 60;
+const MAX_INFO_BATCH_SIZE = 60;
 
 /**
  * 搜索、播放与歌词。
@@ -107,6 +108,28 @@ export class MusicController {
    */
   @Get("songs/:id/info")
   async info(@Param("id", ParseIntPipe) id: number, @Query("mid") mid?: string) {
+    return this.songInfo(id, mid);
+  }
+
+  /**
+   * 最近播放补全资料的批量入口。客户端一次最多请求 60 首，服务端分批并发访问上游，
+   * 避免新设备拉 500 条历史时发出 500 个移动端 HTTP 请求。
+   */
+  @Get("songs/batch-info")
+  async infoBatch(@Query("ids") ids?: string) {
+    const uniqueIds = [...new Set((ids ?? "").split(",").map((value) => Number(value.trim())))]
+      .filter((value) => Number.isInteger(value) && value > 0)
+      .slice(0, MAX_INFO_BATCH_SIZE);
+    if (uniqueIds.length === 0) throw ApiErrors.badRequest(4001, "请提供歌曲 ID");
+    const songs = [];
+    for (let index = 0; index < uniqueIds.length; index += 8) {
+      const batch = await Promise.all(uniqueIds.slice(index, index + 8).map((id) => this.songInfo(id)));
+      songs.push(...batch);
+    }
+    return { songs };
+  }
+
+  private async songInfo(id: number, mid?: string) {
     const info = await this.upstream.requestSongInfo({ id, mid });
     return {
       songId: info.songID,

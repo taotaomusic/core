@@ -1,5 +1,9 @@
 package com.taotao.music.ui
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -27,6 +31,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -74,7 +79,7 @@ fun MusicLibraryPage(
                 )
             }
         } else if (songs.isEmpty()) {
-            EmptyStateView(
+            LibraryEmptyState(
                 title = if (error == null) emptyTitle else "收藏列表加载失败",
                 description = error ?: emptyDescription,
                 modifier = Modifier.weight(1f),
@@ -128,7 +133,7 @@ fun PlaybackHistoryPage(
             },
         )
         if (history.isEmpty()) {
-            EmptyStateView(
+            LibraryEmptyState(
                 title = "还没有播放记录",
                 description = "开始播放歌曲后会自动出现在这里",
                 modifier = Modifier.weight(1f),
@@ -138,7 +143,10 @@ fun PlaybackHistoryPage(
                 itemsIndexed(history, key = { _, entry -> librarySongKey(entry.song) }) { index, entry ->
                     SongRow(
                         song = entry.song,
-                        subtitle = "${entry.song.artist} · ${formatHistoryTime(entry.playedAtMillis)}",
+                        subtitle = buildString {
+                            append(entry.song.artist).append(" · ").append(formatHistoryTime(entry.playedAtMillis))
+                            if (entry.playCount > 0) append(" · 播放 ").append(entry.playCount).append(" 次")
+                        },
                         onClick = { onSongClick(index) },
                         onPlayNext = { onPlayNext(entry.song) },
                         favorited = isFavorite(entry.song),
@@ -149,6 +157,26 @@ fun PlaybackHistoryPage(
                 item { Spacer(Modifier.height(18.dp)) }
             }
         }
+    }
+}
+
+@Composable
+private fun LibraryEmptyState(title: String, description: String?, modifier: Modifier = Modifier) {
+    val reduceMotion = LocalReduceMotion.current
+    val offsetPx = with(LocalDensity.current) { 8.dp.roundToPx() }
+    AnimatedVisibility(
+        visible = true,
+        enter = fadeIn(animationSpec = taotaoTween(AnimationDurations.FADE)) +
+            if (reduceMotion) {
+                EnterTransition.None
+            } else {
+                slideInVertically(
+                    animationSpec = taotaoTween(AnimationDurations.FADE, easing = AnimationCurves.emphasizedIn),
+                ) { offsetPx }
+            },
+        modifier = modifier,
+    ) {
+        EmptyStateView(title = title, description = description)
     }
 }
 

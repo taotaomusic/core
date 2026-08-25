@@ -88,6 +88,52 @@ export async function runMigrations(pool: Pool): Promise<void> {
       CREATE INDEX IF NOT EXISTS idx_favorites_active_user
         ON favorites (user_id, favorited_at DESC) WHERE is_favorite = 1;
 
+      -- 播放会话由客户端生成稳定 session_id，并以累计快照重复上报。服务端只累加相对旧快照
+      -- 增长的部分，所以断线重传、超时重试都不会重复增加听歌时间或播放次数。
+      CREATE TABLE IF NOT EXISTS playback_sessions (
+        user_id          integer NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        session_id       text NOT NULL,
+        device_id        text NOT NULL,
+        source           text NOT NULL,
+        song_id          text NOT NULL,
+        started_at       bigint NOT NULL,
+        last_played_at   bigint NOT NULL,
+        listened_ms      integer NOT NULL DEFAULT 0 CHECK (listened_ms >= 0 AND listened_ms <= 86400000),
+        qualified        smallint NOT NULL DEFAULT 0 CHECK (qualified IN (0, 1)),
+        completed        smallint NOT NULL DEFAULT 0 CHECK (completed IN (0, 1)),
+        duration_seconds integer CHECK (duration_seconds > 0),
+        created_at       bigint NOT NULL,
+        updated_at       bigint NOT NULL,
+        PRIMARY KEY (user_id, session_id)
+      );
+
+      -- 最近播放和统计都从按歌汇总读取，避免每次打开页面扫描全部会话。
+      -- last_history_at 只有单次会话听满 3 秒才更新，误触后立刻切歌不会顶到列表最前。
+      CREATE TABLE IF NOT EXISTS user_song_stats (
+        user_id            integer NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        source             text NOT NULL,
+        song_id            text NOT NULL,
+        first_played_at    bigint NOT NULL,
+        last_played_at     bigint NOT NULL,
+        last_history_at    bigint,
+        play_count         integer NOT NULL DEFAULT 0 CHECK (play_count >= 0),
+        completed_count    integer NOT NULL DEFAULT 0 CHECK (completed_count >= 0),
+        total_listened_ms  bigint NOT NULL DEFAULT 0 CHECK (total_listened_ms >= 0),
+        updated_at          bigint NOT NULL,
+        PRIMARY KEY (user_id, source, song_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_user_song_stats_recent
+        ON user_song_stats (user_id, last_history_at DESC, source, song_id)
+        WHERE last_history_at IS NOT NULL;
+
+      -- 清空最近播放只推进可见边界，累计时长和次数仍保留；离线设备补传旧会话也不会复活列表。
+      CREATE TABLE IF NOT EXISTS playback_history_state (
+        user_id        integer PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        cleared_before bigint NOT NULL DEFAULT 0,
+        revision       integer NOT NULL DEFAULT 1 CHECK (revision > 0),
+        updated_at     bigint NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS app_release (
         id              integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
         channel         text NOT NULL DEFAULT 'release',
