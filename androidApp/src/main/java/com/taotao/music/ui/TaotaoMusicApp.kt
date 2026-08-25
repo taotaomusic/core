@@ -1260,7 +1260,6 @@ private fun HomeHeader(userName: String, onOpenAnnouncements: () -> Unit) {
             Text("听点喜欢的", fontSize = 28.sp, fontWeight = FontWeight.Bold)
         }
         IconButton(onClick = onOpenAnnouncements) { Icon(Icons.Default.NotificationsNone, "公告") }
-                Spacer(Modifier.width(48.dp))
     }
     Spacer(Modifier.height(22.dp))
 }
