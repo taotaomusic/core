@@ -20,7 +20,7 @@
           <el-tab-pane label="公告管理" name="announcements" lazy>
             <AnnouncementManager :admin-token="token" />
           </el-tab-pane>
-          <el-tab-pane label="后援团管理" name="supporters" lazy>
+          <el-tab-pane label="AI 密钥管理" name="supporters" lazy>
             <SupporterKeyManager :admin-token="token" />
           </el-tab-pane>
           <el-tab-pane label="系统设置" name="settings" lazy>
