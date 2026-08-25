@@ -36,10 +36,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import com.taotao.music.data.AiChatStore
+import com.taotao.music.data.SavedAiChatMessage
 import com.taotao.music.data.TencentMusicApi
 
 private data class AiChatMessage(
@@ -65,14 +68,19 @@ fun AiStudioPage(
     var model by remember { mutableStateOf(AiModel.GPT_IMAGE_2) }
     var ratio by remember { mutableStateOf("1:1") }
     var imageSize by remember { mutableStateOf("1K") }
-    var quality by remember { mutableStateOf("low") }
+    var quality by remember { mutableStateOf(AiQuality.LOW) }
     var thinking by remember { mutableStateOf("标准") }
+    val chatStore = remember { AiChatStore(LocalContext.current) }
     val messages = remember {
-        mutableStateListOf(
-            AiChatMessage(AiChatRole.ASSISTANT, "你好，我可以把你的音乐灵感变成一张图片。告诉我你想看到的画面吧。"),
-        )
+        chatStore.read().mapTo(mutableStateListOf<AiChatMessage>()) { it.toChatMessage() }.also { saved ->
+            if (saved.isEmpty()) saved += AiChatMessage(AiChatRole.ASSISTANT, "你好，我可以把你的音乐灵感变成一张图片。告诉我你想看到的画面吧。")
+        }
     }
     val listState = rememberLazyListState()
+
+    LaunchedEffect(messages.toList()) {
+        chatStore.save(messages.map { it.toSavedMessage() })
+    }
 
     LaunchedEffect(task?.taskId, task?.state, task?.progress, task?.imageUrl, task?.error) {
         val current = task ?: return@LaunchedEffect
@@ -144,6 +152,24 @@ private enum class AiQuality(val label: String, val apiName: String) {
     MEDIUM("中", "medium"),
     HIGH("高", "high"),
 }
+
+private fun SavedAiChatMessage.toChatMessage() = AiChatMessage(
+    role = if (role == "user") AiChatRole.USER else AiChatRole.ASSISTANT,
+    text = text,
+    taskId = taskId,
+    progress = progress,
+    imageUrl = imageUrl,
+    error = error,
+)
+
+private fun AiChatMessage.toSavedMessage() = SavedAiChatMessage(
+    role = if (role == AiChatRole.USER) "user" else "assistant",
+    text = text,
+    taskId = taskId,
+    progress = progress,
+    imageUrl = imageUrl,
+    error = error,
+)
 
 @Composable
 private fun <T> AiOptionPicker(
