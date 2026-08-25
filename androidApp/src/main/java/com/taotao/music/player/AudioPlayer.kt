@@ -8,6 +8,7 @@ import android.os.Handler
 import android.os.Looper
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.media3.common.MediaItem
@@ -89,6 +90,13 @@ class AudioPlayer(context: Context) {
         private set
 
     /**
+     * 每次真正从头开始的一轮播放都会递增。相同歌曲无法只靠 remoteId 区分“暂停恢复”与
+     * “重播”，页面用此编号创建新统计会话；普通暂停/恢复不改变它。
+     */
+    var playbackCycle by mutableLongStateOf(0L)
+        private set
+
+    /**
      * 播放器里的完整队列。
      * 界面被销毁重建（而播放服务仍在后台播放）时，队列从这里恢复，
      * 不依赖磁盘缓存，因此不会出现「还在播但列表只剩一首」。
@@ -103,6 +111,28 @@ class AudioPlayer(context: Context) {
     private val listener = object : Player.Listener {
         override fun onEvents(player: Player, events: Player.Events) {
             syncFrom(player)
+        }
+
+        /**
+         * 单曲循环不会进入 STATE_ENDED，而是同一媒体项的自动位置跳转。把它视为一轮新的
+         * 播放，避免多个完整循环共用同一个 sessionId；用户普通拖动进度不会触发该原因。
+         */
+        override fun onPositionDiscontinuity(
+            oldPosition: Player.PositionInfo,
+            newPosition: Player.PositionInfo,
+            reason: Int,
+        ) {
+            if (
+                reason == Player.DISCONTINUITY_REASON_AUTO_TRANSITION &&
+                oldPosition.mediaItemIndex == newPosition.mediaItemIndex &&
+                oldPosition.positionMs > 1_000L &&
+                newPosition.positionMs <= 1_000L
+            ) {
+                queue.getOrNull(oldPosition.mediaItemIndex)?.let { completedSong ->
+                    completionListeners.toList().forEach { listener -> runCatching { listener(completedSong) } }
+                }
+                playbackCycle += 1L
+            }
         }
 
         override fun onPlayerError(error: PlaybackException) {
@@ -149,6 +179,7 @@ class AudioPlayer(context: Context) {
         queue: List<Song> = emptyList(),
         index: Int = 0,
         startPositionMs: Int = 0,
+        newPlaybackCycle: Boolean = true,
     ) {
         val uri = song.audioUri ?: return
         if (uri.startsWith("file:") && !isPlayableFile(uri)) return
@@ -156,6 +187,7 @@ class AudioPlayer(context: Context) {
         val songs = if (queueHasAllAudio) queue else listOf(song)
         val startIndex = if (queueHasAllAudio) index else 0
         val mediaItems = songs.map(::mediaItemOf)
+        if (newPlaybackCycle) playbackCycle += 1L
         submit { activeController ->
             activeController.setMediaItems(
                 mediaItems,
@@ -195,7 +227,10 @@ class AudioPlayer(context: Context) {
 
     /** 播放完成后从头重播当前歌曲，避免必须重新点击列表项。 */
     fun resume() = submit { activeController ->
-        if (activeController.playbackState == Player.STATE_ENDED) activeController.seekTo(0L)
+        if (activeController.playbackState == Player.STATE_ENDED) {
+            playbackCycle += 1L
+            activeController.seekTo(0L)
+        }
         activeController.play()
         updateProgress(activeController)
     }
@@ -238,6 +273,7 @@ class AudioPlayer(context: Context) {
     /** 从播放队列里直接跳到某一首，供播放队列面板使用。 */
     fun playAt(index: Int) = submit { activeController ->
         if (index !in 0 until activeController.mediaItemCount) return@submit
+        if (index == activeController.currentMediaItemIndex) playbackCycle += 1L
         activeController.seekToDefaultPosition(index)
         activeController.play()
     }

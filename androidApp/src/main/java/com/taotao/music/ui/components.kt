@@ -1,8 +1,8 @@
 package com.taotao.music.ui
 
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -47,6 +47,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -258,9 +259,10 @@ fun FavoriteButton(
     size: Dp = 24.dp,
 ) {
     // 收藏是高频操作，使用低回弹弹簧提供反馈，不能留下明显拖尾。
+    val reduceMotion = LocalReduceMotion.current
     val scale by animateFloatAsState(
-        targetValue = if (favorited) 1.08f else 1f,
-        animationSpec = taotaoSpring(dampingRatio = 0.85f),
+        targetValue = if (favorited && !reduceMotion) 1.08f else 1f,
+        animationSpec = if (reduceMotion) snap() else taotaoSpring(dampingRatio = 0.85f),
         label = "收藏缩放",
     )
     val tint by animateColorAsState(
@@ -420,16 +422,17 @@ fun EmptyStateView(title: String = "暂无数据", description: String? = null, 
     }
 }
 
-/** 分页指示器：几页就几个点，当前页用主色实心。切换时尺寸与颜色都渐变。 */
+/** 分页指示器：几页就几个点，当前页用主色实心。选中用缩放而不是改布局尺寸。 */
 @Composable
 fun PagerDots(current: Int, total: Int, modifier: Modifier = Modifier) {
+    val reduceMotion = LocalReduceMotion.current
     Row(modifier, horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
         repeat(total) { index ->
             val selected = index == current
-            val size by animateDpAsState(
-                targetValue = if (selected) 8.dp else 6.dp,
-                animationSpec = taotaoSpring(),
-                label = "分页点尺寸",
+            val scale by animateFloatAsState(
+                targetValue = if (selected) 8f / 6f else 1f,
+                animationSpec = if (reduceMotion) snap() else taotaoSpring(),
+                label = "分页点缩放",
             )
             val color by animateColorAsState(
                 targetValue = if (selected) {
@@ -440,7 +443,18 @@ fun PagerDots(current: Int, total: Int, modifier: Modifier = Modifier) {
                 animationSpec = taotaoTween(AnimationDurations.MICRO),
                 label = "分页点着色",
             )
-            Box(Modifier.size(size).clip(CircleShape).background(color))
+            Box(Modifier.size(8.dp), contentAlignment = Alignment.Center) {
+                Box(
+                    Modifier
+                        .size(6.dp)
+                        .graphicsLayer {
+                            scaleX = scale
+                            scaleY = scale
+                        }
+                        .clip(CircleShape)
+                        .background(color),
+                )
+            }
         }
     }
 }

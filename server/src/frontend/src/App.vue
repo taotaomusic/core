@@ -20,6 +20,9 @@
           <el-tab-pane label="公告管理" name="announcements" lazy>
             <AnnouncementManager :admin-token="token" />
           </el-tab-pane>
+          <el-tab-pane label="用户与统计" name="users" lazy>
+            <UserManager :admin-token="token" />
+          </el-tab-pane>
           <el-tab-pane label="AI 密钥管理" name="supporters" lazy>
             <SupporterKeyManager :admin-token="token" />
           </el-tab-pane>
@@ -57,13 +60,16 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { defineAsyncComponent, ref, onMounted } from "vue";
 import zhCn from "element-plus/es/locale/lang/zh-cn";
-import ReleaseManager from "./components/ReleaseManager.vue";
-import PatchManager from "./components/PatchManager.vue";
-import AnnouncementManager from "./components/AnnouncementManager.vue";
-import SupporterKeyManager from "./components/SupporterKeyManager.vue";
-import SystemSettings from "./components/SystemSettings.vue";
+
+// 标签页使用异步组件：用户未打开的管理模块不进入首屏主包。
+const ReleaseManager = defineAsyncComponent(() => import("./components/ReleaseManager.vue"));
+const PatchManager = defineAsyncComponent(() => import("./components/PatchManager.vue"));
+const AnnouncementManager = defineAsyncComponent(() => import("./components/AnnouncementManager.vue"));
+const UserManager = defineAsyncComponent(() => import("./components/UserManager.vue"));
+const SupporterKeyManager = defineAsyncComponent(() => import("./components/SupporterKeyManager.vue"));
+const SystemSettings = defineAsyncComponent(() => import("./components/SystemSettings.vue"));
 
 const STORAGE_KEY = "taotao_admin_token";
 

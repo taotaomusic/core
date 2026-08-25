@@ -137,14 +137,93 @@ try {
   const capped = await (await fetch(`${base}/api/v1/playback/recent?limit=9999`, { headers })).json();
   check("最近播放默认及最多返回 500 条", capped.data?.length === 500, `实际 ${capped.data?.length}`);
 
-  const cleared = await fetch(`${base}/api/v1/playback/recent`, { method: "DELETE", headers });
+  const clearMarker = `clear-${suffix}`;
+  const cleared = await fetch(`${base}/api/v1/playback/recent?marker=${clearMarker}`, { method: "DELETE", headers });
   check("清空最近播放返回成功", cleared.status >= 200 && cleared.status < 300, `实际 ${cleared.status}`);
   recent = await (await fetch(`${base}/api/v1/playback/recent`, { headers })).json();
   stats = await (await fetch(`${base}/api/v1/playback/stats`, { headers })).json();
   check("清空后最近播放为空", recent.data?.length === 0, JSON.stringify(recent.data));
   const historyState = await (await fetch(`${base}/api/v1/playback/recent/state`, { headers })).json();
-  check("清空状态有递增版本", historyState.data?.revision > 0 && historyState.data?.clearedBefore > 0, JSON.stringify(historyState.data));
+  const clearedRevision = historyState.data?.revision;
+  check(
+    "清空状态含服务端时间与递增版本",
+    Number.isInteger(clearedRevision) && clearedRevision > 0 && historyState.data?.clearedAt > 0
+      && historyState.data?.marker === clearMarker,
+    JSON.stringify(historyState.data),
+  );
+  const clearRetry = await (await fetch(`${base}/api/v1/playback/recent?marker=${clearMarker}`, { method: "DELETE", headers })).json();
+  check(
+    "同一个清空 marker 重试不重复推进版本",
+    clearRetry.data?.revision === clearedRevision && clearRetry.data?.marker === clearMarker,
+    JSON.stringify(clearRetry.data),
+  );
   check("清空最近播放保留累计统计", stats.data?.totalListenedMs === 79_000 && stats.data?.playCount === 3, JSON.stringify(stats.data));
+
+  // 不用客户端墙钟判断清空先后：此会话故意在清空完成后才上报，且 lastPlayedAt 比服务端
+  // clearedAt 更晚，但它携带的是清空前的 revision，因而只能累计统计、不能复活历史。
+  const staleSession = {
+    ...baseSession,
+    sessionId: `session-${suffix}-stale-revision`,
+    songId: "stale-revision-song",
+    startedAt: Date.now() - 5_000,
+    lastPlayedAt: Date.now() - 1_000,
+    listenedMs: 4_000,
+    historyRevision: 0,
+  };
+  const stale = await (await report(staleSession)).json();
+  check(
+    "旧 revision 会话被固化为旧代际",
+    stale.data?.historyRevision === 0 && stale.data?.currentHistoryRevision === clearedRevision,
+    JSON.stringify(stale.data),
+  );
+  // 重试时即使客户端后来知道了新 revision，也不能抬高已有会话的代际，否则清空会被绕过。
+  const staleRetry = await (await report({ ...staleSession, listenedMs: 5_000, lastPlayedAt: Date.now(), historyRevision: clearedRevision })).json();
+  check("同一会话重试不能升级历史版本", staleRetry.data?.historyRevision === 0, JSON.stringify(staleRetry.data));
+  recent = await (await fetch(`${base}/api/v1/playback/recent`, { headers })).json();
+  check("清空后补传旧版本会话不会复活历史", recent.data?.length === 0, JSON.stringify(recent.data));
+
+  // 新设备先拉到服务器 revision 后新建会话，即使设备墙钟不同也能立即进入当前历史代际。
+  const fresh = await (await report({
+    ...baseSession,
+    sessionId: `session-${suffix}-fresh-revision`,
+    songId: "fresh-revision-song",
+    startedAt: Date.now() - 5_000,
+    lastPlayedAt: Date.now() - 1_000,
+    listenedMs: 4_000,
+    historyRevision: clearedRevision,
+  })).json();
+  check(
+    "新会话使用当前 revision 后可见",
+    fresh.data?.historyRevision === clearedRevision && fresh.data?.currentHistoryRevision === clearedRevision,
+    JSON.stringify(fresh.data),
+  );
+  recent = await (await fetch(`${base}/api/v1/playback/recent`, { headers })).json();
+  check("当前 revision 的会话进入最近播放", recent.data?.some((item) => item.songId === "fresh-revision-song"), JSON.stringify(recent.data));
+
+  const ahead = await report({ ...baseSession, sessionId: `session-${suffix}-ahead-revision`, historyRevision: clearedRevision + 1 });
+  check("超前 revision 被拒绝并要求先同步", ahead.status === 409, `实际 ${ahead.status}`);
+
+  // 标识不只保存在“最近一次清空”字段：A 的响应丢失后，B 先清空，再重试 A 的 marker，
+  // 仍必须返回 A 的原版本，不能误判成一次新的清空。
+  const otherMarker = `clear-${suffix}-other-device`;
+  const otherClear = await (await fetch(`${base}/api/v1/playback/recent?marker=${otherMarker}`, { method: "DELETE", headers })).json();
+  check(
+    "另一设备使用新 marker 会推进一次版本",
+    otherClear.data?.revision === clearedRevision + 1 && otherClear.data?.marker === otherMarker,
+    JSON.stringify(otherClear.data),
+  );
+  const delayedOriginalRetry = await (await fetch(`${base}/api/v1/playback/recent?marker=${clearMarker}`, { method: "DELETE", headers })).json();
+  check(
+    "被插队后重试旧 marker 仍返回原版本",
+    delayedOriginalRetry.data?.revision === clearedRevision && delayedOriginalRetry.data?.marker === clearMarker,
+    JSON.stringify(delayedOriginalRetry.data),
+  );
+  const latestState = await (await fetch(`${base}/api/v1/playback/recent/state`, { headers })).json();
+  check(
+    "旧 marker 重试不改变当前清空状态",
+    latestState.data?.revision === clearedRevision + 1 && latestState.data?.marker === otherMarker,
+    JSON.stringify(latestState.data),
+  );
 } finally {
   if (userId !== undefined) await db.query("DELETE FROM users WHERE id = $1", [userId]);
   await db.end();

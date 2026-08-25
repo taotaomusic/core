@@ -22,7 +22,8 @@ export class UsersRepository {
 
   findByUsername(username: string): Promise<UserCredentials | undefined> {
     return this.database.first<UserCredentials>(
-      `SELECT id, username, password_hash, password_salt, ${CREATED_AT} FROM users WHERE username = $1`,
+      `SELECT id, username, password_hash, password_salt, ${CREATED_AT}
+       FROM users WHERE username = $1 AND disabled_at IS NULL`,
       [username],
     );
   }
@@ -32,17 +33,23 @@ export class UsersRepository {
   }
 
   findById(id: number): Promise<UserRecord | undefined> {
-    return this.database.first<UserRecord>(`SELECT id, username, ${CREATED_AT} FROM users WHERE id = $1`, [id]);
+    return this.database.first<UserRecord>(
+      `SELECT id, username, ${CREATED_AT} FROM users WHERE id = $1 AND disabled_at IS NULL`,
+      [id],
+    );
   }
 
   findByIdWithEmail(id: number): Promise<UserWithEmail | undefined> {
-    return this.database.first<UserWithEmail>(`SELECT id, username, email, ${CREATED_AT} FROM users WHERE id = $1`, [id]);
+    return this.database.first<UserWithEmail>(
+      `SELECT id, username, email, ${CREATED_AT} FROM users WHERE id = $1 AND disabled_at IS NULL`,
+      [id],
+    );
   }
 
   findProfileById(id: number): Promise<UserProfile | undefined> {
     return this.database.first<UserProfile>(
       `SELECT id, username, email, COALESCE(nickname, username) AS nickname, avatar_url AS "avatarUrl", ${CREATED_AT}
-       FROM users WHERE id = $1`,
+       FROM users WHERE id = $1 AND disabled_at IS NULL`,
       [id],
     );
   }

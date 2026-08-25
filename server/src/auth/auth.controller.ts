@@ -13,8 +13,11 @@ const USERNAME_PATTERN = /^[\w一-龥]{3,32}$/;
 const MIN_PASSWORD_LENGTH = 6;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const VERIFICATION_CODE_PATTERN = /^\d{6}$/;
-/** 只接受常见 QQ 邮箱域名，避免任意自定义域名被用来批量注册。 */
-const ALLOWED_EMAIL_DOMAINS = new Set(["qq.com", "foxmail.com"]);
+/**
+ * 注册邮箱白名单。内部测试域仅在服务端保留，客户端仍维持原有 QQ 邮箱提示，
+ * 避免把内部地址变成对外承诺的注册渠道。
+ */
+const ALLOWED_EMAIL_DOMAINS = new Set(["qq.com", "foxmail.com", "gongfa.qzz.io"]);
 const MAX_NICKNAME_LENGTH = 24;
 const MAX_AVATAR_URL_LENGTH = 2_048;
 

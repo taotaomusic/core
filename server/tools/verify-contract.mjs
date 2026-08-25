@@ -8,6 +8,7 @@
 //   $env:DATABASE_URL="postgres://postgres:密码@localhost:5432/music_verify"
 //   $env:PORT=4720; $env:APK_DIR="./tmp/apk"
 //   $env:AUTH_SECRET="0123456789012345678901234567890123456789"; $env:ADMIN_TOKEN="verify-token"
+//   $env:NODE_ENV="test"; $env:EMAIL_VERIFICATION_TEST_CODE="123456"
 //   npm run dev
 //   node tools/verify-contract.mjs http://127.0.0.1:4720 verify-token
 import { randomBytes } from "node:crypto";
@@ -46,17 +47,30 @@ async function main() {
 
   section("鉴权：注册 / 登录 / 刷新 / 注销");
   const username = `verify_${randomBytes(4).toString("hex")}`;
-  const registered = await postJson("/api/v1/auth/register", { username, password: "pass123456" });
-  check("注册返回 201", registered.status === 201, `实际 ${registered.status}`);
+  const email = `${username}@qq.com`;
+  const verificationCode = process.env.EMAIL_VERIFICATION_TEST_CODE;
+  if (!/^\d{6}$/.test(verificationCode)) throw new Error("EMAIL_VERIFICATION_TEST_CODE 必须是 6 位数字");
+  const verification = await postJson("/api/v1/auth/email-verification", { email });
+  const registered = await postJson("/api/v1/auth/register", { username, password: "pass123456", email, verificationCode });
+  check(
+    "验证码发送 204 且注册返回 201",
+    verification.status === 204 && registered.status === 201,
+    `发码 ${verification.status}，注册 ${registered.status} ${JSON.stringify(registered.body).slice(0, 120)}`,
+  );
   check("code 为 0", registered.body.code === 0, JSON.stringify(registered.body).slice(0, 120));
   const issued = registered.body.data ?? {};
   check("accessToken / refreshToken 与 user 平铺在 data 下", typeof issued.accessToken === "string" && typeof issued.refreshToken === "string" && !!issued.user);
   check("expiresIn 为 900 秒", issued.expiresIn === 900, String(issued.expiresIn));
 
-  const shortName = await postJson("/api/v1/auth/register", { username: "ab", password: "pass123456" });
+  const shortName = await postJson("/api/v1/auth/register", {
+    username: "ab",
+    password: "pass123456",
+    email,
+    verificationCode,
+  });
   check("用户名过短 400 且 code 4003", shortName.status === 400 && shortName.body.code === 4003, JSON.stringify(shortName.body));
 
-  const duplicate = await postJson("/api/v1/auth/register", { username, password: "pass123456" });
+  const duplicate = await postJson("/api/v1/auth/register", { username, password: "pass123456", email, verificationCode });
   check("重名 409 且 code 4090", duplicate.status === 409 && duplicate.body.code === 4090, JSON.stringify(duplicate.body));
 
   const badLogin = await postJson("/api/v1/auth/login", { username, password: "wrongpass" });
@@ -217,9 +231,26 @@ async function main() {
 
   // ③ 注册是「先查重、再哈希密码（约 100ms）、最后插入」，连接池下挡不住并发。
   const raceName = `verify_${randomBytes(4).toString("hex")}`;
+  // 两个并发请求必须各用独立邮箱和已签发验证码；若共用一个验证码，先消费到它的
+  // 请求会让另一个在唯一约束前就因 4009 失败，无法覆盖数据库并发冲突的真实路径。
+  const raceEmails = [
+    `${raceName}_a@qq.com`,
+    `${raceName}_b@qq.com`,
+  ];
+  await Promise.all(raceEmails.map((raceEmail) => postJson("/api/v1/auth/email-verification", { email: raceEmail })));
   const raced = await Promise.all([
-    postJson("/api/v1/auth/register", { username: raceName, password: "pass123456" }),
-    postJson("/api/v1/auth/register", { username: raceName, password: "pass123456" }),
+    postJson("/api/v1/auth/register", {
+      username: raceName,
+      password: "pass123456",
+      email: raceEmails[0],
+      verificationCode,
+    }),
+    postJson("/api/v1/auth/register", {
+      username: raceName,
+      password: "pass123456",
+      email: raceEmails[1],
+      verificationCode,
+    }),
   ]);
   const accepted = raced.filter((item) => item.status === 201);
   const refused = raced.filter((item) => item.status !== 201);
@@ -231,9 +262,14 @@ async function main() {
   );
 
   // ④ 刷新令牌必须是一次性的：consume 拆成 SELECT + UPDATE 时两个并发请求会双双成功。
+  const victimName = `verify_${randomBytes(4).toString("hex")}`;
+  const victimEmail = `${victimName}@qq.com`;
+  await postJson("/api/v1/auth/email-verification", { email: victimEmail });
   const victim = await postJson("/api/v1/auth/register", {
-    username: `verify_${randomBytes(4).toString("hex")}`,
+    username: victimName,
     password: "pass123456",
+    email: victimEmail,
+    verificationCode,
   });
   const shared = victim.body.data.refreshToken;
   const rotations = await Promise.all([

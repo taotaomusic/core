@@ -1,5 +1,9 @@
 package com.taotao.music.ui
 
+import android.database.ContentObserver
+import android.os.Handler
+import android.os.Looper
+import android.provider.Settings
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.ContentTransform
 import androidx.compose.animation.EnterTransition
@@ -20,7 +24,46 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.IntOffset
+
+/**
+ * 系统「关闭动画」是否开启。关闭后只保留透明度，去掉位移和缩放。
+ */
+val LocalReduceMotion = compositionLocalOf { false }
+
+/**
+ * 读取 [Settings.Global.ANIMATOR_DURATION_SCALE]。缩放到 0 即视为关闭动画。
+ */
+@Composable
+fun rememberReduceMotion(): Boolean {
+    val resolver = LocalContext.current.contentResolver
+    fun disabled(): Boolean =
+        Settings.Global.getFloat(resolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f
+
+    var reduced by remember { mutableStateOf(disabled()) }
+    DisposableEffect(resolver) {
+        val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
+            override fun onChange(selfChange: Boolean) {
+                reduced = disabled()
+            }
+        }
+        resolver.registerContentObserver(
+            Settings.Global.getUriFor(Settings.Global.ANIMATOR_DURATION_SCALE),
+            false,
+            observer,
+        )
+        onDispose { resolver.unregisterContentObserver(observer) }
+    }
+    return reduced
+}
 
 /**
  * 全局动效规范。
@@ -40,6 +83,9 @@ object AnimationDurations {
     /** 微交互：图标切换、着色、选中态。短到几乎无感，但少了就会觉得生硬。 */
     const val MICRO = 140
 
+    /** 按钮按压反馈。 */
+    const val PRESS = 160
+
     /** 常规状态变化：徽标、进度归位、列表项出现。 */
     const val SHORT = 200
 
@@ -57,26 +103,23 @@ object AnimationDurations {
 }
 
 /**
- * 缓动曲线，取自 Material 动效规范的控制点。
+ * 缓动曲线。
  *
- * Compose 没有内置这几条，用 [CubicBezierEasing] 表达。
+ * 入场用 Material emphasized decelerate；离场用更冲的 ease-out，关闭动作一开始就动。
+ * 两条都不能用 ease-in：那会把用户盯着的第一下拖慢。
  */
 object AnimationCurves {
     /** 强调入场：先快后慢，元素利落地落位。 */
     val emphasizedIn: Easing = CubicBezierEasing(0.05f, 0.7f, 0.1f, 1f)
 
-    /**
-     * 离场也要快速起步：用户已经发起关闭或返回，动画不能先停顿再加速。
-     *
-     * 与强调入场共用明确曲线，保证进入和退出都立即响应；差异由位移方向和层级语义表达。
-     */
-    val emphasizedOut: Easing = CubicBezierEasing(0.05f, 0.7f, 0.1f, 1f)
+    /** 强调离场：同样先快，比入场更冲，返回立刻有反馈。 */
+    val emphasizedOut: Easing = CubicBezierEasing(0.23f, 1f, 0.32f, 1f)
 
     /** 标准入场，用于不需要额外强调的过渡。 */
     val standardIn: Easing = CubicBezierEasing(0.05f, 0.7f, 0.1f, 1f)
 
-    /** 标准离场：与其他离场一致立即启动，避免视觉迟滞。 */
-    val standardOut: Easing = CubicBezierEasing(0.05f, 0.7f, 0.1f, 1f)
+    /** 标准离场。 */
+    val standardOut: Easing = CubicBezierEasing(0.23f, 1f, 0.32f, 1f)
 }
 
 /** 通用 tween。泛型让同一个函数既能驱动 Float（透明度）也能驱动 IntOffset（位移）。 */
@@ -97,15 +140,22 @@ fun <T> taotaoSpring(
 ): SpringSpec<T> = spring(dampingRatio = dampingRatio, stiffness = stiffness)
 
 /**
+ * 队列拖拽松手回位。bounce 约 0.2：能感到一点弹性，又不会把邻行弹乱。
+ */
+fun <T> taotaoSettleSpring(): SpringSpec<T> =
+    spring(dampingRatio = 0.8f, stiffness = Spring.StiffnessMedium)
+
+/**
  * 页面的层级深度，用来判断换页是"进"还是"退"。
  *
  * 方向必须区分：进和退用同一个方向的位移时，返回就没有任何空间线索，
  * 用户感觉不到自己是"退回来了"，这是原来那套过渡最难看的地方。
  */
 fun pageDepthOf(page: String): Int = when (page) {
-    "home", "mine" -> 0
-    "search", "settings" -> 1
-    "detail" -> 2
+    "home", "mine", "ai" -> 0
+    "search", "settings", "mine-favorites", "mine-history", "mine-local" -> 1
+    // 账号管理从设置页继续进入，不能和设置页标成同层，否则会被导航策略瞬切。
+    "profile", "detail" -> 2
     else -> 0
 }
 
@@ -116,13 +166,30 @@ fun pageDepthOf(page: String): Int = when (page) {
  *
  * - **详情页**是"正在播放"那一层，从底部升起来盖住当前页，关闭时落回去 ——
  *   和左右换页不是一回事，音乐类应用几乎都是这个手势语言。
- * - **进入下一层**（首页 → 搜索 / 设置）：新页从右侧滑入，旧页向左退出。
+ * - **进入下一层**（首页 → 搜索 / 设置 / 收藏）：新页从右侧滑入，旧页向左退出。
  *   方向必须区分，否则返回时没有任何空间线索，用户感觉不到自己"退回来了"。
- * - **同层之间**（音乐 ⇄ 我的）：没有进退关系，直接完成切换，避免高频导航产生等待。
+ * - **同层之间**（音乐 ⇄ 我的 ⇄ AI）：没有进退关系，直接完成切换，避免高频导航产生等待。
  *
  * 横向位移按容器宽度取比例而不是写死 dp：同一个数值在小屏和大屏上观感差别很大。
  */
-fun AnimatedContentTransitionScope<String>.pageTransition(): ContentTransform {
+fun AnimatedContentTransitionScope<String>.pageTransition(
+    reduceMotion: Boolean = false,
+): ContentTransform {
+    if (reduceMotion) {
+        val fromDepth = pageDepthOf(initialState)
+        val toDepth = pageDepthOf(targetState)
+        if (targetState != "detail" && initialState != "detail" && fromDepth == toDepth) {
+            return EnterTransition.None togetherWith ExitTransition.None using null
+        }
+        return ContentTransform(
+            targetContentEnter = fadeIn(animationSpec = taotaoTween(AnimationDurations.FADE)),
+            initialContentExit = fadeOut(
+                animationSpec = taotaoTween(AnimationDurations.FADE, easing = AnimationCurves.standardOut),
+            ),
+            targetContentZIndex = if (targetState == "detail") 1f else 0f,
+            sizeTransform = null,
+        )
+    }
     // 详情页升起：它必须画在旧页**之上**，否则会看到它从旧页背后钻出来。
     // zIndex 给 1，离开时新页拿默认的 0，详情页就仍然压在上面往下落。
     if (targetState == "detail") {
@@ -178,15 +245,23 @@ fun AnimatedContentTransitionScope<String>.pageTransition(): ContentTransform {
 }
 
 /** 从下方升起，用于迷你播放器一类贴边元素。 */
-fun riseIn(): EnterTransition =
-    slideInVertically(animationSpec = taotaoSpring()) { height -> height } +
+fun riseIn(reduceMotion: Boolean = false): EnterTransition =
+    if (reduceMotion) {
         fadeIn(animationSpec = taotaoTween(AnimationDurations.SHORT))
+    } else {
+        slideInVertically(animationSpec = taotaoSpring()) { height -> height } +
+            fadeIn(animationSpec = taotaoTween(AnimationDurations.SHORT))
+    }
 
-fun sinkOut(): ExitTransition =
-    slideOutVertically(
-        animationSpec = taotaoTween<IntOffset>(AnimationDurations.SHORT, easing = AnimationCurves.emphasizedOut),
-    ) { height -> height } +
+fun sinkOut(reduceMotion: Boolean = false): ExitTransition =
+    if (reduceMotion) {
         fadeOut(animationSpec = taotaoTween(AnimationDurations.MICRO, easing = AnimationCurves.standardOut))
+    } else {
+        slideOutVertically(
+            animationSpec = taotaoTween<IntOffset>(AnimationDurations.SHORT, easing = AnimationCurves.emphasizedOut),
+        ) { height -> height } +
+            fadeOut(animationSpec = taotaoTween(AnimationDurations.MICRO, easing = AnimationCurves.standardOut))
+    }
 
 /** 内容整体淡入淡出，用于骨架屏 → 结果 → 空态之间的切换。 */
 fun contentFadeIn(): EnterTransition = fadeIn(animationSpec = taotaoTween(AnimationDurations.FADE))

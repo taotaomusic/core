@@ -270,7 +270,7 @@ node dist/main.js
 - **`DATABASE_URL` 没有默认值**,缺失或不是 `postgres://` 开头会启动即失败。
 - **不能用 esbuild / tsx 构建或跑开发。** 它们不支持 `emitDecoratorMetadata`,NestJS 的构造器注入拿不到 `design:paramtypes`,启动时报 `Cannot read properties of undefined`。构建用 `tsc`,开发用 `ts-node`。
 - **`vue` / `element-plus` 在 `devDependencies` 里,这是刻意的。** 管理后台编译成自包含的静态文件,运行时不需要它们;放进 `dependencies` 会让服务器白装一套前端库。
-- **改动后必须跑契约脚本**,当前 88 项要全绿:
+- **改动后必须跑契约脚本**,当前 91 项要全绿:
 
   ```powershell
   cd server

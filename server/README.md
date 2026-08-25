@@ -25,9 +25,11 @@ npm run dev
 npm run build
 ```
 
-产物是 `dist/` 目录树（不是单文件）。`npm run build` 会先 `tsc` 编译后端、再 `vite build` 把管理后台产到 `dist/public/`。**部署步骤**：
+产物是 `dist/` 目录树（不是单文件）。`npm run build` 会先用 `tsc` 编译后端，再用 Terser
+压缩 `dist/` 内的服务端 JavaScript 并移除注释，最后由 `vite build` 把管理后台产到
+`dist/public/`。源码始终保持正常缩进和注释，压缩只发生在构建产物中。**部署步骤**：
 
-1. 上传 `dist/` 整个目录和 `package-lock.json` 到服务器（`dist/public/` 是管理后台，不带上去根路径就是 404，接口不受影响）
+1. 上传 `dist/` 整个目录和 `package-lock.json` 到服务器（`dist/public/` 是管理后台，访问路径是 `/admin/`；不带上去后台会 404，接口不受影响）
 2. 在 `dist/` 同级执行 `npm install --omit=dev`（`dist/package.json` 只列出生产依赖）
 3. `node dist/main.js` 启动，或在 `dist/` 内 `npm start`
 
@@ -36,6 +38,10 @@ npm run build
 > 迁移说明：早先用 esbuild 打成单文件 `dist/app.js`。NestJS 的构造器注入依赖
 > `emitDecoratorMetadata` 生成的 `design:paramtypes` 元数据，而 esbuild 没有类型检查器、
 > 无法生成这份元数据，因此改用 `tsc` 输出目录树。
+
+Terser 是 `tsc` 之后的纯产物后处理，不替代 TypeScript 编译，并保留类名和函数名，避免影响
+NestJS 依赖注入及生产日志定位。可以单独执行 `npm run minify:server`，但正常发布只需执行
+`npm run build`。
 
 开发模式用 `ts-node`（`npm run dev`，Node 的 `--watch` 负责重启）。
 
@@ -61,6 +67,7 @@ src/
   database/               PostgreSQL 连接池与建表迁移
   auth/                   注册、登录、令牌轮换、访问令牌守卫
   favorites/              收藏
+  playback/               最近播放、播放会话与听歌统计
   upstream/               第三方接口适配（成功码、字段名、音质降级都收敛在此）
   music/                  搜索、播放转发、歌词
   image-generation/       gpt-image-2 图片生成任务适配
@@ -70,13 +77,19 @@ src/
   frontend/               管理后台（Vue 3 + Element Plus，浏览器入口）
     index.html              vite 入口，tsconfig 刻意 exclude 掉整个目录
     src/api.ts              信封拆解、sha256、上传原始字节
-    src/App.vue             令牌输入与三个标签页
-    src/components/         发布管理 / 补丁管理 / 系统设置
+    src/App.vue             令牌输入与管理标签页
+    src/components/         发布、补丁、公告、用户统计、AI 密钥与系统设置
 ```
 
 ### 管理后台
 
-浏览器打开服务根地址即可(如 `http://localhost:4500/`)。首次进入填 `ADMIN_TOKEN`,只存在 localStorage。三个标签页分别覆盖发布放量、补丁放量、强制更新下限,打的是同一批 `/app/admin/*` 接口。
+浏览器打开 `http://localhost:4500/admin/`。首次进入填 `ADMIN_TOKEN`，只存在浏览器的 localStorage。后台入口固定在 `/admin/`，服务根路径留给未来网页版；发布、补丁、公告、用户统计、AI 密钥和系统设置均通过同一批 `/api/v1/app/admin/*` 接口访问。
+
+管理后台使用 Vite 生产压缩；Element Plus 通过 `unplugin-vue-components` 与
+`unplugin-auto-import` 按实际使用的组件、服务和样式自动导入，入口禁止重新使用
+`app.use(ElementPlus)` 或导入 `element-plus/dist/index.css`，否则会退化成整包构建。五个管理
+标签页使用异步组件，未打开的模块不进入首屏主包。用户统计读取服务端已同步的
+`user_song_stats`，可查看歌曲数、有效播放、完整播放、累计听歌时长和最近播放明细。
 
 ```powershell
 npm run build:frontend    # 产出 dist/public/
@@ -147,6 +160,13 @@ npm run dev:frontend      # 独立开发服务器（5173），API 代理到本�
 - `GET /api/v1/announcements`：公开读取最新 20 条已发布公告，置顶公告始终排在最前。
 - 管理端使用 `GET/POST /api/v1/app/admin/announcements` 读取、发布公告；`POST /api/v1/app/admin/announcements/{id}` 编辑，`POST /api/v1/app/admin/announcements/{id}/enabled` 上下线，`POST /api/v1/app/admin/announcements/{id}/pinned` 置顶/取消置顶，`DELETE /api/v1/app/admin/announcements/{id}` 删除。均需 `X-Admin-Token`。
 
+### 管理端用户（需要 `X-Admin-Token`）
+
+- `GET /api/v1/app/admin/users`：按用户名、昵称或邮箱搜索用户，并返回听歌汇总。
+- `GET /api/v1/app/admin/users/{id}/playback`：读取该用户的统计与最近播放明细。
+- `POST /api/v1/app/admin/users/{id}/disabled`，JSON：`{"disabled":true|false}`：禁用或恢复账号。禁用会撤销所有刷新令牌，所有后续业务请求都会被拒绝。
+- `DELETE /api/v1/app/admin/users/{id}`：永久删除账号及其令牌、收藏、播放会话与统计，无法恢复。
+
 ### 认证
 
 - `POST /api/v1/auth/email-verification`，JSON：`{"email":"name@qq.com"}`，发送六位注册验证码，返回 **204**
@@ -172,6 +192,33 @@ npm run dev:frontend      # 独立开发服务器（5173），API 代理到本�
 `createdAt` 与 `firstFavoritedAt` 都表示第一次收藏时间，取消后重新收藏也不会改变；
 `favoritedAt` 表示当前这一轮收藏开始的时间。取消收藏采用软删除，旧客户端的列表和搜索结果
 仍只会看到当前有效收藏，不会感知到软删除记录。
+
+### 最近播放与听歌统计（需要访问令牌）
+
+- `POST /api/v1/playback/sessions`：幂等上报一个播放会话的累计快照；新客户端额外传
+  `historyRevision`（创建会话时从状态接口读到的版本）
+- `GET /api/v1/playback/recent?limit=500`：读取最近播放，默认及最多 500 首
+- `GET /api/v1/playback/recent/state`：读取 `{revision, clearedAt, clearedBefore, marker}`；`revision`
+  是清空的权威代际，`clearedAt` 是服务端接收清空请求的时间，`clearedBefore` 仅为旧客户端兼容
+- `GET /api/v1/playback/stats`：读取账号累计歌曲数、播放次数和听歌时间
+- `DELETE /api/v1/playback/recent?marker=<uuid>`：服务端递增 `revision` 并返回同一状态对象；
+  新客户端须持久化 UUID 形式的 `marker` 并在网络重试时原样带回，同 marker 始终返回第一次
+  清空的结果，不会重复推进版本；清空最近播放的可见列表，累计统计仍保留
+
+会话以客户端生成的 `sessionId` 幂等。重复上报只计算 `listenedMs` 相比旧快照的增长量；
+单次听满 `min(30 秒, 歌曲时长 50%)` 计一次播放，听满 3 秒才进入最近播放。云端只保存
+`source + songId` 和统计字段，不保存标题、歌手、专辑、封面或音频内容；客户端按 ID 复用
+本地缓存，缺失时调用歌曲信息接口补全。
+
+最近播放不使用 NDJSON 流：云端只返回 ID 与统计字段，500 条仍是较小的单次数据库结果；
+普通 JSON 信封可以继续复用现有的鉴权续期与错误处理逻辑。
+
+清空不以客户端时间戳作为因果判断。客户端须把 `/recent/state` 的 `revision` 与会话快照一起
+持久化；服务端首次收到会话时固化该版本，只有当前版本的会话能进入最近播放。另一台设备清空后
+补传的旧离线会话仍会累计听歌统计，但不会复活最近列表；同步到新版本后创建的下一会话会立即可见。
+这是离线清空与离线播放没有共同因果顺序时的保守策略，避免设备墙钟错误导致新旧记录相互覆盖。
+每次清空还需要客户端生成并持久化 UUID `marker`；服务端保留每个 marker 的结果，故即使清空
+响应丢失、期间另一设备又清空，原 marker 的重试仍返回它最初的 `revision`，不会产生额外清空。
 
 ### 搜索、播放与歌词（需要访问令牌）
 
@@ -349,12 +396,13 @@ node tools/reset-db.mjs postgres://postgres:密码@localhost:5432/music_verify
 $env:DATABASE_URL="postgres://postgres:密码@localhost:5432/music_verify"
 $env:PORT="4720"; $env:APK_DIR="./tmp/apk"
 $env:AUTH_SECRET="0123456789012345678901234567890123456789"; $env:ADMIN_TOKEN="verify-token"
+$env:NODE_ENV="test"; $env:EMAIL_VERIFICATION_TEST_CODE="123456"
 npm run dev
 # 另一个终端
 node tools/verify-contract.mjs http://127.0.0.1:4720 verify-token
 ```
 
-当前共 88 项，必须全绿。脚本会核对状态码、业务码、信封形状、NDJSON 行格式、字段类型（`data.id` 必须是 number、`songId` 必须是字符串、`createdAt` / `configVersion` / `apkSize` 必须是 number）、纯文本歌词、Range 行为，以及「无效令牌访问 bootstrap 仍返回 200」这类红线。
+当前共 91 项，必须全绿。脚本会核对状态码、业务码、信封形状、NDJSON 行格式、字段类型（`data.id` 必须是 number、`songId` 必须是字符串、`createdAt` / `configVersion` / `apkSize` 必须是 number）、纯文本歌词、Range 行为，以及「无效令牌访问 bootstrap 仍返回 200」这类红线。
 
 后面三组分别覆盖：PostgreSQL 迁移的四条硬规矩（并发注册、并发刷新同一令牌、停用版本不可下载、灰度分桶稳定）；搜索拆分后的新契约（60 首的耗时、`X-Accel-Buffering`、`favorited` / `vip` / `mid` 字段、批量收藏查询、`/link` 给的是上游直链、请求不存在的档位会降级、`/info` 过滤掉不存在的档位）；以及参数健壮性（`page=abc` 不会拼出 `page=NaN`、`quality=` 空串回落到 10 而不是 0）。
 

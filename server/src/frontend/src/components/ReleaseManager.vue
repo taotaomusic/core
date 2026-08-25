@@ -106,7 +106,6 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from "vue";
-import { ElMessage, ElMessageBox } from "element-plus";
 import { formatSize, formatTime, sha256Of, apiGet, apiPostJson, apiPostBytes } from "../api";
 
 /** 服务端原样返回数据库行，所以字段是下划线命名。 */

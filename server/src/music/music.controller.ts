@@ -114,6 +114,9 @@ export class MusicController {
   /**
    * 最近播放补全资料的批量入口。客户端一次最多请求 60 首，服务端分批并发访问上游，
    * 避免新设备拉 500 条历史时发出 500 个移动端 HTTP 请求。
+   *
+   * 单首上游资料失败不应让整个批次退化为移动端 N 次逐首请求：成功项照常返回，
+   * 缺失项由客户端以本地可播放占位项展示，下一次刷新再尝试补全。
    */
   @Get("songs/batch-info")
   async infoBatch(@Query("ids") ids?: string) {
@@ -123,8 +126,8 @@ export class MusicController {
     if (uniqueIds.length === 0) throw ApiErrors.badRequest(4001, "请提供歌曲 ID");
     const songs = [];
     for (let index = 0; index < uniqueIds.length; index += 8) {
-      const batch = await Promise.all(uniqueIds.slice(index, index + 8).map((id) => this.songInfo(id)));
-      songs.push(...batch);
+      const batch = await Promise.allSettled(uniqueIds.slice(index, index + 8).map((id) => this.songInfo(id)));
+      songs.push(...batch.flatMap((result) => (result.status === "fulfilled" ? [result.value] : [])));
     }
     return { songs };
   }

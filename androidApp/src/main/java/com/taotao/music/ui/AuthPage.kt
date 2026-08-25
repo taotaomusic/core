@@ -1,6 +1,8 @@
 package com.taotao.music.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -69,7 +71,9 @@ private const val MAX_USERNAME_LENGTH = 32
 
 /** 服务端要求的最短密码长度。 */
 private const val MIN_PASSWORD_LENGTH = 6
-private val QQ_EMAIL_PATTERN = Regex("^[^\\s@]+@(qq\\.com|foxmail\\.com)$", RegexOption.IGNORE_CASE)
+/** 客户端只校验邮箱格式，域名白名单由服务端维护，避免将内部规则暴露在客户端。 */
+private const val SUPPORTED_EMAIL_HINT = "请输入有效的邮箱地址"
+private val EMAIL_INPUT_PATTERN = Regex("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$")
 
 /**
  * 登录与注册页面：只负责收集凭据，令牌保存由调用方的会话层完成。
@@ -98,13 +102,14 @@ fun AuthPage(
     val usernameError = "用户名需为 3 至 32 位".takeIf { username.isNotEmpty() && !USERNAME_PATTERN.matches(username) }
     val passwordError = "密码至少 $MIN_PASSWORD_LENGTH 位".takeIf { password.isNotEmpty() && password.length < MIN_PASSWORD_LENGTH }
     val confirmError = "两次输入的密码不一致".takeIf { registerMode && confirmPassword.isNotEmpty() && confirmPassword != password }
-    val emailError = "请输入 QQ 邮箱或 foxmail.com 邮箱".takeIf { registerMode && email.isNotEmpty() && !QQ_EMAIL_PATTERN.matches(email) }
+    val emailAccepted = EMAIL_INPUT_PATTERN.matches(email.trim())
+    val emailError = SUPPORTED_EMAIL_HINT.takeIf { registerMode && email.isNotEmpty() && !emailAccepted }
     val verificationError = "请输入 6 位验证码".takeIf { registerMode && verificationCode.isNotEmpty() && verificationCode.length != 6 }
 
     val canSubmit = !loading &&
         USERNAME_PATTERN.matches(username) &&
         password.length >= MIN_PASSWORD_LENGTH &&
-        (!registerMode || (confirmPassword == password && QQ_EMAIL_PATTERN.matches(email) && verificationCode.length == 6))
+        (!registerMode || (confirmPassword == password && emailAccepted && verificationCode.length == 6))
 
     fun submit() {
         if (!canSubmit) return
@@ -192,22 +197,31 @@ fun AuthPage(
                         keyboardActions = KeyboardActions(onDone = { submit() }),
                     )
                     // 明确只使用透明度与位移：默认 AnimatedVisibility 会展开高度，表单布局会在输入时抖动。
+                    val reduceMotion = LocalReduceMotion.current
                     AnimatedVisibility(
                         visible = registerMode,
                         enter = fadeIn(animationSpec = taotaoTween(AnimationDurations.SHORT)) +
-                            slideInVertically(
-                                animationSpec = taotaoTween(
-                                    AnimationDurations.SHORT,
-                                    easing = AnimationCurves.emphasizedIn,
-                                ),
-                            ) { height -> height / 12 },
+                            if (reduceMotion) {
+                                EnterTransition.None
+                            } else {
+                                slideInVertically(
+                                    animationSpec = taotaoTween(
+                                        AnimationDurations.SHORT,
+                                        easing = AnimationCurves.emphasizedIn,
+                                    ),
+                                ) { height -> height / 12 }
+                            },
                         exit = fadeOut(animationSpec = taotaoTween(AnimationDurations.MICRO)) +
-                            slideOutVertically(
-                                animationSpec = taotaoTween(
-                                    AnimationDurations.MICRO,
-                                    easing = AnimationCurves.emphasizedIn,
-                                ),
-                            ) { height -> height / 12 },
+                            if (reduceMotion) {
+                                ExitTransition.None
+                            } else {
+                                slideOutVertically(
+                                    animationSpec = taotaoTween(
+                                        AnimationDurations.MICRO,
+                                        easing = AnimationCurves.emphasizedOut,
+                                    ),
+                                ) { height -> height / 12 }
+                            },
                     ) {
                         Column {
                             Spacer(Modifier.height(10.dp))
@@ -230,10 +244,10 @@ fun AuthPage(
                             OutlinedTextField(
                                 value = email,
                                 onValueChange = { email = it.trim(); message = null },
-                                label = { Text("QQ 邮箱") },
+                                label = { Text("邮箱") },
                                 leadingIcon = { Icon(Icons.Default.Email, null) },
                                 isError = emailError != null,
-                                supportingText = { Text(emailError ?: "用于验证账号与找回凭据") },
+                                supportingText = { Text(emailError ?: "$SUPPORTED_EMAIL_HINT，用于验证账号与找回凭据") },
                                 modifier = Modifier.fillMaxWidth(),
                                 shape = RoundedCornerShape(14.dp),
                                 singleLine = true,
@@ -257,7 +271,7 @@ fun AuthPage(
                                     keyboardActions = KeyboardActions(onDone = { submit() }),
                                 )
                                 TextButton(
-                                    enabled = !loading && QQ_EMAIL_PATTERN.matches(email),
+                                    enabled = !loading && emailAccepted,
                                     onClick = {
                                         loading = true
                                         message = null

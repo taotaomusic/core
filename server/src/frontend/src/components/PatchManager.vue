@@ -112,7 +112,6 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from "vue";
-import { ElMessage, ElMessageBox } from "element-plus";
 import { formatSize, formatTime, sha256Of, apiGet, apiPostJson, apiPostBytes } from "../api";
 
 interface Patch {

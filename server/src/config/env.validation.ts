@@ -27,5 +27,18 @@ export function validateEnvironment(config: Record<string, unknown>): Record<str
   if (!Number.isInteger(smtpPort) || smtpPort <= 0 || smtpPort > 65535) {
     throw new Error(`SMTP_PORT 不合法：${config.SMTP_PORT}`);
   }
+
+  // 契约验证需要完整走「发码 → 带码注册」链路，但不能依赖真实 SMTP 邮箱。
+  // 固定验证码只能在显式的测试进程中启用；生产环境或普通开发进程一律拒绝，
+  // 避免把测试便利配置误带成实际的注册后门。
+  const verificationTestCode = String(config.EMAIL_VERIFICATION_TEST_CODE ?? "");
+  if (verificationTestCode) {
+    if (config.NODE_ENV !== "test") {
+      throw new Error("EMAIL_VERIFICATION_TEST_CODE 只能在 NODE_ENV=test 时使用");
+    }
+    if (!/^\d{6}$/.test(verificationTestCode)) {
+      throw new Error("EMAIL_VERIFICATION_TEST_CODE 必须是 6 位数字");
+    }
+  }
   return config;
 }

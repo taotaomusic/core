@@ -48,12 +48,20 @@ async function bootstrap(): Promise<void> {
     return parseJson(request, response, next);
   });
 
-  // 管理后台的静态资源。挂在路由**之前**：express.static 只响应磁盘上真实存在的
-  // 文件，/api/v1/... 匹配不到任何文件会直接落到下一个中间件，所以不会遮住接口。
-  // 这样做的另一个好处是完全不用碰 setGlobalPrefix —— 动那个会波及全部接口。
+  // 管理后台固定放在 /admin，为后续独立 Web 站点或其它前端留出根路径。静态资源挂在
+  // 路由之前：express.static 只响应真实文件，/api/v1/... 会直接落到下一个中间件，
+  // 因此不会遮住接口，也完全不用碰 setGlobalPrefix。
   const publicDir = resolvePublicDir();
   if (publicDir) {
-    app.use(expressStatic(publicDir));
+    app.use("/admin", expressStatic(publicDir));
+    app.getHttpAdapter().getInstance().get(
+      /^\/admin(?:\/.*)?$/,
+      (request: Request, response: Response, next: NextFunction) => {
+        // 不存在的静态资源仍然返回 404；只有未来的前端页面路由才回退到入口文件。
+        if (request.path.split("/").at(-1)?.includes(".")) return next();
+        return response.sendFile(join(publicDir, "index.html"));
+      },
+    );
   } else {
     new Logger("Bootstrap").warn("未找到管理后台构建产物，跳过静态资源。执行 npm run build:frontend 生成");
   }

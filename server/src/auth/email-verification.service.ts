@@ -1,6 +1,7 @@
 import { Injectable } from "@nestjs/common";
 import { createHash, randomInt } from "node:crypto";
 import { ApiErrors } from "../common/api.exception";
+import { AppConfigService } from "../config/app-config.service";
 import { MailService } from "../mail/mail.service";
 
 const CODE_LIFETIME_MS = 10 * 60_000;
@@ -14,7 +15,10 @@ export class EmailVerificationService {
   /** 仅保存哈希且只在当前进程内存中存在；重启后所有未使用验证码自然失效。 */
   private readonly codes = new Map<string, { hash: string; expiresAt: number; failedAttempts: number; purpose: VerificationPurpose }>();
 
-  constructor(private readonly mail: MailService) {}
+  constructor(
+    private readonly mail: MailService,
+    private readonly config: AppConfigService,
+  ) {}
 
   async send(email: string, purpose: VerificationPurpose): Promise<void> {
     const now = Date.now();
@@ -23,14 +27,18 @@ export class EmailVerificationService {
       throw ApiErrors.tooManyRequests();
     }
 
-    const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
+    // 独立验证库可以在 NODE_ENV=test 下配置固定验证码，完整覆盖真实注册链路，
+    // 又无需依赖外部 SMTP。该配置在环境校验中被严格限制，不能用于生产。
+    const code = this.config.emailVerificationTestCode ?? String(randomInt(0, 1_000_000)).padStart(6, "0");
     const codeHash = this.hash(email, code);
     const expiresAt = now + CODE_LIFETIME_MS;
-    await this.mail.sendVerification(email, `桃桃音乐${this.purposeText(purpose)}验证码`, {
-      title: this.purposeText(purpose),
-      description: `请输入以下验证码以${this.purposeText(purpose)}：`,
-      code,
-    });
+    if (!this.config.emailVerificationTestCode) {
+      await this.mail.sendVerification(email, `桃桃音乐${this.purposeText(purpose)}验证码`, {
+        title: this.purposeText(purpose),
+        description: `请输入以下验证码以${this.purposeText(purpose)}：`,
+        code,
+      });
+    }
     this.codes.set(email, { hash: codeHash, expiresAt, failedAttempts: 0, purpose });
     this.lastSentAt.set(email, now);
   }

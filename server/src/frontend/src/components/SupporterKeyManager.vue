@@ -32,7 +32,6 @@
 
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
-import { ElMessage } from "element-plus";
 import { apiDelete, apiGet, apiPostJson } from "../api";
 
 type ImageKey = { id: number; channel: string; maskedKey: string; quota: number };

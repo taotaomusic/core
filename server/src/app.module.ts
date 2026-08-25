@@ -19,6 +19,7 @@ import { MailModule } from "./mail/mail.module";
 import { PlaybackModule } from "./playback/playback.module";
 import { LatestVersionModule } from "./release/latest-version.cache";
 import { ReleaseModule } from "./release/release.module";
+import { UserAdminModule } from "./user-admin/user-admin.module";
 
 /**
  * 根模块。
@@ -40,6 +41,7 @@ import { ReleaseModule } from "./release/release.module";
     MusicModule,
     ImageGenerationModule,
     ReleaseModule,
+    UserAdminModule,
   ],
   controllers: [HealthController],
   providers: [

@@ -54,12 +54,15 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
@@ -86,6 +89,7 @@ import com.taotao.music.data.PlaybackHistoryStore
 import com.taotao.music.data.PlaybackSyncStore
 import com.taotao.music.data.PlaybackSyncCoordinator
 import com.taotao.music.data.PendingPlaybackSnapshot
+import com.taotao.music.data.PlaybackSnapshotPolicy
 import com.taotao.music.data.DeviceIdStore
 import com.taotao.music.data.SavedPlaybackState
 import com.taotao.music.player.AudioPlayer
@@ -97,6 +101,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.withTimeoutOrNull
 import androidx.lifecycle.LifecycleEventObserver
 import android.net.Uri
 import java.io.File
@@ -121,7 +126,14 @@ fun TaotaoMusicApp() {
     val qualityStore = remember { QualityStore(context) }
     val downloadNotifier = remember { DownloadNotifier(context) }
     val playbackDeviceId = remember { DeviceIdStore(context).deviceId() }
-    val playbackSync = remember { PlaybackSyncCoordinator(playbackSyncStore, musicApi, playbackDeviceId) }
+    val playbackSync = remember {
+        PlaybackSyncCoordinator(
+            store = playbackSyncStore,
+            api = musicApi,
+            deviceId = playbackDeviceId,
+            accountIdProvider = { authSession.accountId },
+        )
+    }
     val appearanceStore = remember { AppearanceStore(context) }
     var appearance by remember { mutableStateOf(appearanceStore.mode()) }
     val scope = rememberCoroutineScope()
@@ -212,7 +224,8 @@ fun TaotaoMusicApp() {
         val updated = song.copy(audioUri = TencentMusicApi.placeholderUri(remoteId, quality))
         val queue = playbackSongs.toMutableList().also { it[index] = updated }
         playbackSongs = queue
-        audioPlayer.play(updated, queue, index, position)
+        // 仅切换音质并从原进度继续，不能被统计成一轮新的完整重播。
+        audioPlayer.play(updated, queue, index, position, newPlaybackCycle = false)
         scope.launch { withContext(Dispatchers.IO) { playbackStateStore.save(queue, index, position) } }
     }
 
@@ -343,6 +356,7 @@ fun TaotaoMusicApp() {
 
     /** 最近播放沿用收藏夹的本地优先同步：网络不可用或服务端未部署时不动本地列表。 */
     fun refreshPlaybackHistory() {
+        val historyAccountId = authSession.accountId ?: return
         val knownSongs = playbackHistory.map { it.song } + playbackSongs + searchResults +
             favoriteLibrarySongs + downloadedSongs
         scope.launch {
@@ -351,17 +365,30 @@ fun TaotaoMusicApp() {
             runCatching {
                 withContext(Dispatchers.IO) { musicApi.recentPlaybackLibrary(knownSongs, playbackQuality.value) }
             }.onSuccess { remoteHistory ->
-                // 空数组同样是权威结果；只有尚待上传的本地会话才应保留在 UI 中。
-                val pendingBySongId = playbackSync.pendingSnapshots().associateBy { it.songId }
+                // 网络请求期间可能发生退出/换号；不能把 A 的远端结果写进 B 的界面或缓存桶。
+                if (authSession.accountId != historyAccountId) return@onSuccess
+                // recent/state 的 revision 是跨设备清空的唯一权威水位，不拿本机时间戳猜测。
+                playbackSyncStore.acceptServerHistoryRevision(historyAccountId, remoteHistory.revision)
+                val localHistoryRevision = playbackSync.historyRevision()
+                // 本机清空还未送达服务端时，远端的旧 revision 不能把刚清空的 UI 又复活；
+                // 同样不再用设备时间与 clearedBefore 比较，跨设备冲突完全由 revision 决定。
+                val remoteEntries = if (remoteHistory.revision < localHistoryRevision) emptyList() else remoteHistory.entries
+                // 空数组同样是权威结果；只有 generation 未过期的待上传本地会话才应保留在 UI 中。
+                val pendingBySongId = playbackSync.pendingSnapshots()
+                    .groupBy { it.songId }
+                    .mapValues { (_, snapshots) -> snapshots.maxByOrNull { it.lastPlayedAt } }
                 val localUnsynced = playbackHistory.filter { entry ->
-                    entry.song.remoteId?.let(pendingBySongId::get)?.lastPlayedAt
-                        ?.let { it > remoteHistory.clearedBeforeMillis } == true
+                    entry.song.remoteId
+                        ?.let(pendingBySongId::get)
+                        ?.let { snapshot -> snapshot != null && snapshot.historyRevision >= remoteHistory.revision } == true
                 }
-                val merged = (remoteHistory.entries + localUnsynced)
+                val merged = (remoteEntries + localUnsynced)
                     .sortedByDescending { it.playedAtMillis }
                     .distinctBy { entry -> entry.song.remoteId ?: entry.song.audioUri }
                     .take(500)
-                playbackHistory = withContext(Dispatchers.IO) { playbackHistoryStore.replace(merged) }
+                playbackHistory = withContext(Dispatchers.IO) {
+                    playbackHistoryStore.replace(historyAccountId, merged)
+                }
             }
         }
     }
@@ -466,17 +493,27 @@ fun TaotaoMusicApp() {
 
     if (!signedIn) {
         AuthPage(musicApi, darkTheme) { tokens ->
+            // 登录成功到账号分桶缓存异步读取之间不能保留前一账号的界面数据。
+            playbackHistory = emptyList()
+            restoredPlayback = null
             authSession.save(tokens)
             signedIn = true
         }
         return
     }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(signedIn, authSession.accountId) {
+        val historyAccountId = authSession.accountId
+        if (!signedIn || historyAccountId == null) {
+            playbackHistory = emptyList()
+            restoredPlayback = null
+            return@LaunchedEffect
+        }
         // 队列与播放记录 JSON 都可能不小，别在主线程读盘拖慢启动。
         val restored = withContext(Dispatchers.IO) {
-            playbackStateStore.read() to playbackHistoryStore.read()
+            playbackStateStore.read() to playbackHistoryStore.read(historyAccountId)
         }
+        if (authSession.accountId != historyAccountId) return@LaunchedEffect
         restoredPlayback = restored.first
         playbackHistory = restored.second
     }
@@ -527,7 +564,8 @@ fun TaotaoMusicApp() {
                     playbackStateStore.save(queue, latestSelectedIndex.value, audioPlayer.currentPositionMs())
                 }
                 playbackSession?.takeIf { it.listenedMs > 0 }?.let { snapshot ->
-                    playbackSession = playbackSync.persistTerminalSnapshot(snapshot, completed = false)
+                    val persisted = playbackSync.persistTerminalSnapshot(snapshot, completed = false)
+                    if (playbackSession?.sessionId == persisted.sessionId) playbackSession = persisted
                     scope.launch { runCatching { syncPendingPlayback() } }
                 }
             }
@@ -547,7 +585,8 @@ fun TaotaoMusicApp() {
         val completionListener: (Song) -> Unit = { completedSong ->
             val activeSession = playbackSession
             if (activeSession != null && activeSession.songId == completedSong.remoteId && activeSession.listenedMs > 0) {
-                playbackSession = playbackSync.persistTerminalSnapshot(activeSession, completed = true)
+                val persisted = playbackSync.persistTerminalSnapshot(activeSession, completed = true)
+                if (playbackSession?.sessionId == persisted.sessionId) playbackSession = persisted
                 scope.launch { runCatching { syncPendingPlayback() } }
             }
         }
@@ -578,43 +617,96 @@ fun TaotaoMusicApp() {
      * 完成与离开组合时把最新快照写进 outbox，因此弱网和进程被杀都不会丢失统计。
      */
     val activePlayerSong = audioPlayer.queue.getOrNull(audioPlayer.currentIndex)
-    LaunchedEffect(activePlayerSong?.remoteId, activePlayerSong?.audioUri, audioPlayer.isPlaying, playbackHistoryClearEpoch) {
+    val expectedPlayerSong = playbackSongs.getOrNull(selectedIndex)
+    LaunchedEffect(
+        activePlayerSong?.remoteId,
+        activePlayerSong?.audioUri,
+        audioPlayer.isPlaying,
+        audioPlayer.playbackCycle,
+        playbackHistoryClearEpoch,
+    ) {
         val played = activePlayerSong ?: return@LaunchedEffect
+        // 清空最近播放会改变这个 epoch。被取消的旧 effect 即使进入 finally，也不能把已清空的
+        // 会话重新写回 outbox 或本地 UI。
+        val sessionClearEpoch = playbackHistoryClearEpoch
+        // 点击新歌时 Compose 先更新播放队列，再等 MediaController 切换媒体项；这段极短窗口
+        // 仍会读到上一首。跳过它，避免把“点下一首”误建成上一首的一轮重播。
+        if (expectedPlayerSong?.remoteId != played.remoteId) return@LaunchedEffect
         val remoteId = played.remoteId
+        val historyAccountId = authSession.accountId
         // 本地歌曲同样听满三秒才进入最近播放，和云端歌曲保持同一准入规则。
         if (remoteId == null) {
-            if (!audioPlayer.isPlaying) return@LaunchedEffect
+            if (!audioPlayer.isPlaying || historyAccountId == null) return@LaunchedEffect
             delay(3_000)
-            if (audioPlayer.isPlaying && audioPlayer.queue.getOrNull(audioPlayer.currentIndex) == played) {
-                playbackHistory = withContext(Dispatchers.IO) { playbackHistoryStore.record(played) }
+            if (
+                audioPlayer.isPlaying &&
+                authSession.accountId == historyAccountId &&
+                PlaybackSnapshotPolicy.shouldPersistAfterClear(sessionClearEpoch, playbackHistoryClearEpoch) &&
+                audioPlayer.queue.getOrNull(audioPlayer.currentIndex) == played
+            ) {
+                playbackHistory = withContext(Dispatchers.IO) {
+                    playbackHistoryStore.record(historyAccountId, played)
+                }
             }
             return@LaunchedEffect
         }
-        var session = playbackSession?.takeIf { it.songId == remoteId } ?: run {
+        val playbackCycle = audioPlayer.playbackCycle
+        // 远端会话必须在创建时绑定账号。拿不到已认证账号 ID 时宁可不创建统计会话，也不能
+        // 把匿名/上一账号的内存数据在下一次登录时上传给错误用户。
+        val sessionAccountId = historyAccountId ?: return@LaunchedEffect
+        var session = playbackSession?.takeIf {
+            PlaybackSnapshotPolicy.shouldReuseSession(it, sessionAccountId, remoteId, playbackCycle)
+        } ?: run {
             if (!audioPlayer.isPlaying) return@LaunchedEffect
+            // 新会话优先刷新服务端清空代际；请求慢或离线时 1.5 秒后使用本地已知值继续，
+            // 不让统计同步阻塞真正的音频播放。服务端上报响应仍会再次校准 revision。
+            val historyRevision = withTimeoutOrNull(1_500) {
+                runCatching { playbackSync.refreshHistoryRevision() }
+                    .getOrElse { playbackSync.historyRevision() }
+            } ?: playbackSync.historyRevision()
+            // 发起 revision 拉取期间可能已经退出或切换账号，禁止把旧请求的结果带入新账号会话。
+            if (authSession.accountId != sessionAccountId) return@LaunchedEffect
             PendingPlaybackSnapshot(
                 sessionId = UUID.randomUUID().toString(),
+                accountId = sessionAccountId,
                 songId = remoteId,
                 startedAt = System.currentTimeMillis(),
                 lastPlayedAt = System.currentTimeMillis(),
                 listenedMs = 0,
                 durationSeconds = audioPlayer.durationMs.takeIf { it > 0 }?.div(1_000),
                 completed = false,
+                historyRevision = historyRevision,
+                clearMarker = playbackSyncStore.pendingClearMarker(sessionAccountId),
+                playbackCycle = playbackCycle,
             )
+        }
+        if (!PlaybackSnapshotPolicy.shouldPersistAfterClear(sessionClearEpoch, playbackHistoryClearEpoch)) {
+            return@LaunchedEffect
         }
         playbackSession = session
         if (!audioPlayer.isPlaying) {
-            if (session.listenedMs > 0) {
+            if (
+                session.listenedMs > 0 &&
+                PlaybackSnapshotPolicy.shouldPersistAfterClear(sessionClearEpoch, playbackHistoryClearEpoch)
+            ) {
                 session = playbackSync.persistTerminalSnapshot(session, completed = false)
-                playbackSession = session
+                if (playbackSession?.sessionId == session.sessionId) playbackSession = session
                 runCatching { syncPendingPlayback() }
             }
             return@LaunchedEffect
         }
         var lastElapsed = SystemClock.elapsedRealtime()
         try {
-            while (audioPlayer.isPlaying && audioPlayer.queue.getOrNull(audioPlayer.currentIndex)?.remoteId == remoteId) {
+            while (
+                audioPlayer.isPlaying &&
+                audioPlayer.queue.getOrNull(audioPlayer.currentIndex)?.remoteId == remoteId &&
+                audioPlayer.playbackCycle == playbackCycle &&
+                PlaybackSnapshotPolicy.shouldPersistAfterClear(sessionClearEpoch, playbackHistoryClearEpoch)
+            ) {
                 delay(1_000)
+                if (!PlaybackSnapshotPolicy.shouldPersistAfterClear(sessionClearEpoch, playbackHistoryClearEpoch)) {
+                    return@LaunchedEffect
+                }
                 val nowElapsed = SystemClock.elapsedRealtime()
                 val increment = (nowElapsed - lastElapsed).coerceIn(0L, 2_000L)
                 lastElapsed = nowElapsed
@@ -626,19 +718,31 @@ fun TaotaoMusicApp() {
                     durationSeconds = audioPlayer.durationMs.takeIf { it > 0 }?.div(1_000) ?: session.durationSeconds,
                     completed = session.completed || completed,
                 )
-                playbackSession = session
-                if (reachedHistoryThreshold) {
-                    playbackHistory = withContext(Dispatchers.IO) { playbackHistoryStore.record(played) }
+                if (playbackSession?.sessionId == session.sessionId) playbackSession = session
+                if (
+                    reachedHistoryThreshold &&
+                    authSession.accountId == sessionAccountId &&
+                    PlaybackSnapshotPolicy.shouldPersistAfterClear(sessionClearEpoch, playbackHistoryClearEpoch)
+                ) {
+                    playbackHistory = withContext(Dispatchers.IO) {
+                        playbackHistoryStore.record(sessionAccountId, played)
+                    }
                 }
                 val reachedPeriodicSync = session.listenedMs >= 15_000 && session.listenedMs % 15_000 < increment
                 if (reachedHistoryThreshold || reachedPeriodicSync) {
-                    playbackSync.persistTerminalSnapshot(session, completed = false)
+                    session = playbackSync.persistTerminalSnapshot(session, completed = false)
+                    if (playbackSession?.sessionId == session.sessionId) playbackSession = session
                     runCatching { syncPendingPlayback() }
                 }
             }
         } finally {
-            if (session.listenedMs > 0) {
-                playbackSync.persistTerminalSnapshot(session, completed = session.completed)
+            if (
+                session.listenedMs > 0 &&
+                PlaybackSnapshotPolicy.shouldPersistAfterClear(sessionClearEpoch, playbackHistoryClearEpoch)
+            ) {
+                session = playbackSync.persistTerminalSnapshot(session, completed = session.completed)
+                // 新一轮已经启动时，旧协程 finally 绝不能把内存中的新会话覆盖回去。
+                if (playbackSession?.sessionId == session.sessionId) playbackSession = session
                 runCatching { syncPendingPlayback() }
             }
         }
@@ -1065,7 +1169,13 @@ fun TaotaoMusicApp() {
                         else playSong(playbackSongs, index)
                     },
                     onRemoveQueueItem = { index -> audioPlayer.removeQueueItem(index) },
-                    onMoveQueueItem = { from, to -> audioPlayer.moveQueueItem(from, to) },
+                    onMoveQueueItem = { from, to ->
+                        if (from in playbackSongs.indices && to in playbackSongs.indices && from != to) {
+                            playbackSongs = playbackSongs.moved(from, to)
+                            selectedIndex = movedQueueIndex(selectedIndex, from, to)
+                            audioPlayer.moveQueueItem(from, to)
+                        }
+                    },
                     onKeepOnlyCurrent = { audioPlayer.keepOnlyCurrent() },
                     history = playbackHistory,
                     localSongs = downloadedSongs,
@@ -1182,7 +1292,7 @@ fun TaotaoMusicApp() {
                         playbackSync.markClearPending()
                         playbackSession = null
                         playbackHistoryClearEpoch += 1
-                        playbackHistoryStore.clear()
+                        playbackHistoryStore.clear(authSession.accountId)
                         playbackHistory = emptyList()
                         scope.launch { runCatching { syncPendingPlayback() } }
                     },
@@ -1206,7 +1316,7 @@ fun TaotaoMusicApp() {
                     onLogout = {
                         audioPlayer.stop()
                         playbackStateStore.clear()
-                        playbackHistoryStore.clear()
+                        playbackHistoryStore.clear(authSession.accountId)
                         playbackHistory = emptyList()
                         // 收藏是账号状态，换账号不能沿用上一个人的。
                         favoritesStore.clear()
@@ -1382,6 +1492,18 @@ private fun dedupeSongs(songs: List<Song>): List<Song> {
 
 /** 列表项的稳定唯一键。必须与 [dedupeSongs] 的判重口径一致。 */
 fun songKeyOf(song: Song): String = "${song.remoteId ?: 0}#${song.title}#${song.artist}"
+
+/** 返回列表项从 [from] 移到 [to] 后，原 [index] 对应的新下标。 */
+private fun movedQueueIndex(index: Int, from: Int, to: Int): Int = when {
+    index == from -> to
+    from < to && index in (from + 1)..to -> index - 1
+    to < from && index in to until from -> index + 1
+    else -> index
+}
+
+/** 创建移动后的副本，拖动手势期间不修改播放器持有的权威列表。 */
+private fun <T> List<T>.moved(from: Int, to: Int): List<T> =
+    toMutableList().apply { add(to, removeAt(from)) }
 
 @Composable
 private fun HomeHeader(userName: String, onOpenAnnouncements: () -> Unit) {
@@ -2169,6 +2291,9 @@ private fun AnnouncementPreview(announcement: TencentMusicApi.Announcement, onCl
 
 private val PlaybackQueueContentHeight = 360.dp
 
+/** 播放队列在拖动期间使用的稳定行标识，重复歌曲也不会因为换位而丢失手势。 */
+private data class PlaybackQueueRow(val id: Long, val song: Song)
+
 @Composable
 private fun CurrentPlaybackQueue(
     queue: List<Song>,
@@ -2207,28 +2332,45 @@ private fun CurrentPlaybackQueue(
         if (queue.isEmpty()) {
             PlaybackQueueEmptyState("队列为空", Modifier.weight(1f))
         } else {
+            val initialRows = remember {
+                queue.mapIndexed { index, song -> PlaybackQueueRow(index.toLong(), song) }
+            }
+            var visualRows by remember { mutableStateOf(initialRows) }
+            var nextRowId by remember { mutableLongStateOf(initialRows.size.toLong()) }
             var draggedIndex by remember { mutableIntStateOf(-1) }
+            var dragStartIndex by remember { mutableIntStateOf(-1) }
             var draggedDistance by remember { mutableFloatStateOf(0f) }
+            var visualCurrentIndex by remember { mutableIntStateOf(currentIndex) }
             var settling by remember { mutableStateOf(false) }
-            val settleOffset = remember { Animatable(0f) }
+            var settleOffset by remember { mutableStateOf(Animatable(0f)) }
+            var rowHeightPx by remember { mutableFloatStateOf(0f) }
             val dragScope = rememberCoroutineScope()
             val reduceMotion = LocalReduceMotion.current
-            val rowHeightPx = with(LocalDensity.current) { 64.dp.toPx() }
-            val reorderThresholdPx = rowHeightPx / 2f
-            // 同一首歌可能被重复加入队列：出现次数既保证 key 唯一，也不会因其他歌曲换位而改变。
-            // 稳定 key 能保住 LazyColumn 中正在进行的指针手势和项目位移动画。
-            val occurrences = mutableMapOf<String, Int>()
-            val queueItemKeys = queue.map { song ->
-                val songKey = songKeyOf(song)
-                val occurrence = occurrences.getOrDefault(songKey, 0)
-                occurrences[songKey] = occurrence + 1
-                "$songKey#$occurrence"
+            val haptics = LocalHapticFeedback.current
+
+            // 非拖动阶段才接收播放器队列；拖动中完全由本地列表驱动，避免 Media3 回调打断手势帧。
+            LaunchedEffect(queue, currentIndex, draggedIndex, settling) {
+                if (draggedIndex == -1 && !settling) {
+                    val reusableRows = visualRows.toMutableList()
+                    visualRows = queue.map { song ->
+                        val matchIndex = reusableRows.indexOfFirst { row ->
+                            songKeyOf(row.song) == songKeyOf(song)
+                        }
+                        if (matchIndex >= 0) {
+                            reusableRows.removeAt(matchIndex).copy(song = song)
+                        } else {
+                            PlaybackQueueRow(nextRowId++, song)
+                        }
+                    }
+                    visualCurrentIndex = currentIndex
+                }
             }
+
             LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
-                itemsIndexed(queue, key = { index, _ -> queueItemKeys[index] }) { index, item ->
-                    val isCurrent = index == currentIndex
+                itemsIndexed(visualRows, key = { _, row -> row.id }) { index, row ->
+                    val item = row.song
+                    val isCurrent = index == visualCurrentIndex
                     val isDragged = index == draggedIndex
-                    val itemKey = queueItemKeys[index]
                     val rowOffsetY = when {
                         !isDragged -> 0f
                         settling -> settleOffset.value
@@ -2242,14 +2384,18 @@ private fun CurrentPlaybackQueue(
                         onDelete = { onRemoveItem(index) }.takeUnless { isCurrent },
                         favorited = isFavorite(item),
                         modifier = Modifier
+                            .onSizeChanged { size ->
+                                if (size.height > 0) rowHeightPx = size.height.toFloat()
+                            }
+                            .zIndex(if (isDragged) 1f else 0f)
                             .animateItem(
                                 // 被拖行直接跟随手指；只让让位的相邻行补间，避免两套位移互相拉扯。
-                                placementSpec = if (isDragged) {
+                                placementSpec = if (isDragged || reduceMotion) {
                                     null
                                 } else {
                                     spring(
                                         dampingRatio = Spring.DampingRatioNoBouncy,
-                                        stiffness = Spring.StiffnessMediumLow,
+                                        stiffness = Spring.StiffnessMedium,
                                     )
                                 },
                             )
@@ -2261,48 +2407,76 @@ private fun CurrentPlaybackQueue(
                                 Icons.Default.DragHandle,
                                 "长按拖动调整顺序",
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = modifier.pointerInput(itemKey) {
+                                modifier = modifier.pointerInput(row.id, reduceMotion) {
                                     detectDragGesturesAfterLongPress(
                                         onDragStart = {
+                                            settleOffset = Animatable(0f)
+                                            dragStartIndex = index
                                             draggedIndex = index
                                             draggedDistance = 0f
                                             settling = false
-                                            dragScope.launch { settleOffset.snapTo(0f) }
+                                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                                         },
                                         onDragEnd = {
-                                            val from = draggedDistance
-                                            draggedDistance = 0f
+                                            val fromIndex = dragStartIndex
+                                            val toIndex = draggedIndex
+                                            val fromOffset = draggedDistance
                                             if (reduceMotion) {
+                                                draggedDistance = 0f
                                                 settling = false
                                                 draggedIndex = -1
+                                                dragStartIndex = -1
                                             } else {
+                                                val animation = Animatable(fromOffset)
+                                                settleOffset = animation
+                                                draggedDistance = 0f
                                                 settling = true
                                                 dragScope.launch {
-                                                    settleOffset.snapTo(from)
-                                                    settleOffset.animateTo(0f, taotaoSettleSpring())
-                                                    settling = false
-                                                    draggedIndex = -1
+                                                    animation.animateTo(0f, taotaoSettleSpring())
+                                                    if (settleOffset === animation) {
+                                                        settling = false
+                                                        draggedIndex = -1
+                                                        dragStartIndex = -1
+                                                    }
                                                 }
+                                            }
+                                            if (fromIndex in queue.indices && toIndex in queue.indices && fromIndex != toIndex) {
+                                                onMoveItem(fromIndex, toIndex)
                                             }
                                         },
                                         onDragCancel = {
+                                            settleOffset = Animatable(0f)
                                             draggedIndex = -1
+                                            dragStartIndex = -1
                                             draggedDistance = 0f
                                             settling = false
                                         },
                                     ) { change, dragAmount ->
                                         change.consume()
-                                        if (draggedIndex !in queue.indices) return@detectDragGesturesAfterLongPress
-                                        draggedDistance += dragAmount.y
+                                        if (draggedIndex !in visualRows.indices || rowHeightPx <= 0f) {
+                                            return@detectDragGesturesAfterLongPress
+                                        }
+                                        val pushingPastTop = draggedIndex == 0 && draggedDistance <= 0f && dragAmount.y < 0f
+                                        val pushingPastBottom = draggedIndex == visualRows.lastIndex &&
+                                            draggedDistance >= 0f && dragAmount.y > 0f
+                                        draggedDistance += if (pushingPastTop || pushingPastBottom) {
+                                            dragAmount.y * 0.35f
+                                        } else {
+                                            dragAmount.y
+                                        }
+                                        val reorderThresholdPx = rowHeightPx / 2f
                                         while (kotlin.math.abs(draggedDistance) >= reorderThresholdPx) {
                                             val direction = if (draggedDistance > 0f) 1 else -1
-                                            val destination = (draggedIndex + direction).coerceIn(queue.indices)
+                                            val destination = (draggedIndex + direction).coerceIn(visualRows.indices)
                                             if (destination == draggedIndex) {
-                                                // 到边界仍有阻尼，而不会把项目无限拖出列表。
-                                                draggedDistance *= 0.35f
                                                 break
                                             }
-                                            onMoveItem(draggedIndex, destination)
+                                            visualRows = visualRows.moved(draggedIndex, destination)
+                                            visualCurrentIndex = movedQueueIndex(
+                                                visualCurrentIndex,
+                                                draggedIndex,
+                                                destination,
+                                            )
                                             draggedIndex = destination
                                             // 基准位置换到相邻行后反向扣除完整行高，屏幕坐标保持连续。
                                             draggedDistance -= direction * rowHeightPx

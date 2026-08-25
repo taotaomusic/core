@@ -4,6 +4,7 @@ import { CurrentUser } from "../common/decorators/current-user.decorator";
 import type { SessionUser } from "../common/request.types";
 import {
   PlaybackRepository,
+  PlaybackHistoryRevisionError,
   PlaybackSessionIdentityError,
   type PlaybackSessionInput,
 } from "./playback.repository";
@@ -13,6 +14,7 @@ const SOURCE_PATTERN = /^[a-z0-9_-]{2,32}$/i;
 const MAX_LISTENED_MS = 24 * 60 * 60 * 1_000;
 const MAX_FUTURE_SKEW_MS = 5 * 60 * 1_000;
 const RECENT_LIMIT = 500;
+const MAX_HISTORY_REVISION = 2_147_483_647;
 
 /** 最近播放与听歌统计接口，全部受全局访问令牌守卫保护。 */
 @Controller("playback")
@@ -27,6 +29,9 @@ export class PlaybackController {
     } catch (error) {
       if (error instanceof PlaybackSessionIdentityError) {
         throw ApiErrors.conflict(4095, error.message);
+      }
+      if (error instanceof PlaybackHistoryRevisionError) {
+        throw ApiErrors.conflict(4096, error.message);
       }
       throw error;
     }
@@ -52,8 +57,10 @@ export class PlaybackController {
 
   /** 只清空最近播放的可见列表，累计次数和听歌时间继续保留。 */
   @Delete("recent")
-  clearRecent(@CurrentUser() user: SessionUser) {
-    return this.playback.clearRecent(user.id);
+  clearRecent(@CurrentUser() user: SessionUser, @Query("marker") marker?: string) {
+    // marker 对旧客户端可选；新客户端在本地持久化它，以便响应丢失后用同一标识重试。
+    const clearMarker = marker === undefined ? undefined : this.identifierOf(marker, "marker");
+    return this.playback.clearRecent(user.id, clearMarker);
   }
 
   private sessionInputOf(body: Record<string, unknown>): PlaybackSessionInput {
@@ -61,6 +68,11 @@ export class PlaybackController {
     const deviceId = this.identifierOf(body?.deviceId, "deviceId");
     const source = this.sourceOf(body?.source);
     const songId = this.identifierOf(body?.songId, "songId");
+    // 历史版本是可选字段，缺失时视作旧客户端的第 0 代；这样部署服务端不会打断已发布
+    // 客户端的统计上报。新客户端必须先拉 /recent/state 并随会话快照一起持久化该版本。
+    const historyRevision = body?.historyRevision === undefined
+      ? 0
+      : this.integerOf(body.historyRevision, "historyRevision", 0, MAX_HISTORY_REVISION);
     const startedAt = this.timestampOf(body?.startedAt, "startedAt");
     const lastPlayedAt = this.timestampOf(body?.lastPlayedAt, "lastPlayedAt");
     if (lastPlayedAt < startedAt) throw ApiErrors.badRequest(4006, "lastPlayedAt 不能早于 startedAt");
@@ -81,6 +93,7 @@ export class PlaybackController {
       deviceId,
       source,
       songId,
+      historyRevision,
       startedAt,
       lastPlayedAt,
       listenedMs,

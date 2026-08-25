@@ -28,7 +28,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private val QQ_EMAIL_PATTERN = Regex("^[^\\s@]+@(qq\\.com|foxmail\\.com)$", RegexOption.IGNORE_CASE)
+/** 客户端仅做格式预校验；实际可用域名和验证规则由服务端统一裁决。 */
+private const val SUPPORTED_EMAIL_HINT = "请输入有效的邮箱地址"
+private val EMAIL_INPUT_PATTERN = Regex("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$")
 
 /**
  * 账号资料用完整底部页承载，避免在窄小对话框里叠放三组输入与操作。
@@ -49,6 +51,7 @@ fun AccountSheet(
     var loading by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val changingEmail = profile.email != null
+    val emailAccepted = EMAIL_INPUT_PATTERN.matches(email.trim())
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     fun launchRequest(work: suspend () -> Unit, successMessage: String) {
@@ -111,10 +114,10 @@ fun AccountSheet(
                     OutlinedTextField(
                         value = email,
                         onValueChange = { email = it.trim(); verificationCode = "" },
-                        label = { Text(if (changingEmail) "新的 QQ 邮箱" else "QQ 邮箱") },
+                        label = { Text(if (changingEmail) "新邮箱" else "邮箱") },
                         leadingIcon = { Icon(Icons.Default.Email, null) },
-                        isError = email.isNotEmpty() && !QQ_EMAIL_PATTERN.matches(email),
-                        supportingText = { Text("仅支持 qq.com 或 foxmail.com") },
+                        isError = email.isNotEmpty() && !emailAccepted,
+                        supportingText = { Text(SUPPORTED_EMAIL_HINT) },
                         modifier = Modifier.fillMaxWidth(), singleLine = true, enabled = !loading,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
                     )
@@ -127,12 +130,12 @@ fun AccountSheet(
                         )
                         Spacer(Modifier.width(8.dp))
                         TextButton(
-                            enabled = !loading && QQ_EMAIL_PATTERN.matches(email),
+                            enabled = !loading && emailAccepted,
                             onClick = { launchRequest({ api.sendEmailBindingVerification(email, changingEmail) }, "验证码已发送，请查收邮箱") },
                         ) { Text("获取验证码") }
                     }
                     Button(
-                        enabled = !loading && QQ_EMAIL_PATTERN.matches(email) && verificationCode.length == 6,
+                        enabled = !loading && emailAccepted && verificationCode.length == 6,
                         onClick = {
                             launchRequest({
                                 api.confirmEmailBinding(email, verificationCode, changingEmail)
@@ -167,6 +170,7 @@ fun AccountProfilePage(
     var resendRemainingSeconds by remember { mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
     val changingEmail = profile.email != null
+    val emailAccepted = EMAIL_INPUT_PATTERN.matches(email.trim())
     LaunchedEffect(resendRemainingSeconds) {
         if (resendRemainingSeconds > 0) {
             delay(1_000)
@@ -229,11 +233,11 @@ fun AccountProfilePage(
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 EmailBindingStatus(profile.email)
                 Text(if (changingEmail) "当前邮箱已绑定，可验证新邮箱后换绑。" else "当前账号还未绑定邮箱，验证后即可完成补绑。", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
-                OutlinedTextField(value = email, onValueChange = { email = it.trim(); code = ""; resendRemainingSeconds = 0 }, label = { Text(if (changingEmail) "新的 QQ 邮箱" else "QQ 邮箱") }, modifier = Modifier.fillMaxWidth(), singleLine = true, enabled = !loading, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email))
+                OutlinedTextField(value = email, onValueChange = { email = it.trim(); code = ""; resendRemainingSeconds = 0 }, label = { Text(if (changingEmail) "新邮箱" else "邮箱") }, supportingText = { Text(SUPPORTED_EMAIL_HINT) }, isError = email.isNotEmpty() && !emailAccepted, modifier = Modifier.fillMaxWidth(), singleLine = true, enabled = !loading, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     OutlinedTextField(value = code, onValueChange = { code = it.filter(Char::isDigit).take(6) }, label = { Text("6 位验证码") }, modifier = Modifier.weight(1f), singleLine = true, enabled = !loading, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
                     TextButton(
-                        enabled = !loading && resendRemainingSeconds == 0 && QQ_EMAIL_PATTERN.matches(email),
+                        enabled = !loading && resendRemainingSeconds == 0 && emailAccepted,
                         onClick = {
                             loading = true
                             scope.launch {
@@ -250,7 +254,7 @@ fun AccountProfilePage(
                         Text(if (resendRemainingSeconds > 0) "${resendRemainingSeconds} 秒后重发" else "获取验证码")
                     }
                 }
-                Button(enabled = !loading && QQ_EMAIL_PATTERN.matches(email) && code.length == 6, onClick = {
+                Button(enabled = !loading && emailAccepted && code.length == 6, onClick = {
                     request({ api.confirmEmailBinding(email, code, changingEmail); onProfileChanged(api.profile()) }, if (changingEmail) "邮箱已换绑" else "邮箱已绑定")
                 }, modifier = Modifier.fillMaxWidth()) { Text(if (changingEmail) "确认换绑" else "确认绑定") }
             }

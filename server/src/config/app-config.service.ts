@@ -52,6 +52,12 @@ export class AppConfigService {
   readonly smtpFrom: string;
 
   /**
+   * 仅供独立契约验证使用的固定验证码。环境校验已限制它只能出现在
+   * `NODE_ENV=test`，生产和普通开发进程绝不会启用此分支。
+   */
+  readonly emailVerificationTestCode: string | null;
+
+  /**
    * 上游接口基地址。
    * 搜索与播放链接用 v3（v3 的路径里不带版本号前缀），歌词仍用 v2 ——
    * v2 的歌词接口同时给出 lrc、逐字 yrc、翻译和音译，v3 没有等价接口。
@@ -84,6 +90,7 @@ export class AppConfigService {
     this.smtpUser = String(config.get("SMTP_USER") ?? "");
     this.smtpPassword = String(config.get("SMTP_PASSWORD") ?? "");
     this.smtpFrom = String(config.get("SMTP_FROM") ?? "");
+    this.emailVerificationTestCode = String(config.get("EMAIL_VERIFICATION_TEST_CODE") ?? "") || null;
   }
 
   /** 发信配置必须完整，避免错误部署时静默跳过邮箱验证。 */

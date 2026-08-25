@@ -66,6 +66,24 @@ DatabaseService.onModuleInit
 `deleted_at`、`updated_at` 并递增 `revision`；重新收藏只刷新 `favorited_at`，必须继续保留
 原来的 `created_at`。普通收藏列表和搜索页批量判断都只查询 `is_favorite = 1`。
 
+### `playback_sessions`
+
+保存客户端按 `(user_id, session_id)` 幂等上报的播放会话累计快照。同一个会话的
+`listened_ms`、`qualified`、`completed` 只能向前增长；重复或乱序请求不会重复累计。
+
+### `user_song_stats`
+
+按 `(user_id, source, song_id)` 保存首次/最后播放时间、有效播放次数、完整播放次数、
+累计听歌毫秒数。歌曲元信息不入库，最近播放接口只返回来源与歌曲 ID；客户端按 ID 补全
+展示数据。最近播放直接查询这张汇总表，不扫描全部播放会话；部分索引
+`(user_id, last_history_at DESC, source, song_id) WHERE last_history_at IS NOT NULL` 与筛选和
+稳定排序完全一致。
+
+### `playback_history_state`
+
+保存用户清空最近播放时推进的 `cleared_before` 边界。清空操作不删除 `user_song_stats`，
+因此听歌次数和累计时长仍然保留，离线设备补传边界之前的旧会话也不会恢复已清空列表。
+
 ### `app_release`
 
 保存 APK 文件名、大小、sha256、灰度比例、最低 SDK 和发布状态。

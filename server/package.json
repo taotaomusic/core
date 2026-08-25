@@ -4,8 +4,9 @@
   "scripts": {
     "dev": "node --watch --require ts-node/register src/main.ts",
     "dev:frontend": "vite",
-    "build": "rimraf --glob dist/* && tsc -p tsconfig.json && node tools/copy-manifest.mjs && npm run build:frontend",
+    "build": "rimraf --glob dist/* && tsc -p tsconfig.json && npm run minify:server && node tools/copy-manifest.mjs && npm run build:frontend",
     "build:frontend": "vite build",
+    "minify:server": "node tools/minify-server.mjs",
     "start": "node dist/main.js",
     "send-mail": "ts-node --project tools/tsconfig.json tools/send-outlook-mail.ts",
     "verify": "node tools/verify-contract.mjs"
@@ -33,8 +34,11 @@
     "@vitejs/plugin-vue": "^5.2.1",
     "element-plus": "^2.14.5",
     "rimraf": "^6.0.1",
+    "terser": "^5.50.0",
     "ts-node": "^10.9.2",
     "typescript": "^5.7.2",
+    "unplugin-auto-import": "^21.1.0",
+    "unplugin-vue-components": "^32.1.0",
     "vite": "^6.0.7",
     "vue": "^3.5.41"
   }

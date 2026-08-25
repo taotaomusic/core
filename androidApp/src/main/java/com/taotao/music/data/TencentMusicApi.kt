@@ -18,7 +18,18 @@ class TencentMusicApi(
     private val tokenProvider: TokenProvider,
     private val appVersionCode: Long = 0L,
 ) {
-    data class TokenPair(val accessToken: String, val refreshToken: String, val expiresIn: Int)
+    /**
+     * 认证响应中携带的账号 ID 只用于本地数据分桶，绝不作为鉴权凭据使用。
+     *
+     * 刷新接口为了兼容已发布客户端不会重复返回 user，因此 [userId] 可以为空；
+     * [AuthSession] 会保留登录或注册时拿到的 ID。
+     */
+    data class TokenPair(
+        val accessToken: String,
+        val refreshToken: String,
+        val expiresIn: Int,
+        val userId: Long? = null,
+    )
     data class FavoriteLibrary(val ids: Set<String>, val songs: List<Song>)
     /** 账号资料仅由本人读取；邮箱不写入本地持久化。 */
     data class UserProfile(val username: String, val email: String?, val nickname: String, val avatarUrl: String?)
@@ -49,6 +60,22 @@ class TencentMusicApi(
         val entries: List<PlaybackHistoryEntry>,
         val clearedBeforeMillis: Long,
         val revision: Long,
+    )
+
+    /**
+     * 最近播放的服务端水位。revision 用来表达跨设备清空的先后关系，不能再依赖设备本地时间。
+     * marker 是服务端为一次清空分配的稳定标识，供离线重试保持幂等。
+     */
+    data class PlaybackHistoryState(
+        val revision: Long,
+        val clearedAtMillis: Long,
+        val marker: String?,
+    )
+
+    /** 单次会话上报的确认信息；服务端会返回会话所属与当前最新的历史代际。 */
+    data class PlaybackReportResult(
+        val historyRevision: Long,
+        val currentHistoryRevision: Long,
     )
 
     /**
@@ -237,8 +264,9 @@ class TencentMusicApi(
         listenedMs: Long,
         durationSeconds: Int?,
         completed: Boolean = false,
-    ) {
-        authorizedJson(
+        historyRevision: Long? = null,
+    ): PlaybackReportResult {
+        return authorizedJson(
             "/api/v1/playback/sessions",
             "POST",
             JSONObject()
@@ -250,12 +278,36 @@ class TencentMusicApi(
                 .put("lastPlayedAt", lastPlayedAt.coerceAtLeast(startedAt))
                 .put("listenedMs", listenedMs.coerceAtLeast(0L))
                 .put("completed", completed)
-                .put("durationSeconds", durationSeconds),
-        ) { Unit }
+                .put("durationSeconds", durationSeconds)
+                .apply { historyRevision?.takeIf { it >= 0L }?.let { put("historyRevision", it) } },
+        ) { data ->
+            val reportedRevision = data.optLong("historyRevision", historyRevision ?: 0L).coerceAtLeast(0L)
+            PlaybackReportResult(
+                historyRevision = reportedRevision,
+                currentHistoryRevision = data.optLong("currentHistoryRevision", reportedRevision).coerceAtLeast(reportedRevision),
+            )
+        }
     }
 
-    fun clearRecentPlayback() {
-        authorized("/api/v1/playback/recent", "DELETE") { connection -> connection.inputStream.close() }
+    /**
+     * 清空历史并取回服务端确认的 revision。marker 是客户端持久化的 UUID，同一网络重试
+     * 绝不生成第二次清空；旧服务端忽略 query 参数或返回空响应时仍可完成原有清空。
+     */
+    fun clearRecentPlayback(marker: String?): PlaybackHistoryState = authorized(
+        "/api/v1/playback/recent" + marker?.takeIf { it.isNotBlank() }?.let { "?marker=${encode(it)}" }.orEmpty(),
+        "DELETE",
+    ) { connection ->
+        val body = connection.inputStream.bufferedReader().use { it.readText() }
+        if (body.isBlank()) PlaybackHistoryState(0L, 0L, null) else {
+            val envelope = JSONObject(body)
+            (envelope.optJSONObject("data") ?: JSONObject()).toPlaybackHistoryState()
+        }
+    }
+
+    /** 读取跨设备清空水位。缺失新端点时调用方可保留已经缓存的 revision。 */
+    fun playbackHistoryState(): PlaybackHistoryState = authorized("/api/v1/playback/recent/state") { connection ->
+        val envelope = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+        (envelope.optJSONObject("data") ?: JSONObject()).toPlaybackHistoryState()
     }
 
     private fun recentPlaybackPage(): RecentPlaybackPage = authorized("/api/v1/playback/recent?limit=500") { connection ->
@@ -283,7 +335,7 @@ class TencentMusicApi(
         }
         val legacyCompatiblePage = RecentPlaybackPage(
             entries = entries,
-            clearedBeforeMillis = (data as? JSONObject)?.optLong("clearedBefore", 0L) ?: 0L,
+            clearedBeforeMillis = (data as? JSONObject)?.clearedAtMillis() ?: 0L,
             revision = (data as? JSONObject)?.optLong("revision", 0L) ?: 0L,
         )
         // recent 保持裸数组以兼容已发布客户端；新状态端点缺失时仍可正常读取历史。
@@ -292,24 +344,46 @@ class TencentMusicApi(
                 val envelope = JSONObject(stateConnection.inputStream.bufferedReader().use { it.readText() })
                 val state = envelope.optJSONObject("data") ?: return@authorized legacyCompatiblePage
                 legacyCompatiblePage.copy(
-                    clearedBeforeMillis = state.optLong("clearedBefore", 0L),
+                    clearedBeforeMillis = state.clearedAtMillis(),
                     revision = state.optLong("revision", 0L),
                 )
             }
         }.getOrDefault(legacyCompatiblePage)
     }
 
-    private fun requestSongInfoBatch(remoteIds: List<Long>, quality: Int): List<Song> = runCatching {
-        authorized("/api/v1/songs/batch-info?ids=${remoteIds.joinToString(",")}") { connection ->
-            val result = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
-            val songs = result.optJSONObject("data")?.optJSONArray("songs") ?: JSONArray()
-            (0 until songs.length()).mapNotNull { index ->
-                songs.optJSONObject(index)?.let { item ->
-                    item.optLong("songId", -1).takeIf { it > 0 }?.let { id -> songFromInfo(item, id, quality, false) }
-                }
+    /** 新字段叫 clearedAt，旧服务端叫 clearedBefore；两者都只由服务端生成。 */
+    private fun JSONObject.clearedAtMillis(): Long =
+        optLong("clearedAt", optLong("clearedBefore", 0L)).coerceAtLeast(0L)
+
+    private fun JSONObject.toPlaybackHistoryState(fallbackRevision: Long = 0L): PlaybackHistoryState =
+        PlaybackHistoryState(
+            revision = optLong("revision", fallbackRevision).coerceAtLeast(0L),
+            clearedAtMillis = clearedAtMillis(),
+            marker = nullableString("marker"),
+        )
+
+    /**
+     * 最近播放资料只能以批量请求补全。若批次或其中的某首失败，直接给缺失项本地占位，
+     * 不能回退为逐首 HTTP 请求：500 条历史在弱网下会把一次失败放大成数百次串行请求。
+     */
+    private fun requestSongInfoBatch(remoteIds: List<Long>, quality: Int): List<Song> {
+        val resolvedById = runCatching {
+            authorized("/api/v1/songs/batch-info?ids=${remoteIds.joinToString(",")}") { connection ->
+                val result = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+                val songs = result.optJSONObject("data")?.optJSONArray("songs") ?: JSONArray()
+                (0 until songs.length()).mapNotNull { index ->
+                    songs.optJSONObject(index)?.let { item ->
+                        item.optLong("songId", -1).takeIf { it > 0 }?.let { id ->
+                            id to songFromInfo(item, id, quality, false)
+                        }
+                    }
+                }.toMap()
             }
+        }.getOrDefault(emptyMap())
+        return remoteIds.map { remoteId ->
+            resolvedById[remoteId] ?: unavailableSong(remoteId, quality, favorited = false)
         }
-    }.getOrElse { remoteIds.map { requestSongInfo(it, quality, favorited = false) } }
+    }
 
     /** 单首补全失败时仍保留可播放占位项，不能让服务端历史从页面上凭空消失。 */
     private fun requestSongInfo(remoteId: Long, quality: Int, favorited: Boolean): Song = runCatching {
@@ -320,6 +394,11 @@ class TencentMusicApi(
             songFromInfo(data, remoteId, quality, favorited)
         }
     }.getOrElse {
+        unavailableSong(remoteId, quality, favorited)
+    }
+
+    /** 单首收藏和批量最近播放都复用同一套离线占位，保证列表不会因资料接口失败而消失。 */
+    private fun unavailableSong(remoteId: Long, quality: Int, favorited: Boolean): Song =
         Song(
             title = "歌曲 $remoteId",
             artist = "歌曲信息暂不可用",
@@ -330,7 +409,6 @@ class TencentMusicApi(
             lyricUri = "$ENDPOINT/api/v1/songs/$remoteId/lyrics",
             favorited = favorited,
         )
-    }
 
     private fun songFromInfo(data: JSONObject, remoteId: Long, quality: Int, favorited: Boolean): Song {
         val seconds = data.optInt("durationSeconds")
@@ -658,7 +736,13 @@ class TencentMusicApi(
             val result = connection.inputStream.bufferedReader().use { JSONObject(it.readText()) }
             check(result.optInt("code") == 0) { result.optString("message", fallback) }
             val data = result.getJSONObject("data")
-            return TokenPair(data.getString("accessToken"), data.getString("refreshToken"), data.optInt("expiresIn", 900))
+            return TokenPair(
+                accessToken = data.getString("accessToken"),
+                refreshToken = data.getString("refreshToken"),
+                expiresIn = data.optInt("expiresIn", 900),
+                // refresh 响应不带 user；登录/注册的 user 与令牌平铺在同一 data 中。
+                userId = data.optJSONObject("user")?.optLong("id", -1L)?.takeIf { it > 0L },
+            )
         }
 
         private fun openPost(path: String): HttpURLConnection =

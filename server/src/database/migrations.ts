@@ -43,6 +43,8 @@ export async function runMigrations(pool: Pool): Promise<void> {
         ON users (email) WHERE email IS NOT NULL;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS nickname text;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url text;
+      -- 禁用不是删除：保留账号与统计以便后台核查，同时鉴权查询会排除该用户并撤销刷新令牌。
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS disabled_at bigint;
 
       CREATE TABLE IF NOT EXISTS refresh_tokens (
         id         integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -102,6 +104,9 @@ export async function runMigrations(pool: Pool): Promise<void> {
         qualified        smallint NOT NULL DEFAULT 0 CHECK (qualified IN (0, 1)),
         completed        smallint NOT NULL DEFAULT 0 CHECK (completed IN (0, 1)),
         duration_seconds integer CHECK (duration_seconds > 0),
+        -- 客户端创建会话时已知的清空代际。首次写入后不可变，避免旧离线会话在稍后
+        -- 收到新 revision 时重新出现在已清空的最近播放列表。
+        history_revision integer NOT NULL DEFAULT 0 CHECK (history_revision >= 0),
         created_at       bigint NOT NULL,
         updated_at       bigint NOT NULL,
         PRIMARY KEY (user_id, session_id)
@@ -116,6 +121,9 @@ export async function runMigrations(pool: Pool): Promise<void> {
         first_played_at    bigint NOT NULL,
         last_played_at     bigint NOT NULL,
         last_history_at    bigint,
+        -- last_history_at 所属的清空代际。列表以此与 history_state.revision 比较，
+        -- 不能再以客户端墙钟和清空时间戳比较。
+        last_history_revision integer NOT NULL DEFAULT 0 CHECK (last_history_revision >= 0),
         play_count         integer NOT NULL DEFAULT 0 CHECK (play_count >= 0),
         completed_count    integer NOT NULL DEFAULT 0 CHECK (completed_count >= 0),
         total_listened_ms  bigint NOT NULL DEFAULT 0 CHECK (total_listened_ms >= 0),
@@ -131,8 +139,55 @@ export async function runMigrations(pool: Pool): Promise<void> {
         user_id        integer PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
         cleared_before bigint NOT NULL DEFAULT 0,
         revision       integer NOT NULL DEFAULT 1 CHECK (revision > 0),
-        updated_at     bigint NOT NULL
+        updated_at     bigint NOT NULL,
+        -- 清空请求的幂等标识。相同 marker 的响应重试必须返回同一 revision，不能再清一次。
+        clear_marker   text
       );
+      -- 每个 marker 都要保留一条幂等结果，不能只记 history_state 上最新的 marker。
+      -- 否则设备 A 的清空响应丢失、设备 B 随后清空后，A 重试会错误地推进第三个版本。
+      CREATE TABLE IF NOT EXISTS playback_history_clear_operation (
+        user_id        integer NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        marker         text NOT NULL,
+        revision       integer NOT NULL CHECK (revision > 0),
+        cleared_before bigint NOT NULL,
+        cleared_at     bigint NOT NULL,
+        PRIMARY KEY (user_id, marker)
+      );
+
+      -- 线上旧库可能已经有上述两张表。新增字段默认第 0 代，正好表示历史上尚未发生
+      -- 过可同步清空；以下回填把旧时间边界仍可见的记录迁到当前 revision，避免升级服务
+      -- 端后把此前清空之后的记录误隐藏。
+      ALTER TABLE playback_sessions
+        ADD COLUMN IF NOT EXISTS history_revision integer NOT NULL DEFAULT 0;
+      ALTER TABLE user_song_stats
+        ADD COLUMN IF NOT EXISTS last_history_revision integer NOT NULL DEFAULT 0;
+      ALTER TABLE playback_history_state
+        ADD COLUMN IF NOT EXISTS clear_marker text;
+      DO $$
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'playback_sessions_history_revision_check') THEN
+          ALTER TABLE playback_sessions
+            ADD CONSTRAINT playback_sessions_history_revision_check CHECK (history_revision >= 0);
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'user_song_stats_last_history_revision_check') THEN
+          ALTER TABLE user_song_stats
+            ADD CONSTRAINT user_song_stats_last_history_revision_check CHECK (last_history_revision >= 0);
+        END IF;
+      END
+      $$;
+      UPDATE playback_sessions session
+      SET history_revision = state.revision
+      FROM playback_history_state state
+      WHERE state.user_id = session.user_id
+        AND session.history_revision = 0
+        AND session.last_played_at > state.cleared_before;
+      UPDATE user_song_stats stats
+      SET last_history_revision = state.revision
+      FROM playback_history_state state
+      WHERE state.user_id = stats.user_id
+        AND stats.last_history_at IS NOT NULL
+        AND stats.last_history_revision = 0
+        AND stats.last_history_at > state.cleared_before;
 
       CREATE TABLE IF NOT EXISTS app_release (
         id              integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
