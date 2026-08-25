@@ -16,14 +16,19 @@ class AiChatStore(context: Context) {
                 val item = items.optJSONObject(index) ?: continue
                 val id = item.optString("id").takeIf { it.isNotBlank() } ?: continue
                 val messages = decodeMessages(item.optJSONArray("messages") ?: JSONArray())
-                if (messages.isNotEmpty()) add(SavedAiConversation(id, item.optString("title").ifBlank { "新对话" }, item.optBoolean("pinned"), messages))
+                // 旧版本会把只含欢迎语的空白对话也落盘；读取时一并清掉，避免历史无限堆积。
+                if (messages.any { it.role == "user" }) {
+                    add(SavedAiConversation(id, item.optString("title").ifBlank { "新对话" }, item.optBoolean("pinned"), messages))
+                }
             }
         }
     }.getOrDefault(emptyList()).takeLast(MAX_CONVERSATIONS)
 
     fun saveConversations(conversations: List<SavedAiConversation>) {
         val array = JSONArray()
-        conversations.takeLast(MAX_CONVERSATIONS).forEach { conversation ->
+        conversations.filter { conversation -> conversation.messages.any { it.role == "user" } }
+            .takeLast(MAX_CONVERSATIONS)
+            .forEach { conversation ->
             val messages = JSONArray()
             conversation.messages.takeLast(MAX_MESSAGES_PER_CONVERSATION).forEach { message ->
                 messages.put(JSONObject().put("role", message.role).put("text", message.text).put("taskId", message.taskId).put("progress", message.progress).put("imageUrl", message.imageUrl).put("error", message.error))

@@ -85,6 +85,15 @@ fun AiStudioPage(
     val scope = rememberCoroutineScope()
     val reduceMotion = LocalReduceMotion.current
 
+    /** 未发送过内容的欢迎页只是草稿，不占用本地会话名额。 */
+    fun startNewConversation() {
+        val fresh = store.newConversation()
+        conversations = conversations.filter { conversation ->
+            conversation.messages.any { message -> message.role == "user" }
+        } + fresh
+        selectedId = fresh.id
+    }
+
     fun saveImage(imageUrl: String) {
         scope.launch {
             saveMessage = try {
@@ -170,7 +179,7 @@ fun AiStudioPage(
                 conversations = conversations,
                 selectedId = selectedId,
                 onSelect = { id -> selectedId = id; scope.launch { drawerState.close() } },
-                onNew = { val fresh = store.newConversation(); conversations = conversations + fresh; selectedId = fresh.id; scope.launch { drawerState.close() } },
+                onNew = { startNewConversation(); scope.launch { drawerState.close() } },
                 onTogglePinned = { id -> conversations = conversations.map { if (it.id == id) it.copy(pinned = !it.pinned) else it } },
                 onDelete = { id ->
                     val remaining = conversations.filterNot { it.id == id }
@@ -188,7 +197,7 @@ fun AiStudioPage(
                 Text(selected.title, fontSize = 20.sp, fontWeight = FontWeight.Bold, maxLines = 1)
                 Text("GPT Image 创作对话", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
             }
-            IconButton(onClick = { val fresh = store.newConversation(); conversations = conversations + fresh; selectedId = fresh.id }) { Icon(Icons.Default.Add, "新建对话", tint = MaterialTheme.colorScheme.primary) }
+            IconButton(onClick = ::startNewConversation) { Icon(Icons.Default.Add, "新建对话", tint = MaterialTheme.colorScheme.primary) }
         }
         LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             itemsIndexed(messages) { _, message ->
