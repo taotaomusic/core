@@ -169,6 +169,10 @@ npm run dev:frontend      # 独立开发服务器（5173），API 代理到本�
 - `DELETE /api/v1/favorites/tencent/105648974`
 - `GET /api/v1/favorites`
 
+`createdAt` 与 `firstFavoritedAt` 都表示第一次收藏时间，取消后重新收藏也不会改变；
+`favoritedAt` 表示当前这一轮收藏开始的时间。取消收藏采用软删除，旧客户端的列表和搜索结果
+仍只会看到当前有效收藏，不会感知到软删除记录。
+
 ### 搜索、播放与歌词（需要访问令牌）
 
 `GET /api/v1/search?keyword=歌曲名&page=1&num=60&quality=10`

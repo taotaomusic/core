@@ -62,6 +62,10 @@ DatabaseService.onModuleInit
 
 唯一约束是 `(user_id, source, song_id)`。`song_id` 使用 text，因为客户端收藏模型要求字符串。
 
+`created_at` 是不可变的首次收藏时间。取消收藏不删除行，而是写入 `is_favorite = 0`、
+`deleted_at`、`updated_at` 并递增 `revision`；重新收藏只刷新 `favorited_at`，必须继续保留
+原来的 `created_at`。普通收藏列表和搜索页批量判断都只查询 `is_favorite = 1`。
+
 ### `app_release`
 
 保存 APK 文件名、大小、sha256、灰度比例、最低 SDK 和发布状态。

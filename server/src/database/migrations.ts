@@ -63,6 +63,31 @@ export async function runMigrations(pool: Pool): Promise<void> {
       );
       CREATE INDEX IF NOT EXISTS idx_favorites_user ON favorites (user_id, created_at DESC);
 
+      -- created_at 永远表示第一次收藏时间，取消收藏和重新收藏都不能覆盖它。
+      -- 取消收藏使用软删除，避免离线设备同步时丢失历史状态，也为后续增量同步保留版本依据。
+      ALTER TABLE favorites ADD COLUMN IF NOT EXISTS is_favorite smallint NOT NULL DEFAULT 1;
+      ALTER TABLE favorites ADD COLUMN IF NOT EXISTS favorited_at bigint;
+      ALTER TABLE favorites ADD COLUMN IF NOT EXISTS updated_at bigint;
+      ALTER TABLE favorites ADD COLUMN IF NOT EXISTS deleted_at bigint;
+      ALTER TABLE favorites ADD COLUMN IF NOT EXISTS revision integer NOT NULL DEFAULT 1;
+      ALTER TABLE favorites ADD COLUMN IF NOT EXISTS mutation_id text;
+      UPDATE favorites SET favorited_at = created_at WHERE favorited_at IS NULL;
+      UPDATE favorites SET updated_at = created_at WHERE updated_at IS NULL;
+      ALTER TABLE favorites ALTER COLUMN favorited_at SET NOT NULL;
+      ALTER TABLE favorites ALTER COLUMN updated_at SET NOT NULL;
+      DO $$
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'favorites_is_favorite_check') THEN
+          ALTER TABLE favorites ADD CONSTRAINT favorites_is_favorite_check CHECK (is_favorite IN (0, 1));
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'favorites_revision_check') THEN
+          ALTER TABLE favorites ADD CONSTRAINT favorites_revision_check CHECK (revision > 0);
+        END IF;
+      END
+      $$;
+      CREATE INDEX IF NOT EXISTS idx_favorites_active_user
+        ON favorites (user_id, favorited_at DESC) WHERE is_favorite = 1;
+
       CREATE TABLE IF NOT EXISTS app_release (
         id              integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
         channel         text NOT NULL DEFAULT 'release',

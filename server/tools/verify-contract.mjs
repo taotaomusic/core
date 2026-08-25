@@ -88,8 +88,19 @@ async function main() {
   const listed = await (await fetch(`${base}/api/v1/favorites`, { headers: { authorization: `Bearer ${token}` } })).json();
   check("data 是裸数组", Array.isArray(listed.data), JSON.stringify(listed).slice(0, 120));
   check("songId 是字符串", typeof listed.data?.[0]?.songId === "string", typeof listed.data?.[0]?.songId);
+  const firstFavoritedAt = listed.data?.[0]?.firstFavoritedAt;
+  check("首次收藏时间是 number", typeof firstFavoritedAt === "number", typeof firstFavoritedAt);
   const removed = await fetch(`${base}/api/v1/favorites/tencent/97773`, { method: "DELETE", headers: { authorization: `Bearer ${token}` } });
   check("DELETE 返回 2xx", removed.status >= 200 && removed.status < 300, `实际 ${removed.status}`);
+  const afterRemove = await (await fetch(`${base}/api/v1/favorites`, { headers: { authorization: `Bearer ${token}` } })).json();
+  check("取消收藏后不再出现在收藏列表", afterRemove.data?.every((item) => item.songId !== "97773"), JSON.stringify(afterRemove.data));
+  await fetch(`${base}/api/v1/favorites/tencent/97773`, { method: "POST", headers: { authorization: `Bearer ${token}` } });
+  const afterReAdd = await (await fetch(`${base}/api/v1/favorites`, { headers: { authorization: `Bearer ${token}` } })).json();
+  check(
+    "取消后重新收藏仍保留首次收藏时间",
+    afterReAdd.data?.[0]?.firstFavoritedAt === firstFavoritedAt,
+    `${firstFavoritedAt} -> ${afterReAdd.data?.[0]?.firstFavoritedAt}`,
+  );
 
   section("搜索（NDJSON 流）");
   const emptyKeyword = await fetch(`${base}/api/v1/search?keyword=`, { headers: { authorization: `Bearer ${token}` } });
