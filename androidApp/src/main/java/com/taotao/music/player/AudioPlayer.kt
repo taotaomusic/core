@@ -41,6 +41,10 @@ class AudioPlayer(context: Context) {
     private var controllerFuture: ListenableFuture<MediaController>? = null
     private var controller: MediaController? = null
 
+    /** 来自 Media3 状态机的整条队列结束监听器，后台播放结束时也会即时触发。 */
+    private val completionListeners = linkedSetOf<(Song) -> Unit>()
+    private var lastPlaybackState = Player.STATE_IDLE
+
     /** 连接完成前收到的播放请求，连接成功后立即补发。 */
     private var pendingCommand: ((MediaController) -> Unit)? = null
 
@@ -200,6 +204,14 @@ class AudioPlayer(context: Context) {
     fun previous() = submit { it.seekToPreviousMediaItem() }
     fun updateRepeatMode(mode: Int) = submit { it.repeatMode = mode }
 
+    fun addCompletionListener(listener: (Song) -> Unit) {
+        completionListeners += listener
+    }
+
+    fun removeCompletionListener(listener: (Song) -> Unit) {
+        completionListeners -= listener
+    }
+
     /** 删除一首非当前歌曲；当前歌曲必须先切走，避免删除后播放指针跳到意外位置。 */
     fun removeQueueItem(index: Int) = submit { activeController ->
         if (index !in 0 until activeController.mediaItemCount) return@submit
@@ -313,15 +325,23 @@ class AudioPlayer(context: Context) {
     }
 
     private fun syncFrom(player: Player) {
+        val playbackState = player.playbackState
+        val restoredQueue = readQueue(player)
+        val completedSong = restoredQueue.getOrNull(player.currentMediaItemIndex)
+        val justCompleted = playbackState == Player.STATE_ENDED && lastPlaybackState != Player.STATE_ENDED
+        lastPlaybackState = playbackState
         isPlaying = player.isPlaying
-        hasMedia = player.mediaItemCount > 0 && player.playbackState != Player.STATE_IDLE
+        hasMedia = player.mediaItemCount > 0 && playbackState != Player.STATE_IDLE
         currentIndex = player.currentMediaItemIndex
         durationMs = player.duration.takeIf { it > 0L }?.toInt() ?: 0
         updateProgress(player)
         mainHandler.removeCallbacks(progressTicker)
         if (player.isPlaying) mainHandler.post(progressTicker)
         repeatMode = player.repeatMode
-        queue = readQueue(player)
+        queue = restoredQueue
+        if (justCompleted && completedSong != null) {
+            completionListeners.toList().forEach { listener -> runCatching { listener(completedSong) } }
+        }
     }
 
     private fun updateProgress(player: Player) {

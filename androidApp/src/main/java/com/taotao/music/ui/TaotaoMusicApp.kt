@@ -84,6 +84,7 @@ import com.taotao.music.data.PlaybackStateStore
 import com.taotao.music.data.PlaybackHistoryEntry
 import com.taotao.music.data.PlaybackHistoryStore
 import com.taotao.music.data.PlaybackSyncStore
+import com.taotao.music.data.PlaybackSyncCoordinator
 import com.taotao.music.data.PendingPlaybackSnapshot
 import com.taotao.music.data.DeviceIdStore
 import com.taotao.music.data.SavedPlaybackState
@@ -120,6 +121,7 @@ fun TaotaoMusicApp() {
     val qualityStore = remember { QualityStore(context) }
     val downloadNotifier = remember { DownloadNotifier(context) }
     val playbackDeviceId = remember { DeviceIdStore(context).deviceId() }
+    val playbackSync = remember { PlaybackSyncCoordinator(playbackSyncStore, musicApi, playbackDeviceId) }
     val appearanceStore = remember { AppearanceStore(context) }
     var appearance by remember { mutableStateOf(appearanceStore.mode()) }
     val scope = rememberCoroutineScope()
@@ -336,25 +338,7 @@ fun TaotaoMusicApp() {
      * 进入最近播放或新的播放快照到来时重试；网络失败绝不吞掉用户动作。
      */
     suspend fun syncPendingPlayback() {
-        withContext(Dispatchers.IO) {
-            if (playbackSyncStore.isClearPending()) {
-                musicApi.clearRecentPlayback()
-                playbackSyncStore.confirmClear()
-            }
-            playbackSyncStore.snapshots().forEach { snapshot ->
-                musicApi.reportPlayback(
-                    sessionId = snapshot.sessionId,
-                    deviceId = playbackDeviceId,
-                    songId = snapshot.songId,
-                    startedAt = snapshot.startedAt,
-                    lastPlayedAt = snapshot.lastPlayedAt,
-                    listenedMs = snapshot.listenedMs,
-                    durationSeconds = snapshot.durationSeconds,
-                    completed = snapshot.completed,
-                )
-                playbackSyncStore.remove(snapshot.sessionId)
-            }
-        }
+        playbackSync.syncPending()
     }
 
     /** 最近播放沿用收藏夹的本地优先同步：网络不可用或服务端未部署时不动本地列表。 */
@@ -368,7 +352,7 @@ fun TaotaoMusicApp() {
                 withContext(Dispatchers.IO) { musicApi.recentPlaybackLibrary(knownSongs, playbackQuality.value) }
             }.onSuccess { remoteHistory ->
                 // 空数组同样是权威结果；只有尚待上传的本地会话才应保留在 UI 中。
-                val pendingBySongId = playbackSyncStore.snapshots().associateBy { it.songId }
+                val pendingBySongId = playbackSync.pendingSnapshots().associateBy { it.songId }
                 val localUnsynced = playbackHistory.filter { entry ->
                     entry.song.remoteId?.let(pendingBySongId::get)?.lastPlayedAt
                         ?.let { it > remoteHistory.clearedBeforeMillis } == true
@@ -543,7 +527,7 @@ fun TaotaoMusicApp() {
                     playbackStateStore.save(queue, latestSelectedIndex.value, audioPlayer.currentPositionMs())
                 }
                 playbackSession?.takeIf { it.listenedMs > 0 }?.let { snapshot ->
-                    playbackSyncStore.put(snapshot)
+                    playbackSession = playbackSync.persistTerminalSnapshot(snapshot, completed = false)
                     scope.launch { runCatching { syncPendingPlayback() } }
                 }
             }
@@ -556,6 +540,19 @@ fun TaotaoMusicApp() {
     DisposableEffect(audioPlayer) {
         audioPlayer.connect()
         onDispose { audioPlayer.release() }
+    }
+
+    // 由播放器状态机发出结束事件；不再依赖页面协程刚好执行到 finally。
+    DisposableEffect(audioPlayer, playbackSync) {
+        val completionListener: (Song) -> Unit = { completedSong ->
+            val activeSession = playbackSession
+            if (activeSession != null && activeSession.songId == completedSong.remoteId && activeSession.listenedMs > 0) {
+                playbackSession = playbackSync.persistTerminalSnapshot(activeSession, completed = true)
+                scope.launch { runCatching { syncPendingPlayback() } }
+            }
+        }
+        audioPlayer.addCompletionListener(completionListener)
+        onDispose { audioPlayer.removeCompletionListener(completionListener) }
     }
 
     /**
@@ -607,7 +604,11 @@ fun TaotaoMusicApp() {
         }
         playbackSession = session
         if (!audioPlayer.isPlaying) {
-            if (session.listenedMs > 0) withContext(Dispatchers.IO) { playbackSyncStore.put(session) }
+            if (session.listenedMs > 0) {
+                session = playbackSync.persistTerminalSnapshot(session, completed = false)
+                playbackSession = session
+                runCatching { syncPendingPlayback() }
+            }
             return@LaunchedEffect
         }
         var lastElapsed = SystemClock.elapsedRealtime()
@@ -631,13 +632,13 @@ fun TaotaoMusicApp() {
                 }
                 val reachedPeriodicSync = session.listenedMs >= 15_000 && session.listenedMs % 15_000 < increment
                 if (reachedHistoryThreshold || reachedPeriodicSync) {
-                    withContext(Dispatchers.IO) { playbackSyncStore.put(session) }
+                    playbackSync.persistTerminalSnapshot(session, completed = false)
                     runCatching { syncPendingPlayback() }
                 }
             }
         } finally {
             if (session.listenedMs > 0) {
-                withContext(Dispatchers.IO) { playbackSyncStore.put(session) }
+                playbackSync.persistTerminalSnapshot(session, completed = session.completed)
                 runCatching { syncPendingPlayback() }
             }
         }
@@ -1178,8 +1179,7 @@ fun TaotaoMusicApp() {
                     isFavorite = { song -> favoritesStore.contains(song.remoteId) },
                     onToggleFavorite = { song -> toggleFavorite(song) },
                     onClear = {
-                        playbackSyncStore.markClearPending()
-                        playbackSyncStore.discardSnapshots()
+                        playbackSync.markClearPending()
                         playbackSession = null
                         playbackHistoryClearEpoch += 1
                         playbackHistoryStore.clear()
