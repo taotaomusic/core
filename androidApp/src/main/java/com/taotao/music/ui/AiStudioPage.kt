@@ -70,7 +70,8 @@ fun AiStudioPage(
     var imageSize by remember { mutableStateOf("1K") }
     var quality by remember { mutableStateOf(AiQuality.LOW) }
     var thinking by remember { mutableStateOf("标准") }
-    val chatStore = remember { AiChatStore(LocalContext.current) }
+    val context = LocalContext.current
+    val chatStore = remember(context) { AiChatStore(context) }
     val messages = remember {
         chatStore.read().mapTo(mutableStateListOf<AiChatMessage>()) { it.toChatMessage() }.also { saved ->
             if (saved.isEmpty()) saved += AiChatMessage(AiChatRole.ASSISTANT, "你好，我可以把你的音乐灵感变成一张图片。告诉我你想看到的画面吧。")
