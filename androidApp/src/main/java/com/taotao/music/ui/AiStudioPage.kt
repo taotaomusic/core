@@ -19,6 +19,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -57,12 +59,14 @@ fun AiStudioPage(
     signedIn: Boolean,
     submitting: Boolean,
     task: TencentMusicApi.ImageTask?,
-    onGenerate: (String, String, String, String) -> Unit,
+    onGenerate: (String, String, String, String, String, String) -> Unit,
 ) {
     var draft by remember { mutableStateOf("") }
+    var model by remember { mutableStateOf(AiModel.GPT_IMAGE_2) }
     var ratio by remember { mutableStateOf("1:1") }
     var imageSize by remember { mutableStateOf("1K") }
     var quality by remember { mutableStateOf("low") }
+    var thinking by remember { mutableStateOf("标准") }
     val messages = remember {
         mutableStateListOf(
             AiChatMessage(AiChatRole.ASSISTANT, "你好，我可以把你的音乐灵感变成一张图片。告诉我你想看到的画面吧。"),
@@ -99,12 +103,13 @@ fun AiStudioPage(
             if (submitting && task == null) item { AiChatBubble(AiChatMessage(AiChatRole.ASSISTANT, "正在提交创作请求…")) }
         }
         Spacer(Modifier.height(8.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
-            listOf("1:1", "3:4", "9:16", "16:9").forEach { item -> FilterChip(ratio == item, { ratio = item }, { Text(item) }) }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            AiOptionPicker("模型", model.title, Modifier.weight(1f), AiModel.entries.toList(), { it.title }) { model = it }
+            AiOptionPicker("比例", ratio, Modifier.weight(1f), listOf("1:1", "3:4", "9:16", "16:9"), { it }) { ratio = it }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
-            listOf("1K", "2K", "4K").forEach { item -> FilterChip(imageSize == item, { imageSize = item }, { Text(item) }) }
-            listOf("low" to "低", "medium" to "中", "high" to "高").forEach { (value, label) -> FilterChip(quality == value, { quality = value }, { Text(label) }) }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            AiOptionPicker("质量", quality.label, Modifier.weight(1f), AiQuality.entries.toList(), { it.label }) { quality = it }
+            AiOptionPicker("思考", thinking, Modifier.weight(1f), listOf("快速", "标准", "深入"), { it }) { thinking = it }
         }
         Row(Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 14.dp), verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(
@@ -120,11 +125,50 @@ fun AiStudioPage(
                     messages += AiChatMessage(AiChatRole.USER, prompt)
                     messages += AiChatMessage(AiChatRole.ASSISTANT, "正在提交创作请求…")
                     draft = ""
-                    onGenerate(prompt, ratio, imageSize, quality)
+                    onGenerate(model.apiName, prompt, ratio, imageSize, quality.apiName, thinking)
                 },
                 enabled = signedIn && draft.isNotBlank() && !submitting,
                 modifier = Modifier.padding(start = 8.dp).background(MaterialTheme.colorScheme.primary, RoundedCornerShape(18.dp)),
             ) { Icon(Icons.Default.Send, "发送", tint = MaterialTheme.colorScheme.onPrimary) }
+        }
+    }
+}
+
+/** 当前只启用 GPT Image 2；菜单结构保留，后续接入聊天或其它生图模型无需重做输入区。 */
+private enum class AiModel(val title: String, val apiName: String) {
+    GPT_IMAGE_2("GPT Image 2", "gpt-image-2"),
+}
+
+private enum class AiQuality(val label: String, val apiName: String) {
+    LOW("低", "low"),
+    MEDIUM("中", "medium"),
+    HIGH("高", "high"),
+}
+
+@Composable
+private fun <T> AiOptionPicker(
+    label: String,
+    value: String,
+    modifier: Modifier,
+    options: List<T>,
+    optionLabel: (T) -> String,
+    onSelected: (T) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box(modifier) {
+        FilterChip(
+            selected = true,
+            onClick = { expanded = true },
+            label = { Text("$label · $value", maxLines = 1) },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            options.forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(optionLabel(option)) },
+                    onClick = { onSelected(option); expanded = false },
+                )
+            }
         }
     }
 }

@@ -8,6 +8,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.pager.HorizontalPager
@@ -25,6 +27,8 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -778,10 +782,12 @@ fun TaotaoMusicApp() {
                     Column {
                     // 迷你播放器升起/落下要有过渡：原来是直接出现和消失，
                     // 底部一整条突然多出来一块，视觉上很跳。
+                    val reduceMotion = LocalReduceMotion.current
                     AnimatedVisibility(
                         visible = !showPlayerDetail && playbackSongs.isNotEmpty(),
-                        enter = riseIn(),
-                        exit = sinkOut(),
+                        enter = riseIn(reduceMotion),
+                        // 打开详情时迷你条立刻让位，只保留详情页自底部升起，避免两套位移叠在一起。
+                        exit = if (showPlayerDetail) ExitTransition.None else sinkOut(reduceMotion),
                     ) {
                         // 退出动画期间队列可能已被清空，用最后一次的快照撑到动画走完。
                         val current = remember(playbackSongs, selectedIndex) {
@@ -849,6 +855,7 @@ fun TaotaoMusicApp() {
                     }
                 },
             ) { innerPadding ->
+            val pageReduceMotion = LocalReduceMotion.current
             AnimatedContent(
                 targetState = when {
                     showPlayerDetail -> "detail"
@@ -864,7 +871,7 @@ fun TaotaoMusicApp() {
                     bottomTab == 2 -> "mine"
                     else -> "home"
                 },
-                transitionSpec = { pageTransition() },
+                transitionSpec = { pageTransition(pageReduceMotion) },
                 label = "页面切换",
             ) { page ->
             Box(Modifier.fillMaxSize().padding(innerPadding)) {
@@ -873,13 +880,13 @@ fun TaotaoMusicApp() {
                     signedIn = signedIn,
                     submitting = imageGenerating,
                     task = imageTask,
-                    onGenerate = { prompt, ratio, imageSize, quality ->
+                    onGenerate = { model, prompt, ratio, imageSize, quality, _ ->
                         if (prompt.isBlank()) return@AiStudioPage
                         imageGenerating = true
                         imageTask = null
                         scope.launch {
                             runCatching {
-                                withContext(Dispatchers.IO) { musicApi.createImageTask(prompt, ratio, imageSize, quality) }
+                                withContext(Dispatchers.IO) { musicApi.createImageTask(model, prompt, ratio, imageSize, quality) }
                             }.onSuccess { created ->
                                 imageTask = created
                                 while (created.taskId.isNotBlank() && imageTask?.state == "IN_PROGRESS") {
@@ -1613,6 +1620,7 @@ private fun PlayerDetailPage(
     // key 必须是稳定的标识而不是整个 song：换音质或解析地址后队列里的 Song 会被换成新副本，
     // 用 song 做 key 会重建 Animatable，封面转到一半突然弹回 0°。
     val coverRotation = remember(song.remoteId, song.audioUri) { Animatable(0f) }
+    val reduceMotion = LocalReduceMotion.current
     LaunchedEffect(song.lyricUri, song.remoteId) {
         // 离线歌曲的行级与逐字时间轴分别存成两个文件，两个都要读 ——
         // 早先这里只读一个文本文件，离线播放于是永远没有逐字高亮。
@@ -1665,7 +1673,11 @@ private fun PlayerDetailPage(
      * 少了最后一个，用户看歌词的整段时间里这个动画仍在每 16 毫秒请求一帧，
      * 而封面那一页已经被 pager 销毁 —— 驱动的是一个没人读的值，纯耗电。
      */
-    LaunchedEffect(song.remoteId, song.audioUri, isPlaying, lifecycleOwner) {
+    LaunchedEffect(song.remoteId, song.audioUri, isPlaying, lifecycleOwner, reduceMotion) {
+        if (reduceMotion) {
+            coverRotation.snapTo(0f)
+            return@LaunchedEffect
+        }
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
             if (!isPlaying) return@repeatOnLifecycle
             snapshotFlow { pagerState.settledPage == 0 }.collectLatest { onCoverPage ->
@@ -1812,9 +1824,20 @@ private fun PlayerDetailPage(
                 )
             }
             IconButton(onClick = onPrevious) { Icon(Icons.Default.SkipPrevious, "上一首", modifier = Modifier.size(34.dp)) }
+            val playPressSource = remember { MutableInteractionSource() }
+            val playPressed by playPressSource.collectIsPressedAsState()
+            val playScale by animateFloatAsState(
+                targetValue = if (playPressed && !reduceMotion) 0.97f else 1f,
+                animationSpec = taotaoTween(AnimationDurations.PRESS, easing = AnimationCurves.standardOut),
+                label = "主播放键按压",
+            )
             FilledIconButton(
                 onClick = onTogglePlaying,
-                modifier = Modifier.size(64.dp),
+                modifier = Modifier.size(64.dp).graphicsLayer {
+                    scaleX = playScale
+                    scaleY = playScale
+                },
+                interactionSource = playPressSource,
                 colors = IconButtonDefaults.filledIconButtonColors(
                     containerColor = MaterialTheme.colorScheme.primary,
                     contentColor = MaterialTheme.colorScheme.onPrimary,
@@ -2056,12 +2079,21 @@ private fun CurrentPlaybackQueue(
         } else {
             var draggedIndex by remember { mutableIntStateOf(-1) }
             var draggedDistance by remember { mutableFloatStateOf(0f) }
+            var settling by remember { mutableStateOf(false) }
+            val settleOffset = remember { Animatable(0f) }
+            val dragScope = rememberCoroutineScope()
+            val reduceMotion = LocalReduceMotion.current
             // 触发阈值低于行高，长按后会连续跟手；未用完的距离会保留，
             // 避免每次换位都出现“吸回去再跳”的停顿。
             val dragStep = with(LocalDensity.current) { 34.dp.toPx() }
             LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
                 itemsIndexed(queue, key = { index, item -> "${songKeyOf(item)}#$index" }) { index, item ->
                     val isCurrent = index == currentIndex
+                    val rowOffsetY = when {
+                        index != draggedIndex -> 0f
+                        settling -> settleOffset.value
+                        else -> draggedDistance
+                    }
                     SongRow(
                         song = item,
                         active = isCurrent,
@@ -2076,10 +2108,7 @@ private fun CurrentPlaybackQueue(
                                     stiffness = Spring.StiffnessMediumLow,
                                 ),
                             )
-                            .graphicsLayer {
-                                // 手势是连续反馈，整行随手移动；其余行由 placement spring 让位。
-                                translationY = if (index == draggedIndex) draggedDistance else 0f
-                            },
+                            .graphicsLayer { translationY = rowOffsetY },
                         onToggleFavorite = onToggleFavorite.takeIf { item.remoteId != null }
                             ?.let { callback -> { callback(item) } },
                         dragHandle = { modifier ->
@@ -2089,9 +2118,33 @@ private fun CurrentPlaybackQueue(
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = modifier.pointerInput(queue, index) {
                                     detectDragGesturesAfterLongPress(
-                                        onDragStart = { draggedIndex = index; draggedDistance = 0f },
-                                        onDragEnd = { draggedIndex = -1; draggedDistance = 0f },
-                                        onDragCancel = { draggedIndex = -1; draggedDistance = 0f },
+                                        onDragStart = {
+                                            draggedIndex = index
+                                            draggedDistance = 0f
+                                            settling = false
+                                            dragScope.launch { settleOffset.snapTo(0f) }
+                                        },
+                                        onDragEnd = {
+                                            val from = draggedDistance
+                                            draggedDistance = 0f
+                                            if (reduceMotion) {
+                                                settling = false
+                                                draggedIndex = -1
+                                            } else {
+                                                settling = true
+                                                dragScope.launch {
+                                                    settleOffset.snapTo(from)
+                                                    settleOffset.animateTo(0f, taotaoSettleSpring())
+                                                    settling = false
+                                                    draggedIndex = -1
+                                                }
+                                            }
+                                        },
+                                        onDragCancel = {
+                                            draggedIndex = -1
+                                            draggedDistance = 0f
+                                            settling = false
+                                        },
                                     ) { change, dragAmount ->
                                         change.consume()
                                         if (draggedIndex !in queue.indices) return@detectDragGesturesAfterLongPress
