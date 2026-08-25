@@ -1,39 +1,20 @@
 package com.taotao.music.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Send
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -43,181 +24,110 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.taotao.music.data.AiChatStore
 import com.taotao.music.data.SavedAiChatMessage
+import com.taotao.music.data.SavedAiConversation
 import com.taotao.music.data.TencentMusicApi
 
-private data class AiChatMessage(
-    val role: AiChatRole,
-    val text: String,
-    val taskId: String? = null,
-    val progress: Int = 0,
-    val imageUrl: String? = null,
-    val error: String? = null,
-)
-
+private data class AiChatMessage(val role: AiChatRole, val text: String, val taskId: String? = null, val progress: Int = 0, val imageUrl: String? = null, val error: String? = null)
 private enum class AiChatRole { USER, ASSISTANT }
+private enum class AiModel(val title: String, val apiName: String) { GPT_IMAGE_2("GPT Image 2", "gpt-image-2") }
+private enum class AiQuality(val label: String, val apiName: String) { LOW("低", "low"), MEDIUM("中", "medium"), HIGH("高", "high") }
 
-/** GPT Image 创作工作台：用对话承载意图、进度和图片结果。 */
+/** 支持多会话的 GPT Image 对话工作台，所有会话保存在设备本地。 */
 @Composable
-fun AiStudioPage(
-    signedIn: Boolean,
-    submitting: Boolean,
-    task: TencentMusicApi.ImageTask?,
-    onGenerate: (String, String, String, String, String, String) -> Unit,
-) {
+fun AiStudioPage(signedIn: Boolean, submitting: Boolean, task: TencentMusicApi.ImageTask?, onGenerate: (String, String, String, String, String, String) -> Unit) {
+    val context = LocalContext.current
+    val store = remember(context) { AiChatStore(context) }
+    var conversations by remember { mutableStateOf(store.readConversations().ifEmpty { listOf(store.newConversation()) }) }
+    var selectedId by remember { mutableStateOf(conversations.last().id) }
     var draft by remember { mutableStateOf("") }
     var model by remember { mutableStateOf(AiModel.GPT_IMAGE_2) }
     var ratio by remember { mutableStateOf("1:1") }
     var imageSize by remember { mutableStateOf("1K") }
     var quality by remember { mutableStateOf(AiQuality.LOW) }
     var thinking by remember { mutableStateOf("标准") }
-    val context = LocalContext.current
-    val chatStore = remember(context) { AiChatStore(context) }
-    val messages = remember {
-        chatStore.read().mapTo(mutableStateListOf<AiChatMessage>()) { it.toChatMessage() }.also { saved ->
-            if (saved.isEmpty()) saved += AiChatMessage(AiChatRole.ASSISTANT, "你好，我可以把你的音乐灵感变成一张图片。告诉我你想看到的画面吧。")
-        }
-    }
+    var conversationMenu by remember { mutableStateOf(false) }
+    val selected = conversations.firstOrNull { it.id == selectedId } ?: conversations.last()
+    val messages = selected.messages.map { it.toChatMessage() }
     val listState = rememberLazyListState()
 
-    LaunchedEffect(messages.toList()) {
-        chatStore.save(messages.map { it.toSavedMessage() })
+    fun replaceSelected(newMessages: List<AiChatMessage>, title: String = selected.title) {
+        conversations = conversations.map { conversation ->
+            if (conversation.id == selected.id) SavedAiConversation(conversation.id, title, newMessages.map { it.toSavedMessage() }) else conversation
+        }
     }
-
-    LaunchedEffect(task?.taskId, task?.state, task?.progress, task?.imageUrl, task?.error) {
+    LaunchedEffect(conversations) { store.saveConversations(conversations) }
+    LaunchedEffect(task?.taskId, task?.state, task?.progress, task?.imageUrl, task?.error, selected.id) {
         val current = task ?: return@LaunchedEffect
-        val index = messages.indexOfLast { it.taskId == current.taskId }
-        // 任务创建成功后首次拿到 taskId 时，替换刚插入的“正在提交”占位消息；后续轮询
-        // 再按 taskId 精确更新同一气泡，避免每次进度都追加一条聊天记录。
-        val targetIndex = if (index >= 0) index else messages.lastIndex
-        messages[targetIndex] = when {
+        val index = messages.indexOfLast { it.taskId == current.taskId }.takeIf { it >= 0 }
+            ?: messages.indexOfLast { it.role == AiChatRole.ASSISTANT && it.text == "正在提交创作请求…" }
+        if (index < 0) return@LaunchedEffect
+        val updated = messages.toMutableList()
+        updated[index] = when {
             current.imageUrl != null -> AiChatMessage(AiChatRole.ASSISTANT, "创作完成，喜欢这张图吗？", current.taskId, imageUrl = current.imageUrl)
             current.state == "FAILED" -> AiChatMessage(AiChatRole.ASSISTANT, "这次创作没有完成。", current.taskId, error = current.error ?: "图片生成失败")
-            else -> AiChatMessage(AiChatRole.ASSISTANT, "正在根据你的描述创作…", current.taskId, progress = current.progress)
+            else -> AiChatMessage(AiChatRole.ASSISTANT, "正在根据你的描述创作…", current.taskId, current.progress)
         }
-        listState.animateScrollToItem(messages.lastIndex)
+        replaceSelected(updated)
+        listState.animateScrollToItem(updated.lastIndex)
     }
 
     Column(Modifier.fillMaxSize().padding(horizontal = 18.dp)) {
-        Row(Modifier.fillMaxWidth().padding(vertical = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(38.dp).background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(14.dp)), contentAlignment = Alignment.Center) {
-                Icon(Icons.Default.AutoAwesome, null, tint = MaterialTheme.colorScheme.onPrimaryContainer)
+        Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(38.dp).background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(14.dp)), contentAlignment = Alignment.Center) { Icon(Icons.Default.AutoAwesome, null, tint = MaterialTheme.colorScheme.onPrimaryContainer) }
+            Box(Modifier.weight(1f).padding(start = 10.dp)) {
+                TextButton(onClick = { conversationMenu = true }, contentPadding = PaddingValues(0.dp)) {
+                    Column(horizontalAlignment = Alignment.Start) {
+                        Row(verticalAlignment = Alignment.CenterVertically) { Text(selected.title, fontSize = 20.sp, fontWeight = FontWeight.Bold); Icon(Icons.Default.KeyboardArrowDown, null) }
+                        Text("GPT Image 创作对话", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+                    }
+                }
+                DropdownMenu(expanded = conversationMenu, onDismissRequest = { conversationMenu = false }, containerColor = MaterialTheme.colorScheme.surface) {
+                    conversations.asReversed().forEach { conversation -> DropdownMenuItem(text = { Text(conversation.title) }, onClick = { selectedId = conversation.id; conversationMenu = false }) }
+                }
             }
-            Column(Modifier.padding(start = 10.dp)) {
-                Text("AI 工作台", fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                Text("GPT Image 创作对话", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
-            }
+            IconButton(onClick = { val fresh = store.newConversation(); conversations = conversations + fresh; selectedId = fresh.id }) { Icon(Icons.Default.Add, "新建对话", tint = MaterialTheme.colorScheme.primary) }
         }
         LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             itemsIndexed(messages) { _, message -> AiChatBubble(message) }
-            if (submitting && task == null) item { AiChatBubble(AiChatMessage(AiChatRole.ASSISTANT, "正在提交创作请求…")) }
+            if (submitting && messages.lastOrNull()?.taskId == null) item { AiChatBubble(AiChatMessage(AiChatRole.ASSISTANT, "正在提交创作请求…")) }
         }
-        Spacer(Modifier.height(8.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-            AiOptionPicker("模型", model.title, Modifier.weight(1f), AiModel.entries.toList(), { it.title }) { model = it }
-            AiOptionPicker("比例", ratio, Modifier.weight(1f), listOf("1:1", "3:4", "9:16", "16:9"), { it }) { ratio = it }
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-            AiOptionPicker("质量", quality.label, Modifier.weight(1f), AiQuality.entries.toList(), { it.label }) { quality = it }
-            AiOptionPicker("思考", thinking, Modifier.weight(1f), listOf("快速", "标准", "深入"), { it }) { thinking = it }
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            AiOptionPicker("模型", model.title, AiModel.entries.toList(), { it.title }) { model = it }
+            AiOptionPicker("比例", ratio, listOf("1:1", "3:4", "9:16", "16:9"), { it }) { ratio = it }
+            AiOptionPicker("尺寸", imageSize, listOf("1K", "2K", "4K"), { it }) { imageSize = it }
+            AiOptionPicker("质量", quality.label, AiQuality.entries.toList(), { it.label }) { quality = it }
+            AiOptionPicker("思考", thinking, listOf("快速", "标准", "深入"), { it }) { thinking = it }
         }
         Row(Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(
-                value = draft, onValueChange = { draft = it },
-                placeholder = { Text(if (signedIn) "描述你想创作的画面…" else "登录后可开始对话") },
-                modifier = Modifier.weight(1f), minLines = 1, maxLines = 4,
-                enabled = signedIn && !submitting, shape = RoundedCornerShape(22.dp),
-            )
-            IconButton(
-                onClick = {
-                    val prompt = draft.trim()
-                    if (prompt.isBlank()) return@IconButton
-                    messages += AiChatMessage(AiChatRole.USER, prompt)
-                    messages += AiChatMessage(AiChatRole.ASSISTANT, "正在提交创作请求…")
-                    draft = ""
-                    onGenerate(model.apiName, prompt, ratio, imageSize, quality.apiName, thinking)
-                },
-                enabled = signedIn && draft.isNotBlank() && !submitting,
-                modifier = Modifier.padding(start = 8.dp).background(MaterialTheme.colorScheme.primary, RoundedCornerShape(18.dp)),
-            ) { Icon(Icons.Default.Send, "发送", tint = MaterialTheme.colorScheme.onPrimary) }
+            OutlinedTextField(value = draft, onValueChange = { draft = it }, placeholder = { Text(if (signedIn) "描述你想创作的画面…" else "登录后可开始对话") }, modifier = Modifier.weight(1f), minLines = 1, maxLines = 4, enabled = signedIn && !submitting, shape = RoundedCornerShape(22.dp))
+            IconButton(onClick = {
+                val prompt = draft.trim(); if (prompt.isBlank()) return@IconButton
+                replaceSelected(messages + AiChatMessage(AiChatRole.USER, prompt) + AiChatMessage(AiChatRole.ASSISTANT, "正在提交创作请求…"), prompt.take(16))
+                draft = ""; onGenerate(model.apiName, prompt, ratio, imageSize, quality.apiName, thinking)
+            }, enabled = signedIn && draft.isNotBlank() && !submitting, modifier = Modifier.padding(start = 8.dp).background(MaterialTheme.colorScheme.primary, RoundedCornerShape(18.dp))) { Icon(Icons.Default.Send, "发送", tint = MaterialTheme.colorScheme.onPrimary) }
         }
     }
 }
 
-/** 当前只启用 GPT Image 2；菜单结构保留，后续接入聊天或其它生图模型无需重做输入区。 */
-private enum class AiModel(val title: String, val apiName: String) {
-    GPT_IMAGE_2("GPT Image 2", "gpt-image-2"),
-}
-
-private enum class AiQuality(val label: String, val apiName: String) {
-    LOW("低", "low"),
-    MEDIUM("中", "medium"),
-    HIGH("高", "high"),
-}
-
-private fun SavedAiChatMessage.toChatMessage() = AiChatMessage(
-    role = if (role == "user") AiChatRole.USER else AiChatRole.ASSISTANT,
-    text = text,
-    taskId = taskId,
-    progress = progress,
-    imageUrl = imageUrl,
-    error = error,
-)
-
-private fun AiChatMessage.toSavedMessage() = SavedAiChatMessage(
-    role = if (role == AiChatRole.USER) "user" else "assistant",
-    text = text,
-    taskId = taskId,
-    progress = progress,
-    imageUrl = imageUrl,
-    error = error,
-)
-
-@Composable
-private fun <T> AiOptionPicker(
-    label: String,
-    value: String,
-    modifier: Modifier,
-    options: List<T>,
-    optionLabel: (T) -> String,
-    onSelected: (T) -> Unit,
-) {
+@Composable private fun <T> AiOptionPicker(label: String, value: String, options: List<T>, optionLabel: (T) -> String, onSelected: (T) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
-    Box(modifier) {
-        FilterChip(
-            selected = true,
-            onClick = { expanded = true },
-            label = { Text("$label · $value", maxLines = 1) },
-            modifier = Modifier.fillMaxWidth(),
-        )
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            options.forEach { option ->
-                DropdownMenuItem(
-                    text = { Text(optionLabel(option)) },
-                    onClick = { onSelected(option); expanded = false },
-                )
-            }
-        }
+    Box {
+        FilterChip(selected = true, onClick = { expanded = true }, label = { Text("$label · $value", maxLines = 1) }, colors = FilterChipDefaults.filterChipColors(selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer, selectedLabelColor = MaterialTheme.colorScheme.onSecondaryContainer))
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, containerColor = MaterialTheme.colorScheme.surface) { options.forEach { option -> DropdownMenuItem(text = { Text(optionLabel(option), color = MaterialTheme.colorScheme.onSurface) }, onClick = { onSelected(option); expanded = false }) } }
     }
 }
 
-@Composable
-private fun AiChatBubble(message: AiChatMessage) {
+@Composable private fun AiChatBubble(message: AiChatMessage) {
     val mine = message.role == AiChatRole.USER
     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start) {
-        Column(
-            Modifier.fillMaxWidth(if (mine) 0.78f else 0.88f)
-                .background(if (mine) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(20.dp))
-                .padding(14.dp),
-        ) {
+        Column(Modifier.fillMaxWidth(if (mine) 0.78f else 0.88f).background(if (mine) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(20.dp)).padding(14.dp)) {
             Text(message.text, color = if (mine) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant)
-            if (message.progress > 0) Row(Modifier.padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                Text(" ${message.progress.coerceIn(0, 100)}%", Modifier.padding(start = 8.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            message.imageUrl?.let { imageUrl ->
-                AsyncImage(imageUrl, "AI 生成图片", Modifier.fillMaxWidth().padding(top = 10.dp).background(MaterialTheme.colorScheme.surface, RoundedCornerShape(14.dp)))
-            }
+            if (message.progress > 0) Row(Modifier.padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp); Text(" ${message.progress.coerceIn(0, 100)}%", Modifier.padding(start = 8.dp)) }
+            message.imageUrl?.let { AsyncImage(it, "AI 生成图片", Modifier.fillMaxWidth().padding(top = 10.dp).background(MaterialTheme.colorScheme.surface, RoundedCornerShape(14.dp))) }
             message.error?.let { Text(it, Modifier.padding(top = 8.dp), color = MaterialTheme.colorScheme.error) }
         }
     }
 }
+
+private fun SavedAiChatMessage.toChatMessage() = AiChatMessage(if (role == "user") AiChatRole.USER else AiChatRole.ASSISTANT, text, taskId, progress, imageUrl, error)
+private fun AiChatMessage.toSavedMessage() = SavedAiChatMessage(if (role == AiChatRole.USER) "user" else "assistant", text, taskId, progress, imageUrl, error)
