@@ -2,10 +2,7 @@ package com.taotao.music.data
 
 import android.content.Context
 import com.xinbida.wukongim.WKIM
-import com.xinbida.wukongim.entity.WKChannel
-import com.xinbida.wukongim.entity.WKChannelType
 import com.xinbida.wukongim.message.type.WKConnectStatus
-import com.xinbida.wukongim.msgmodel.WKTextContent
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -28,13 +25,10 @@ class WukongImClient(
     private val applicationContext = context.applicationContext
     private val wkIm = WKIM.getInstance()
     private val _connection = MutableStateFlow(ImConnectionInfo())
-    private val _messages = MutableStateFlow(emptyList<ImChatMessage>())
 
     /** 页面订阅的连接状态；不会暴露悟空 IM Token。 */
     val connection: StateFlow<ImConnectionInfo> = _connection.asStateFlow()
 
-    /** 当前进程内已收发的文本消息，按私聊对端 UUID 归类。 */
-    val messages: StateFlow<List<ImChatMessage>> = _messages.asStateFlow()
 
     @Volatile
     private var gateway: Gateway? = null
@@ -60,24 +54,9 @@ class WukongImClient(
         }
         // SDK 认证成功后会进入「同步最近会话」阶段，并等待业务服务回调。桃桃当前尚未提供
         // 会话列表同步接口；若不显式回调空结果，SDK 会永远停在 syncMsg 状态，页面看起来
-        // 就是「连接中」，尽管 Gateway 已经握手成功。在线消息仍由 SDK 正常持久化和分发。
+        // 就是「连接中」，尽管 Gateway 已经握手成功。聊天正文以业务服务的游标同步为准。
         wkIm.conversationManager.addOnSyncConversationListener { _, _, _, callback ->
             callback?.onBack(null)
-        }
-        wkIm.msgManager.addOnNewMsgListener(NEW_MESSAGE_LISTENER) { received ->
-            val currentUid = _connection.value.uid ?: return@addOnNewMsgListener
-            val added = received.mapNotNull { message ->
-                val fromUid = message.fromUID?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
-                val content = message.baseContentMsgModel?.displayContent?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
-                ImChatMessage(
-                    id = message.messageID ?: message.clientMsgNO,
-                    peerUid = if (fromUid == currentUid) message.channelID else fromUid,
-                    content = content,
-                    sentAtMillis = message.timestamp * 1000,
-                    isMine = fromUid == currentUid,
-                )
-            }
-            if (added.isNotEmpty()) _messages.value = (_messages.value + added).takeLast(MAX_IN_MEMORY_MESSAGES)
         }
     }
 
@@ -104,30 +83,11 @@ class WukongImClient(
         wkIm.connectionManager.connection()
     }
 
-    /** 通过悟空 IM 的个人频道发送文本；对端 UID 必须是桃桃用户获得的 UUID。 */
-    fun sendText(peerUid: String, content: String) {
-        val normalizedPeerUid = peerUid.trim().lowercase()
-        val normalizedContent = content.trim()
-        require(UUID_PATTERN.matches(normalizedPeerUid)) { "对方聊天 ID 必须是 UUID" }
-        require(normalizedContent.isNotEmpty()) { "消息不能为空" }
-        require(_connection.value.state == ImConnectionState.CONNECTED) { "聊天服务尚未连接" }
-
-        _messages.value = (_messages.value + ImChatMessage(
-            id = "local-${System.nanoTime()}",
-            peerUid = normalizedPeerUid,
-            content = normalizedContent,
-            sentAtMillis = System.currentTimeMillis(),
-            isMine = true,
-        )).takeLast(MAX_IN_MEMORY_MESSAGES)
-        wkIm.msgManager.send(WKTextContent(normalizedContent), WKChannel(normalizedPeerUid, WKChannelType.PERSONAL))
-    }
-
     /** 退出账号或会话彻底失效时停止重连并清除 SDK 中保留的 Token。 */
     fun signOut() {
         gateway = null
         currentAccountId = null
         _connection.value = ImConnectionInfo()
-        _messages.value = emptyList()
         wkIm.connectionManager.disconnect(true)
     }
 
@@ -150,9 +110,6 @@ class WukongImClient(
 
     private companion object {
         const val CONNECTION_STATUS_LISTENER = "taotao-im-connection"
-        const val NEW_MESSAGE_LISTENER = "taotao-im-message"
-        const val MAX_IN_MEMORY_MESSAGES = 300
-        val UUID_PATTERN = Regex("^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
     }
 }
 
@@ -169,13 +126,4 @@ data class ImConnectionInfo(
     val uid: String? = null,
     val state: ImConnectionState = ImConnectionState.IDLE,
     val detail: String? = null,
-)
-
-/** 当前应用进程内的私聊文本项；消息持久化与离线同步由悟空 SDK 的本地库负责。 */
-data class ImChatMessage(
-    val id: String,
-    val peerUid: String,
-    val content: String,
-    val sentAtMillis: Long,
-    val isMine: Boolean,
 )

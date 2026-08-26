@@ -2,8 +2,9 @@
 
 [返回文档中心](README.md)
 
-本项目使用悟空 IM `v2.2.5-20260422` 提供聊天连接、消息顺序和离线同步；桃桃音乐 NestJS
-服务继续负责账号、登录、连接凭据、群成员权限和业务审计。聊天消息正文不复制进 PostgreSQL。
+本项目使用悟空 IM `v2.2.5-20260422` 提供客户端连接能力；桃桃音乐 NestJS 服务继续负责账号、
+登录、连接凭据、好友关系、可靠消息存储和业务审计。私聊消息正文以 PostgreSQL 为真相源，不能以
+Gateway 当时是否在线作为发送成功条件。
 
 ## 1. 身份与会话边界
 
@@ -84,10 +85,32 @@ IM_SESSION_LIFETIME_SECONDS=900
 2. 把悟空 IM 产品 API 绑定到 `127.0.0.1:5001`，收紧 5001、5200、5300 的云安全组和主机防火墙。
 3. 在 NestJS `.env` 启用 `IM_ENABLED=true`，重启服务，让幂等迁移创建 `im_device_session`。
 4. 使用真实测试帐号调用 `POST /api/v1/im/session`，确认悟空 IM `/user/token` 收到成功响应。
-5. 在 Android SDK 连接 `tcp://114.66.23.232:5100`，发送文字消息并测试离线、重连和退出登录。
-6. 最后再把聊天页面加入手写导航的 `switchTab`、`AnimatedContent` 和 `BackHandler` 三处。
+5. 在 Android SDK 连接 `tcp://114.66.23.232:5100`，测试重连和退出登录。
+6. 用两个测试帐号完成好友申请、接受、在线发送和离线发送；接收方重新进入聊天页后必须按游标收到
+   全部离线消息。
+7. 最后再把聊天页面加入手写导航的 `switchTab`、`AnimatedContent` 和 `BackHandler` 三处。
 
-## 5. 故障定位
+## 5. 好友与可靠私聊
+
+客户端只能从已接受好友列表中选择私聊对象，不能凭一个任意 UUID 直接发送消息。UUID 仅用于发送好友
+申请；双方互相申请时会自动变为好友，也可由接收方显式接受。关系写入 `im_friendship`，消息写入
+`im_chat_message`，均由幂等迁移创建。
+
+| 接口 | 用途 |
+| --- | --- |
+| `GET /api/v1/im/identity` | 当前帐号自己的聊天 UUID，仅供本人查看与分享 |
+| `GET /api/v1/im/friends` | 已接受好友列表 |
+| `GET /api/v1/im/friends/requests` | 收到和发出的好友申请 |
+| `POST /api/v1/im/friends/requests` | 以 `{ "uid": "<对方聊天 UUID>" }` 发起申请 |
+| `POST /api/v1/im/friends/:uid/accept` | 接受收到的申请 |
+| `POST /api/v1/im/messages` | 以 `{ peerUid, content, clientMessageId }` 发送消息 |
+| `GET /api/v1/im/messages?cursor=<游标>&limit=200` | 增量补齐收、发消息 |
+
+发送接口在同一条数据库语句中确认好友关系并插入消息，插入成功才返回；`clientMessageId` 必须由客户端
+生成且同一发送方唯一，网络重试会返回同一条记录，不会重复发出。客户端保留最大游标，打开聊天页和
+前台每 5 秒都会增量同步。因此对方不在线、应用被杀或 Gateway 暂时断连时，消息仍会在下一次同步出现。
+
+## 6. 故障定位
 
 - 业务接口返回 `5031`：`IM_ENABLED` 未开启。
 - 业务接口返回 `5020`：NestJS 无法访问 `IM_INTERNAL_API_BASE_URL`，先在应用宿主机执行

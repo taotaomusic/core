@@ -51,6 +51,10 @@ class TencentMusicApi(
         val deviceLevel: Int,
         val gatewayUrl: String,
     )
+    data class ImFriend(val uid: String, val username: String, val nickname: String, val avatarUrl: String?, val since: Long)
+    data class ImFriendRequest(val uid: String, val username: String, val nickname: String, val direction: String, val requestedAt: Long)
+    data class ImChatMessage(val cursor: Long, val id: String, val senderUid: String, val recipientUid: String, val content: String, val createdAt: Long)
+    data class ImMessagePage(val messages: List<ImChatMessage>, val cursor: Long, val hasMore: Boolean)
     /** 云端最近播放只持久化来源、歌曲 ID 与时间；展示资料由歌曲信息接口补全。 */
     data class RecentPlayback(
         val source: String,
@@ -555,6 +559,31 @@ class TencentMusicApi(
         }
     }
 
+    /** 好友与消息均由业务服务持久化，悟空 Gateway 只负责在线连接。 */
+    fun imFriends(): List<ImFriend> = authorizedArray("/api/v1/im/friends") { data ->
+        (0 until data.length()).map { index -> data.getJSONObject(index).toImFriend() }
+    }
+
+    fun imFriendRequests(): List<ImFriendRequest> = authorizedArray("/api/v1/im/friends/requests") { data ->
+        (0 until data.length()).map { index -> data.getJSONObject(index).toImFriendRequest() }
+    }
+
+    fun requestImFriend(uid: String) = authorizedJson("/api/v1/im/friends/requests", "POST", JSONObject().put("uid", uid)) { Unit }
+
+    fun acceptImFriend(uid: String) = authorizedJson("/api/v1/im/friends/${URLEncoder.encode(uid, "UTF-8")}/accept", "POST", JSONObject()) { Unit }
+
+    fun syncImMessages(cursor: Long): ImMessagePage = authorizedJson("/api/v1/im/messages?cursor=$cursor&limit=200", "GET", JSONObject()) { data ->
+        ImMessagePage(
+            messages = (0 until data.getJSONArray("messages").length()).map { index -> data.getJSONArray("messages").getJSONObject(index).toImChatMessage() },
+            cursor = data.getLong("cursor"),
+            hasMore = data.getBoolean("hasMore"),
+        )
+    }
+
+    fun sendImMessage(peerUid: String, content: String, clientMessageId: String): ImChatMessage = authorizedJson(
+        "/api/v1/im/messages", "POST", JSONObject().put("peerUid", peerUid).put("content", content).put("clientMessageId", clientMessageId),
+    ) { data -> data.toImChatMessage() }
+
     /** [change] 为 false 表示给旧账号补绑，为 true 表示换绑。 */
     fun sendEmailBindingVerification(email: String, change: Boolean) = authorizedJson(
         if (change) "/api/v1/auth/email/change-verification" else "/api/v1/auth/email/bind-verification",
@@ -625,16 +654,38 @@ class TencentMusicApi(
         var token = tokenProvider.validToken() ?: throw SessionExpiredException()
         repeat(MAX_AUTH_ATTEMPTS) { attempt ->
             val connection = open(path, method, token).apply {
-                doOutput = true
-                setRequestProperty("Content-Type", "application/json")
+                if (method != "GET") {
+                    doOutput = true
+                    setRequestProperty("Content-Type", "application/json")
+                }
             }
-            connection.outputStream.use { it.write(body.toString().toByteArray()) }
+            if (method != "GET") connection.outputStream.use { it.write(body.toString().toByteArray()) }
             val code = connection.responseCode
             if (code in 200..299) {
                 noteLatestVersion(connection)
                 val data = if (code == HttpURLConnection.HTTP_NO_CONTENT) JSONObject() else {
                     connection.inputStream.bufferedReader().use { JSONObject(it.readText()) }.optJSONObject("data") ?: JSONObject()
                 }
+                return read(data)
+            }
+            if (code != HttpURLConnection.HTTP_UNAUTHORIZED || attempt == MAX_AUTH_ATTEMPTS - 1) {
+                throw IllegalStateException(messageOf(connection, "请求失败：HTTP $code"))
+            }
+            runCatching { connection.errorStream?.close() }
+            token = tokenProvider.renewToken(token) ?: throw SessionExpiredException()
+        }
+        throw SessionExpiredException()
+    }
+
+    /** 好友列表这类接口的信封 data 是数组，保留与对象接口一致的自动续期语义。 */
+    private fun <T> authorizedArray(path: String, read: (JSONArray) -> T): T {
+        var token = tokenProvider.validToken() ?: throw SessionExpiredException()
+        repeat(MAX_AUTH_ATTEMPTS) { attempt ->
+            val connection = open(path, "GET", token)
+            val code = connection.responseCode
+            if (code in 200..299) {
+                noteLatestVersion(connection)
+                val data = connection.inputStream.bufferedReader().use { JSONObject(it.readText()) }.optJSONArray("data") ?: JSONArray()
                 return read(data)
             }
             if (code != HttpURLConnection.HTTP_UNAUTHORIZED || attempt == MAX_AUTH_ATTEMPTS - 1) {
@@ -703,6 +754,21 @@ class TencentMusicApi(
         email = nullableString("email"),
         nickname = optString("nickname").ifBlank { optString("username") },
         avatarUrl = nullableString("avatarUrl"),
+    )
+
+    private fun JSONObject.toImFriend() = ImFriend(
+        uid = getString("uid"), username = getString("username"), nickname = getString("nickname"),
+        avatarUrl = nullableString("avatarUrl"), since = getLong("since"),
+    )
+
+    private fun JSONObject.toImFriendRequest() = ImFriendRequest(
+        uid = getString("uid"), username = getString("username"), nickname = getString("nickname"),
+        direction = getString("direction"), requestedAt = getLong("requestedAt"),
+    )
+
+    private fun JSONObject.toImChatMessage() = ImChatMessage(
+        cursor = getLong("cursor"), id = getString("id"), senderUid = getString("senderUid"),
+        recipientUid = getString("recipientUid"), content = getString("content"), createdAt = getLong("createdAt"),
     )
 
     private fun JSONObject.nullableString(name: String): String? =

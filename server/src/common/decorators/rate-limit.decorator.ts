@@ -12,6 +12,7 @@ export const RATE_LIMIT_METADATA_KEY = "taotao:rate-limit";
  * - `image`：图片生成，按用户 10 次 + 按来源地址 60 次 / 15 分钟
  * - `image-status`：图片任务轮询，按用户 300 次 + 按来源地址 1800 次 / 15 分钟
  * - `im-session`：IM 连接凭据签发，按用户与来源地址限制频率
+ * - `im-chat`：好友与消息同步，允许前台轮询但限制单用户刷库
  *
  * 各用途计数器必须互相独立：更新检查和图片轮询都是周期性调用，
  * 与登录或图片创建共用会烧掉其它用途的额度。
@@ -23,6 +24,7 @@ export type RateLimitBucket =
   | "admin"
   | "image"
   | "image-status"
-  | "im-session";
+  | "im-session"
+  | "im-chat";
 
 export const RateLimit = (bucket: RateLimitBucket) => SetMetadata(RATE_LIMIT_METADATA_KEY, bucket);
