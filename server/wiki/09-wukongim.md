@@ -94,4 +94,4 @@ IM_SESSION_LIFETIME_SECONDS=900
   `curl.exe http://127.0.0.1:5001/health`。
 - 把 `IM_EXTERNAL_GATEWAY_URL` 写成 `http://...:5100`：启动时会被环境校验拒绝；5100 是 TCP。
 - 能获得 Token 但任意 Token 都能 CONNECT：Gateway Token 校验尚未生效，不能上线。
-- 登录另一台 Android 后前一台断线：这是当前 `device_flag=Android` 的单设备策略，符合 MVP 设计。
+- 登录另一台 Android 后前一台断线：这是当前 `device_flag=0`（悟空 Android SDK 固定值）的单设备策略，符合 MVP 设计。

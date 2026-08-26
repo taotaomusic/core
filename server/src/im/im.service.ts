@@ -6,7 +6,13 @@ import { AppConfigService } from "../config/app-config.service";
 import { ImRepository } from "./im.repository";
 import { WukongImClient } from "./wukong-im.client";
 
-const ANDROID_DEVICE_FLAG = 1;
+/**
+ * 悟空 IM Android SDK 1.5.2 的 WKConnectMsg 固定携带 device_flag=0。
+ *
+ * 服务端签发 Token、设备退出与客户端 CONNECT 必须使用同一个标识；此前错误使用 1 会让
+ * Gateway 拒绝认证，而 SDK 会持续重连，界面只能一直显示「连接中」。
+ */
+const ANDROID_DEVICE_FLAG = 0;
 const PRIMARY_DEVICE_LEVEL = 1;
 
 export type ImSessionBootstrap = {
