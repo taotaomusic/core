@@ -27,6 +27,15 @@ export function validateEnvironment(config: Record<string, unknown>): Record<str
   if (!Number.isInteger(smtpPort) || smtpPort <= 0 || smtpPort > 65535) {
     throw new Error(`SMTP_PORT 不合法：${config.SMTP_PORT}`);
   }
+  const imEnabled = String(config.IM_ENABLED ?? "false").toLowerCase() === "true";
+  if (imEnabled) {
+    validateUrl("IM_INTERNAL_API_BASE_URL", String(config.IM_INTERNAL_API_BASE_URL ?? "http://127.0.0.1:5001"), ["http:", "https:"]);
+    validateUrl("IM_EXTERNAL_GATEWAY_URL", String(config.IM_EXTERNAL_GATEWAY_URL ?? "tcp://114.66.23.232:5100"), ["tcp:"]);
+    const imLifetime = Number(config.IM_SESSION_LIFETIME_SECONDS ?? 900);
+    if (!Number.isInteger(imLifetime) || imLifetime < 60 || imLifetime > 86_400) {
+      throw new Error(`IM_SESSION_LIFETIME_SECONDS 必须在 60 至 86400 秒之间：${config.IM_SESSION_LIFETIME_SECONDS}`);
+    }
+  }
 
   // 契约验证需要完整走「发码 → 带码注册」链路，但不能依赖真实 SMTP 邮箱。
   // 固定验证码只能在显式的测试进程中启用；生产环境或普通开发进程一律拒绝，
@@ -41,4 +50,16 @@ export function validateEnvironment(config: Record<string, unknown>): Record<str
     }
   }
   return config;
+}
+
+function validateUrl(name: string, value: string, protocols: string[]): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error(`${name} 不是合法 URL：${value}`);
+  }
+  if (!protocols.includes(parsed.protocol) || !parsed.hostname) {
+    throw new Error(`${name} 协议或主机不合法：${value}`);
+  }
 }

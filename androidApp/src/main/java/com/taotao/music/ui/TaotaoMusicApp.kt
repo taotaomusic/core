@@ -91,7 +91,9 @@ import com.taotao.music.data.PlaybackSyncCoordinator
 import com.taotao.music.data.PendingPlaybackSnapshot
 import com.taotao.music.data.PlaybackSnapshotPolicy
 import com.taotao.music.data.DeviceIdStore
+import com.taotao.music.data.ImSessionStore
 import com.taotao.music.data.SavedPlaybackState
+import com.taotao.music.data.WukongImClient
 import com.taotao.music.player.AudioPlayer
 import com.taotao.music.update.UpdateManager
 import com.taotao.music.update.UpdateStage
@@ -126,6 +128,16 @@ fun TaotaoMusicApp() {
     val qualityStore = remember { QualityStore(context) }
     val downloadNotifier = remember { DownloadNotifier(context) }
     val playbackDeviceId = remember { DeviceIdStore(context).deviceId() }
+    val wukongImClient = remember {
+        WukongImClient(
+            context = context,
+            api = musicApi,
+            sessionStore = ImSessionStore(context),
+            deviceId = playbackDeviceId,
+        )
+    }
+    val imConnection by wukongImClient.connection.collectAsState()
+    val imMessages by wukongImClient.messages.collectAsState()
     val playbackSync = remember {
         PlaybackSyncCoordinator(
             store = playbackSyncStore,
@@ -500,6 +512,24 @@ fun TaotaoMusicApp() {
             signedIn = true
         }
         return
+    }
+
+    /**
+     * 登录后自动申请短期 IM 凭据并连接悟空 Gateway。IM 尚未在服务端启用、网络暂时不可用
+     * 等情况只记日志，不能让音乐首页或账号流程无法使用。
+     */
+    LaunchedEffect(signedIn, authSession.accountId) {
+        val accountId = authSession.accountId
+        if (!signedIn || accountId == null) {
+            wukongImClient.signOut()
+            return@LaunchedEffect
+        }
+        runCatching { wukongImClient.connect(accountId) }
+            .onFailure { error -> android.util.Log.w("TaotaoMusicApp", "悟空 IM 暂不可用", error) }
+    }
+
+    DisposableEffect(wukongImClient) {
+        onDispose { wukongImClient.signOut() }
     }
 
     LaunchedEffect(signedIn, authSession.accountId) {
@@ -1077,6 +1107,13 @@ fun TaotaoMusicApp() {
                         NavigationBarItem(
                             selected = bottomTab == 2,
                             onClick = { switchTab(2) },
+                            icon = { Icon(Icons.Default.ChatBubbleOutline, "聊天") },
+                            label = { Text("聊天") },
+                            colors = navigationColors,
+                        )
+                        NavigationBarItem(
+                            selected = bottomTab == 3,
+                            onClick = { switchTab(3) },
                             icon = { Icon(Icons.Default.Person, "我的") },
                             label = { Text("我的") },
                             colors = navigationColors,
@@ -1098,14 +1135,22 @@ fun TaotaoMusicApp() {
                     // 底部标签也参与：不带上它的话音乐 ⇄ 我的是硬切，
                     // 而其它换页都有过渡，观感上很不一致。
                     bottomTab == 1 -> "ai"
-                    bottomTab == 2 -> "mine"
+                    bottomTab == 2 -> "chat"
+                    bottomTab == 3 -> "mine"
                     else -> "home"
                 },
                 transitionSpec = { pageTransition(pageReduceMotion) },
                 label = "页面切换",
             ) { page ->
             Box(Modifier.fillMaxSize().padding(innerPadding)) {
-            if (page == "ai") {
+            if (page == "chat") {
+                ChatPage(
+                    connection = imConnection,
+                    messages = imMessages,
+                    onSend = wukongImClient::sendText,
+                    onMessage = { message = it },
+                )
+            } else if (page == "ai") {
                 AiStudioPage(
                     signedIn = signedIn,
                     submitting = imageGenerating,

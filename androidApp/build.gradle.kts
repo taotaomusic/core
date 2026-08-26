@@ -63,5 +63,7 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
     implementation("io.coil-kt:coil-compose:2.7.0")
+    // 与部署中的悟空 IM v2.2.5 同日发布的 Android SDK，避免协议版本漂移。
+    implementation("com.github.WuKongIM:WuKongIMAndroidSDK:1.5.2")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

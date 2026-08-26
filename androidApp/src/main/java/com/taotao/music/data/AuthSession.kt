@@ -11,7 +11,8 @@ import org.json.JSONObject
  * 因此续期锁定义在伴生对象上，保证整个进程内串行刷新。
  */
 class AuthSession(context: Context) : TokenProvider {
-    private val preferences = context.getSharedPreferences("auth", Context.MODE_PRIVATE)
+    private val applicationContext = context.applicationContext
+    private val preferences = applicationContext.getSharedPreferences("auth", Context.MODE_PRIVATE)
 
     /** 会话彻底失效时通知界面回到登录页，由界面层注册。 */
     @Volatile
@@ -50,7 +51,13 @@ class AuthSession(context: Context) : TokenProvider {
 
     /** 退出登录：先清空本地会话，再请服务端撤销刷新令牌。 */
     fun signOut() {
-        val token = synchronized(TOKEN_LOCK) { refreshToken.also { clearTokens() } }
+        val (accessToken, token) = synchronized(TOKEN_LOCK) {
+            currentToken() to refreshToken.also { clearTokens() }
+        }
+        // IM 与音乐业务 Token 相互独立，退出时需要单独关闭悟空 IM 的 Android 连接。
+        // 服务端不可达时仍优先完成本地退出，下次签发新 Token 会覆盖旧连接凭据。
+        accessToken?.takeIf { it.isNotBlank() }?.let { TencentMusicApi.revokeImSession(it) }
+        ImSessionStore(applicationContext).clear()
         token?.takeIf { it.isNotBlank() }?.let { TencentMusicApi.revokeRefreshToken(it) }
     }
 

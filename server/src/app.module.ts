@@ -14,6 +14,7 @@ import { DatabaseModule } from "./database/database.module";
 import { FavoritesModule } from "./favorites/favorites.module";
 import { HealthController } from "./health/health.controller";
 import { ImageGenerationModule } from "./image-generation/image-generation.module";
+import { ImModule } from "./im/im.module";
 import { MusicModule } from "./music/music.module";
 import { MailModule } from "./mail/mail.module";
 import { PlaybackModule } from "./playback/playback.module";
@@ -40,6 +41,7 @@ import { UserAdminModule } from "./user-admin/user-admin.module";
     PlaybackModule,
     MusicModule,
     ImageGenerationModule,
+    ImModule,
     ReleaseModule,
     UserAdminModule,
   ],

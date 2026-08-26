@@ -62,4 +62,15 @@ export class RateLimitService {
     if (!this.allow(`image-status-ip:${address}`, 1800, 15 * 60_000)) return false;
     return this.allow(`image-status-user:${userId}`, 300, 15 * 60_000);
   }
+
+  /**
+   * IM Token 是可连接凭据，签发频率必须独立限制。
+   *
+   * 客户端正常在凭据临近过期时续签，15 分钟内 30 次已经远大于正常重连需求；同时保留 IP
+   * 维度，避免被盗号帐号单独刷穿悟空 IM 的 Token 管理接口。
+   */
+  allowImSessionRequest(userId: number, address: string): boolean {
+    if (!this.allow(`im-session-ip:${address}`, 180, 15 * 60_000)) return false;
+    return this.allow(`im-session-user:${userId}`, 30, 15 * 60_000);
+  }
 }

@@ -37,6 +37,20 @@ class TencentMusicApi(
     data class Announcement(val id: Long, val title: String, val content: String, val pinned: Boolean, val publishedAt: Long)
     /** GPT Image 工作台的异步任务状态。图片 Key 始终只保留在服务端。 */
     data class ImageTask(val taskId: String, val state: String, val progress: Int, val imageUrl: String?, val error: String?)
+    /**
+     * 悟空 IM 的 Android 连接凭据。
+     *
+     * gatewayUrl 是原生 WKProto 地址（当前为 `tcp://`），不是桃桃音乐 HTTP API，也不包含
+     * 悟空 IM 产品 API 的管理凭据。
+     */
+    data class ImSession(
+        val uid: String,
+        val token: String,
+        val tokenExpiresAt: Long,
+        val deviceFlag: Int,
+        val deviceLevel: Int,
+        val gatewayUrl: String,
+    )
     /** 云端最近播放只持久化来源、歌曲 ID 与时间；展示资料由歌曲信息接口补全。 */
     data class RecentPlayback(
         val source: String,
@@ -513,6 +527,34 @@ class TencentMusicApi(
         },
     ) { data -> data.toProfile() }
 
+    /**
+     * 向业务服务申请悟空 IM 连接凭据。
+     *
+     * 连接 Token 与现有访问令牌彼此独立；后者仅用于证明调用者身份，前者只交给悟空 IM
+     * 客户端 SDK。凭据即将过期时由聊天模块重新调用此方法，不需要让用户重新登录。
+     */
+    fun requestImSession(deviceId: String): ImSession = authorizedJson(
+        "/api/v1/im/session",
+        "POST",
+        JSONObject().put("deviceId", deviceId),
+    ) { data ->
+        ImSession(
+            uid = data.getString("uid"),
+            token = data.getString("token"),
+            tokenExpiresAt = data.getLong("tokenExpiresAt"),
+            deviceFlag = data.getInt("deviceFlag"),
+            deviceLevel = data.getInt("deviceLevel"),
+            gatewayUrl = data.getString("gatewayUrl"),
+        )
+    }
+
+    /** 当前帐号退出时尽力使悟空 IM 关闭 Android 会话；网络失败不影响本地退出。 */
+    fun revokeImSession() {
+        runCatching {
+            authorizedJson("/api/v1/im/session", "DELETE", JSONObject()) { Unit }
+        }
+    }
+
     /** [change] 为 false 表示给旧账号补绑，为 true 表示换绑。 */
     fun sendEmailBindingVerification(email: String, change: Boolean) = authorizedJson(
         if (change) "/api/v1/auth/email/change-verification" else "/api/v1/auth/email/bind-verification",
@@ -718,6 +760,26 @@ class TencentMusicApi(
             runCatching {
                 val connection = openPost("/api/v1/auth/logout")
                 connection.outputStream.use { it.write(JSONObject().put("refreshToken", refreshToken).toString().toByteArray()) }
+                connection.responseCode
+                runCatching { connection.errorStream?.close() }
+                runCatching { connection.inputStream.close() }
+            }
+        }
+
+        /**
+         * 退出登录时撤销悟空 IM 的 Android 会话。该请求只使用现有访问令牌，失败不影响
+         * 本地令牌清理；客户端不会因聊天基础设施暂时不可用而无法退出。
+         */
+        fun revokeImSession(accessToken: String) {
+            runCatching {
+                val connection = (URL(ENDPOINT + "/api/v1/im/session").openConnection() as HttpURLConnection).apply {
+                    requestMethod = "DELETE"
+                    connectTimeout = 15_000
+                    readTimeout = 30_000
+                    setRequestProperty("Accept", "application/json")
+                    setRequestProperty("Authorization", "Bearer $accessToken")
+                    setRequestProperty("User-Agent", "TaotaoMusic/1.0")
+                }
                 connection.responseCode
                 runCatching { connection.errorStream?.close() }
                 runCatching { connection.inputStream.close() }

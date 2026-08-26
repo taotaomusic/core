@@ -45,6 +45,11 @@ export async function runMigrations(pool: Pool): Promise<void> {
       ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url text;
       -- 禁用不是删除：保留账号与统计以便后台核查，同时鉴权查询会排除该用户并撤销刷新令牌。
       ALTER TABLE users ADD COLUMN IF NOT EXISTS disabled_at bigint;
+      -- 对外 IM UID 不能复用递增主键。历史账号在第一次申请聊天会话时懒生成，避免升级迁移
+      -- 一次扫描全部用户；唯一索引既挡住随机碰撞，也避免并发首次登录产生两个身份。
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS im_uid text;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_users_im_uid_unique
+        ON users (im_uid) WHERE im_uid IS NOT NULL;
 
       CREATE TABLE IF NOT EXISTS refresh_tokens (
         id         integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -255,6 +260,23 @@ export async function runMigrations(pool: Pool): Promise<void> {
         api_key_id     integer NOT NULL REFERENCES api_key(id) ON DELETE RESTRICT
       );
       CREATE INDEX IF NOT EXISTS idx_image_generation_task_key ON image_generation_task (api_key_id);
+
+      -- 悟空 IM 的连接凭据。消息正文和同步游标由悟空 IM 保存；本库只保存业务账号与
+      -- 设备凭据的可撤销映射。悟空 IM 当前按 device_flag 管理同类设备 Token，因此一名
+      -- 用户同一类设备只保留最新一份凭据，新的 Android 登录会使旧 Android 设备重连失败。
+      CREATE TABLE IF NOT EXISTS im_device_session (
+        user_id        integer NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        device_flag    integer NOT NULL,
+        device_id_hash text NOT NULL,
+        token_hash     text NOT NULL,
+        expires_at     bigint NOT NULL,
+        revoked_at     bigint,
+        created_at     bigint NOT NULL,
+        updated_at     bigint NOT NULL,
+        PRIMARY KEY (user_id, device_flag)
+      );
+      CREATE INDEX IF NOT EXISTS idx_im_device_session_active
+        ON im_device_session (expires_at) WHERE revoked_at IS NULL;
 
       -- 代码热修复补丁。与 app_release 并列而不是复用它：
       -- 补丁只对**某一个** versionCode 的宿主有效（方法签名是按那份代码生成的），

@@ -98,3 +98,25 @@ export class AppConfigService {
     return !!this.smtpHost && !!this.smtpUser && !!this.smtpPassword && !!this.smtpFrom;
   }
 }
+  /** 是否启用悟空 IM 会话签发。未启用时旧客户端与其它业务完全不受影响。 */
+  readonly imEnabled: boolean;
+
+  /** 悟空 IM 产品 API，仅允许桃桃音乐服务通过本机回环地址访问。 */
+  readonly imInternalApiBaseUrl: string;
+
+  /** 下发给 Android 客户端的悟空 IM 原生 TCP Gateway 地址。 */
+  readonly imExternalGatewayUrl: string;
+
+  /** 悟空 IM 产品 API 的服务端访问令牌；为空表示由内网隔离提供边界。 */
+  readonly imApiToken: string;
+
+  /** IM 设备 Token 的客户端续签周期；实际连接校验仍必须由悟空 IM Gateway 完成。 */
+  readonly imSessionLifetimeSeconds: number;
+    this.imEnabled = String(config.get("IM_ENABLED") ?? "false").toLowerCase() === "true";
+    this.imInternalApiBaseUrl = String(config.get("IM_INTERNAL_API_BASE_URL") ?? "http://127.0.0.1:5001").replace(
+      /\/+$/,
+      "",
+    );
+    this.imExternalGatewayUrl = String(config.get("IM_EXTERNAL_GATEWAY_URL") ?? "tcp://114.66.23.232:5100");
+    this.imApiToken = String(config.get("IM_API_TOKEN") ?? "");
+    this.imSessionLifetimeSeconds = Number(config.get("IM_SESSION_LIFETIME_SECONDS") ?? 900);

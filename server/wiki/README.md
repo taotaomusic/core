@@ -14,6 +14,7 @@
 | [06-release-deployment.md](06-release-deployment.md) | 部署后端、发布 APK、灰度或回滚时 |
 | [07-troubleshooting.md](07-troubleshooting.md) | 服务启动失败、接口异常或线上行为不符合预期时 |
 | [08-native-crypto.md](08-native-crypto.md) | 接口需要原生加密、认证、防重放或排查 Kiwi Crypto 时 |
+| [09-wukongim.md](09-wukongim.md) | 接入悟空 IM、配置端口、排查聊天连接或凭据问题时 |
 
 ## 上位文档
 

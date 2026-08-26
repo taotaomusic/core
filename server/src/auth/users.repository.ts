@@ -1,4 +1,5 @@
 import { Injectable } from "@nestjs/common";
+import { randomUUID } from "node:crypto";
 import { ApiErrors } from "../common/api.exception";
 import { DatabaseService } from "../database/database.service";
 import { isUniqueViolation } from "../database/pg-errors";
@@ -8,6 +9,7 @@ export type UserRecord = { id: number; username: string; created_at: string };
 export type UserWithEmail = UserRecord & { email: string | null };
 export type UserProfile = UserRecord & { email: string | null; nickname: string; avatarUrl: string | null };
 export type UserCredentials = UserRecord & { password_hash: string; password_salt: string };
+type ImUidRow = { im_uid: string | null };
 
 /**
  * `created_at` 在库里是 timestamptz，但响应里必须仍是 SQLite 那种
@@ -83,15 +85,51 @@ export class UsersRepository {
   async create(username: string, email: string, passwordHash: string, passwordSalt: string): Promise<UserRecord> {
     try {
       const created = await this.database.first<UserRecord>(
-        `INSERT INTO users (username, email, password_hash, password_salt) VALUES ($1, $2, $3, $4)
+        `INSERT INTO users (username, email, password_hash, password_salt, im_uid) VALUES ($1, $2, $3, $4, $5)
          RETURNING id, username, ${CREATED_AT}`,
-        [username, email, passwordHash, passwordSalt],
+        [username, email, passwordHash, passwordSalt, randomUUID()],
       );
       return created!;
     } catch (error) {
       if (isUniqueViolation(error)) throw ApiErrors.conflict(4090, "用户名已存在");
       throw error;
     }
+  }
+
+  /**
+   * 取一个不可枚举的悟空 IM UID。
+   *
+   * 不能用递增的 users.id：它会暴露用户规模，并允许攻击者批量猜测聊天对象。新账号和历史
+   * 账号统一使用 UUID；数据库唯一索引与条件 UPDATE 处理极小概率
+   * 的碰撞及同一帐号的并发首次请求。
+   */
+  async ensureImUid(userId: number): Promise<string> {
+    const current = await this.database.first<ImUidRow>(`SELECT im_uid FROM users WHERE id = $1`, [userId]);
+    if (!current) throw ApiErrors.unauthorized(4010, "请先登录");
+    if (current.im_uid) return current.im_uid;
+
+    // 随机碰撞的概率可忽略，但仍依靠数据库唯一约束作最终裁决；发生时重新生成即可。
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const candidate = randomUUID();
+      try {
+        const updated = await this.database.first<ImUidRow>(
+          `UPDATE users SET im_uid = $2 WHERE id = $1 AND im_uid IS NULL RETURNING im_uid`,
+          [userId, candidate],
+        );
+        if (updated?.im_uid) return updated.im_uid;
+      } catch (error) {
+        if (!isUniqueViolation(error)) throw error;
+      }
+
+      const concurrent = await this.database.first<ImUidRow>(`SELECT im_uid FROM users WHERE id = $1`, [userId]);
+      if (concurrent?.im_uid) return concurrent.im_uid;
+    }
+    throw ApiErrors.upstream("生成聊天账号标识失败，请稍后重试");
+  }
+
+  /** 退出聊天只读取已有 UID，不能因为退出操作给未使用 IM 的旧账号分配新标识。 */
+  async imUidOf(userId: number): Promise<string | undefined> {
+    return (await this.database.first<ImUidRow>(`SELECT im_uid FROM users WHERE id = $1`, [userId]))?.im_uid ?? undefined;
   }
 
   private async updateEmail(sql: string, params: unknown[]): Promise<boolean> {

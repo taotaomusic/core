@@ -32,4 +32,10 @@ export const ApiErrors = {
    * 在刷新令牌接口上会因此清空本地会话把用户踢回登录页。
    */
   upstream: (message: string) => new ApiException(HttpStatus.BAD_GATEWAY, 5020, message),
+  /**
+   * 某项可选基础设施未启用或暂时不可用。
+   *
+   * 与 upstream 的 502 区分：前者表示本服务尚未完成配置，客户端不应把它误判成登录失效。
+   */
+  serviceUnavailable: (code: number, message: string) => new ApiException(HttpStatus.SERVICE_UNAVAILABLE, code, message),
 };
