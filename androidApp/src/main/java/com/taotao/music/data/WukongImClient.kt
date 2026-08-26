@@ -41,6 +41,7 @@ class WukongImClient(
     private val _connection = MutableStateFlow(ImConnectionInfo())
     private val _messages = MutableStateFlow(emptyList<ImChatMessage>())
     private val _syncedPeers = MutableStateFlow(emptyList<String>())
+    private val _syncDetail = MutableStateFlow("等待悟空 IM 同步")
 
     /** 页面订阅的连接状态；不会暴露悟空 IM Token。 */
     val connection: StateFlow<ImConnectionInfo> = _connection.asStateFlow()
@@ -50,6 +51,9 @@ class WukongImClient(
 
     /** 最近同步到的私聊对端，供页面恢复离线会话入口。 */
     val syncedPeers: StateFlow<List<String>> = _syncedPeers.asStateFlow()
+
+    /** 同步诊断，避免网络或协议错误被误显示为「没有消息」。 */
+    val syncDetail: StateFlow<String> = _syncDetail.asStateFlow()
 
     @Volatile
     private var gateway: Gateway? = null
@@ -78,10 +82,14 @@ class WukongImClient(
             syncScope.launch {
                 runCatching { api.syncImConversations(lastSeqs, count, version) }
                     .onSuccess { rows ->
-                        mergeSyncedConversations(rows)
+                        val restored = mergeSyncedConversations(rows)
+                        _syncDetail.value = "已同步 ${rows.length()} 个会话、${restored} 条消息"
                         callback?.onBack(toSyncChat(rows))
                     }
-                    .onFailure { callback?.onBack(null) }
+                    .onFailure { error ->
+                        _syncDetail.value = "同步失败：${error.message ?: error.javaClass.simpleName}"
+                        callback?.onBack(null)
+                    }
             }
         }
         // SDK 只有在用户进入会话、需要更多历史时才触发该回调；每次最多一页。
@@ -165,6 +173,7 @@ class WukongImClient(
         _connection.value = ImConnectionInfo()
         _messages.value = emptyList()
         _syncedPeers.value = emptyList()
+        _syncDetail.value = "等待悟空 IM 同步"
         wkIm.connectionManager.disconnect(true)
     }
 
@@ -215,8 +224,8 @@ class WukongImClient(
      * 悟空 SDK 会把同步数据落入自己的数据库，但不会触发 addOnNewMsgListener。当前聊天页
      * 展示的是状态流，因此这里同步更新内存投影，避免「已同步但页面空白」。
      */
-    private fun mergeSyncedConversations(rows: org.json.JSONArray) {
-        val currentUid = _connection.value.uid ?: return
+    private fun mergeSyncedConversations(rows: org.json.JSONArray): Int {
+        val currentUid = _connection.value.uid ?: return 0
         val restored = buildList {
             for (rowIndex in 0 until rows.length()) {
                 val row = rows.optJSONObject(rowIndex) ?: continue
@@ -240,7 +249,7 @@ class WukongImClient(
                 }
             }
         }
-        if (restored.isEmpty()) return
+        if (restored.isEmpty()) return 0
         val merged = (_messages.value + restored)
             .associateBy { it.id }
             .values
@@ -248,6 +257,7 @@ class WukongImClient(
             .takeLast(MAX_IN_MEMORY_MESSAGES)
         _messages.value = merged
         _syncedPeers.value = ( _syncedPeers.value + restored.map { it.peerUid } ).distinct().sorted()
+        return restored.size
     }
 
     private fun toSyncRecents(messages: org.json.JSONArray?): ArrayList<WKSyncRecent> = ArrayList<WKSyncRecent>().apply {

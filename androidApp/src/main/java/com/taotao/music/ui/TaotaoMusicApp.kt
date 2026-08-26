@@ -141,6 +141,7 @@ fun TaotaoMusicApp() {
     val imPeerStore = remember { ImPeerStore(context) }
     val imMessages by wukongImClient.messages.collectAsState()
     val syncedImPeers by wukongImClient.syncedPeers.collectAsState()
+    val imSyncDetail by wukongImClient.syncDetail.collectAsState()
     val playbackSync = remember {
         PlaybackSyncCoordinator(
             store = playbackSyncStore,
@@ -1158,6 +1159,7 @@ fun TaotaoMusicApp() {
                     connection = imConnection,
                     messages = imMessages,
                     savedPeers = imPeers,
+                    syncDetail = imSyncDetail,
                     onSend = { peerUid, content ->
                         imPeers = imPeerStore.remember(authSession.accountId, peerUid)
                         wukongImClient.sendText(peerUid, content)

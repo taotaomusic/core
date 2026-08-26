@@ -51,6 +51,7 @@ fun ChatPage(
     connection: ImConnectionInfo,
     messages: List<ImChatMessage>,
     savedPeers: List<String>,
+    syncDetail: String,
     onSend: (peerUid: String, content: String) -> Unit,
     onMessage: (String) -> Unit,
 ) {
@@ -118,6 +119,12 @@ fun ChatPage(
                 }
             }
         }
+
+        Text(
+            text = syncDetail,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
 
         if (peerUid.isBlank()) {
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
