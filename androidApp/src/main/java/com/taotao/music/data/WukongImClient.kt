@@ -1,17 +1,27 @@
 package com.taotao.music.data
 
 import android.content.Context
+import android.util.Base64
 import com.xinbida.wukongim.WKIM
 import com.xinbida.wukongim.entity.WKChannel
 import com.xinbida.wukongim.entity.WKChannelType
+import com.xinbida.wukongim.entity.WKSyncChat
+import com.xinbida.wukongim.entity.WKSyncChannelMsg
+import com.xinbida.wukongim.entity.WKSyncConvMsg
+import com.xinbida.wukongim.entity.WKSyncRecent
 import com.xinbida.wukongim.message.type.WKConnectStatus
 import com.xinbida.wukongim.msgmodel.WKTextContent
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import java.net.URI
+import java.util.ArrayList
+import java.util.HashMap
 
 /**
  * 桃桃音乐对悟空 IM Android SDK 的连接适配层。
@@ -27,6 +37,7 @@ class WukongImClient(
 ) {
     private val applicationContext = context.applicationContext
     private val wkIm = WKIM.getInstance()
+    private val syncScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val _connection = MutableStateFlow(ImConnectionInfo())
     private val _messages = MutableStateFlow(emptyList<ImChatMessage>())
 
@@ -58,11 +69,29 @@ class WukongImClient(
                 detail = reason?.takeIf { it.isNotBlank() },
             )
         }
-        // SDK 认证成功后会进入「同步最近会话」阶段，并等待业务服务回调。桃桃当前尚未提供
-        // 会话列表同步接口；若不显式回调空结果，SDK 会永远停在 syncMsg 状态，页面看起来
-        // 就是「连接中」，尽管 Gateway 已经握手成功。在线消息仍由 SDK 正常持久化和分发。
-        wkIm.conversationManager.addOnSyncConversationListener { _, _, _, callback ->
-            callback?.onBack(null)
+        // 将悟空 API 的会话数据交回 SDK；SDK 随后负责写入本地库和离线消息恢复。
+        wkIm.conversationManager.addOnSyncConversationListener { lastSeqs, count, version, callback ->
+            syncScope.launch {
+                runCatching { api.syncImConversations(lastSeqs, count, version) }
+                    .onSuccess { callback?.onBack(toSyncChat(it)) }
+                    .onFailure { callback?.onBack(null) }
+            }
+        }
+        // SDK 只有在用户进入会话、需要更多历史时才触发该回调；每次最多一页。
+        wkIm.msgManager.addOnSyncChannelMsgListener { channelId, _, startSeq, endSeq, limit, pullMode, callback ->
+            val normalizedChannelId = channelId?.trim().orEmpty()
+            syncScope.launch {
+                runCatching {
+                    api.syncImChannelMessages(
+                        channelId = normalizedChannelId,
+                        startMessageSeq = startSeq,
+                        endMessageSeq = endSeq,
+                        limit = limit.coerceIn(1, 50),
+                        pullMode = pullMode.toInt().coerceIn(0, 1),
+                    )
+                }.onSuccess { callback?.onBack(toSyncChannelMessages(it)) }
+                    .onFailure { callback?.onBack(null) }
+            }
         }
         wkIm.msgManager.addOnNewMsgListener(NEW_MESSAGE_LISTENER) { received ->
             val currentUid = _connection.value.uid ?: return@addOnNewMsgListener
@@ -145,6 +174,59 @@ class WukongImClient(
                 require(uri.port in 1..65535) { "IM Gateway 端口不正确" }
                 return Gateway(host, uri.port)
             }
+        }
+    }
+
+    private fun toSyncChat(rows: org.json.JSONArray): WKSyncChat = WKSyncChat().apply {
+        conversations = ArrayList<WKSyncConvMsg>().apply {
+            for (index in 0 until rows.length()) {
+                val row = rows.optJSONObject(index) ?: continue
+                add(WKSyncConvMsg().apply {
+                    channel_id = row.optString("channel_id")
+                    channel_type = row.optInt("channel_type").toByte()
+                    last_client_msg_no = row.optString("last_client_msg_no")
+                    last_msg_seq = row.optLong("last_msg_seq")
+                    offset_msg_seq = row.optInt("offset_msg_seq")
+                    timestamp = row.optLong("timestamp")
+                    unread = row.optInt("unread")
+                    version = row.optLong("version")
+                    recents = toSyncRecents(row.optJSONArray("recents"))
+                })
+            }
+        }
+    }
+
+    private fun toSyncChannelMessages(row: org.json.JSONObject): WKSyncChannelMsg = WKSyncChannelMsg().apply {
+        min_message_seq = row.optLong("start_message_seq")
+        max_message_seq = row.optLong("end_message_seq")
+        more = row.optInt("more")
+        messages = toSyncRecents(row.optJSONArray("messages"))
+    }
+
+    private fun toSyncRecents(messages: org.json.JSONArray?): ArrayList<WKSyncRecent> = ArrayList<WKSyncRecent>().apply {
+        if (messages == null) return@apply
+        for (index in 0 until messages.length()) {
+            val message = messages.optJSONObject(index) ?: continue
+            val rawPayload = message.optString("payload")
+            val payloadText = runCatching {
+                String(Base64.decode(rawPayload, Base64.DEFAULT), Charsets.UTF_8)
+            }.getOrDefault(rawPayload)
+            val payload = HashMap<String, Any>().apply {
+                val json = runCatching { org.json.JSONObject(payloadText) }.getOrNull()
+                json?.keys()?.forEach { key -> put(key, json.get(key)) }
+            }
+            add(WKSyncRecent().apply {
+                message_id = message.optString("message_idstr", message.optString("message_id"))
+                message_seq = message.optInt("message_seq")
+                client_msg_no = message.optString("client_msg_no")
+                from_uid = message.optString("from_uid")
+                channel_id = message.optString("channel_id")
+                channel_type = message.optInt("channel_type").toByte()
+                timestamp = message.optLong("timestamp")
+                setting = message.optInt("setting")
+                expire = message.optInt("expire")
+                this.payload = payload
+            })
         }
     }
 

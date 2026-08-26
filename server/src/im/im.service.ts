@@ -84,6 +84,16 @@ export class ImService {
     await this.repository.revokeSession(userId, ANDROID_DEVICE_FLAG, now);
   }
 
+  async syncConversations(userId: number, input: { lastMessageSeqs: string; messageCount: number; version: number }): Promise<unknown> {
+    this.requireEnabled();
+    return this.wukong.syncConversations(await this.users.ensureImUid(userId), input.lastMessageSeqs, input.messageCount, input.version);
+  }
+
+  async syncChannelMessages(userId: number, input: { channelId: string; channelType: number; startMessageSeq: number; endMessageSeq: number; limit: number; pullMode: number }): Promise<unknown> {
+    this.requireEnabled();
+    return this.wukong.syncChannelMessages({ uid: await this.users.ensureImUid(userId), ...input });
+  }
+
   private requireEnabled(): void {
     if (!this.config.imEnabled) throw ApiErrors.serviceUnavailable(5031, "聊天服务尚未启用");
   }

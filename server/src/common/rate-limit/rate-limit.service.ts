@@ -73,4 +73,13 @@ export class RateLimitService {
     if (!this.allow(`im-session-ip:${address}`, 180, 15 * 60_000)) return false;
     return this.allow(`im-session-user:${userId}`, 30, 15 * 60_000);
   }
+
+  /**
+   * IM 同步会在登录和翻阅历史时调用。单次响应已做严格分页，再用独立桶避免异常客户端
+   * 反复拉取悟空 IM；额度仍允许正常滚动翻阅历史。
+   */
+  allowImSyncRequest(userId: number, address: string): boolean {
+    if (!this.allow(`im-sync-ip:${address}`, 1_800, 15 * 60_000)) return false;
+    return this.allow(`im-sync-user:${userId}`, 300, 15 * 60_000);
+  }
 }

@@ -29,7 +29,31 @@ export class WukongImClient {
     await this.post("/user/device_quit", { uid, device_flag: deviceFlag });
   }
 
+  /** 仅由已认证业务用户调用的悟空会话同步代理，不能把 5001 暴露给客户端。 */
+  syncConversations(uid: string, lastMessageSeqs: string, messageCount: number, version: number): Promise<unknown> {
+    // 登录只恢复最近 50 个会话；更早历史由频道消息的按页同步按需取得，避免重连放大。
+    return this.postJson("/conversation/sync", {
+      uid,
+      last_msg_seqs: lastMessageSeqs,
+      msg_count: messageCount,
+      version,
+      page: 1,
+      page_size: 50,
+    });
+  }
+
+  syncChannelMessages(input: { uid: string; channelId: string; channelType: number; startMessageSeq: number; endMessageSeq: number; limit: number; pullMode: number }): Promise<unknown> {
+    return this.postJson("/channel/messagesync", {
+      login_uid: input.uid, channel_id: input.channelId, channel_type: input.channelType,
+      start_message_seq: input.startMessageSeq, end_message_seq: input.endMessageSeq, limit: input.limit, pull_mode: input.pullMode,
+    });
+  }
+
   private async post(path: string, body: Record<string, unknown>): Promise<void> {
+    await this.postJson(path, body);
+  }
+
+  private async postJson(path: string, body: Record<string, unknown>): Promise<unknown> {
     const abort = new AbortController();
     const timeout = setTimeout(() => abort.abort(), REQUEST_TIMEOUT_MS);
     try {
@@ -42,7 +66,7 @@ export class WukongImClient {
         body: JSON.stringify(body),
         signal: abort.signal,
       });
-      if (response.ok) return;
+      if (response.ok) return response.status === 204 ? undefined : response.json();
 
       // 只保留有限长度的服务端错误以辅助运维；请求体中含 Token，绝不能记录请求体。
       const detail = (await response.text()).replace(/\s+/g, " ").slice(0, 200);
