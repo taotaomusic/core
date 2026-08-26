@@ -35,7 +35,7 @@ export class ImService {
   ) {}
 
   async createAndroidSession(userId: number, deviceId: string): Promise<ImSessionBootstrap> {
-    this.ensureEnabled();
+    this.requireEnabled();
     const uid = await this.users.ensureImUid(userId);
     const now = Date.now();
     const tokenExpiresAt = now + this.config.imSessionLifetimeSeconds * 1000;
@@ -73,14 +73,8 @@ export class ImService {
     };
   }
 
-  /** 返回稳定的聊天 UUID，供用户添加好友时分享；不会暴露递增业务用户 ID。 */
-  async identity(userId: number): Promise<{ uid: string }> {
-    this.ensureEnabled();
-    return { uid: await this.users.ensureImUid(userId) };
-  }
-
   async revokeAndroidSession(userId: number): Promise<void> {
-    this.ensureEnabled();
+    this.requireEnabled();
     const now = Date.now();
     // 悟空 IM v2 的 device_quit 以设备类别为范围，故当前 MVP 的退出会关闭该帐号全部
     // Android 连接；多 Android 设备并行是后续需要和 Gateway 设备 ID 校验一起扩展的能力。
@@ -90,8 +84,7 @@ export class ImService {
     await this.repository.revokeSession(userId, ANDROID_DEVICE_FLAG, now);
   }
 
-  /** 供好友和消息接口复用，避免 IM 关闭时仍暴露半成品数据接口。 */
-  ensureEnabled(): void {
+  private requireEnabled(): void {
     if (!this.config.imEnabled) throw ApiErrors.serviceUnavailable(5031, "聊天服务尚未启用");
   }
 

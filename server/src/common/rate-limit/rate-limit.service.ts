@@ -73,10 +73,4 @@ export class RateLimitService {
     if (!this.allow(`im-session-ip:${address}`, 180, 15 * 60_000)) return false;
     return this.allow(`im-session-user:${userId}`, 30, 15 * 60_000);
   }
-
-  /** 聊天同步可在前台每几秒执行一次，单用户与 IP 的额度独立于 Token 签发。 */
-  allowImChatRequest(userId: number, address: string): boolean {
-    if (!this.allow(`im-chat-ip:${address}`, 1_800, 15 * 60_000)) return false;
-    return this.allow(`im-chat-user:${userId}`, 600, 15 * 60_000);
-  }
 }

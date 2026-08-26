@@ -92,6 +92,7 @@ import com.taotao.music.data.PendingPlaybackSnapshot
 import com.taotao.music.data.PlaybackSnapshotPolicy
 import com.taotao.music.data.DeviceIdStore
 import com.taotao.music.data.ImSessionStore
+import com.taotao.music.data.ImPeerStore
 import com.taotao.music.data.SavedPlaybackState
 import com.taotao.music.data.WukongImClient
 import com.taotao.music.player.AudioPlayer
@@ -137,6 +138,8 @@ fun TaotaoMusicApp() {
         )
     }
     val imConnection by wukongImClient.connection.collectAsState()
+    val imPeerStore = remember { ImPeerStore(context) }
+    val imMessages by wukongImClient.messages.collectAsState()
     val playbackSync = remember {
         PlaybackSyncCoordinator(
             store = playbackSyncStore,
@@ -158,16 +161,13 @@ fun TaotaoMusicApp() {
     var hasSearched by remember { mutableStateOf(false) }
     var searchError by remember { mutableStateOf<String?>(null) }
     var message by remember { mutableStateOf<String?>(null) }
-    var imFriends by remember { mutableStateOf(emptyList<TencentMusicApi.ImFriend>()) }
-    var imFriendRequests by remember { mutableStateOf(emptyList<TencentMusicApi.ImFriendRequest>()) }
-    var imMessages by remember { mutableStateOf(emptyList<TencentMusicApi.ImChatMessage>()) }
-    var imCursor by remember { mutableLongStateOf(0L) }
     var downloadedSongs by remember { mutableStateOf(emptyList<Song>()) }
     var bottomTab by remember { mutableIntStateOf(0) }
     var imageTask by remember { mutableStateOf<TencentMusicApi.ImageTask?>(null) }
     var imageGenerating by remember { mutableStateOf(false) }
     var searchHistory by remember { mutableStateOf(searchHistoryStore.read()) }
     var signedIn by remember { mutableStateOf(authSession.isSignedIn) }
+    var imPeers by remember(authSession.accountId) { mutableStateOf(imPeerStore.read(authSession.accountId)) }
     /** 资料只在内存中保留；退出登录立即清空邮箱与昵称。 */
     var userProfile by remember { mutableStateOf<TencentMusicApi.UserProfile?>(null) }
     var profileLoading by remember { mutableStateOf(false) }
@@ -533,43 +533,6 @@ fun TaotaoMusicApp() {
 
     DisposableEffect(wukongImClient) {
         onDispose { wukongImClient.signOut() }
-    }
-
-    /** 打开聊天页时补拉好友与自上个游标之后的消息；离线期间的消息也从这里恢复。 */
-    LaunchedEffect(signedIn, bottomTab) {
-        if (!signedIn || bottomTab != 2) return@LaunchedEffect
-        runCatching {
-            withContext(Dispatchers.IO) {
-                val friends = musicApi.imFriends()
-                val requests = musicApi.imFriendRequests()
-                var cursor = imCursor
-                val received = mutableListOf<TencentMusicApi.ImChatMessage>()
-                do {
-                    val page = musicApi.syncImMessages(cursor)
-                    received += page.messages
-                    cursor = page.cursor
-                } while (page.hasMore)
-                Triple(friends, requests, received to cursor)
-            }
-        }.onSuccess { (friends, requests, result) ->
-            imFriends = friends
-            imFriendRequests = requests
-            imMessages = (imMessages + result.first).distinctBy { it.id }.sortedBy { it.cursor }
-            imCursor = result.second
-        }.onFailure { error -> message = error.message ?: "聊天同步失败" }
-    }
-
-    /** 前台每 5 秒补拉新消息；服务端游标保证重复轮询不会重复显示，也覆盖对方离线后上线的场景。 */
-    LaunchedEffect(signedIn, authSession.accountId) {
-        if (!signedIn) return@LaunchedEffect
-        while (isActive) {
-            runCatching { withContext(Dispatchers.IO) { musicApi.syncImMessages(imCursor) } }
-                .onSuccess { page ->
-                    imMessages = (imMessages + page.messages).distinctBy { it.id }.sortedBy { it.cursor }
-                    imCursor = maxOf(imCursor, page.cursor)
-                }
-            delay(5_000)
-        }
     }
 
     LaunchedEffect(signedIn, authSession.accountId) {
@@ -1186,24 +1149,12 @@ fun TaotaoMusicApp() {
             if (page == "chat") {
                 ChatPage(
                     connection = imConnection,
-                    friends = imFriends,
-                    requests = imFriendRequests,
                     messages = imMessages,
-                    onAddFriend = { uid -> scope.launch {
-                        runCatching { withContext(Dispatchers.IO) { musicApi.requestImFriend(uid); musicApi.imFriends() to musicApi.imFriendRequests() } }
-                            .onSuccess { (friends, requests) -> imFriends = friends; imFriendRequests = requests }
-                            .onFailure { message = it.message ?: "好友申请失败" }
-                    } },
-                    onAcceptFriend = { uid -> scope.launch {
-                        runCatching { withContext(Dispatchers.IO) { musicApi.acceptImFriend(uid); musicApi.imFriends() to musicApi.imFriendRequests() } }
-                            .onSuccess { (friends, requests) -> imFriends = friends; imFriendRequests = requests }
-                            .onFailure { message = it.message ?: "接受好友失败" }
-                    } },
-                    onSend = { peerUid, content -> scope.launch {
-                        runCatching { withContext(Dispatchers.IO) { musicApi.sendImMessage(peerUid, content, UUID.randomUUID().toString()) } }
-                            .onSuccess { sent -> imMessages = (imMessages + sent).distinctBy { it.id }.sortedBy { it.cursor }; imCursor = maxOf(imCursor, sent.cursor) }
-                            .onFailure { message = it.message ?: "消息发送失败" }
-                    } },
+                    savedPeers = imPeers,
+                    onSend = { peerUid, content ->
+                        imPeers = imPeerStore.remember(authSession.accountId, peerUid)
+                        wukongImClient.sendText(peerUid, content)
+                    },
                     onMessage = { message = it },
                 )
             } else if (page == "ai") {

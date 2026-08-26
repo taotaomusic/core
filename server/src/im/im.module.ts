@@ -2,7 +2,6 @@ import { Module } from "@nestjs/common";
 import { AuthModule } from "../auth/auth.module";
 import { ImController } from "./im.controller";
 import { ImRepository } from "./im.repository";
-import { ImChatRepository } from "./im-chat.repository";
 import { ImService } from "./im.service";
 import { WukongImClient } from "./wukong-im.client";
 
@@ -10,6 +9,6 @@ import { WukongImClient } from "./wukong-im.client";
 @Module({
   imports: [AuthModule],
   controllers: [ImController],
-  providers: [ImRepository, ImChatRepository, ImService, WukongImClient],
+  providers: [ImRepository, ImService, WukongImClient],
 })
 export class ImModule {}
