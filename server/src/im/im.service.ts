@@ -84,9 +84,21 @@ export class ImService {
     await this.repository.revokeSession(userId, ANDROID_DEVICE_FLAG, now);
   }
 
-  async syncConversations(userId: number, input: { lastMessageSeqs: string; messageCount: number; version: number }): Promise<unknown> {
+  async syncConversations(userId: number, input: { lastMessageSeqs: string; messageCount: number; version: number }): Promise<{ conversations: unknown[] }> {
     this.requireEnabled();
-    return this.wukong.syncConversations(await this.users.ensureImUid(userId), input.lastMessageSeqs, input.messageCount, input.version);
+    const result = await this.wukong.syncConversations(
+      await this.users.ensureImUid(userId),
+      input.lastMessageSeqs,
+      input.messageCount,
+      input.version,
+    );
+    // 悟空 IM 旧版返回数组，新版返回 { conversations: [...] }。对 Android 固定输出一种契约，
+    // 不能把具体悟空版本差异泄漏给客户端。
+    if (Array.isArray(result)) return { conversations: result };
+    if (result && typeof result === "object" && Array.isArray((result as { conversations?: unknown }).conversations)) {
+      return { conversations: (result as { conversations: unknown[] }).conversations };
+    }
+    throw ApiErrors.upstream("悟空 IM 会话同步响应格式不正确");
   }
 
   async syncChannelMessages(userId: number, input: { channelId: string; channelType: number; startMessageSeq: number; endMessageSeq: number; limit: number; pullMode: number }): Promise<unknown> {
