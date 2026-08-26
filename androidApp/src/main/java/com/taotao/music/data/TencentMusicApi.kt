@@ -556,11 +556,10 @@ class TencentMusicApi(
     }
 
     /** 已登录用户经业务服务代理拉取悟空 IM 的最近会话，客户端不接触 5001。 */
-    fun syncImConversations(lastMessageSeqs: String, messageCount: Int, version: Long): JSONArray = authorizedJson(
+    fun syncImConversations(lastMessageSeqs: String, messageCount: Int, version: Long): JSONArray = authorizedConversationArray(
         "/api/v1/im/sync/conversations",
-        "POST",
         JSONObject().put("lastMessageSeqs", lastMessageSeqs).put("messageCount", messageCount).put("version", version),
-    ) { it.optJSONArray("conversations") ?: JSONArray() }
+    )
 
     /** 按悟空 IM 给出的游标同步单个频道的一页历史消息。 */
     fun syncImChannelMessages(
@@ -661,6 +660,39 @@ class TencentMusicApi(
                     connection.inputStream.bufferedReader().use { JSONObject(it.readText()) }.optJSONObject("data") ?: JSONObject()
                 }
                 return read(data)
+            }
+            if (code != HttpURLConnection.HTTP_UNAUTHORIZED || attempt == MAX_AUTH_ATTEMPTS - 1) {
+                throw IllegalStateException(messageOf(connection, "请求失败：HTTP $code"))
+            }
+            runCatching { connection.errorStream?.close() }
+            token = tokenProvider.renewToken(token) ?: throw SessionExpiredException()
+        }
+        throw SessionExpiredException()
+    }
+
+    /**
+     * 兼容两代 IM 代理：旧服务将悟空原始数组放在 data，新服务固定放在 data.conversations。
+     * 保持兼容能避免服务灰度期间客户端把有效离线消息误判为空。
+     */
+    private fun authorizedConversationArray(path: String, body: JSONObject): JSONArray {
+        var token = tokenProvider.validToken() ?: throw SessionExpiredException()
+        repeat(MAX_AUTH_ATTEMPTS) { attempt ->
+            val connection = open(path, "POST", token).apply {
+                doOutput = true
+                setRequestProperty("Content-Type", "application/json")
+            }
+            connection.outputStream.use { it.write(body.toString().toByteArray()) }
+            val code = connection.responseCode
+            if (code in 200..299) {
+                noteLatestVersion(connection)
+                return connection.inputStream.bufferedReader().use {
+                    val data = JSONObject(it.readText()).opt("data")
+                    when (data) {
+                        is JSONArray -> data
+                        is JSONObject -> data.optJSONArray("conversations") ?: JSONArray()
+                        else -> JSONArray()
+                    }
+                }
             }
             if (code != HttpURLConnection.HTTP_UNAUTHORIZED || attempt == MAX_AUTH_ATTEMPTS - 1) {
                 throw IllegalStateException(messageOf(connection, "请求失败：HTTP $code"))
