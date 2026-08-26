@@ -58,6 +58,12 @@ class WukongImClient(
                 detail = reason?.takeIf { it.isNotBlank() },
             )
         }
+        // SDK 认证成功后会进入「同步最近会话」阶段，并等待业务服务回调。桃桃当前尚未提供
+        // 会话列表同步接口；若不显式回调空结果，SDK 会永远停在 syncMsg 状态，页面看起来
+        // 就是「连接中」，尽管 Gateway 已经握手成功。在线消息仍由 SDK 正常持久化和分发。
+        wkIm.conversationManager.addOnSyncConversationListener { _, _, _, callback ->
+            callback?.onBack(null)
+        }
         wkIm.msgManager.addOnNewMsgListener(NEW_MESSAGE_LISTENER) { received ->
             val currentUid = _connection.value.uid ?: return@addOnNewMsgListener
             val added = received.mapNotNull { message ->
