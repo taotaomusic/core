@@ -40,12 +40,16 @@ class WukongImClient(
     private val syncScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val _connection = MutableStateFlow(ImConnectionInfo())
     private val _messages = MutableStateFlow(emptyList<ImChatMessage>())
+    private val _syncedPeers = MutableStateFlow(emptyList<String>())
 
     /** 页面订阅的连接状态；不会暴露悟空 IM Token。 */
     val connection: StateFlow<ImConnectionInfo> = _connection.asStateFlow()
 
     /** 当前进程内已收发的文本消息，按私聊对端 UUID 归类。 */
     val messages: StateFlow<List<ImChatMessage>> = _messages.asStateFlow()
+
+    /** 最近同步到的私聊对端，供页面恢复离线会话入口。 */
+    val syncedPeers: StateFlow<List<String>> = _syncedPeers.asStateFlow()
 
     @Volatile
     private var gateway: Gateway? = null
@@ -73,7 +77,10 @@ class WukongImClient(
         wkIm.conversationManager.addOnSyncConversationListener { lastSeqs, count, version, callback ->
             syncScope.launch {
                 runCatching { api.syncImConversations(lastSeqs, count, version) }
-                    .onSuccess { callback?.onBack(toSyncChat(it)) }
+                    .onSuccess { rows ->
+                        mergeSyncedConversations(rows)
+                        callback?.onBack(toSyncChat(rows))
+                    }
                     .onFailure { callback?.onBack(null) }
             }
         }
@@ -157,6 +164,7 @@ class WukongImClient(
         currentAccountId = null
         _connection.value = ImConnectionInfo()
         _messages.value = emptyList()
+        _syncedPeers.value = emptyList()
         wkIm.connectionManager.disconnect(true)
     }
 
@@ -203,18 +211,50 @@ class WukongImClient(
         messages = toSyncRecents(row.optJSONArray("messages"))
     }
 
+    /**
+     * 悟空 SDK 会把同步数据落入自己的数据库，但不会触发 addOnNewMsgListener。当前聊天页
+     * 展示的是状态流，因此这里同步更新内存投影，避免「已同步但页面空白」。
+     */
+    private fun mergeSyncedConversations(rows: org.json.JSONArray) {
+        val currentUid = _connection.value.uid ?: return
+        val restored = buildList {
+            for (rowIndex in 0 until rows.length()) {
+                val row = rows.optJSONObject(rowIndex) ?: continue
+                val channelId = row.optString("channel_id").trim().lowercase()
+                if (!UUID_PATTERN.matches(channelId) || row.optInt("channel_type") != WKChannelType.PERSONAL.toInt()) continue
+                val recents = row.optJSONArray("recents") ?: continue
+                for (messageIndex in 0 until recents.length()) {
+                    val message = recents.optJSONObject(messageIndex) ?: continue
+                    val fromUid = message.optString("from_uid").trim().lowercase()
+                    val peerUid = if (fromUid == currentUid) channelId else fromUid
+                    if (!UUID_PATTERN.matches(peerUid)) continue
+                    val content = payloadOf(message).optString("content").trim()
+                    if (content.isBlank()) continue
+                    add(ImChatMessage(
+                        id = message.optString("message_idstr", message.optString("client_msg_no")),
+                        peerUid = peerUid,
+                        content = content,
+                        sentAtMillis = message.optLong("timestamp") * 1000,
+                        isMine = fromUid == currentUid,
+                    ))
+                }
+            }
+        }
+        if (restored.isEmpty()) return
+        val merged = (_messages.value + restored)
+            .associateBy { it.id }
+            .values
+            .sortedBy { it.sentAtMillis }
+            .takeLast(MAX_IN_MEMORY_MESSAGES)
+        _messages.value = merged
+        _syncedPeers.value = ( _syncedPeers.value + restored.map { it.peerUid } ).distinct().sorted()
+    }
+
     private fun toSyncRecents(messages: org.json.JSONArray?): ArrayList<WKSyncRecent> = ArrayList<WKSyncRecent>().apply {
         if (messages == null) return@apply
         for (index in 0 until messages.length()) {
             val message = messages.optJSONObject(index) ?: continue
-            val rawPayload = message.optString("payload")
-            val payloadText = runCatching {
-                String(Base64.decode(rawPayload, Base64.DEFAULT), Charsets.UTF_8)
-            }.getOrDefault(rawPayload)
-            val payload = HashMap<String, Any>().apply {
-                val json = runCatching { org.json.JSONObject(payloadText) }.getOrNull()
-                json?.keys()?.forEach { key -> put(key, json.get(key)) }
-            }
+            val payload = payloadMapOf(message)
             add(WKSyncRecent().apply {
                 message_id = message.optString("message_idstr", message.optString("message_id"))
                 message_seq = message.optInt("message_seq")
@@ -228,6 +268,19 @@ class WukongImClient(
                 this.payload = payload
             })
         }
+    }
+
+    private fun payloadMapOf(message: org.json.JSONObject): HashMap<String, Any> = HashMap<String, Any>().apply {
+        val json = payloadOf(message)
+        json.keys().forEach { key -> put(key, json.get(key)) }
+    }
+
+    private fun payloadOf(message: org.json.JSONObject): org.json.JSONObject {
+        val rawPayload = message.optString("payload")
+        val payloadText = runCatching {
+            String(Base64.decode(rawPayload, Base64.DEFAULT), Charsets.UTF_8)
+        }.getOrDefault(rawPayload)
+        return runCatching { org.json.JSONObject(payloadText) }.getOrDefault(org.json.JSONObject())
     }
 
     private companion object {

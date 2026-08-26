@@ -140,6 +140,7 @@ fun TaotaoMusicApp() {
     val imConnection by wukongImClient.connection.collectAsState()
     val imPeerStore = remember { ImPeerStore(context) }
     val imMessages by wukongImClient.messages.collectAsState()
+    val syncedImPeers by wukongImClient.syncedPeers.collectAsState()
     val playbackSync = remember {
         PlaybackSyncCoordinator(
             store = playbackSyncStore,
@@ -168,6 +169,12 @@ fun TaotaoMusicApp() {
     var searchHistory by remember { mutableStateOf(searchHistoryStore.read()) }
     var signedIn by remember { mutableStateOf(authSession.isSignedIn) }
     var imPeers by remember(authSession.accountId) { mutableStateOf(imPeerStore.read(authSession.accountId)) }
+    // 离线会话同步完成后，把悟空返回的对端 UUID 写入本机入口；消息正文仍只由悟空 SDK 保存。
+    LaunchedEffect(authSession.accountId, syncedImPeers) {
+        syncedImPeers.forEach { peerUid ->
+            imPeers = imPeerStore.remember(authSession.accountId, peerUid)
+        }
+    }
     /** 资料只在内存中保留；退出登录立即清空邮箱与昵称。 */
     var userProfile by remember { mutableStateOf<TencentMusicApi.UserProfile?>(null) }
     var profileLoading by remember { mutableStateOf(false) }
