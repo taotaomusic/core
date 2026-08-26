@@ -556,10 +556,11 @@ class TencentMusicApi(
     }
 
     /** 已登录用户经业务服务代理拉取悟空 IM 的最近会话，客户端不接触 5001。 */
-    fun syncImConversations(lastMessageSeqs: String, messageCount: Int, version: Long): JSONArray = authorizedArray(
+    fun syncImConversations(lastMessageSeqs: String, messageCount: Int, version: Long): JSONArray = authorizedJson(
         "/api/v1/im/sync/conversations",
+        "POST",
         JSONObject().put("lastMessageSeqs", lastMessageSeqs).put("messageCount", messageCount).put("version", version),
-    )
+    ) { it.optJSONArray("conversations") ?: JSONArray() }
 
     /** 按悟空 IM 给出的游标同步单个频道的一页历史消息。 */
     fun syncImChannelMessages(
@@ -665,26 +666,6 @@ class TencentMusicApi(
                 throw IllegalStateException(messageOf(connection, "请求失败：HTTP $code"))
             }
             runCatching { connection.errorStream?.close() }
-            token = tokenProvider.renewToken(token) ?: throw SessionExpiredException()
-        }
-        throw SessionExpiredException()
-    }
-
-    private fun authorizedArray(path: String, body: JSONObject): JSONArray {
-        var token = tokenProvider.validToken() ?: throw SessionExpiredException()
-        repeat(MAX_AUTH_ATTEMPTS) { attempt ->
-            val connection = open(path, "POST", token).apply {
-                doOutput = true
-                setRequestProperty("Content-Type", "application/json")
-            }
-            connection.outputStream.use { it.write(body.toString().toByteArray()) }
-            if (connection.responseCode in 200..299) {
-                noteLatestVersion(connection)
-                return connection.inputStream.bufferedReader().use { JSONObject(it.readText()) }.optJSONArray("data") ?: JSONArray()
-            }
-            if (connection.responseCode != HttpURLConnection.HTTP_UNAUTHORIZED || attempt == MAX_AUTH_ATTEMPTS - 1) {
-                throw IllegalStateException(messageOf(connection, "请求失败"))
-            }
             token = tokenProvider.renewToken(token) ?: throw SessionExpiredException()
         }
         throw SessionExpiredException()
