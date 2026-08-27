@@ -1,12 +1,8 @@
-package com.taotao.music.data
+package com.taotao.music.data.im
 
 import android.content.Context
 import android.util.Base64
-import com.taotao.music.data.im.ImChatMessage
-import com.taotao.music.data.im.ImConnectionInfo
-import com.taotao.music.data.im.ImConnectionState
-import com.taotao.music.data.im.ImConversationSync
-import com.taotao.music.data.im.ImSessionStore
+import com.taotao.music.data.TencentMusicApi
 import com.xinbida.wukongim.WKIM
 import com.xinbida.wukongim.entity.WKChannel
 import com.xinbida.wukongim.entity.WKChannelType

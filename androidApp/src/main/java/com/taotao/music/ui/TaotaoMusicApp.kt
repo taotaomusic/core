@@ -94,7 +94,7 @@ import com.taotao.music.data.DeviceIdStore
 import com.taotao.music.data.im.ImSessionStore
 import com.taotao.music.data.ImPeerStore
 import com.taotao.music.data.SavedPlaybackState
-import com.taotao.music.data.WukongImClient
+import com.taotao.music.data.im.WukongImClient
 import com.taotao.music.player.AudioPlayer
 import com.taotao.music.update.UpdateManager
 import com.taotao.music.update.UpdateStage
