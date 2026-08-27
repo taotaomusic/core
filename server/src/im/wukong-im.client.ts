@@ -64,7 +64,7 @@ export class WukongImClient {
     // 由 Android SDK 的 WKCMDKeys.wk_messageRevoke 回调更新本地消息视图。
     const payload = Buffer.from(JSON.stringify({
       type: 99,
-      cmd: "message_revoke",
+      cmd: "messageRevoke",
       param: {
         message_id: input.messageId,
         client_msg_no: input.clientMsgNo,
@@ -74,8 +74,10 @@ export class WukongImClient {
     })).toString("base64");
     await this.post("/message/send", {
       from_uid: input.uid,
-      subscribers: [input.uid, input.channelId],
-      header: { no_persist: 1, red_dot: 0, sync_once: 1 },
+      channel_id: input.channelId,
+      channel_type: 1,
+      // 撤回命令也需离线可恢复；SDK 会将 type=99 交给 CMDManager，不会显示为普通消息。
+      header: { no_persist: 0, red_dot: 0, sync_once: 0 },
       payload,
     });
   }

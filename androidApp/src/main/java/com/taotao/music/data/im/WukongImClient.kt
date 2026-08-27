@@ -26,6 +26,8 @@ import kotlinx.coroutines.withContext
 import java.net.URI
 import java.util.ArrayList
 import java.util.HashMap
+import org.json.JSONArray
+import org.json.JSONObject
 
 /**
  * 桃桃音乐对悟空 IM Android SDK 的连接适配层。
@@ -171,11 +173,30 @@ class WukongImClient(
         }
         // 悟空通过 TCP 下发原生撤回命令；先立即更新当前界面，离线端则在下次同步时恢复状态。
         wkIm.getCMDManager().addCmdListener(REVOKE_COMMAND_LISTENER) { command ->
-            if (command.cmdKey != WKCMDKeys.wk_messageRevoke) return@addCmdListener
-            val messageId = command.paramJsonObject?.optString("message_id").orEmpty()
-            if (messageId.isBlank()) return@addCmdListener
-            _messages.value = _messages.value.map { message ->
-                if (message.id == messageId) message.copy(content = "消息已撤回", isRevoked = true) else message
+            when (command.cmdKey) {
+                WKCMDKeys.wk_messageRevoke -> {
+                    val messageId = command.paramJsonObject?.optString("message_id").orEmpty()
+                    if (messageId.isBlank()) return@addCmdListener
+                    _messages.value = _messages.value.map { message ->
+                        if (message.id == messageId) message.copy(content = "消息已撤回", isRevoked = true) else message
+                    }
+                }
+                READ_RECEIPT_COMMAND -> {
+                    val parameters = command.paramJsonObject ?: return@addCmdListener
+                    val readerUid = parameters.optString("reader_uid").trim().lowercase()
+                    val messageIds = parameters.optJSONArray("message_ids") ?: return@addCmdListener
+                    val readIds = buildSet {
+                        for (index in 0 until messageIds.length()) {
+                            messageIds.optString(index).takeIf { it.isNotBlank() }?.let(::add)
+                        }
+                    }
+                    if (readerUid.isBlank() || readIds.isEmpty()) return@addCmdListener
+                    _messages.value = _messages.value.map { message ->
+                        if (message.isMine && message.peerUid == readerUid && message.id in readIds) {
+                            message.copy(isRead = true)
+                        } else message
+                    }
+                }
             }
         }
     }
@@ -282,6 +303,7 @@ class WukongImClient(
                         .sortedBy { it.sentAtMillis }
                         .takeLast(MAX_IN_MEMORY_MESSAGES)
                     _syncedPeers.value = (_syncedPeers.value + normalizedPeerUid).distinct().sorted()
+                    sendReadReceipt(normalizedPeerUid, restored.filterNot { it.isMine || it.isRevoked }.map { it.id })
                 }
             },
         )
@@ -298,6 +320,22 @@ class WukongImClient(
                 _peerNames.value = _peerNames.value + contacts.associate { it.uid to it.nickname }
             }
         }
+    }
+
+    /** 对端打开会话后，以悟空内部消息回传实际已读的消息编号。 */
+    private fun sendReadReceipt(peerUid: String, messageIds: List<String>) {
+        val readerUid = _connection.value.uid ?: return
+        if (messageIds.isEmpty()) return
+        wkIm.msgManager.sendWithOptions(
+            ImInternalCommandContent(
+                READ_RECEIPT_COMMAND,
+                JSONObject()
+                    .put("reader_uid", readerUid)
+                    .put("message_ids", JSONArray(messageIds.take(MAX_READ_RECEIPT_IDS))),
+            ),
+            WKChannel(peerUid, WKChannelType.PERSONAL),
+            WKSendOptions(),
+        )
     }
 
     /** 退出账号或会话彻底失效时停止重连并清除 SDK 中保留的 Token。 */
@@ -443,6 +481,8 @@ class WukongImClient(
         const val REVOKE_COMMAND_LISTENER = "taotao-im-revoke"
         const val HISTORY_PAGE_SIZE = 50
         const val MAX_IN_MEMORY_MESSAGES = 300
+        const val READ_RECEIPT_COMMAND = "taotao.messageRead"
+        const val MAX_READ_RECEIPT_IDS = 100
         val UUID_PATTERN = Regex("^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
     }
 }
