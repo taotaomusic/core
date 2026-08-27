@@ -11,6 +11,7 @@ import com.xinbida.wukongim.entity.WKSendOptions
 import com.xinbida.wukongim.entity.WKSyncChat
 import com.xinbida.wukongim.entity.WKSyncChannelMsg
 import com.xinbida.wukongim.entity.WKSyncConvMsg
+import com.xinbida.wukongim.entity.WKSyncExtraMsg
 import com.xinbida.wukongim.entity.WKSyncRecent
 import com.xinbida.wukongim.interfaces.IGetOrSyncHistoryMsgBack
 import com.xinbida.wukongim.message.type.WKConnectStatus
@@ -26,6 +27,7 @@ import kotlinx.coroutines.withContext
 import java.net.URI
 import java.util.ArrayList
 import java.util.HashMap
+import java.util.concurrent.ConcurrentHashMap
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -49,6 +51,12 @@ class WukongImClient(
     private val _syncedPeers = MutableStateFlow(emptyList<String>())
     private val _peerNames = MutableStateFlow<Map<String, String>>(emptyMap())
     private val _syncDetail = MutableStateFlow("等待悟空 IM 同步")
+    /**
+     * 已读与撤回命令本身由悟空持久化。同步原始消息时先恢复这些命令，避免 SDK 只给
+     * 普通消息建索引而导致冷启动后状态暂时回退。
+     */
+    private val confirmedReadMessageIds = ConcurrentHashMap.newKeySet<String>()
+    private val confirmedRevokedMessageIds = ConcurrentHashMap.newKeySet<String>()
 
     /** 页面订阅的连接状态；不会暴露悟空 IM Token。 */
     val connection: StateFlow<ImConnectionInfo> = _connection.asStateFlow()
@@ -185,19 +193,7 @@ class WukongImClient(
                     val parameters = command.paramJsonObject ?: return@addCmdListener
                     val readerUid = parameters.optString("reader_uid").trim().lowercase()
                     val messageIds = parameters.optJSONArray("message_ids") ?: return@addCmdListener
-                    val readIds = buildSet {
-                        for (index in 0 until messageIds.length()) {
-                            messageIds.optString(index).takeIf { it.isNotBlank() }?.let(::add)
-                        }
-                    }
-                    if (readerUid.isBlank() || readIds.isEmpty()) return@addCmdListener
-                    _messages.value = _messages.value.map { message ->
-                        if (message.isMine && message.peerUid == readerUid &&
-                            (message.id in readIds || message.clientMsgNo in readIds)
-                        ) {
-                            message.copy(isRead = true)
-                        } else message
-                    }
+                    applyReadReceipt(readerUid, messageIds)
                 }
             }
         }
@@ -218,6 +214,10 @@ class WukongImClient(
 
         // 切换账号或刷新连接凭据时，先停止旧连接，避免旧 Token 在后台继续重连。
         if (currentAccountId != null) wkIm.connectionManager.disconnect(false)
+        if (currentAccountId != accountId) {
+            confirmedReadMessageIds.clear()
+            confirmedRevokedMessageIds.clear()
+        }
         gateway = resolvedGateway
         wkIm.setDeviceId(deviceId)
         wkIm.init(applicationContext, session.uid, session.token)
@@ -345,6 +345,8 @@ class WukongImClient(
         _messages.value = emptyList()
         _syncedPeers.value = emptyList()
         _peerNames.value = emptyMap()
+        confirmedReadMessageIds.clear()
+        confirmedRevokedMessageIds.clear()
         _syncDetail.value = "等待悟空 IM 同步"
         wkIm.connectionManager.disconnect(true)
     }
@@ -398,6 +400,14 @@ class WukongImClient(
      */
     private fun mergeSyncedConversations(rows: org.json.JSONArray): Int {
         val currentUid = _connection.value.uid ?: return 0
+        // 先扫描整批内部命令。会话最近消息的顺序不是状态顺序，若先建气泡再遇到回执，
+        // 冷启动时仍可能短暂甚至永久显示为未读。
+        for (rowIndex in 0 until rows.length()) {
+            val recents = rows.optJSONObject(rowIndex)?.optJSONArray("recents") ?: continue
+            for (messageIndex in 0 until recents.length()) {
+                recents.optJSONObject(messageIndex)?.let(::consumePersistedInternalCommand)
+            }
+        }
         val restored = buildList {
             for (rowIndex in 0 until rows.length()) {
                 val row = rows.optJSONObject(rowIndex) ?: continue
@@ -406,18 +416,22 @@ class WukongImClient(
                 val recents = row.optJSONArray("recents") ?: continue
                 for (messageIndex in 0 until recents.length()) {
                     val message = recents.optJSONObject(messageIndex) ?: continue
+                    if (consumePersistedInternalCommand(message)) continue
                     val fromUid = message.optString("from_uid").trim().lowercase()
                     val peerUid = if (fromUid == currentUid) channelId else fromUid
                     if (!UUID_PATTERN.matches(peerUid)) continue
                     val content = payloadOf(message).optString("content").trim()
                     if (content.isBlank()) continue
+                    val revoked = isRevokedConfirmed(message)
                     add(ImChatMessage(
                         id = message.optString("message_idstr", message.optString("client_msg_no")),
                         clientMsgNo = message.optString("client_msg_no", message.optString("message_idstr")),
                         peerUid = peerUid,
-                        content = content,
+                        content = if (revoked) "消息已撤回" else content,
                         sentAtMillis = message.optLong("timestamp") * 1000,
                         isMine = fromUid == currentUid,
+                        isRead = fromUid == currentUid && isReadConfirmed(message),
+                        isRevoked = revoked,
                     ))
                 }
             }
@@ -443,6 +457,14 @@ class WukongImClient(
                 timestamp = message.optLong("timestamp")
                 setting = message.optInt("setting")
                 expire = message.optInt("expire")
+                val extra = message.optJSONObject("message_extra") ?: message
+                revoke = extra.optInt("revoke")
+                revoker = extra.optString("revoker")
+                unread_count = extra.optInt("unread_count")
+                readed_count = extra.optInt("readed_count")
+                readed = extra.optInt("readed")
+                extra_version = extra.optLong("extra_version")
+                message_extra = toSyncExtra(message.optJSONObject("message_extra"))
                 this.payload = payload
             })
         }
@@ -460,6 +482,81 @@ class WukongImClient(
         }.getOrDefault(rawPayload)
         return runCatching { org.json.JSONObject(payloadText) }.getOrDefault(org.json.JSONObject())
     }
+
+    /** 将产品 API 的 message_extra 完整交给 SDK，本地消息库才能在冷启动时恢复状态。 */
+    private fun toSyncExtra(extra: org.json.JSONObject?): WKSyncExtraMsg? {
+        if (extra == null) return null
+        return WKSyncExtraMsg().apply {
+            message_id_str = extra.optString("message_id_str", extra.optString("message_id"))
+            message_id = message_id_str
+            revoke = extra.optInt("revoke")
+            revoker = extra.optString("revoker")
+            unread_count = extra.optInt("unread_count")
+            readed_count = extra.optInt("readed_count")
+            readed = extra.optInt("readed")
+            is_mutual_deleted = extra.optInt("is_mutual_deleted")
+            extra_version = extra.optLong("extra_version")
+        }
+    }
+
+    /**
+     * type=99 的内部消息不会进入聊天气泡。它仍会随悟空的历史分页返回，所以必须在
+     * 建立 UI 投影前消费它；否则发送方杀进程后会丢失已经收到的已读回执。
+     */
+    private fun consumePersistedInternalCommand(message: org.json.JSONObject): Boolean {
+        val payload = payloadOf(message)
+        val command = payload.optString("cmd")
+        val parameters = payload.optJSONObject("param") ?: return false
+        return when (command) {
+            READ_RECEIPT_COMMAND -> {
+                applyReadReceipt(parameters.optString("reader_uid").trim().lowercase(), parameters.optJSONArray("message_ids"))
+                true
+            }
+            WKCMDKeys.wk_messageRevoke -> {
+                markMessageRevoked(parameters.optString("message_id"), parameters.optString("client_msg_no"))
+                true
+            }
+            else -> false
+        }
+    }
+
+    private fun applyReadReceipt(readerUid: String, messageIds: org.json.JSONArray?) {
+        if (readerUid.isBlank() || messageIds == null) return
+        val readIds = buildSet {
+            for (index in 0 until messageIds.length()) {
+                messageIds.optString(index).takeIf { it.isNotBlank() }?.let(::add)
+            }
+        }
+        if (readIds.isEmpty()) return
+        confirmedReadMessageIds += readIds
+        _messages.value = _messages.value.map { message ->
+            if (message.isMine && message.peerUid == readerUid &&
+                (message.id in readIds || message.clientMsgNo in readIds)
+            ) {
+                message.copy(isRead = true)
+            } else message
+        }
+    }
+
+    private fun isReadConfirmed(message: org.json.JSONObject): Boolean {
+        val extra = message.optJSONObject("message_extra")
+        return extra?.optInt("readed") == 1 ||
+            message.optInt("readed") == 1 ||
+            messageIdsOf(message).any(confirmedReadMessageIds::contains)
+    }
+
+    private fun isRevokedConfirmed(message: org.json.JSONObject): Boolean {
+        val extra = message.optJSONObject("message_extra")
+        return extra?.optInt("revoke") == 1 ||
+            message.optInt("revoke") == 1 ||
+            messageIdsOf(message).any(confirmedRevokedMessageIds::contains)
+    }
+
+    private fun messageIdsOf(message: org.json.JSONObject): Set<String> = setOf(
+        message.optString("message_idstr"),
+        message.optString("message_id"),
+        message.optString("client_msg_no"),
+    ).filter { it.isNotBlank() }.toSet()
 
     /**
      * 合并悟空的推送、历史页和刷新事件。网络事件可以乱序到达，不能用后来的旧快照
@@ -492,6 +589,7 @@ class WukongImClient(
     /** 悟空不同链路可能只携带 message_id 或 client_msg_no，二者都必须能命中。 */
     private fun markMessageRevoked(messageId: String, clientMsgNo: String) {
         if (messageId.isBlank() && clientMsgNo.isBlank()) return
+        listOf(messageId, clientMsgNo).filter { it.isNotBlank() }.forEach(confirmedRevokedMessageIds::add)
         // 同时写入悟空 SDK 本地库。只改 StateFlow 会在冷启动重新读取 SDK 历史后丢失撤回状态。
         val resolvedMessageId = messageId.ifBlank {
             wkIm.msgManager.getWithClientMsgNO(clientMsgNo)?.messageID.orEmpty()
