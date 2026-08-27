@@ -20,7 +20,15 @@ val appVersionCode = versionProperties.getProperty("VERSION_CODE").toInt()
 val appVersionName = versionProperties.getProperty("VERSION_NAME")
 
 android { namespace = "com.taotao.music"; compileSdk = 35
-    defaultConfig { applicationId = "com.taotao.music"; minSdk = 24; targetSdk = 35; versionCode = appVersionCode; versionName = appVersionName }
+    defaultConfig {
+        applicationId = "com.taotao.music"
+        minSdk = 24
+        targetSdk = 35
+        versionCode = appVersionCode
+        versionName = appVersionName
+        // 正式包只服务真机 ARM 架构，移除模拟器 x86/x86_64 的 SQLCipher 等原生库以减小体积。
+        ndk { abiFilters += setOf("armeabi-v7a", "arm64-v8a") }
+    }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_21; targetCompatibility = JavaVersion.VERSION_21 }
     kotlinOptions { jvmTarget = "21" }
     signingConfigs {
