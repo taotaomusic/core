@@ -1159,13 +1159,12 @@ fun TaotaoMusicApp() {
                     connection = imConnection,
                     messages = imMessages,
                     savedPeers = imPeers,
-                    syncDetail = imSyncDetail,
-                      onSend = { peerUid, content ->
-                          imPeers = imPeerStore.remember(authSession.accountId, peerUid)
-                          wukongImClient.sendText(peerUid, content)
-                      },
-                      onPeerSelected = wukongImClient::loadRecentMessages,
-                      onMessage = { message = it },
+                    onSend = { peerUid, content ->
+                        imPeers = imPeerStore.remember(authSession.accountId, peerUid)
+                        wukongImClient.sendText(peerUid, content)
+                    },
+                    onPeerSelected = wukongImClient::loadRecentMessages,
+                    onMessage = { message = it },
                 )
             } else if (page == "ai") {
                 AiStudioPage(
@@ -1405,6 +1404,7 @@ fun TaotaoMusicApp() {
                     onOpenLocal = { mineLibrarySection = MineLibrarySection.LOCAL },
                     profile = userProfile,
                     profileLoading = profileLoading,
+                    imUid = imConnection.uid,
                     onOpenAccount = { showSettingsPage = true },
                 )
             } else Column(Modifier.fillMaxSize().padding(horizontal = 22.dp)) {
@@ -1595,6 +1595,7 @@ private fun MinePage(
     onOpenLocal: () -> Unit,
     profile: TencentMusicApi.UserProfile?,
     profileLoading: Boolean,
+    imUid: String?,
     onOpenAccount: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -1642,6 +1643,16 @@ private fun MinePage(
                     )
                 }
                 TextButton(onClick = onOpenAccount, enabled = !profileLoading) { Text(if (profileLoading) "读取中" else "设置") }
+            }
+        }
+        if (!imUid.isNullOrBlank()) {
+            item {
+                Text(
+                    "聊天 ID：$imUid",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                )
             }
         }
         item { Text("我的音乐", fontSize = 17.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp)) }
