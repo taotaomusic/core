@@ -556,7 +556,7 @@ class TencentMusicApi(
     }
 
     /** 已登录用户经业务服务代理拉取悟空 IM 的最近会话，客户端不接触 5001。 */
-    fun syncImConversations(lastMessageSeqs: String, messageCount: Int, version: Long): JSONArray = authorizedConversationArray(
+    fun syncImConversations(lastMessageSeqs: String, messageCount: Int, version: Long): ImConversationSync = authorizedConversationSync(
         "/api/v1/im/sync/conversations",
         JSONObject().put("lastMessageSeqs", lastMessageSeqs).put("messageCount", messageCount).put("version", version),
     )
@@ -674,7 +674,7 @@ class TencentMusicApi(
      * 兼容两代 IM 代理：旧服务将悟空原始数组放在 data，新服务固定放在 data.conversations。
      * 保持兼容能避免服务灰度期间客户端把有效离线消息误判为空。
      */
-    private fun authorizedConversationArray(path: String, body: JSONObject): JSONArray {
+    private fun authorizedConversationSync(path: String, body: JSONObject): ImConversationSync {
         var token = tokenProvider.validToken() ?: throw SessionExpiredException()
         repeat(MAX_AUTH_ATTEMPTS) { attempt ->
             val connection = open(path, "POST", token).apply {
@@ -688,9 +688,12 @@ class TencentMusicApi(
                 return connection.inputStream.bufferedReader().use {
                     val data = JSONObject(it.readText()).opt("data")
                     when (data) {
-                        is JSONArray -> data
-                        is JSONObject -> data.optJSONArray("conversations") ?: JSONArray()
-                        else -> JSONArray()
+                        is JSONArray -> ImConversationSync(uid = null, conversations = data)
+                        is JSONObject -> ImConversationSync(
+                            uid = data.optString("uid").takeIf { it.isNotBlank() },
+                            conversations = data.optJSONArray("conversations") ?: JSONArray(),
+                        )
+                        else -> ImConversationSync(uid = null, conversations = JSONArray())
                     }
                 }
             }

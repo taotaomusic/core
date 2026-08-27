@@ -9,6 +9,7 @@ import com.xinbida.wukongim.entity.WKSyncChat
 import com.xinbida.wukongim.entity.WKSyncChannelMsg
 import com.xinbida.wukongim.entity.WKSyncConvMsg
 import com.xinbida.wukongim.entity.WKSyncRecent
+import com.xinbida.wukongim.interfaces.IGetOrSyncHistoryMsgBack
 import com.xinbida.wukongim.message.type.WKConnectStatus
 import com.xinbida.wukongim.msgmodel.WKTextContent
 import kotlinx.coroutines.Dispatchers
@@ -81,7 +82,14 @@ class WukongImClient(
         wkIm.conversationManager.addOnSyncConversationListener { lastSeqs, count, version, callback ->
             syncScope.launch {
                 runCatching { api.syncImConversations(lastSeqs, count, version) }
-                    .onSuccess { rows ->
+                    .onSuccess { sync ->
+                        val rows = sync.conversations
+                        val expectedUid = _connection.value.uid
+                        if (sync.uid != null && expectedUid != null && sync.uid != expectedUid) {
+                            _syncDetail.value = "身份不一致：连接 ${expectedUid.take(8)}，同步 ${sync.uid.take(8)}"
+                            callback?.onBack(null)
+                            return@onSuccess
+                        }
                         val restored = mergeSyncedConversations(rows)
                         _syncDetail.value = "已同步 ${rows.length()} 个会话、${restored} 条消息"
                         callback?.onBack(toSyncChat(rows))
@@ -164,6 +172,55 @@ class WukongImClient(
             isMine = true,
         )).takeLast(MAX_IN_MEMORY_MESSAGES)
         wkIm.msgManager.send(WKTextContent(normalizedContent), WKChannel(normalizedPeerUid, WKChannelType.PERSONAL))
+    }
+
+    /**
+     * 打开某个私聊时优先读取悟空 SDK 的本地消息库。SDK 的会话增量游标已经推进后，
+     * 服务端会正确返回空增量；这里不能把空增量误当成「没有历史消息」。
+     */
+    fun loadRecentMessages(peerUid: String) {
+        val normalizedPeerUid = peerUid.trim().lowercase()
+        if (!UUID_PATTERN.matches(normalizedPeerUid)) return
+
+        wkIm.msgManager.getOrSyncHistoryMessages(
+            normalizedPeerUid,
+            WKChannelType.PERSONAL,
+            0,
+            false,
+            0,
+            HISTORY_PAGE_SIZE,
+            0,
+            object : IGetOrSyncHistoryMsgBack {
+                override fun onSyncing() = Unit
+
+                override fun onResult(rows: List<com.xinbida.wukongim.entity.WKMsg>) {
+                    val currentUid = _connection.value.uid ?: return
+                    val restored = rows.mapNotNull { message ->
+                        val fromUid = message.fromUID?.trim()?.lowercase()?.takeIf { it.isNotBlank() }
+                            ?: return@mapNotNull null
+                        val content = message.baseContentMsgModel?.displayContent
+                            ?.takeIf { it.isNotBlank() }
+                            ?: return@mapNotNull null
+                        val messagePeerUid = if (fromUid == currentUid) message.channelID else fromUid
+                        if (!UUID_PATTERN.matches(messagePeerUid)) return@mapNotNull null
+                        ImChatMessage(
+                            id = message.messageID ?: message.clientMsgNO,
+                            peerUid = messagePeerUid,
+                            content = content,
+                            sentAtMillis = message.timestamp * 1000,
+                            isMine = fromUid == currentUid,
+                        )
+                    }
+                    if (restored.isEmpty()) return
+                    _messages.value = (_messages.value + restored)
+                        .associateBy { it.id }
+                        .values
+                        .sortedBy { it.sentAtMillis }
+                        .takeLast(MAX_IN_MEMORY_MESSAGES)
+                    _syncedPeers.value = (_syncedPeers.value + normalizedPeerUid).distinct().sorted()
+                }
+            },
+        )
     }
 
     /** 退出账号或会话彻底失效时停止重连并清除 SDK 中保留的 Token。 */
@@ -296,6 +353,7 @@ class WukongImClient(
     private companion object {
         const val CONNECTION_STATUS_LISTENER = "taotao-im-connection"
         const val NEW_MESSAGE_LISTENER = "taotao-im-message"
+        const val HISTORY_PAGE_SIZE = 50
         const val MAX_IN_MEMORY_MESSAGES = 300
         val UUID_PATTERN = Regex("^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
     }
@@ -323,4 +381,10 @@ data class ImChatMessage(
     val content: String,
     val sentAtMillis: Long,
     val isMine: Boolean,
+)
+
+/** 业务服务返回的同步结果；uid 用于检测客户端缓存会话与服务端帐号映射是否漂移。 */
+data class ImConversationSync(
+    val uid: String?,
+    val conversations: org.json.JSONArray,
 )

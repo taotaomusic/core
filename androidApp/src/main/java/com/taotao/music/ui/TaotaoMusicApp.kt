@@ -1160,11 +1160,12 @@ fun TaotaoMusicApp() {
                     messages = imMessages,
                     savedPeers = imPeers,
                     syncDetail = imSyncDetail,
-                    onSend = { peerUid, content ->
-                        imPeers = imPeerStore.remember(authSession.accountId, peerUid)
-                        wukongImClient.sendText(peerUid, content)
-                    },
-                    onMessage = { message = it },
+                      onSend = { peerUid, content ->
+                          imPeers = imPeerStore.remember(authSession.accountId, peerUid)
+                          wukongImClient.sendText(peerUid, content)
+                      },
+                      onPeerSelected = wukongImClient::loadRecentMessages,
+                      onMessage = { message = it },
                 )
             } else if (page == "ai") {
                 AiStudioPage(

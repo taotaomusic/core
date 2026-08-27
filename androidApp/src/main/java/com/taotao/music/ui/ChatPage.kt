@@ -27,6 +27,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -53,12 +54,17 @@ fun ChatPage(
     savedPeers: List<String>,
     syncDetail: String,
     onSend: (peerUid: String, content: String) -> Unit,
+    onPeerSelected: (peerUid: String) -> Unit,
     onMessage: (String) -> Unit,
 ) {
     var peerUid by remember { mutableStateOf("") }
     var draft by remember { mutableStateOf("") }
     val peerMessages = remember(messages, peerUid) {
         messages.filter { it.peerUid == peerUid.trim().lowercase() }
+    }
+    LaunchedEffect(peerUid) {
+        val normalizedPeerUid = peerUid.trim().lowercase()
+        if (UUID_PATTERN.matches(normalizedPeerUid)) onPeerSelected(normalizedPeerUid)
     }
 
     Column(
@@ -192,3 +198,5 @@ private fun ChatBubble(message: ImChatMessage) {
         )
     }
 }
+
+private val UUID_PATTERN = Regex("^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
