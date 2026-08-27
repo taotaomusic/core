@@ -128,6 +128,11 @@ export class ImService {
     await this.wukong.clearUnread(await this.users.ensureImUid(userId), channelId);
   }
 
+  async readedToMessageSeq(userId: number, channelId: string): Promise<number> {
+    this.requireEnabled();
+    return this.wukong.readedToMessageSeq(await this.users.ensureImUid(userId), channelId);
+  }
+
   private requireEnabled(): void {
     if (!this.config.imEnabled) throw ApiErrors.serviceUnavailable(5031, "聊天服务尚未启用");
   }

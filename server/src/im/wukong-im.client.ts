@@ -42,6 +42,14 @@ export class WukongImClient {
     });
   }
 
+  async readedToMessageSeq(viewerUid: string, peerUid: string): Promise<number> {
+    const rows = await this.syncConversations(peerUid, "", 1, 0);
+    if (!Array.isArray(rows)) throw ApiErrors.upstream("悟空 IM 会话同步响应格式不正确");
+    const row = rows.find((item) => item && typeof item === "object" && (item as Record<string, unknown>).channel_id === viewerUid) as Record<string, unknown> | undefined;
+    const value = Number(row?.readed_to_msg_seq ?? 0);
+    return Number.isSafeInteger(value) && value > 0 ? value : 0;
+  }
+
   syncChannelMessages(input: { uid: string; channelId: string; channelType: number; startMessageSeq: number; endMessageSeq: number; limit: number; pullMode: number }): Promise<unknown> {
     return this.postJson("/channel/messagesync", {
       login_uid: input.uid, channel_id: input.channelId, channel_type: input.channelType,
@@ -77,8 +85,8 @@ export class WukongImClient {
       channel_id: input.channelId,
       channel_type: 1,
       // 撤回命令也需离线可恢复；SDK 会将 type=99 交给 CMDManager，不会显示为普通消息。
-      // sync_once 会进入悟空的命令通道：在线立即下发，离线设备下次连接也会补收。
-      header: { no_persist: 0, red_dot: 0, sync_once: 1 },
+      // 当前 Android SDK 使用 READ 会话同步；命令留在原频道才能随会话历史恢复。
+      header: { no_persist: 0, red_dot: 0, sync_once: 0 },
       payload,
     });
   }

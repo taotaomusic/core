@@ -24,6 +24,7 @@ data class ImChatMessage(
     val peerUid: String,
     val content: String,
     val sentAtMillis: Long,
+    val messageSeq: Long = 0,
     val isMine: Boolean,
     val isRead: Boolean = false,
     val isRevoked: Boolean = false,

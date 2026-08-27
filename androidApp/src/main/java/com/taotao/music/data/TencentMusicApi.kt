@@ -581,6 +581,14 @@ class TencentMusicApi(
         authorizedJson("/api/v1/im/conversations/read", "POST", JSONObject().put("channelId", channelId)) { Unit }
     }
 
+    /** 悟空保存的对端会话已读序号；业务服务不落库，仅作鉴权代理。 */
+    fun imReadedToMessageSeq(channelId: String): Long = authorized(
+        "/api/v1/im/conversations/read-state?channelId=${java.net.URLEncoder.encode(channelId, "UTF-8")}",
+    ) { connection ->
+        connection.inputStream.bufferedReader().use { JSONObject(it.readText()) }
+            .optJSONObject("data")?.optLong("readedToMessageSeq") ?: 0L
+    }
+
     fun imContacts(uids: List<String>): List<ImContact> {
         if (uids.isEmpty()) return emptyList()
         val encoded = java.net.URLEncoder.encode(uids.joinToString(","), "UTF-8")

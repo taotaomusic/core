@@ -23,6 +23,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.net.URI
 import java.util.ArrayList
@@ -151,8 +152,9 @@ class WukongImClient(
                     peerUid = peerUid,
                     content = if (message.remoteExtra?.revoke == 1) "消息已撤回" else content,
                     sentAtMillis = message.timestamp * 1000,
+                    messageSeq = message.messageSeq,
                     isMine = fromUid == currentUid,
-                    isRead = message.remoteExtra?.readed == 1,
+                    isRead = message.remoteExtra?.readed == 1 || isReadConfirmed(message.messageID, message.clientMsgNO),
                     isRevoked = message.remoteExtra?.revoke == 1,
                 )
             }
@@ -171,11 +173,22 @@ class WukongImClient(
                 peerUid = message.channelID,
                 content = content,
                 sentAtMillis = message.timestamp * 1000,
+                messageSeq = message.messageSeq,
                 isMine = message.fromUID == currentUid || message.fromUID.isNullOrBlank(),
-                isRead = message.remoteExtra?.readed == 1,
+                isRead = message.remoteExtra?.readed == 1 || isReadConfirmed(message.messageID, message.clientMsgNO),
                 isRevoked = message.remoteExtra?.revoke == 1,
             )
             mergeMessage(chatMessage)
+            if (activePeerUid == chatMessage.peerUid) {
+                // 对端正在看时，悟空的 readed_to_msg_seq 会很快推进；短窗口轮询仅用于
+                // 在线即时更新，最终真相仍来自下一次进入会话时的同一悟空游标。
+                syncScope.launch {
+                    repeat(4) {
+                        delay(1_000)
+                        refreshReadState(chatMessage.peerUid)
+                    }
+                }
+            }
         }
         wkIm.msgManager.addOnRefreshMsgListener(REFRESH_MESSAGE_LISTENER) { message, _ ->
             val currentUid = _connection.value.uid ?: return@addOnRefreshMsgListener
@@ -186,8 +199,9 @@ class WukongImClient(
                 peerUid = message.channelID,
                 content = if (message.remoteExtra?.revoke == 1) "消息已撤回" else content,
                 sentAtMillis = message.timestamp * 1000,
+                messageSeq = message.messageSeq,
                 isMine = message.fromUID == currentUid || message.fromUID.isNullOrBlank(),
-                isRead = message.remoteExtra?.readed == 1,
+                isRead = message.remoteExtra?.readed == 1 || isReadConfirmed(message.messageID, message.clientMsgNO),
                 isRevoked = message.remoteExtra?.revoke == 1,
             ))
         }
@@ -307,8 +321,9 @@ class WukongImClient(
                             peerUid = messagePeerUid,
                             content = if (message.remoteExtra?.revoke == 1) "消息已撤回" else content,
                             sentAtMillis = message.timestamp * 1000,
+                            messageSeq = message.messageSeq,
                             isMine = fromUid == currentUid,
-                            isRead = message.remoteExtra?.readed == 1,
+                            isRead = message.remoteExtra?.readed == 1 || isReadConfirmed(message.messageID, message.clientMsgNO),
                             isRevoked = message.remoteExtra?.revoke == 1,
                         )
                     }
@@ -347,9 +362,10 @@ class WukongImClient(
             ),
             WKChannel(peerUid, WKChannelType.PERSONAL),
             WKSendOptions().apply {
-                // 内部命令走悟空的命令频道，在线即时送达；对端离线时也能随命令同步恢复。
+                // 保持在原私聊频道，READ 同步模式能随会话历史恢复；sync_once 的命令频道
+                // 仅由 WRITE 同步模式拉取，当前客户端不会走那条链路。
                 header.redDot = false
-                header.syncOnce = true
+                header.syncOnce = false
             },
         )
     }
@@ -357,6 +373,7 @@ class WukongImClient(
     /** 聊天页切换或离开时更新可见会话，避免应用在后台把新消息误标已读。 */
     fun setActivePeer(peerUid: String?) {
         activePeerUid = peerUid?.trim()?.lowercase()?.takeIf(UUID_PATTERN::matches)
+        activePeerUid?.let(::refreshReadState)
     }
 
     /** 退出账号或会话彻底失效时停止重连并清除 SDK 中保留的 Token。 */
@@ -452,6 +469,7 @@ class WukongImClient(
                         peerUid = peerUid,
                         content = if (revoked) "消息已撤回" else content,
                         sentAtMillis = message.optLong("timestamp") * 1000,
+                        messageSeq = message.optLong("message_seq"),
                         isMine = fromUid == currentUid,
                         isRead = fromUid == currentUid && isReadConfirmed(message),
                         isRevoked = revoked,
@@ -490,6 +508,20 @@ class WukongImClient(
                 message_extra = toSyncExtra(message.optJSONObject("message_extra"))
                 this.payload = payload
             })
+        }
+    }
+
+    /** 读取悟空持久化的接收方已读游标；业务服务只做代理，不保存状态。 */
+    private fun refreshReadState(peerUid: String) {
+        syncScope.launch {
+            runCatching { api.imReadedToMessageSeq(peerUid) }.onSuccess { readedToSeq ->
+                if (readedToSeq <= 0) return@onSuccess
+                _messages.value = _messages.value.map { message ->
+                    if (message.isMine && message.peerUid == peerUid &&
+                        message.messageSeq > 0 && message.messageSeq <= readedToSeq
+                    ) message.copy(isRead = true) else message
+                }
+            }
         }
     }
 
@@ -552,6 +584,7 @@ class WukongImClient(
         }
         if (readIds.isEmpty()) return
         confirmedReadMessageIds += readIds
+        persistMessageExtra(readerUid, readIds, readed = true, revoked = false)
         _messages.value = _messages.value.map { message ->
             if (message.isMine && message.peerUid == readerUid &&
                 (message.id in readIds || message.clientMsgNo in readIds)
@@ -567,6 +600,9 @@ class WukongImClient(
             message.optInt("readed") == 1 ||
             messageIdsOf(message).any(confirmedReadMessageIds::contains)
     }
+
+    private fun isReadConfirmed(messageId: String?, clientMsgNo: String?): Boolean =
+        listOf(messageId, clientMsgNo).any { it != null && it in confirmedReadMessageIds }
 
     private fun isRevokedConfirmed(message: org.json.JSONObject): Boolean {
         val extra = message.optJSONObject("message_extra")
@@ -599,6 +635,7 @@ class WukongImClient(
                     id = candidate.id.ifBlank { previous.id },
                     clientMsgNo = candidate.clientMsgNo.ifBlank { previous.clientMsgNo },
                     content = if (revoked) "消息已撤回" else candidate.content,
+                    messageSeq = candidate.messageSeq.takeIf { it > 0 } ?: previous.messageSeq,
                     isRead = previous.isRead || candidate.isRead,
                     isRevoked = revoked,
                 )
@@ -613,6 +650,8 @@ class WukongImClient(
     private fun markMessageRevoked(messageId: String, clientMsgNo: String) {
         if (messageId.isBlank() && clientMsgNo.isBlank()) return
         listOf(messageId, clientMsgNo).filter { it.isNotBlank() }.forEach(confirmedRevokedMessageIds::add)
+        val peerUid = _messages.value.firstOrNull { sameMessage(it, messageId, clientMsgNo) }?.peerUid
+        if (peerUid != null) persistMessageExtra(peerUid, listOf(messageId, clientMsgNo), readed = false, revoked = true)
         // 同时写入悟空 SDK 本地库。只改 StateFlow 会在冷启动重新读取 SDK 历史后丢失撤回状态。
         val resolvedMessageId = messageId.ifBlank {
             wkIm.msgManager.getWithClientMsgNO(clientMsgNo)?.messageID.orEmpty()
@@ -632,6 +671,29 @@ class WukongImClient(
     private fun sameMessage(message: ImChatMessage, messageId: String, clientMsgNo: String): Boolean =
         (messageId.isNotBlank() && (message.id == messageId || message.clientMsgNo == messageId)) ||
             (clientMsgNo.isNotBlank() && (message.id == clientMsgNo || message.clientMsgNo == clientMsgNo))
+
+    /**
+     * 自定义回执的事实来源仍是悟空内部命令；命令到达后写入 SDK 的 remoteExtra 表，
+     * 这样 SDK 在冷启动读取历史时会返回 readed/revoke，而不是只保留一份页面内存。
+     */
+    private fun persistMessageExtra(peerUid: String, identities: Collection<String>, readed: Boolean, revoked: Boolean) {
+        val extras = identities.asSequence().filter { it.isNotBlank() }.mapNotNull { identity ->
+            val message = wkIm.msgManager.getWithMessageID(identity)
+                ?: wkIm.msgManager.getWithClientMsgNO(identity)
+                ?: return@mapNotNull null
+            val messageId = message.messageID ?: return@mapNotNull null
+            WKSyncExtraMsg().apply {
+                message_id = messageId
+                message_id_str = messageId
+                this.readed = if (readed) 1 else message.remoteExtra?.readed ?: 0
+                revoke = if (revoked) 1 else message.remoteExtra?.revoke ?: 0
+                extra_version = System.currentTimeMillis()
+            }
+        }.distinctBy { it.message_id }.toList()
+        if (extras.isNotEmpty()) {
+            wkIm.msgManager.saveRemoteExtraMsg(WKChannel(peerUid, WKChannelType.PERSONAL), extras)
+        }
+    }
 
     private companion object {
         const val CONNECTION_STATUS_LISTENER = "taotao-im-connection"
