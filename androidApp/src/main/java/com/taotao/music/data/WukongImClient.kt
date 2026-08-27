@@ -135,6 +135,36 @@ class WukongImClient(
             }
             if (added.isNotEmpty()) _messages.value = (_messages.value + added).takeLast(MAX_IN_MEMORY_MESSAGES)
         }
+        // 自己发送的消息不会走“新消息”监听；以 SDK 回调提供的 clientMsgNo 为准，不能保留自造的 local-* ID。
+        wkIm.msgManager.addOnSendMsgCallback(SEND_MESSAGE_LISTENER) { message ->
+            val currentUid = _connection.value.uid ?: return@addOnSendMsgCallback
+            val content = message.baseContentMsgModel?.displayContent?.takeIf { it.isNotBlank() } ?: return@addOnSendMsgCallback
+            val chatMessage = ImChatMessage(
+                id = message.messageID ?: message.clientMsgNO,
+                clientMsgNo = message.clientMsgNO ?: message.messageID,
+                peerUid = message.channelID,
+                content = content,
+                sentAtMillis = message.timestamp * 1000,
+                isMine = message.fromUID == currentUid || message.fromUID.isNullOrBlank(),
+                isRead = message.remoteExtra?.readed == 1,
+                isRevoked = message.remoteExtra?.revoke == 1,
+            )
+            mergeMessage(chatMessage)
+        }
+        wkIm.msgManager.addOnRefreshMsgListener(REFRESH_MESSAGE_LISTENER) { message, _ ->
+            val currentUid = _connection.value.uid ?: return@addOnRefreshMsgListener
+            val content = message.baseContentMsgModel?.displayContent?.takeIf { it.isNotBlank() } ?: return@addOnRefreshMsgListener
+            mergeMessage(ImChatMessage(
+                id = message.messageID ?: message.clientMsgNO,
+                clientMsgNo = message.clientMsgNO ?: message.messageID,
+                peerUid = message.channelID,
+                content = if (message.remoteExtra?.revoke == 1) "消息已撤回" else content,
+                sentAtMillis = message.timestamp * 1000,
+                isMine = message.fromUID == currentUid || message.fromUID.isNullOrBlank(),
+                isRead = message.remoteExtra?.readed == 1,
+                isRevoked = message.remoteExtra?.revoke == 1,
+            ))
+        }
         // 悟空通过 TCP 下发原生撤回命令；先立即更新当前界面，离线端则在下次同步时恢复状态。
         wkIm.getCMDManager().addCmdListener(REVOKE_COMMAND_LISTENER) { command ->
             if (command.cmdKey != WKCMDKeys.wk_messageRevoke) return@addCmdListener
@@ -177,13 +207,6 @@ class WukongImClient(
         require(normalizedContent.isNotEmpty()) { "消息不能为空" }
         require(_connection.value.state == ImConnectionState.CONNECTED) { "聊天服务尚未连接" }
 
-        _messages.value = (_messages.value + ImChatMessage(
-            id = "local-${System.nanoTime()}",
-            peerUid = normalizedPeerUid,
-            content = normalizedContent,
-            sentAtMillis = System.currentTimeMillis(),
-            isMine = true,
-        )).takeLast(MAX_IN_MEMORY_MESSAGES)
         wkIm.msgManager.sendWithOptions(
             WKTextContent(normalizedContent),
             WKChannel(normalizedPeerUid, WKChannelType.PERSONAL),
@@ -192,7 +215,7 @@ class WukongImClient(
     }
 
     fun revokeMessage(message: ImChatMessage) {
-        require(message.isMine && !message.id.startsWith("local-")) { "消息尚未送达，暂不能撤回" }
+        require(message.isMine && message.id.isNotBlank() && message.clientMsgNo.isNotBlank()) { "消息尚未送达，暂不能撤回" }
         syncScope.launch {
             runCatching { api.revokeImMessage(message.peerUid, message.id, message.clientMsgNo) }
                 .onSuccess {
@@ -349,6 +372,7 @@ class WukongImClient(
                     if (content.isBlank()) continue
                     add(ImChatMessage(
                         id = message.optString("message_idstr", message.optString("client_msg_no")),
+                        clientMsgNo = message.optString("client_msg_no", message.optString("message_idstr")),
                         peerUid = peerUid,
                         content = content,
                         sentAtMillis = message.optLong("timestamp") * 1000,
@@ -401,9 +425,17 @@ class WukongImClient(
         return runCatching { org.json.JSONObject(payloadText) }.getOrDefault(org.json.JSONObject())
     }
 
+    private fun mergeMessage(message: ImChatMessage) {
+        _messages.value = (_messages.value.filterNot { it.id == message.id || it.clientMsgNo == message.clientMsgNo } + message)
+            .sortedBy { it.sentAtMillis }
+            .takeLast(MAX_IN_MEMORY_MESSAGES)
+    }
+
     private companion object {
         const val CONNECTION_STATUS_LISTENER = "taotao-im-connection"
         const val NEW_MESSAGE_LISTENER = "taotao-im-message"
+        const val SEND_MESSAGE_LISTENER = "taotao-im-send"
+        const val REFRESH_MESSAGE_LISTENER = "taotao-im-refresh"
         const val REVOKE_COMMAND_LISTENER = "taotao-im-revoke"
         const val HISTORY_PAGE_SIZE = 50
         const val MAX_IN_MEMORY_MESSAGES = 300
