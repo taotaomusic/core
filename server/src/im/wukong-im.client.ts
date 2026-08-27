@@ -50,17 +50,38 @@ export class WukongImClient {
   }
 
   async revokeMessage(input: { uid: string; channelId: string; messageId: string; clientMsgNo: string }): Promise<void> {
-    await this.post("/message/revoke", {
+    const message = await this.postJson("/message", {
       login_uid: input.uid,
       channel_id: input.channelId,
       channel_type: 1,
-      message_id: input.messageId,
+      message_id: /^\d+$/.test(input.messageId) ? Number(input.messageId) : 0,
       client_msg_no: input.clientMsgNo,
+    }) as { from_uid?: unknown };
+    if (message?.from_uid !== input.uid) {
+      throw ApiErrors.badRequest(4000, "只能撤回自己发送的消息");
+    }
+    // v2.2.5 没有 /message/revoke HTTP 路由。将撤回作为悟空内部命令发给双方，
+    // 由 Android SDK 的 WKCMDKeys.wk_messageRevoke 回调更新本地消息视图。
+    const payload = Buffer.from(JSON.stringify({
+      type: 99,
+      cmd: "message_revoke",
+      param: {
+        message_id: input.messageId,
+        client_msg_no: input.clientMsgNo,
+        channel_id: input.channelId,
+        channel_type: 1,
+      },
+    })).toString("base64");
+    await this.post("/message/send", {
+      from_uid: input.uid,
+      subscribers: [input.uid, input.channelId],
+      header: { no_persist: 1, red_dot: 0, sync_once: 1 },
+      payload,
     });
   }
 
   async clearUnread(uid: string, channelId: string): Promise<void> {
-    await this.request("PUT", "/conversation/clearUnread", { login_uid: uid, channel_id: channelId, channel_type: 1, unread: 0 });
+    await this.post("/conversations/clearUnread", { uid, channel_id: channelId, channel_type: 1 });
   }
 
   private async post(path: string, body: Record<string, unknown>): Promise<void> {

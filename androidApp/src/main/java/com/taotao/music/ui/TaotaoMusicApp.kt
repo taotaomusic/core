@@ -91,7 +91,7 @@ import com.taotao.music.data.PlaybackSyncCoordinator
 import com.taotao.music.data.PendingPlaybackSnapshot
 import com.taotao.music.data.PlaybackSnapshotPolicy
 import com.taotao.music.data.DeviceIdStore
-import com.taotao.music.data.ImSessionStore
+import com.taotao.music.data.im.ImSessionStore
 import com.taotao.music.data.ImPeerStore
 import com.taotao.music.data.SavedPlaybackState
 import com.taotao.music.data.WukongImClient

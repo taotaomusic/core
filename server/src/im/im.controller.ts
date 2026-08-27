@@ -50,7 +50,7 @@ export class ImController {
     });
   }
 
-  /** 撤回由悟空服务端校验归属；客户端只能携带当前登录用户的会话。 */
+  /** 撤回通过悟空内部命令发送；客户端只能携带当前登录用户的会话。 */
   @Post("messages/revoke")
   @RateLimit("im-sync")
   async revokeMessage(@CurrentUser() user: SessionUser | undefined, @Body() body: Record<string, unknown>): Promise<void> {

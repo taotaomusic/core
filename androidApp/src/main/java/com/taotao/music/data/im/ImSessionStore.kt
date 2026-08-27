@@ -1,13 +1,9 @@
-package com.taotao.music.data
+package com.taotao.music.data.im
 
 import android.content.Context
+import com.taotao.music.data.TencentMusicApi
 
-/**
- * 悟空 IM 的最近连接凭据缓存。
- *
- * 缓存仅用于应用重建后的快速恢复，真正可用性始终以 `tokenExpiresAt` 和服务端 Gateway 校验为准。
- * 它按桃桃账号 ID 隔离，防止同一手机切换账号后把 A 的聊天凭据拿给 B 使用。
- */
+/** 悟空 IM 的短期连接凭据缓存，按桃桃账号隔离。 */
 class ImSessionStore(context: Context) {
     private val preferences = context.applicationContext.getSharedPreferences("im_session", Context.MODE_PRIVATE)
 
@@ -24,7 +20,6 @@ class ImSessionStore(context: Context) {
             .apply()
     }
 
-    /** 只返回尚有 30 秒余量、且归属当前登录帐号的凭据。 */
     fun validSession(accountId: Long, now: Long = System.currentTimeMillis()): TencentMusicApi.ImSession? {
         if (accountId <= 0 || preferences.getLong(ACCOUNT_ID, 0L) != accountId) return null
         val token = preferences.getString(TOKEN, null)?.takeIf { it.isNotBlank() } ?: return null
@@ -32,14 +27,7 @@ class ImSessionStore(context: Context) {
         val gatewayUrl = preferences.getString(GATEWAY_URL, null)?.takeIf { it.isNotBlank() } ?: return null
         val expiresAt = preferences.getLong(EXPIRES_AT, 0L)
         if (expiresAt <= now + REFRESH_SAFETY_MARGIN_MILLIS) return null
-        return TencentMusicApi.ImSession(
-            uid = uid,
-            token = token,
-            tokenExpiresAt = expiresAt,
-            deviceFlag = preferences.getInt(DEVICE_FLAG, 1),
-            deviceLevel = preferences.getInt(DEVICE_LEVEL, 1),
-            gatewayUrl = gatewayUrl,
-        )
+        return TencentMusicApi.ImSession(uid, token, expiresAt, preferences.getInt(DEVICE_FLAG, 1), preferences.getInt(DEVICE_LEVEL, 1), gatewayUrl)
     }
 
     fun clear() {

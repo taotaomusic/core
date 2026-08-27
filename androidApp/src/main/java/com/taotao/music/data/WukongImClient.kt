@@ -2,6 +2,11 @@ package com.taotao.music.data
 
 import android.content.Context
 import android.util.Base64
+import com.taotao.music.data.im.ImChatMessage
+import com.taotao.music.data.im.ImConnectionInfo
+import com.taotao.music.data.im.ImConnectionState
+import com.taotao.music.data.im.ImConversationSync
+import com.taotao.music.data.im.ImSessionStore
 import com.xinbida.wukongim.WKIM
 import com.xinbida.wukongim.entity.WKChannel
 import com.xinbida.wukongim.entity.WKChannelType
@@ -127,10 +132,13 @@ class WukongImClient(
                 val content = message.baseContentMsgModel?.displayContent?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
                 ImChatMessage(
                     id = message.messageID ?: message.clientMsgNO,
+                    clientMsgNo = message.clientMsgNO ?: message.messageID,
                     peerUid = if (fromUid == currentUid) message.channelID else fromUid,
-                    content = content,
+                    content = if (message.remoteExtra?.revoke == 1) "消息已撤回" else content,
                     sentAtMillis = message.timestamp * 1000,
                     isMine = fromUid == currentUid,
+                    isRead = message.remoteExtra?.readed == 1,
+                    isRevoked = message.remoteExtra?.revoke == 1,
                 )
             }
             if (added.isNotEmpty()) _messages.value = (_messages.value + added).takeLast(MAX_IN_MEMORY_MESSAGES)
@@ -236,8 +244,8 @@ class WukongImClient(
             runCatching { api.imContacts(listOf(normalizedPeerUid)) }.onSuccess { contacts ->
                 _peerNames.value = _peerNames.value + contacts.associate { it.uid to it.nickname }
             }
-            runCatching { api.markImConversationRead(normalizedPeerUid) }
         }
+        syncScope.launch { runCatching { api.markImConversationRead(normalizedPeerUid) } }
 
         wkIm.msgManager.getOrSyncHistoryMessages(
             normalizedPeerUid,
@@ -264,7 +272,7 @@ class WukongImClient(
                             id = message.messageID ?: message.clientMsgNO,
                             clientMsgNo = message.clientMsgNO ?: message.messageID,
                             peerUid = messagePeerUid,
-                            content = content,
+                            content = if (message.remoteExtra?.revoke == 1) "消息已撤回" else content,
                             sentAtMillis = message.timestamp * 1000,
                             isMine = fromUid == currentUid,
                             isRead = message.remoteExtra?.readed == 1,
@@ -442,36 +450,3 @@ class WukongImClient(
         val UUID_PATTERN = Regex("^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
     }
 }
-
-/** 悟空 IM 网关的连接状态，供 Compose 页面展示。 */
-enum class ImConnectionState {
-    IDLE,
-    CONNECTING,
-    CONNECTED,
-    NO_NETWORK,
-    FAILED,
-}
-
-data class ImConnectionInfo(
-    val uid: String? = null,
-    val state: ImConnectionState = ImConnectionState.IDLE,
-    val detail: String? = null,
-)
-
-/** 当前应用进程内的私聊文本项；消息持久化与离线同步由悟空 SDK 的本地库负责。 */
-data class ImChatMessage(
-    val id: String,
-    val clientMsgNo: String = id,
-    val peerUid: String,
-    val content: String,
-    val sentAtMillis: Long,
-    val isMine: Boolean,
-    val isRead: Boolean = false,
-    val isRevoked: Boolean = false,
-)
-
-/** 业务服务返回的同步结果；uid 用于检测客户端缓存会话与服务端帐号映射是否漂移。 */
-data class ImConversationSync(
-    val uid: String?,
-    val conversations: org.json.JSONArray,
-)

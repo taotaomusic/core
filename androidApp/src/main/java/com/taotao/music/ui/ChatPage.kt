@@ -41,9 +41,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.taotao.music.data.ImChatMessage
-import com.taotao.music.data.ImConnectionInfo
-import com.taotao.music.data.ImConnectionState
+import com.taotao.music.data.im.ImChatMessage
+import com.taotao.music.data.im.ImConnectionInfo
+import com.taotao.music.data.im.ImConnectionState
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -86,7 +86,7 @@ fun ChatPage(
             } else {
                 savedPeers.forEach { savedUid ->
                     Text(
-                        text = peerNames[savedUid] ?: "未知用户",
+                        text = peerNames[savedUid] ?: "加载昵称…",
                         color = if (savedUid == peerUid) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                         fontWeight = if (savedUid == peerUid) FontWeight.Bold else FontWeight.Normal,
                         maxLines = 1,
@@ -108,7 +108,7 @@ fun ChatPage(
                 Spacer(Modifier.size(10.dp))
                 Column(Modifier.weight(1f)) {
                     Text("聊天", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-                    Text(peerNames[peerUid] ?: peerUid.takeIf { it.isBlank() } ?: "好友", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(peerNames[peerUid] ?: peerUid.takeIf { it.isBlank() } ?: "加载昵称…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 ConnectionBadge(connection.state)
             }

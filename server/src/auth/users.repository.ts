@@ -136,8 +136,8 @@ export class UsersRepository {
   async imContactsByUid(uids: string[]): Promise<ImContact[]> {
     if (uids.length === 0) return [];
     return this.database.all<ImContact>(
-      `SELECT im_uid AS uid, COALESCE(nickname, username) AS nickname
-       FROM users WHERE im_uid = ANY($1::uuid[]) AND disabled_at IS NULL`,
+      `SELECT im_uid AS uid, COALESCE(NULLIF(BTRIM(nickname), ''), username) AS nickname
+       FROM users WHERE im_uid = ANY($1::text[]) AND disabled_at IS NULL`,
       [uids],
     );
   }

@@ -1,5 +1,6 @@
 package com.taotao.music.data
 
+import com.taotao.music.data.im.ImConversationSync
 import com.taotao.music.model.AudioQuality
 import com.taotao.music.model.Song
 import kotlinx.coroutines.Dispatchers
@@ -576,13 +577,19 @@ class TencentMusicApi(
             .put("clientMsgNo", clientMsgNo)) { Unit }
     }
 
+    fun markImConversationRead(channelId: String) {
+        authorizedJson("/api/v1/im/conversations/read", "POST", JSONObject().put("channelId", channelId)) { Unit }
+    }
+
     fun imContacts(uids: List<String>): List<ImContact> {
         if (uids.isEmpty()) return emptyList()
         val encoded = java.net.URLEncoder.encode(uids.joinToString(","), "UTF-8")
         return authorized("/api/v1/im/contacts?uids=$encoded") { connection ->
             val rows = connection.inputStream.bufferedReader().use { JSONObject(it.readText()) }.optJSONArray("data") ?: JSONArray()
             List(rows.length()) { index -> rows.optJSONObject(index) }.mapNotNull { row ->
-                row?.optString("uid")?.takeIf { it.isNotBlank() }?.let { uid -> ImContact(uid, row.optString("nickname", "好友")) }
+                row?.optString("uid")?.takeIf { it.isNotBlank() }?.let { uid ->
+                    ImContact(uid, row.optString("nickname").ifBlank { "加载昵称…" })
+                }
             }
         }
     }

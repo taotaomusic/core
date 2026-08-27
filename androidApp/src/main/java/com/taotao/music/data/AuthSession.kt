@@ -2,6 +2,7 @@ package com.taotao.music.data
 
 import android.content.Context
 import android.util.Base64
+import com.taotao.music.data.im.ImSessionStore
 import org.json.JSONObject
 
 /**
