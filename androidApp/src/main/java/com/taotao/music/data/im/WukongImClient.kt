@@ -77,6 +77,10 @@ class WukongImClient(
     @Volatile
     private var currentAccountId: Long? = null
 
+    /** 当前可见的私聊。在线新消息只有落在这里时才自动回传已读，避免后台误标已读。 */
+    @Volatile
+    private var activePeerUid: String? = null
+
     init {
         // 悟空 SDK 在每次重连时都会询问 Gateway；地址只接受服务端下发的 tcp URL。
         wkIm.connectionManager.addOnGetIpAndPortListener { callback ->
@@ -133,13 +137,18 @@ class WukongImClient(
         }
         wkIm.msgManager.addOnNewMsgListener(NEW_MESSAGE_LISTENER) { received ->
             val currentUid = _connection.value.uid ?: return@addOnNewMsgListener
+            val newlyReadIds = ArrayList<String>()
             val added = received.mapNotNull { message ->
                 val fromUid = message.fromUID?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
                 val content = message.baseContentMsgModel?.displayContent?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                val peerUid = if (fromUid == currentUid) message.channelID else fromUid
+                if (fromUid != currentUid && peerUid == activePeerUid) {
+                    (message.messageID ?: message.clientMsgNO)?.takeIf { it.isNotBlank() }?.let(newlyReadIds::add)
+                }
                 ImChatMessage(
                     id = message.messageID ?: message.clientMsgNO,
                     clientMsgNo = message.clientMsgNO ?: message.messageID,
-                    peerUid = if (fromUid == currentUid) message.channelID else fromUid,
+                    peerUid = peerUid,
                     content = if (message.remoteExtra?.revoke == 1) "消息已撤回" else content,
                     sentAtMillis = message.timestamp * 1000,
                     isMine = fromUid == currentUid,
@@ -148,6 +157,9 @@ class WukongImClient(
                 )
             }
             mergeMessages(added)
+            // 双方都在线时历史加载不会再次发生；这里对正在看的会话即时确认已读。
+            val activePeer = activePeerUid
+            if (activePeer != null) sendReadReceipt(activePeer, newlyReadIds)
         }
         // 自己发送的消息不会走“新消息”监听；以 SDK 回调提供的 clientMsgNo 为准，不能保留自造的 local-* ID。
         wkIm.msgManager.addOnSendMsgCallback(SEND_MESSAGE_LISTENER) { message ->
@@ -260,6 +272,7 @@ class WukongImClient(
     fun loadRecentMessages(peerUid: String) {
         val normalizedPeerUid = peerUid.trim().lowercase()
         if (!UUID_PATTERN.matches(normalizedPeerUid)) return
+        activePeerUid = normalizedPeerUid
         syncScope.launch {
             runCatching { api.imContacts(listOf(normalizedPeerUid)) }.onSuccess { contacts ->
                 _peerNames.value = _peerNames.value + contacts.associate { it.uid to it.nickname }
@@ -333,8 +346,17 @@ class WukongImClient(
                     .put("message_ids", JSONArray(messageIds.take(MAX_READ_RECEIPT_IDS))),
             ),
             WKChannel(peerUid, WKChannelType.PERSONAL),
-            WKSendOptions(),
+            WKSendOptions().apply {
+                // 内部命令走悟空的命令频道，在线即时送达；对端离线时也能随命令同步恢复。
+                header.redDot = false
+                header.syncOnce = true
+            },
         )
+    }
+
+    /** 聊天页切换或离开时更新可见会话，避免应用在后台把新消息误标已读。 */
+    fun setActivePeer(peerUid: String?) {
+        activePeerUid = peerUid?.trim()?.lowercase()?.takeIf(UUID_PATTERN::matches)
     }
 
     /** 退出账号或会话彻底失效时停止重连并清除 SDK 中保留的 Token。 */
@@ -345,6 +367,7 @@ class WukongImClient(
         _messages.value = emptyList()
         _syncedPeers.value = emptyList()
         _peerNames.value = emptyMap()
+        activePeerUid = null
         confirmedReadMessageIds.clear()
         confirmedRevokedMessageIds.clear()
         _syncDetail.value = "等待悟空 IM 同步"

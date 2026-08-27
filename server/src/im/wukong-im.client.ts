@@ -77,7 +77,8 @@ export class WukongImClient {
       channel_id: input.channelId,
       channel_type: 1,
       // 撤回命令也需离线可恢复；SDK 会将 type=99 交给 CMDManager，不会显示为普通消息。
-      header: { no_persist: 0, red_dot: 0, sync_once: 0 },
+      // sync_once 会进入悟空的命令通道：在线立即下发，离线设备下次连接也会补收。
+      header: { no_persist: 0, red_dot: 0, sync_once: 1 },
       payload,
     });
   }

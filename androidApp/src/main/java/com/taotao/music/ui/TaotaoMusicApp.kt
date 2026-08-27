@@ -1166,6 +1166,7 @@ fun TaotaoMusicApp() {
                         wukongImClient.sendText(peerUid, content)
                     },
                     onPeerSelected = wukongImClient::loadRecentMessages,
+                    onPeerActiveChanged = wukongImClient::setActivePeer,
                     onPeersVisible = wukongImClient::loadPeerNames,
                     onRevoke = { chatMessage ->
                         runCatching { wukongImClient.revokeMessage(chatMessage) }

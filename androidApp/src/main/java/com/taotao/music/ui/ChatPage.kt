@@ -30,6 +30,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -58,6 +59,7 @@ fun ChatPage(
     peerNames: Map<String, String>,
     onSend: (peerUid: String, content: String) -> Unit,
     onPeerSelected: (peerUid: String) -> Unit,
+    onPeerActiveChanged: (peerUid: String?) -> Unit,
     onPeersVisible: (List<String>) -> Unit,
     onRevoke: (ImChatMessage) -> Unit,
     onMessage: (String) -> Unit,
@@ -70,8 +72,14 @@ fun ChatPage(
     val peerMessages = remember(messages, peerUid) { messages.filter { it.peerUid == peerUid.trim().lowercase() } }
     LaunchedEffect(peerUid) {
         val normalizedPeerUid = peerUid.trim().lowercase()
-        if (UUID_PATTERN.matches(normalizedPeerUid)) onPeerSelected(normalizedPeerUid)
+        if (UUID_PATTERN.matches(normalizedPeerUid)) {
+            onPeerActiveChanged(normalizedPeerUid)
+            onPeerSelected(normalizedPeerUid)
+        } else {
+            onPeerActiveChanged(null)
+        }
     }
+    DisposableEffect(Unit) { onDispose { onPeerActiveChanged(null) } }
     LaunchedEffect(savedPeers) { onPeersVisible(savedPeers) }
     // 进入会话或本地历史补齐后，定位到最后一条而非列表顶部。
     LaunchedEffect(peerUid, peerMessages.lastOrNull()?.id) {
