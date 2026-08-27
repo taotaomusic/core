@@ -5,6 +5,8 @@ import android.util.Base64
 import com.xinbida.wukongim.WKIM
 import com.xinbida.wukongim.entity.WKChannel
 import com.xinbida.wukongim.entity.WKChannelType
+import com.xinbida.wukongim.entity.WKCMDKeys
+import com.xinbida.wukongim.entity.WKSendOptions
 import com.xinbida.wukongim.entity.WKSyncChat
 import com.xinbida.wukongim.entity.WKSyncChannelMsg
 import com.xinbida.wukongim.entity.WKSyncConvMsg
@@ -42,6 +44,7 @@ class WukongImClient(
     private val _connection = MutableStateFlow(ImConnectionInfo())
     private val _messages = MutableStateFlow(emptyList<ImChatMessage>())
     private val _syncedPeers = MutableStateFlow(emptyList<String>())
+    private val _peerNames = MutableStateFlow<Map<String, String>>(emptyMap())
     private val _syncDetail = MutableStateFlow("等待悟空 IM 同步")
 
     /** 页面订阅的连接状态；不会暴露悟空 IM Token。 */
@@ -52,6 +55,7 @@ class WukongImClient(
 
     /** 最近同步到的私聊对端，供页面恢复离线会话入口。 */
     val syncedPeers: StateFlow<List<String>> = _syncedPeers.asStateFlow()
+    val peerNames: StateFlow<Map<String, String>> = _peerNames.asStateFlow()
 
     /** 同步诊断，避免网络或协议错误被误显示为「没有消息」。 */
     val syncDetail: StateFlow<String> = _syncDetail.asStateFlow()
@@ -131,6 +135,15 @@ class WukongImClient(
             }
             if (added.isNotEmpty()) _messages.value = (_messages.value + added).takeLast(MAX_IN_MEMORY_MESSAGES)
         }
+        // 悟空通过 TCP 下发原生撤回命令；先立即更新当前界面，离线端则在下次同步时恢复状态。
+        wkIm.getCMDManager().addCmdListener(REVOKE_COMMAND_LISTENER) { command ->
+            if (command.cmdKey != WKCMDKeys.wk_messageRevoke) return@addCmdListener
+            val messageId = command.paramJsonObject?.optString("message_id").orEmpty()
+            if (messageId.isBlank()) return@addCmdListener
+            _messages.value = _messages.value.map { message ->
+                if (message.id == messageId) message.copy(content = "消息已撤回", isRevoked = true) else message
+            }
+        }
     }
 
     /**
@@ -171,7 +184,19 @@ class WukongImClient(
             sentAtMillis = System.currentTimeMillis(),
             isMine = true,
         )).takeLast(MAX_IN_MEMORY_MESSAGES)
-        wkIm.msgManager.send(WKTextContent(normalizedContent), WKChannel(normalizedPeerUid, WKChannelType.PERSONAL))
+        wkIm.msgManager.sendWithOptions(
+            WKTextContent(normalizedContent),
+            WKChannel(normalizedPeerUid, WKChannelType.PERSONAL),
+            WKSendOptions().apply { setting.receipt = 1 },
+        )
+    }
+
+    fun revokeMessage(message: ImChatMessage) {
+        require(message.isMine && !message.id.startsWith("local-")) { "消息尚未送达，暂不能撤回" }
+        syncScope.launch {
+            api.revokeImMessage(message.peerUid, message.id, message.clientMsgNo)
+            _messages.value = _messages.value.map { if (it.id == message.id) it.copy(content = "消息已撤回", isRevoked = true) else it }
+        }
     }
 
     /**
@@ -181,6 +206,11 @@ class WukongImClient(
     fun loadRecentMessages(peerUid: String) {
         val normalizedPeerUid = peerUid.trim().lowercase()
         if (!UUID_PATTERN.matches(normalizedPeerUid)) return
+        syncScope.launch {
+            runCatching { api.imContacts(listOf(normalizedPeerUid)) }.onSuccess { contacts ->
+                _peerNames.value = _peerNames.value + contacts.associate { it.uid to it.nickname }
+            }
+        }
 
         wkIm.msgManager.getOrSyncHistoryMessages(
             normalizedPeerUid,
@@ -205,10 +235,13 @@ class WukongImClient(
                         if (!UUID_PATTERN.matches(messagePeerUid)) return@mapNotNull null
                         ImChatMessage(
                             id = message.messageID ?: message.clientMsgNO,
+                            clientMsgNo = message.clientMsgNO ?: message.messageID,
                             peerUid = messagePeerUid,
                             content = content,
                             sentAtMillis = message.timestamp * 1000,
                             isMine = fromUid == currentUid,
+                            isRead = message.remoteExtra?.readed == 1,
+                            isRevoked = message.remoteExtra?.revoke == 1,
                         )
                     }
                     if (restored.isEmpty()) return
@@ -230,6 +263,7 @@ class WukongImClient(
         _connection.value = ImConnectionInfo()
         _messages.value = emptyList()
         _syncedPeers.value = emptyList()
+        _peerNames.value = emptyMap()
         _syncDetail.value = "等待悟空 IM 同步"
         wkIm.connectionManager.disconnect(true)
     }
@@ -353,6 +387,7 @@ class WukongImClient(
     private companion object {
         const val CONNECTION_STATUS_LISTENER = "taotao-im-connection"
         const val NEW_MESSAGE_LISTENER = "taotao-im-message"
+        const val REVOKE_COMMAND_LISTENER = "taotao-im-revoke"
         const val HISTORY_PAGE_SIZE = 50
         const val MAX_IN_MEMORY_MESSAGES = 300
         val UUID_PATTERN = Regex("^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
@@ -377,10 +412,13 @@ data class ImConnectionInfo(
 /** 当前应用进程内的私聊文本项；消息持久化与离线同步由悟空 SDK 的本地库负责。 */
 data class ImChatMessage(
     val id: String,
+    val clientMsgNo: String = id,
     val peerUid: String,
     val content: String,
     val sentAtMillis: Long,
     val isMine: Boolean,
+    val isRead: Boolean = false,
+    val isRevoked: Boolean = false,
 )
 
 /** 业务服务返回的同步结果；uid 用于检测客户端缓存会话与服务端帐号映射是否漂移。 */

@@ -141,6 +141,7 @@ fun TaotaoMusicApp() {
     val imPeerStore = remember { ImPeerStore(context) }
     val imMessages by wukongImClient.messages.collectAsState()
     val syncedImPeers by wukongImClient.syncedPeers.collectAsState()
+    val imPeerNames by wukongImClient.peerNames.collectAsState()
     val imSyncDetail by wukongImClient.syncDetail.collectAsState()
     val playbackSync = remember {
         PlaybackSyncCoordinator(
@@ -1159,11 +1160,16 @@ fun TaotaoMusicApp() {
                     connection = imConnection,
                     messages = imMessages,
                     savedPeers = imPeers,
+                    peerNames = imPeerNames,
                     onSend = { peerUid, content ->
                         imPeers = imPeerStore.remember(authSession.accountId, peerUid)
                         wukongImClient.sendText(peerUid, content)
                     },
                     onPeerSelected = wukongImClient::loadRecentMessages,
+                    onRevoke = { chatMessage ->
+                        runCatching { wukongImClient.revokeMessage(chatMessage) }
+                            .onFailure { error -> message = error.message ?: "撤回失败" }
+                    },
                     onMessage = { message = it },
                 )
             } else if (page == "ai") {

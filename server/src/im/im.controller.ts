@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, HttpCode, HttpStatus, Post } from "@nestjs/common";
+import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Post, Query } from "@nestjs/common";
 import { ApiErrors } from "../common/api.exception";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
 import { RateLimit } from "../common/decorators/rate-limit.decorator";
@@ -48,6 +48,24 @@ export class ImController {
       endMessageSeq: this.numberOf(body.endMessageSeq, 0, 0, Number.MAX_SAFE_INTEGER),
       limit: this.numberOf(body.limit, 50, 1, 50), pullMode: this.numberOf(body.pullMode, 0, 0, 1),
     });
+  }
+
+  /** 撤回由悟空服务端校验归属；客户端只能携带当前登录用户的会话。 */
+  @Post("messages/revoke")
+  @RateLimit("im-sync")
+  async revokeMessage(@CurrentUser() user: SessionUser | undefined, @Body() body: Record<string, unknown>): Promise<void> {
+    const channelId = typeof body.channelId === "string" ? body.channelId.trim().toLowerCase() : "";
+    const messageId = typeof body.messageId === "string" ? body.messageId.trim() : "";
+    const clientMsgNo = typeof body.clientMsgNo === "string" ? body.clientMsgNo.trim() : "";
+    if (!UUID_PATTERN.test(channelId) || !messageId || !clientMsgNo) throw ApiErrors.badRequest(4000, "撤回消息参数不正确");
+    await this.im.revokeMessage(this.requireUser(user).id, { channelId, messageId: messageId.slice(0, 128), clientMsgNo: clientMsgNo.slice(0, 256) });
+  }
+
+  @Get("contacts")
+  @RateLimit("im-sync")
+  contacts(@CurrentUser() user: SessionUser | undefined, @Query("uids") rawUids?: string) {
+    const uids = (rawUids ?? "").split(",").map((uid) => uid.trim().toLowerCase()).filter((uid, index, all) => UUID_PATTERN.test(uid) && all.indexOf(uid) === index).slice(0, 50);
+    return this.im.contacts(this.requireUser(user).id, uids);
   }
 
   private requireUser(user: SessionUser | undefined): SessionUser {

@@ -10,6 +10,7 @@ export type UserWithEmail = UserRecord & { email: string | null };
 export type UserProfile = UserRecord & { email: string | null; nickname: string; avatarUrl: string | null };
 export type UserCredentials = UserRecord & { password_hash: string; password_salt: string };
 type ImUidRow = { im_uid: string | null };
+export type ImContact = { uid: string; nickname: string };
 
 /**
  * `created_at` 在库里是 timestamptz，但响应里必须仍是 SQLite 那种
@@ -130,6 +131,15 @@ export class UsersRepository {
   /** 退出聊天只读取已有 UID，不能因为退出操作给未使用 IM 的旧账号分配新标识。 */
   async imUidOf(userId: number): Promise<string | undefined> {
     return (await this.database.first<ImUidRow>(`SELECT im_uid FROM users WHERE id = $1`, [userId]))?.im_uid ?? undefined;
+  }
+
+  async imContactsByUid(uids: string[]): Promise<ImContact[]> {
+    if (uids.length === 0) return [];
+    return this.database.all<ImContact>(
+      `SELECT im_uid AS uid, COALESCE(nickname, username) AS nickname
+       FROM users WHERE im_uid = ANY($1::uuid[]) AND disabled_at IS NULL`,
+      [uids],
+    );
   }
 
   private async updateEmail(sql: string, params: unknown[]): Promise<boolean> {

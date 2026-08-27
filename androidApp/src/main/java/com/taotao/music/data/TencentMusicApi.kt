@@ -12,12 +12,14 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URLEncoder
 import java.net.URL
+import android.net.Uri
 
 /** 桃桃音乐后端客户端：移动端不直接请求第三方音乐接口。 */
 class TencentMusicApi(
     private val tokenProvider: TokenProvider,
     private val appVersionCode: Long = 0L,
 ) {
+    data class ImContact(val uid: String, val nickname: String)
     /**
      * 认证响应中携带的账号 ID 只用于本地数据分桶，绝不作为鉴权凭据使用。
      *
@@ -527,6 +529,11 @@ class TencentMusicApi(
         },
     ) { data -> data.toProfile() }
 
+    /** 上传头像到业务服务端，由服务端代为调用图床。 */
+    fun uploadAvatar(uri: Uri, contentResolver: android.content.ContentResolver): UserProfile = authorizedMultipart(
+        "/api/v1/auth/avatar", uri, contentResolver,
+    ) { data -> data.toProfile() }
+
     /**
      * 向业务服务申请悟空 IM 连接凭据。
      *
@@ -560,6 +567,25 @@ class TencentMusicApi(
         "/api/v1/im/sync/conversations",
         JSONObject().put("lastMessageSeqs", lastMessageSeqs).put("messageCount", messageCount).put("version", version),
     )
+
+    /** 已认证用户经业务服务申请悟空原生撤回，客户端不直接接触 5001。 */
+    fun revokeImMessage(channelId: String, messageId: String, clientMsgNo: String) {
+        authorizedJson("/api/v1/im/messages/revoke", "POST", JSONObject()
+            .put("channelId", channelId)
+            .put("messageId", messageId)
+            .put("clientMsgNo", clientMsgNo)) { Unit }
+    }
+
+    fun imContacts(uids: List<String>): List<ImContact> {
+        if (uids.isEmpty()) return emptyList()
+        val encoded = java.net.URLEncoder.encode(uids.joinToString(","), "UTF-8")
+        return authorized("/api/v1/im/contacts?uids=$encoded") { connection ->
+            val rows = connection.inputStream.bufferedReader().use { JSONObject(it.readText()) }.optJSONArray("data") ?: JSONArray()
+            List(rows.length()) { index -> rows.optJSONObject(index) }.mapNotNull { row ->
+                row?.optString("uid")?.takeIf { it.isNotBlank() }?.let { uid -> ImContact(uid, row.optString("nickname", "好友")) }
+            }
+        }
+    }
 
     /** 按悟空 IM 给出的游标同步单个频道的一页历史消息。 */
     fun syncImChannelMessages(
@@ -664,6 +690,39 @@ class TencentMusicApi(
             if (code != HttpURLConnection.HTTP_UNAUTHORIZED || attempt == MAX_AUTH_ATTEMPTS - 1) {
                 throw IllegalStateException(messageOf(connection, "请求失败：HTTP $code"))
             }
+            runCatching { connection.errorStream?.close() }
+            token = tokenProvider.renewToken(token) ?: throw SessionExpiredException()
+        }
+        throw SessionExpiredException()
+    }
+
+    private fun <T> authorizedMultipart(
+        path: String,
+        uri: Uri,
+        resolver: android.content.ContentResolver,
+        read: (JSONObject) -> T,
+    ): T {
+        val bytes = resolver.openInputStream(uri)?.use { it.readBytes() } ?: error("无法读取图片")
+        check(bytes.size <= 5 * 1024 * 1024) { "图片不能超过 5 MB" }
+        val boundary = "----TaotaoAvatar${System.currentTimeMillis()}"
+        var token = tokenProvider.validToken() ?: throw SessionExpiredException()
+        repeat(MAX_AUTH_ATTEMPTS) { attempt ->
+            val connection = open(path, "POST", token).apply {
+                doOutput = true
+                setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+            }
+            connection.outputStream.use { output ->
+                output.write("--$boundary\r\nContent-Disposition: form-data; name=\"file\"; filename=\"avatar.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n".toByteArray())
+                output.write(bytes)
+                output.write("\r\n--$boundary--\r\n".toByteArray())
+            }
+            val code = connection.responseCode
+            if (code in 200..299) {
+                noteLatestVersion(connection)
+                val data = connection.inputStream.bufferedReader().use { JSONObject(it.readText()) }.optJSONObject("data") ?: JSONObject()
+                return read(data)
+            }
+            if (code != 401 || attempt == MAX_AUTH_ATTEMPTS - 1) throw IllegalStateException(messageOf(connection, "头像上传失败：HTTP $code"))
             runCatching { connection.errorStream?.close() }
             token = tokenProvider.renewToken(token) ?: throw SessionExpiredException()
         }

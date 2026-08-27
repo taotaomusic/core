@@ -49,6 +49,16 @@ export class WukongImClient {
     });
   }
 
+  revokeMessage(input: { uid: string; channelId: string; messageId: string; clientMsgNo: string }): Promise<void> {
+    return this.post("/message/revoke", {
+      login_uid: input.uid,
+      channel_id: input.channelId,
+      channel_type: 1,
+      message_id: input.messageId,
+      client_msg_no: input.clientMsgNo,
+    });
+  }
+
   private async post(path: string, body: Record<string, unknown>): Promise<void> {
     await this.postJson(path, body);
   }

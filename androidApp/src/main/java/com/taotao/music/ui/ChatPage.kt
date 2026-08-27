@@ -55,8 +55,10 @@ fun ChatPage(
     connection: ImConnectionInfo,
     messages: List<ImChatMessage>,
     savedPeers: List<String>,
+    peerNames: Map<String, String>,
     onSend: (peerUid: String, content: String) -> Unit,
     onPeerSelected: (peerUid: String) -> Unit,
+    onRevoke: (ImChatMessage) -> Unit,
     onMessage: (String) -> Unit,
 ) {
     var peerUid by remember(savedPeers) { mutableStateOf(savedPeers.firstOrNull().orEmpty()) }
@@ -82,7 +84,7 @@ fun ChatPage(
             } else {
                 savedPeers.forEach { savedUid ->
                     Text(
-                        text = savedUid,
+                        text = peerNames[savedUid] ?: "好友",
                         color = if (savedUid == peerUid) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                         fontWeight = if (savedUid == peerUid) FontWeight.Bold else FontWeight.Normal,
                         maxLines = 1,
@@ -104,7 +106,7 @@ fun ChatPage(
                 Spacer(Modifier.size(10.dp))
                 Column(Modifier.weight(1f)) {
                     Text("聊天", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-                    Text(peerUid.ifBlank { "从列表选择聊天" }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(peerNames[peerUid] ?: peerUid.takeIf { it.isBlank() } ?: "好友", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 ConnectionBadge(connection.state)
             }
@@ -115,7 +117,7 @@ fun ChatPage(
                     state = messageListState,
                     modifier = Modifier.weight(1f).fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) { items(peerMessages, key = { it.id }) { ChatBubble(it) } }
+                ) { items(peerMessages, key = { it.id }) { ChatBubble(it, onRevoke) } }
             }
             Row(verticalAlignment = Alignment.Bottom) {
                 OutlinedTextField(value = draft, onValueChange = { draft = it }, label = { Text("消息") }, modifier = Modifier.weight(1f), maxLines = 4)
@@ -141,7 +143,7 @@ private fun ConnectionBadge(state: ImConnectionState) {
 }
 
 @Composable
-private fun ChatBubble(message: ImChatMessage) {
+private fun ChatBubble(message: ImChatMessage, onRevoke: (ImChatMessage) -> Unit) {
     Box(Modifier.fillMaxWidth(), contentAlignment = if (message.isMine) Alignment.CenterEnd else Alignment.CenterStart) {
         Column(horizontalAlignment = if (message.isMine) Alignment.End else Alignment.Start) {
             Text(message.content, modifier = Modifier.background(if (message.isMine) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(16.dp)).padding(horizontal = 12.dp, vertical = 9.dp), color = if (message.isMine) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant)
@@ -151,6 +153,14 @@ private fun ChatBubble(message: ImChatMessage) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
             )
+            if (message.isMine && !message.isRevoked) {
+                Text(
+                    if (message.isRead) "已读 · 撤回" else "未读 · 撤回",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.clickable { onRevoke(message) }.padding(horizontal = 4.dp, vertical = 2.dp),
+                )
+            }
         }
     }
 }
