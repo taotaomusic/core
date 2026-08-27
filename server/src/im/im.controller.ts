@@ -76,14 +76,6 @@ export class ImController {
     await this.im.markConversationRead(this.requireUser(user).id, channelId);
   }
 
-  @Get("conversations/read-state")
-  @RateLimit("im-sync")
-  readState(@CurrentUser() user: SessionUser | undefined, @Query("channelId") channelId?: string) {
-    const normalized = channelId?.trim().toLowerCase() ?? "";
-    if (!UUID_PATTERN.test(normalized)) throw ApiErrors.badRequest(4000, "聊天频道标识不正确");
-    return this.im.readedToMessageSeq(this.requireUser(user).id, normalized).then((readedToMessageSeq) => ({ readedToMessageSeq }));
-  }
-
   private requireUser(user: SessionUser | undefined): SessionUser {
     if (!user) throw ApiErrors.unauthorized(4010, "请先登录");
     return user;

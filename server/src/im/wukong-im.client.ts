@@ -42,14 +42,6 @@ export class WukongImClient {
     });
   }
 
-  async readedToMessageSeq(viewerUid: string, peerUid: string): Promise<number> {
-    const rows = await this.syncConversations(peerUid, "", 1, 0);
-    if (!Array.isArray(rows)) throw ApiErrors.upstream("悟空 IM 会话同步响应格式不正确");
-    const row = rows.find((item) => item && typeof item === "object" && (item as Record<string, unknown>).channel_id === viewerUid) as Record<string, unknown> | undefined;
-    const value = Number(row?.readed_to_msg_seq ?? 0);
-    return Number.isSafeInteger(value) && value > 0 ? value : 0;
-  }
-
   syncChannelMessages(input: { uid: string; channelId: string; channelType: number; startMessageSeq: number; endMessageSeq: number; limit: number; pullMode: number }): Promise<unknown> {
     return this.postJson("/channel/messagesync", {
       login_uid: input.uid, channel_id: input.channelId, channel_type: input.channelType,

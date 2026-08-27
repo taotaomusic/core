@@ -179,16 +179,6 @@ class WukongImClient(
                 isRevoked = message.remoteExtra?.revoke == 1,
             )
             mergeMessage(chatMessage)
-            if (activePeerUid == chatMessage.peerUid) {
-                // 对端正在看时，悟空的 readed_to_msg_seq 会很快推进；短窗口轮询仅用于
-                // 在线即时更新，最终真相仍来自下一次进入会话时的同一悟空游标。
-                syncScope.launch {
-                    repeat(4) {
-                        delay(1_000)
-                        refreshReadState(chatMessage.peerUid)
-                    }
-                }
-            }
         }
         wkIm.msgManager.addOnRefreshMsgListener(REFRESH_MESSAGE_LISTENER) { message, _ ->
             val currentUid = _connection.value.uid ?: return@addOnRefreshMsgListener
@@ -373,7 +363,6 @@ class WukongImClient(
     /** 聊天页切换或离开时更新可见会话，避免应用在后台把新消息误标已读。 */
     fun setActivePeer(peerUid: String?) {
         activePeerUid = peerUid?.trim()?.lowercase()?.takeIf(UUID_PATTERN::matches)
-        activePeerUid?.let(::refreshReadState)
     }
 
     /** 退出账号或会话彻底失效时停止重连并清除 SDK 中保留的 Token。 */
@@ -469,7 +458,7 @@ class WukongImClient(
                         peerUid = peerUid,
                         content = if (revoked) "消息已撤回" else content,
                         sentAtMillis = message.optLong("timestamp") * 1000,
-                        messageSeq = message.optLong("message_seq"),
+                        messageSeq = message.optInt("message_seq"),
                         isMine = fromUid == currentUid,
                         isRead = fromUid == currentUid && isReadConfirmed(message),
                         isRevoked = revoked,
@@ -508,20 +497,6 @@ class WukongImClient(
                 message_extra = toSyncExtra(message.optJSONObject("message_extra"))
                 this.payload = payload
             })
-        }
-    }
-
-    /** 读取悟空持久化的接收方已读游标；业务服务只做代理，不保存状态。 */
-    private fun refreshReadState(peerUid: String) {
-        syncScope.launch {
-            runCatching { api.imReadedToMessageSeq(peerUid) }.onSuccess { readedToSeq ->
-                if (readedToSeq <= 0) return@onSuccess
-                _messages.value = _messages.value.map { message ->
-                    if (message.isMine && message.peerUid == peerUid &&
-                        message.messageSeq > 0 && message.messageSeq <= readedToSeq
-                    ) message.copy(isRead = true) else message
-                }
-            }
         }
     }
 
