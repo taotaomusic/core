@@ -139,7 +139,7 @@ class WukongImClient(
                     isRevoked = message.remoteExtra?.revoke == 1,
                 )
             }
-            if (added.isNotEmpty()) _messages.value = (_messages.value + added).takeLast(MAX_IN_MEMORY_MESSAGES)
+            mergeMessages(added)
         }
         // 自己发送的消息不会走“新消息”监听；以 SDK 回调提供的 clientMsgNo 为准，不能保留自造的 local-* ID。
         wkIm.msgManager.addOnSendMsgCallback(SEND_MESSAGE_LISTENER) { message ->
@@ -175,11 +175,11 @@ class WukongImClient(
         wkIm.getCMDManager().addCmdListener(REVOKE_COMMAND_LISTENER) { command ->
             when (command.cmdKey) {
                 WKCMDKeys.wk_messageRevoke -> {
-                    val messageId = command.paramJsonObject?.optString("message_id").orEmpty()
-                    if (messageId.isBlank()) return@addCmdListener
-                    _messages.value = _messages.value.map { message ->
-                        if (message.id == messageId) message.copy(content = "消息已撤回", isRevoked = true) else message
-                    }
+                    val parameters = command.paramJsonObject ?: return@addCmdListener
+                    markMessageRevoked(
+                        messageId = parameters.optString("message_id"),
+                        clientMsgNo = parameters.optString("client_msg_no"),
+                    )
                 }
                 READ_RECEIPT_COMMAND -> {
                     val parameters = command.paramJsonObject ?: return@addCmdListener
@@ -192,7 +192,9 @@ class WukongImClient(
                     }
                     if (readerUid.isBlank() || readIds.isEmpty()) return@addCmdListener
                     _messages.value = _messages.value.map { message ->
-                        if (message.isMine && message.peerUid == readerUid && message.id in readIds) {
+                        if (message.isMine && message.peerUid == readerUid &&
+                            (message.id in readIds || message.clientMsgNo in readIds)
+                        ) {
                             message.copy(isRead = true)
                         } else message
                     }
@@ -244,7 +246,8 @@ class WukongImClient(
         syncScope.launch {
             runCatching { api.revokeImMessage(message.peerUid, message.id, message.clientMsgNo) }
                 .onSuccess {
-                    _messages.value = _messages.value.map { if (it.id == message.id) it.copy(content = "消息已撤回", isRevoked = true) else it }
+                    // 命令会异步回送；HTTP 成功即表示悟空已接受撤回，不能再让界面等待回送。
+                    markMessageRevoked(message.id, message.clientMsgNo)
                 }
                 .onFailure { error -> _syncDetail.value = "撤回失败：${error.message ?: "悟空 IM 服务暂不可用"}" }
         }
@@ -297,11 +300,7 @@ class WukongImClient(
                         )
                     }
                     if (restored.isEmpty()) return
-                    _messages.value = (_messages.value + restored)
-                        .associateBy { it.id }
-                        .values
-                        .sortedBy { it.sentAtMillis }
-                        .takeLast(MAX_IN_MEMORY_MESSAGES)
+                    mergeMessages(restored)
                     _syncedPeers.value = (_syncedPeers.value + normalizedPeerUid).distinct().sorted()
                     sendReadReceipt(normalizedPeerUid, restored.filterNot { it.isMine || it.isRevoked }.map { it.id })
                 }
@@ -424,12 +423,7 @@ class WukongImClient(
             }
         }
         if (restored.isEmpty()) return 0
-        val merged = (_messages.value + restored)
-            .associateBy { it.id }
-            .values
-            .sortedBy { it.sentAtMillis }
-            .takeLast(MAX_IN_MEMORY_MESSAGES)
-        _messages.value = merged
+        mergeMessages(restored)
         _syncedPeers.value = ( _syncedPeers.value + restored.map { it.peerUid } ).distinct().sorted()
         return restored.size
     }
@@ -467,11 +461,56 @@ class WukongImClient(
         return runCatching { org.json.JSONObject(payloadText) }.getOrDefault(org.json.JSONObject())
     }
 
-    private fun mergeMessage(message: ImChatMessage) {
-        _messages.value = (_messages.value.filterNot { it.id == message.id || it.clientMsgNo == message.clientMsgNo } + message)
-            .sortedBy { it.sentAtMillis }
-            .takeLast(MAX_IN_MEMORY_MESSAGES)
+    /**
+     * 合并悟空的推送、历史页和刷新事件。网络事件可以乱序到达，不能用后来的旧快照
+     * 把已读或撤回状态倒退回去；两种状态一旦在悟空事件中确认，就只能保持或增强。
+     */
+    private fun mergeMessages(incoming: List<ImChatMessage>) {
+        if (incoming.isEmpty()) return
+        val merged = _messages.value.toMutableList()
+        incoming.forEach { candidate ->
+            val index = merged.indexOfFirst { existing -> sameMessage(existing, candidate.id, candidate.clientMsgNo) }
+            if (index < 0) {
+                merged += candidate
+            } else {
+                val previous = merged[index]
+                val revoked = previous.isRevoked || candidate.isRevoked
+                merged[index] = candidate.copy(
+                    id = candidate.id.ifBlank { previous.id },
+                    clientMsgNo = candidate.clientMsgNo.ifBlank { previous.clientMsgNo },
+                    content = if (revoked) "消息已撤回" else candidate.content,
+                    isRead = previous.isRead || candidate.isRead,
+                    isRevoked = revoked,
+                )
+            }
+        }
+        _messages.value = merged.sortedBy { it.sentAtMillis }.takeLast(MAX_IN_MEMORY_MESSAGES)
     }
+
+    private fun mergeMessage(message: ImChatMessage) = mergeMessages(listOf(message))
+
+    /** 悟空不同链路可能只携带 message_id 或 client_msg_no，二者都必须能命中。 */
+    private fun markMessageRevoked(messageId: String, clientMsgNo: String) {
+        if (messageId.isBlank() && clientMsgNo.isBlank()) return
+        // 同时写入悟空 SDK 本地库。只改 StateFlow 会在冷启动重新读取 SDK 历史后丢失撤回状态。
+        val resolvedMessageId = messageId.ifBlank {
+            wkIm.msgManager.getWithClientMsgNO(clientMsgNo)?.messageID.orEmpty()
+        }
+        if (resolvedMessageId.isNotBlank()) {
+            wkIm.msgManager.updateContentAndRefresh(resolvedMessageId, "消息已撤回", true)
+        }
+        _messages.value = _messages.value.map { message ->
+            if (sameMessage(message, messageId, clientMsgNo)) {
+                message.copy(content = "消息已撤回", isRevoked = true)
+            } else {
+                message
+            }
+        }
+    }
+
+    private fun sameMessage(message: ImChatMessage, messageId: String, clientMsgNo: String): Boolean =
+        (messageId.isNotBlank() && (message.id == messageId || message.clientMsgNo == messageId)) ||
+            (clientMsgNo.isNotBlank() && (message.id == clientMsgNo || message.clientMsgNo == clientMsgNo))
 
     private companion object {
         const val CONNECTION_STATUS_LISTENER = "taotao-im-connection"

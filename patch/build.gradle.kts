@@ -124,7 +124,7 @@ val printMethodKeys by tasks.registering {
         // 只有长度前缀和结束符，不收边会把下一个字符串一起吞进来。
         val nul = Char(0)
         val pattern = Regex(
-            "com/taotao/music/(?:data|player|update)/[A-Za-z0-9_$]+" +
+            "com/taotao/music/(?:data|player|update)/(?:[A-Za-z0-9_$]+/)*[A-Za-z0-9_$]+" +
                 "#[A-Za-z0-9_$<>]+[(][^)$nul]*[)][^$nul]{0,80}",
         )
         ZipFile(apk).use { zip ->
