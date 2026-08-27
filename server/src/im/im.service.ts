@@ -123,6 +123,11 @@ export class ImService {
     return this.users.imContactsByUid(uids.filter((uid) => uid !== selfUid));
   }
 
+  async markConversationRead(userId: number, channelId: string): Promise<void> {
+    this.requireEnabled();
+    await this.wukong.clearUnread(await this.users.ensureImUid(userId), channelId);
+  }
+
   private requireEnabled(): void {
     if (!this.config.imEnabled) throw ApiErrors.serviceUnavailable(5031, "聊天服务尚未启用");
   }

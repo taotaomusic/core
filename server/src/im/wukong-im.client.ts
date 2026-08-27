@@ -49,8 +49,8 @@ export class WukongImClient {
     });
   }
 
-  revokeMessage(input: { uid: string; channelId: string; messageId: string; clientMsgNo: string }): Promise<void> {
-    return this.post("/message/revoke", {
+  async revokeMessage(input: { uid: string; channelId: string; messageId: string; clientMsgNo: string }): Promise<void> {
+    await this.post("/message/revoke", {
       login_uid: input.uid,
       channel_id: input.channelId,
       channel_type: 1,
@@ -59,16 +59,24 @@ export class WukongImClient {
     });
   }
 
+  async clearUnread(uid: string, channelId: string): Promise<void> {
+    await this.request("PUT", "/conversation/clearUnread", { login_uid: uid, channel_id: channelId, channel_type: 1, unread: 0 });
+  }
+
   private async post(path: string, body: Record<string, unknown>): Promise<void> {
-    await this.postJson(path, body);
+    await this.request("POST", path, body);
   }
 
   private async postJson(path: string, body: Record<string, unknown>): Promise<unknown> {
+    return this.request("POST", path, body);
+  }
+
+  private async request(method: "POST" | "PUT", path: string, body: Record<string, unknown>): Promise<unknown> {
     const abort = new AbortController();
     const timeout = setTimeout(() => abort.abort(), REQUEST_TIMEOUT_MS);
     try {
       const response = await fetch(`${this.config.imInternalApiBaseUrl}${path}`, {
-        method: "POST",
+        method,
         headers: {
           "content-type": "application/json",
           ...(this.config.imApiToken ? { token: this.config.imApiToken } : {}),

@@ -194,8 +194,11 @@ class WukongImClient(
     fun revokeMessage(message: ImChatMessage) {
         require(message.isMine && !message.id.startsWith("local-")) { "消息尚未送达，暂不能撤回" }
         syncScope.launch {
-            api.revokeImMessage(message.peerUid, message.id, message.clientMsgNo)
-            _messages.value = _messages.value.map { if (it.id == message.id) it.copy(content = "消息已撤回", isRevoked = true) else it }
+            runCatching { api.revokeImMessage(message.peerUid, message.id, message.clientMsgNo) }
+                .onSuccess {
+                    _messages.value = _messages.value.map { if (it.id == message.id) it.copy(content = "消息已撤回", isRevoked = true) else it }
+                }
+                .onFailure { error -> _syncDetail.value = "撤回失败：${error.message ?: "悟空 IM 服务暂不可用"}" }
         }
     }
 
@@ -210,6 +213,7 @@ class WukongImClient(
             runCatching { api.imContacts(listOf(normalizedPeerUid)) }.onSuccess { contacts ->
                 _peerNames.value = _peerNames.value + contacts.associate { it.uid to it.nickname }
             }
+            runCatching { api.markImConversationRead(normalizedPeerUid) }
         }
 
         wkIm.msgManager.getOrSyncHistoryMessages(
@@ -254,6 +258,19 @@ class WukongImClient(
                 }
             },
         )
+    }
+
+    fun loadPeerNames(peerUids: List<String>) {
+        val normalized = peerUids.map { it.trim().lowercase() }
+            .filter { UUID_PATTERN.matches(it) }
+            .distinct()
+            .take(50)
+        if (normalized.isEmpty()) return
+        syncScope.launch {
+            runCatching { api.imContacts(normalized) }.onSuccess { contacts ->
+                _peerNames.value = _peerNames.value + contacts.associate { it.uid to it.nickname }
+            }
+        }
     }
 
     /** 退出账号或会话彻底失效时停止重连并清除 SDK 中保留的 Token。 */

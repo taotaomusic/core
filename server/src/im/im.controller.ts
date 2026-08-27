@@ -68,6 +68,14 @@ export class ImController {
     return this.im.contacts(this.requireUser(user).id, uids);
   }
 
+  @Post("conversations/read")
+  @RateLimit("im-sync")
+  async markConversationRead(@CurrentUser() user: SessionUser | undefined, @Body() body: Record<string, unknown>): Promise<void> {
+    const channelId = typeof body.channelId === "string" ? body.channelId.trim().toLowerCase() : "";
+    if (!UUID_PATTERN.test(channelId)) throw ApiErrors.badRequest(4000, "聊天频道标识不正确");
+    await this.im.markConversationRead(this.requireUser(user).id, channelId);
+  }
+
   private requireUser(user: SessionUser | undefined): SessionUser {
     if (!user) throw ApiErrors.unauthorized(4010, "请先登录");
     return user;

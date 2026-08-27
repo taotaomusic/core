@@ -58,6 +58,7 @@ fun ChatPage(
     peerNames: Map<String, String>,
     onSend: (peerUid: String, content: String) -> Unit,
     onPeerSelected: (peerUid: String) -> Unit,
+    onPeersVisible: (List<String>) -> Unit,
     onRevoke: (ImChatMessage) -> Unit,
     onMessage: (String) -> Unit,
 ) {
@@ -71,6 +72,7 @@ fun ChatPage(
         val normalizedPeerUid = peerUid.trim().lowercase()
         if (UUID_PATTERN.matches(normalizedPeerUid)) onPeerSelected(normalizedPeerUid)
     }
+    LaunchedEffect(savedPeers) { onPeersVisible(savedPeers) }
     // 进入会话或本地历史补齐后，定位到最后一条而非列表顶部。
     LaunchedEffect(peerUid, peerMessages.lastOrNull()?.id) {
         if (peerMessages.isNotEmpty()) messageListState.scrollToItem(peerMessages.lastIndex)
@@ -84,7 +86,7 @@ fun ChatPage(
             } else {
                 savedPeers.forEach { savedUid ->
                     Text(
-                        text = peerNames[savedUid] ?: "好友",
+                        text = peerNames[savedUid] ?: "未知用户",
                         color = if (savedUid == peerUid) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                         fontWeight = if (savedUid == peerUid) FontWeight.Bold else FontWeight.Normal,
                         maxLines = 1,
