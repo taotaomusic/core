@@ -2,64 +2,144 @@ package com.taotao.music.hotfix.generated
 
 import com.taotao.music.hotfix.PatchDispatcher
 import com.taotao.music.hotfix.PatchEntry
+import org.json.JSONArray
+import org.json.JSONObject
+import java.util.Base64
 
 /**
- * 补丁入口。
+ * 1.0.128 IM 已读热修。悟空把 type=99 已读回执作为持久内部消息随会话同步返回；旧包
+ * 没有在冷启动时消费它，故进程死亡后已读状态回退。补丁先扫描回执，再建立消息投影。
  *
- * 类名必须固定为 `com.taotao.music.hotfix.generated.PatchEntryImpl` ——
- * 加载器按这个名字反射实例化，补丁与宿主只靠这一个约定耦合。
- *
- * ## 怎么写一个补丁
- *
- * 1. 在 [targets] 里列出要打补丁的类（全名，点号形式）。这些类必须被插过桩，
- *    也就是必须落在 `data` / `player` / `update` 包下 —— UI 层没有插桩，
- *    界面 bug 只能发整包。
- * 2. 在 `isSupport` 里认领要接管的方法键。格式是
- *    `类的内部名#方法名(参数描述符)返回描述符`。
- *    用 `./gradlew :patch:printMethodKeys` 可以列出当前 APK 里所有可用的键。
- * 3. 在 `dispatch` 里写新实现。`receiver` 是实例方法的 this（静态方法为 null），
- *    `args` 是原方法的实参，基本类型已装箱。返回值会被插桩代码按原返回类型拆箱，
- *    类型对不上会在运行时 ClassCastException。
- *
- * ## 四条不能踩的
- *
- * - **不要在 dispatch 里调用被自己接管的那个方法**。插桩的判断在方法入口，
- *   调用它会再次进到这里，无限递归直接 StackOverflow。要原逻辑就自己重写一遍。
- * - **不要 new 宿主已有的类并跨边界传递**。补丁类加载器加载的同名类与宿主的不是
- *   同一个 Class，传参会 ClassCastException。引用宿主类型只做类型声明
- *   （compileOnly 已保证不打进补丁），实例一律用传进来的那个。
- * - **不要改方法签名**。补丁是按宿主那份代码的签名生成的，签名变了匹配不上。
- * - **改完补丁要同步改源码**。补丁只是让线上先不崩，下一个整包版本里真正的修复
- *   必须在原位置也做一遍，否则升级后 bug 回归。
- *
- * ## 当前内容：问候语验证补丁
- *
- * 接管 `GreetingFormatter.greetingForHour()`：仅把深夜默认文案改为「你好」。首页的
- * Compose 结构没有变化，适合作为数据层热修补的加载、即时生效与回退验证样例。
+ * 补丁不直接引用宿主或悟空 SDK 类型，避免补丁类加载器制造同名类冲突。
  */
 class PatchEntryImpl : PatchEntry {
-
-    override fun targets(): List<String> = listOf("com.taotao.music.data.GreetingFormatter")
+    override fun targets(): List<String> = listOf(WUKONG_CLIENT)
 
     override fun dispatcher(): PatchDispatcher = object : PatchDispatcher {
-        override fun isSupport(methodKey: String): Boolean = methodKey == LABEL_KEY
+        override fun isSupport(methodKey: String): Boolean = methodKey == MERGE_KEY
 
         override fun dispatch(methodKey: String, receiver: Any?, args: Array<Any?>): Any? {
-            check(methodKey == LABEL_KEY) { "补丁没有实现方法：$methodKey" }
-            // 不能调宿主的 greetingForHour()：那会再次命中分发器造成递归。
-            val hour = args.getOrNull(0) as? Int ?: return "夜深了"
-            return when (hour) {
-                in 5..8 -> "早上好"
-                in 9..11 -> "上午好"
-                in 12..13 -> "中午好"
-                in 14..18 -> "下午好"
-                in 19..22 -> "晚上好"
-                else -> "你好"
+            check(methodKey == MERGE_KEY) { "补丁没有实现方法：$methodKey" }
+            val client = requireNotNull(receiver) { "缺少 IM 客户端实例" }
+            val rows = args.firstOrNull() as? JSONArray ?: return 0
+            return restore(client, rows)
+        }
+    }
+
+    private fun restore(client: Any, rows: JSONArray): Int {
+        val uid = connectionUid(client) ?: return 0
+        val readIds = collectReadIds(rows)
+        val restored = ArrayList<Any>()
+        val peers = linkedSetOf<String>()
+
+        for (rowIndex in 0 until rows.length()) {
+            val row = rows.optJSONObject(rowIndex) ?: continue
+            val channelId = row.optString("channel_id").trim().lowercase()
+            if (!UUID_REGEX.matches(channelId) || row.optInt("channel_type") != 1) continue
+            val recents = row.optJSONArray("recents") ?: continue
+            for (messageIndex in 0 until recents.length()) {
+                val message = recents.optJSONObject(messageIndex) ?: continue
+                val payload = payloadOf(message)
+                if (payload.optString("cmd").isNotBlank()) continue
+                val fromUid = message.optString("from_uid").trim().lowercase()
+                val peerUid = if (fromUid == uid) channelId else fromUid
+                if (!UUID_REGEX.matches(peerUid)) continue
+                val content = payload.optString("content").trim()
+                if (content.isBlank()) continue
+
+                val id = message.optString("message_idstr", message.optString("message_id"))
+                    .ifBlank { message.optString("client_msg_no") }
+                val clientMsgNo = message.optString("client_msg_no").ifBlank { id }
+                val extra = message.optJSONObject("message_extra")
+                val revoked = extra?.optInt("revoke") == 1 || message.optInt("revoke") == 1
+                restored += newMessage(
+                    client,
+                    id,
+                    clientMsgNo,
+                    peerUid,
+                    if (revoked) "消息已撤回" else content,
+                    message.optLong("timestamp") * 1_000L,
+                    fromUid == uid,
+                    fromUid == uid && (extra?.optInt("readed") == 1 || message.optInt("readed") == 1 || id in readIds || clientMsgNo in readIds),
+                    revoked,
+                )
+                peers += peerUid
+            }
+        }
+        if (restored.isEmpty()) return 0
+        invokePrivate(client, "mergeMessages", restored)
+        mergePeers(client, peers)
+        return restored.size
+    }
+
+    private fun collectReadIds(rows: JSONArray): Set<String> = buildSet {
+        for (rowIndex in 0 until rows.length()) {
+            val recents = rows.optJSONObject(rowIndex)?.optJSONArray("recents") ?: continue
+            for (messageIndex in 0 until recents.length()) {
+                val payload = recents.optJSONObject(messageIndex)?.let(::payloadOf) ?: continue
+                if (payload.optString("cmd") != READ_COMMAND) continue
+                val ids = payload.optJSONObject("param")?.optJSONArray("message_ids") ?: continue
+                for (idIndex in 0 until ids.length()) {
+                    ids.optString(idIndex).takeIf { it.isNotBlank() }?.let(::add)
+                }
             }
         }
     }
 
+    private fun payloadOf(message: JSONObject): JSONObject {
+        val raw = message.optString("payload")
+        val decoded = runCatching { String(Base64.getDecoder().decode(raw), Charsets.UTF_8) }.getOrDefault(raw)
+        return runCatching { JSONObject(decoded) }.getOrDefault(JSONObject())
+    }
+
+    private fun connectionUid(client: Any): String? {
+        val connection = privateField(client, "_connection") ?: return null
+        val value = invoke(connection, "getValue") ?: return null
+        return invoke(value, "getUid") as? String
+    }
+
+    private fun newMessage(
+        client: Any,
+        id: String,
+        clientMsgNo: String,
+        peerUid: String,
+        content: String,
+        sentAtMillis: Long,
+        isMine: Boolean,
+        isRead: Boolean,
+        isRevoked: Boolean,
+    ): Any {
+        val type = Class.forName(IM_CHAT_MESSAGE, true, client.javaClass.classLoader)
+        val constructor = type.declaredConstructors.single { it.parameterTypes.size == 8 }
+        return constructor.newInstance(id, clientMsgNo, peerUid, content, sentAtMillis, isMine, isRead, isRevoked)
+    }
+
+    private fun mergePeers(client: Any, peers: Set<String>) {
+        val flow = privateField(client, "_syncedPeers") ?: return
+        val current = (invoke(flow, "getValue") as? List<*>)?.filterIsInstance<String>().orEmpty()
+        invoke(flow, "setValue", (current + peers).distinct().sorted())
+    }
+
+    private fun privateField(instance: Any, name: String): Any? = runCatching {
+        instance.javaClass.getDeclaredField(name).apply { isAccessible = true }.get(instance)
+    }.getOrNull()
+
+    private fun invokePrivate(instance: Any, name: String, argument: Any) {
+        instance.javaClass.getDeclaredMethod(name, List::class.java).apply { isAccessible = true }.invoke(instance, argument)
+    }
+
+    private fun invoke(instance: Any, name: String, vararg arguments: Any?): Any? = runCatching {
+        val method = instance.javaClass.methods.firstOrNull {
+            it.name == name && it.parameterTypes.size == arguments.size
+        } ?: return null
+        method.invoke(instance, *arguments)
+    }.getOrNull()
+
     private companion object {
-        const val LABEL_KEY = "com/taotao/music/data/GreetingFormatter#greetingForHour(I)Ljava/lang/String;"
+        const val WUKONG_CLIENT = "com.taotao.music.data.im.WukongImClient"
+        const val IM_CHAT_MESSAGE = "com.taotao.music.data.im.ImChatMessage"
+        const val MERGE_KEY = "com/taotao/music/data/im/WukongImClient#mergeSyncedConversations(Lorg/json/JSONArray;)I"
+        const val READ_COMMAND = "taotao.messageRead"
+        val UUID_REGEX = Regex("^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
     }
 }
