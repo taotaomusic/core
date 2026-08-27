@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -44,6 +45,9 @@ import com.taotao.music.data.ImChatMessage
 import com.taotao.music.data.ImConnectionInfo
 import com.taotao.music.data.ImConnectionState
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /** 悟空 IM 私聊页：左侧抽屉用于切换已保存的聊天。 */
 @Composable
@@ -59,10 +63,15 @@ fun ChatPage(
     var draft by remember { mutableStateOf("") }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
+    val messageListState = rememberLazyListState()
     val peerMessages = remember(messages, peerUid) { messages.filter { it.peerUid == peerUid.trim().lowercase() } }
     LaunchedEffect(peerUid) {
         val normalizedPeerUid = peerUid.trim().lowercase()
         if (UUID_PATTERN.matches(normalizedPeerUid)) onPeerSelected(normalizedPeerUid)
+    }
+    // 进入会话或本地历史补齐后，定位到最后一条而非列表顶部。
+    LaunchedEffect(peerUid, peerMessages.lastOrNull()?.id) {
+        if (peerMessages.isNotEmpty()) messageListState.scrollToItem(peerMessages.lastIndex)
     }
 
     ModalNavigationDrawer(drawerState = drawerState, drawerContent = {
@@ -102,7 +111,11 @@ fun ChatPage(
             if (peerUid.isBlank()) {
                 Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) { Text("从左上角打开聊天列表", color = MaterialTheme.colorScheme.onSurfaceVariant) }
             } else {
-                LazyColumn(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) { items(peerMessages, key = { it.id }) { ChatBubble(it) } }
+                LazyColumn(
+                    state = messageListState,
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) { items(peerMessages, key = { it.id }) { ChatBubble(it) } }
             }
             Row(verticalAlignment = Alignment.Bottom) {
                 OutlinedTextField(value = draft, onValueChange = { draft = it }, label = { Text("消息") }, modifier = Modifier.weight(1f), maxLines = 4)
@@ -130,8 +143,17 @@ private fun ConnectionBadge(state: ImConnectionState) {
 @Composable
 private fun ChatBubble(message: ImChatMessage) {
     Box(Modifier.fillMaxWidth(), contentAlignment = if (message.isMine) Alignment.CenterEnd else Alignment.CenterStart) {
-        Text(message.content, modifier = Modifier.background(if (message.isMine) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(16.dp)).padding(horizontal = 12.dp, vertical = 9.dp), color = if (message.isMine) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant)
+        Column(horizontalAlignment = if (message.isMine) Alignment.End else Alignment.Start) {
+            Text(message.content, modifier = Modifier.background(if (message.isMine) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(16.dp)).padding(horizontal = 12.dp, vertical = 9.dp), color = if (message.isMine) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                text = MESSAGE_TIME_FORMAT.format(Date(message.sentAtMillis)),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
+            )
+        }
     }
 }
 
 private val UUID_PATTERN = Regex("^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+private val MESSAGE_TIME_FORMAT = SimpleDateFormat("MM-dd HH:mm", Locale.CHINA)
