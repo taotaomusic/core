@@ -258,7 +258,8 @@ class WukongImClient(
     }
 
     fun revokeMessage(message: ImChatMessage) {
-        require(message.isMine && message.id.isNotBlank() && message.clientMsgNo.isNotBlank()) { "消息尚未送达，暂不能撤回" }
+        require(message.isMine) { "只能撤回自己发送的消息" }
+        require(message.id.isNotBlank() || message.clientMsgNo.isNotBlank()) { "消息尚未送达，暂不能撤回" }
         syncScope.launch {
             runCatching { api.revokeImMessage(message.peerUid, message.id, message.clientMsgNo) }
                 .onSuccess {
@@ -625,15 +626,19 @@ class WukongImClient(
     private fun markMessageRevoked(messageId: String, clientMsgNo: String) {
         if (messageId.isBlank() && clientMsgNo.isBlank()) return
         listOf(messageId, clientMsgNo).filter { it.isNotBlank() }.forEach(confirmedRevokedMessageIds::add)
-        val peerUid = _messages.value.firstOrNull { sameMessage(it, messageId, clientMsgNo) }?.peerUid
-        if (peerUid != null) persistMessageExtra(peerUid, listOf(messageId, clientMsgNo), readed = false, revoked = true)
-        // 同时写入悟空 SDK 本地库。只改 StateFlow 会在冷启动重新读取 SDK 历史后丢失撤回状态。
+
+        // 先写入悟空 SDK 本地库，确保消息存在于数据库中
         val resolvedMessageId = messageId.ifBlank {
             wkIm.msgManager.getWithClientMsgNO(clientMsgNo)?.messageID.orEmpty()
         }
         if (resolvedMessageId.isNotBlank()) {
             wkIm.msgManager.updateContentAndRefresh(resolvedMessageId, "消息已撤回", true)
         }
+
+        // SDK 写入完成后，再持久化 extra 表（此时 getWithMessageID 才能成功）
+        val peerUid = _messages.value.firstOrNull { sameMessage(it, messageId, clientMsgNo) }?.peerUid
+        if (peerUid != null) persistMessageExtra(peerUid, listOf(messageId, clientMsgNo), readed = false, revoked = true)
+
         _messages.value = _messages.value.map { message ->
             if (sameMessage(message, messageId, clientMsgNo)) {
                 message.copy(content = "消息已撤回", isRevoked = true)
