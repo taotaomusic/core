@@ -227,6 +227,7 @@ fun SongListItem(
     active: Boolean,
     favorited: Boolean = false,
     downloaded: Boolean = false,
+    modifier: Modifier = Modifier,
     onToggleFavorite: (() -> Unit)? = null,
     onPlayNext: (() -> Unit)? = null,
     onDelete: (() -> Unit)? = null,
@@ -236,6 +237,7 @@ fun SongListItem(
         song = song,
         active = active,
         downloaded = downloaded,
+        modifier = modifier,
         onClick = onClick,
         favorited = favorited,
         onToggleFavorite = onToggleFavorite,
@@ -458,6 +460,9 @@ fun PagerDots(current: Int, total: Int, modifier: Modifier = Modifier) {
         }
     }
 }
+
+
+
 
 
 

@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -46,6 +47,7 @@ import java.util.Locale
 enum class MineLibrarySection { FAVORITES, HISTORY, LOCAL }
 
 /** 收藏夹与本地歌曲共用的歌曲页，差异只通过明确的回调注入。 */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun MusicLibraryPage(
     title: String,
@@ -92,7 +94,7 @@ fun MusicLibraryPage(
         } else {
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.spacedBy(2.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 itemsIndexed(songs, key = { _, song -> librarySongKey(song) }) { index, song ->
                     SongListItem(
@@ -103,6 +105,7 @@ fun MusicLibraryPage(
                         onToggleFavorite = onToggleFavorite?.let { callback -> { callback(song) } },
                         onPlayNext = onPlayNext?.let { callback -> { callback(song) } },
                         onDelete = onDelete?.let { callback -> { callback(song) } },
+                        modifier = Modifier.animateItem(),
                         onClick = { onSongClick(index) },
                     )
                 }
@@ -113,6 +116,7 @@ fun MusicLibraryPage(
 }
 
 /** 最近播放独立页：记录按最近时间排列，保留时间信息并可一键清空。 */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun PlaybackHistoryPage(
     history: List<PlaybackHistoryEntry>,
@@ -139,7 +143,7 @@ fun PlaybackHistoryPage(
                 modifier = Modifier.weight(1f),
             )
         } else {
-            LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 itemsIndexed(history, key = { _, entry -> librarySongKey(entry.song) }) { index, entry ->
                     SongRow(
                         song = entry.song,
@@ -147,6 +151,7 @@ fun PlaybackHistoryPage(
                             append(entry.song.artist).append(" · ").append(formatHistoryTime(entry.playedAtMillis))
                             if (entry.playCount > 0) append(" · 播放 ").append(entry.playCount).append(" 次")
                         },
+                        modifier = Modifier.animateItem(),
                         onClick = { onSongClick(index) },
                         onPlayNext = { onPlayNext(entry.song) },
                         favorited = isFavorite(entry.song),
@@ -219,4 +224,15 @@ private fun formatHistoryTime(timestamp: Long): String {
     }
     return SimpleDateFormat(pattern, Locale.SIMPLIFIED_CHINESE).format(Date(timestamp))
 }
+
+
+
+
+
+
+
+
+
+
+
 

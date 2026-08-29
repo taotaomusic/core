@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -44,6 +45,7 @@ import androidx.compose.ui.unit.sp
 import com.taotao.music.model.Song
 
 /** 搜索页面：负责关键词输入、结果展示和异步状态过渡。 */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun SearchPage(
     keyword: String,
@@ -157,7 +159,7 @@ fun SearchPage(
             LazyColumn(
                 Modifier.fillMaxSize(),
                 state = listState,
-                verticalArrangement = Arrangement.spacedBy(4.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 itemsIndexed(
                     songs,
@@ -176,6 +178,7 @@ fun SearchPage(
                             ?.takeIf { song.remoteId != null }
                             ?.let { toggle -> { toggle(song) } },
                         onPlayNext = onPlayNext?.let { callback -> { callback(song) } },
+                        modifier = Modifier.animateItem(),
                     ) { onSongClick(index, song) }
                 }
                 if (isLoadingMore) {
@@ -204,6 +207,11 @@ fun SearchPage(
         }
     }
 }
+
+
+
+
+
 
 
 

@@ -13,13 +13,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.material.icons.filled.Menu
-import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material3.Button
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.Icon
@@ -51,6 +52,7 @@ import java.util.Date
 import java.util.Locale
 
 /** 悟空 IM 私聊页：左侧抽屉用于切换已保存的聊天。 */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ChatPage(
     connection: ImConnectionInfo,
@@ -63,6 +65,7 @@ fun ChatPage(
     onPeersVisible: (List<String>) -> Unit,
     onRevoke: (ImChatMessage) -> Unit,
     onMessage: (String) -> Unit,
+    onNewMessage: () -> Unit = {},
 ) {
     var peerUid by remember(savedPeers) { mutableStateOf(savedPeers.firstOrNull().orEmpty()) }
     var draft by remember { mutableStateOf("") }
@@ -70,6 +73,14 @@ fun ChatPage(
     val scope = rememberCoroutineScope()
     val messageListState = rememberLazyListState()
     val peerMessages = remember(messages, peerUid) { messages.filter { it.peerUid == peerUid.trim().lowercase() } }
+    val previousMessageCount = remember { mutableStateOf(peerMessages.size) }
+
+    LaunchedEffect(peerMessages.size) {
+        if (peerMessages.size > previousMessageCount.value) {
+            onNewMessage()
+        }
+        previousMessageCount.value = peerMessages.size
+    }
     LaunchedEffect(peerUid) {
         val normalizedPeerUid = peerUid.trim().lowercase()
         if (UUID_PATTERN.matches(normalizedPeerUid)) {
@@ -81,9 +92,11 @@ fun ChatPage(
     }
     DisposableEffect(Unit) { onDispose { onPeerActiveChanged(null) } }
     LaunchedEffect(savedPeers) { onPeersVisible(savedPeers) }
-    // 进入会话或本地历史补齐后，定位到最后一条而非列表顶部。
-    LaunchedEffect(peerUid, peerMessages.lastOrNull()?.id) {
-        if (peerMessages.isNotEmpty()) messageListState.scrollToItem(peerMessages.lastIndex)
+    // 切换会话或收到新消息时滚动到底部
+    LaunchedEffect(peerUid, peerMessages.size) {
+        if (peerMessages.isNotEmpty()) {
+            messageListState.scrollToItem(peerMessages.lastIndex)
+        }
     }
 
     ModalNavigationDrawer(drawerState = drawerState, drawerContent = {
@@ -127,14 +140,16 @@ fun ChatPage(
                     state = messageListState,
                     modifier = Modifier.weight(1f).fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) { items(peerMessages, key = { it.id }) { ChatBubble(it, onRevoke) } }
+                ) {
+                    items(peerMessages, key = { it.id }) { ChatBubble(it, onRevoke, Modifier.animateItem()) }
+                }
             }
             Row(verticalAlignment = Alignment.Bottom) {
                 OutlinedTextField(value = draft, onValueChange = { draft = it }, label = { Text("消息") }, modifier = Modifier.weight(1f), maxLines = 4)
                 Spacer(Modifier.size(8.dp))
                 Button(enabled = peerUid.isNotBlank() && draft.isNotBlank() && connection.state == ImConnectionState.CONNECTED, onClick = {
                     runCatching { onSend(peerUid, draft) }.onSuccess { draft = "" }.onFailure { onMessage(it.message ?: "消息发送失败") }
-                }) { Icon(Icons.Default.Send, "发送") }
+                }) { Icon(Icons.AutoMirrored.Filled.Send, "发送") }
             }
         }
     }
@@ -153,23 +168,37 @@ private fun ConnectionBadge(state: ImConnectionState) {
 }
 
 @Composable
-private fun ChatBubble(message: ImChatMessage, onRevoke: (ImChatMessage) -> Unit) {
-    Box(Modifier.fillMaxWidth(), contentAlignment = if (message.isMine) Alignment.CenterEnd else Alignment.CenterStart) {
-        Column(horizontalAlignment = if (message.isMine) Alignment.End else Alignment.Start) {
-            Text(message.content, modifier = Modifier.background(if (message.isMine) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(16.dp)).padding(horizontal = 12.dp, vertical = 9.dp), color = if (message.isMine) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant)
+private fun ChatBubble(message: ImChatMessage, onRevoke: (ImChatMessage) -> Unit, modifier: Modifier = Modifier) {
+    if (message.isRevoked) {
+        // 撤回消息：微信风格，灰色居中显示
+        Box(modifier.fillMaxWidth().padding(vertical = 4.dp), contentAlignment = Alignment.Center) {
             Text(
-                text = MESSAGE_TIME_FORMAT.format(Date(message.sentAtMillis)),
+                text = if (message.isMine) "你撤回了一条消息" else "对方撤回了一条消息",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
             )
-            if (message.isMine && !message.isRevoked) {
+        }
+    } else {
+        Box(modifier.fillMaxWidth(), contentAlignment = if (message.isMine) Alignment.CenterEnd else Alignment.CenterStart) {
+            Column(horizontalAlignment = if (message.isMine) Alignment.End else Alignment.Start) {
+                Text(message.content, modifier = Modifier.background(if (message.isMine) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(16.dp)).padding(horizontal = 12.dp, vertical = 9.dp), color = if (message.isMine) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant)
                 Text(
-                    if (message.isRead) "已读 · 撤回" else "未读 · 撤回",
+                    text = MESSAGE_TIME_FORMAT.format(Date(message.sentAtMillis)),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.clickable { onRevoke(message) }.padding(horizontal = 4.dp, vertical = 2.dp),
+                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
                 )
+                if (message.isMine) {
+                    val canRevoke = System.currentTimeMillis() - message.sentAtMillis <= 120_000
+                    if (canRevoke) {
+                        Text(
+                            if (message.isRead) "已读 · 撤回" else "未读 · 撤回",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.clickable { onRevoke(message) }.padding(horizontal = 4.dp, vertical = 2.dp),
+                        )
+                    }
+                }
             }
         }
     }
@@ -177,3 +206,12 @@ private fun ChatBubble(message: ImChatMessage, onRevoke: (ImChatMessage) -> Unit
 
 private val UUID_PATTERN = Regex("^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 private val MESSAGE_TIME_FORMAT = SimpleDateFormat("MM-dd HH:mm", Locale.CHINA)
+
+
+
+
+
+
+
+
+
