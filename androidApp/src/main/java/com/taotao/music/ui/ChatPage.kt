@@ -141,7 +141,7 @@ fun ChatPage(
                     modifier = Modifier.weight(1f).fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    items(peerMessages, key = { it.id }) { ChatBubble(it, onRevoke, Modifier.animateItem()) }
+                    items(peerMessages, key = { it.id }) { ChatBubble(it, onRevoke, Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)) }
                 }
             }
             Row(verticalAlignment = Alignment.Bottom) {
@@ -206,6 +206,7 @@ private fun ChatBubble(message: ImChatMessage, onRevoke: (ImChatMessage) -> Unit
 
 private val UUID_PATTERN = Regex("^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 private val MESSAGE_TIME_FORMAT = SimpleDateFormat("MM-dd HH:mm", Locale.CHINA)
+
 
 
 

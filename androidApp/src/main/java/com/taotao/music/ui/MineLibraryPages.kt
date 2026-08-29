@@ -105,7 +105,7 @@ fun MusicLibraryPage(
                         onToggleFavorite = onToggleFavorite?.let { callback -> { callback(song) } },
                         onPlayNext = onPlayNext?.let { callback -> { callback(song) } },
                         onDelete = onDelete?.let { callback -> { callback(song) } },
-                        modifier = Modifier.animateItem(),
+                        modifier = Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null),
                         onClick = { onSongClick(index) },
                     )
                 }
@@ -151,7 +151,7 @@ fun PlaybackHistoryPage(
                             append(entry.song.artist).append(" · ").append(formatHistoryTime(entry.playedAtMillis))
                             if (entry.playCount > 0) append(" · 播放 ").append(entry.playCount).append(" 次")
                         },
-                        modifier = Modifier.animateItem(),
+                        modifier = Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null),
                         onClick = { onSongClick(index) },
                         onPlayNext = { onPlayNext(entry.song) },
                         favorited = isFavorite(entry.song),
@@ -224,6 +224,7 @@ private fun formatHistoryTime(timestamp: Long): String {
     }
     return SimpleDateFormat(pattern, Locale.SIMPLIFIED_CHINESE).format(Date(timestamp))
 }
+
 
 
 

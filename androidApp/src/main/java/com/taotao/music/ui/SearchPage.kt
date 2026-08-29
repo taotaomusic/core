@@ -178,7 +178,7 @@ fun SearchPage(
                             ?.takeIf { song.remoteId != null }
                             ?.let { toggle -> { toggle(song) } },
                         onPlayNext = onPlayNext?.let { callback -> { callback(song) } },
-                        modifier = Modifier.animateItem(),
+                        modifier = Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null),
                     ) { onSongClick(index, song) }
                 }
                 if (isLoadingMore) {
@@ -207,6 +207,7 @@ fun SearchPage(
         }
     }
 }
+
 
 
 
