@@ -11,7 +11,7 @@
             class="theme-toggle"
             circle 
             text
-            @click="toggleTheme"
+            @click="toggleTheme()"
           >
             <el-icon><component :is="isDark ? Moon : Sunny" /></el-icon>
           </el-button>
@@ -134,6 +134,7 @@ const isMobile = ref(false);
 const isDark = useDark({
   storageKey: 'taotao_admin_theme',
   valueDark: 'dark',
+  /* Element Plus 的暗黑模式靠 class='dark'，亮色就是没有这个 class */
   valueLight: '',
 });
 const toggleTheme = useToggle(isDark);

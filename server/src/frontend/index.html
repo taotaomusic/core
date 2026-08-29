@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN" class="dark">
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
@@ -7,13 +7,14 @@
     <style>
       /* 防止在移动端切换暗色模式时出现白屏闪烁 */
       html { background-color: #f5f7fa; }
-      html.dark { background-color: #141414; color-scheme: dark; } html.light { background-color: #f5f7fa; color-scheme: light; }
+      html.dark { background-color: #141414; color-scheme: dark; }
     </style>
     <script>
       // 在应用加载前同步执行，避免主题闪烁
       const theme = localStorage.getItem('taotao_admin_theme');
       const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-      if (theme === 'dark' || (!theme && prefersDark)) {
+      // 兼容 VueUse 默认写入 'auto' 的情况，或者用户之前存下的值
+      if (theme === 'dark' || theme === 'auto' || (!theme && prefersDark)) {
         document.documentElement.classList.add('dark');
       } else {
         document.documentElement.classList.remove('dark');
