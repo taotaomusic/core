@@ -42,6 +42,7 @@ import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material3.*
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.*
@@ -420,6 +421,19 @@ fun TaotaoMusicApp() {
     // 冷启动就先补发上次进程退出前保存的快照，不必等用户再点进「最近播放」。
     LaunchedEffect(signedIn) {
         if (signedIn) runCatching { syncPendingPlayback() }
+    }
+
+    // 监听应用前后台状态，用于 IM 消息通知
+    DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> wukongImClient.setAppForeground(true)
+                Lifecycle.Event.ON_PAUSE -> wukongImClient.setAppForeground(false)
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     /**
@@ -1156,6 +1170,7 @@ fun TaotaoMusicApp() {
             ) { page ->
             Box(Modifier.fillMaxSize().padding(innerPadding)) {
             if (page == "chat") {
+                val haptic = LocalHapticFeedback.current
                 ChatPage(
                     connection = imConnection,
                     messages = imMessages,
@@ -1170,9 +1185,12 @@ fun TaotaoMusicApp() {
                     onPeersVisible = wukongImClient::loadPeerNames,
                     onRevoke = { chatMessage ->
                         runCatching { wukongImClient.revokeMessage(chatMessage) }
-                            .onFailure { error -> message = error.message ?: "撤回失败" }
+                            .onFailure { error -> message = "撤回失败: ${error.message}" }
                     },
                     onMessage = { message = it },
+                    onNewMessage = {
+                        runCatching { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove) }
+                    },
                 )
             } else if (page == "ai") {
                 AiStudioPage(
@@ -1623,7 +1641,7 @@ private fun MinePage(
         item {
             Row(
                 modifier = Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 8.dp)
-                    .clip(RoundedCornerShape(22.dp)).background(MaterialTheme.colorScheme.surface).padding(18.dp),
+                    .clip(RoundedCornerShape(22.dp)).background(MaterialTheme.colorScheme.surface).clickable(onClick = onOpenAccount).padding(18.dp),
                 // 资料卡是进入昵称与邮箱管理的唯一入口，整块可点更容易发现。
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -1650,7 +1668,7 @@ private fun MinePage(
                         modifier = Modifier.padding(top = 4.dp),
                     )
                 }
-                TextButton(onClick = onOpenAccount, enabled = !profileLoading) { Text(if (profileLoading) "读取中" else "设置") }
+                Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(24.dp))
             }
         }
         if (!imUid.isNullOrBlank()) {
@@ -2638,3 +2656,10 @@ private fun formatTime(milliseconds: Int): String {
     val totalSeconds = (milliseconds / 1000).coerceAtLeast(0)
     return "%02d:%02d".format(totalSeconds / 60, totalSeconds % 60)
 }
+
+
+
+
+
+
+
