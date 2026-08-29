@@ -152,7 +152,7 @@ fun <T> taotaoSettleSpring(): SpringSpec<T> =
  * 用户感觉不到自己是"退回来了"，这是原来那套过渡最难看的地方。
  */
 fun pageDepthOf(page: String): Int = when (page) {
-    "home", "mine", "ai" -> 0
+    "home", "mine", "ai", "chat" -> 0
     "search", "settings", "mine-favorites", "mine-history", "mine-local" -> 1
     // 账号管理从设置页继续进入，不能和设置页标成同层，否则会被导航策略瞬切。
     "profile", "detail" -> 2
@@ -268,3 +268,4 @@ fun contentFadeIn(): EnterTransition = fadeIn(animationSpec = taotaoTween(Animat
 
 fun contentFadeOut(): ExitTransition =
     fadeOut(animationSpec = taotaoTween(AnimationDurations.FADE, easing = AnimationCurves.standardOut))
+
