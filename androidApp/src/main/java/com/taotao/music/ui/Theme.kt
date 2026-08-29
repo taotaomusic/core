@@ -13,10 +13,10 @@ import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 
 /** 主色：珊瑚红，用于强调按钮、选中态和图标。亮暗两套配色共用。 */
-val TaotaoCoral = Color(0xFFFF6B5F)
+val TaotaoCoral = Color(0xFFFA5E5B)
 
 /** 暗色下的主色略微提亮：原色压在深底上对比度不够，长时间看容易发闷。 */
-val TaotaoCoralDark = Color(0xFFFF8578)
+val TaotaoCoralDark = Color(0xFFFC7773)
 
 /** 亮色底：偏暖的浅色背景，卡片用近白叠在其上形成层次。 */
 val TaotaoBackground = Color(0xFFFFF9F7)
@@ -120,3 +120,5 @@ val LyricDim: Color
 fun isDarkTheme(): Boolean = MaterialTheme.colorScheme.background.luminanceIsDark()
 
 private fun Color.luminanceIsDark(): Boolean = (red * 0.299f + green * 0.587f + blue * 0.114f) < 0.5f
+
+

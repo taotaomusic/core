@@ -77,7 +77,7 @@ import com.taotao.music.model.Song
  */
 @Composable
 fun AlbumArt(color: Color, size: Dp, iconSize: TextUnit, imageUri: String? = null) {
-    val shape = if (size > 80.dp) CircleShape else RoundedCornerShape(12.dp)
+    val shape = if (size > 80.dp) CircleShape else RoundedCornerShape(24.dp)
     if (!imageUri.isNullOrBlank()) {
         AsyncImage(
             model = ImageRequest.Builder(LocalContext.current)
@@ -132,7 +132,7 @@ fun SongRow(
         modifier
             .fillMaxWidth()
             .heightIn(min = 64.dp, max = 72.dp)
-            .clip(RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(20.dp))
             .background(backgroundColor)
             .clickable(onClick = onClick)
             .padding(vertical = 7.dp, horizontal = 8.dp),
@@ -315,7 +315,7 @@ fun MiniPlayer(
     onTogglePlaying: () -> Unit,
 ) {
     Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(MaterialTheme.colorScheme.surface).clickable(onClick = onOpen).padding(10.dp),
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(32.dp)).background(MaterialTheme.colorScheme.surface).clickable(onClick = onOpen).padding(10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         AlbumArt(Color(song.color), 44.dp, 22.sp, song.coverUri)
@@ -458,3 +458,7 @@ fun PagerDots(current: Int, total: Int, modifier: Modifier = Modifier) {
         }
     }
 }
+
+
+
+

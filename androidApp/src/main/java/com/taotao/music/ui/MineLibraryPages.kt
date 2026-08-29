@@ -163,7 +163,7 @@ fun PlaybackHistoryPage(
 @Composable
 private fun LibraryEmptyState(title: String, description: String?, modifier: Modifier = Modifier) {
     val reduceMotion = LocalReduceMotion.current
-    val offsetPx = with(LocalDensity.current) { 8.dp.roundToPx() }
+    val offsetPx = 20
     AnimatedVisibility(
         visible = true,
         enter = fadeIn(animationSpec = taotaoTween(AnimationDurations.FADE)) +
@@ -219,3 +219,4 @@ private fun formatHistoryTime(timestamp: Long): String {
     }
     return SimpleDateFormat(pattern, Locale.SIMPLIFIED_CHINESE).format(Date(timestamp))
 }
+
