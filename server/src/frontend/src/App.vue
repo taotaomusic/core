@@ -134,7 +134,7 @@ const isMobile = ref(false);
 const isDark = useDark({
   storageKey: 'taotao_admin_theme',
   valueDark: 'dark',
-  valueLight: 'light',
+  valueLight: '',
 });
 const toggleTheme = useToggle(isDark);
 
