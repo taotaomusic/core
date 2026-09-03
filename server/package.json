@@ -22,6 +22,7 @@
     "@nestjs/platform-express": "^11.0.0",
     "@types/nodemailer": "^8.0.1",
     "@vueuse/core": "^14.4.0",
+    "bsdiff-wasm": "^0.1.4",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.1",
     "multer": "^2.2.0",

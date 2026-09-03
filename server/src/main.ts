@@ -19,6 +19,9 @@ import { AppConfigService } from "./config/app-config.service";
 const RAW_BODY_PATHS = new Set([
   "/api/v1/app/admin/releases",
   "/api/v1/app/admin/patches",
+  "/api/v1/desktop/admin/jars",
+  "/api/v1/desktop/admin/patches",
+  "/api/v1/desktop/admin/artifacts",
 ]);
 
 /**
