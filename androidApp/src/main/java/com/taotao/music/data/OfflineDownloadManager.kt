@@ -66,6 +66,7 @@ class OfflineDownloadManager(context: Context, private val tokenProvider: TokenP
             // mid 与 type 要留着：离线歌重新联网想换音质时还得靠它们解析。
             song.mid?.let { setProperty("mid", it) }
             song.type?.let { setProperty("type", it.toString()) }
+            setProperty("source", song.source.ifBlank { "tencent" })
         }.also { properties ->
             File(dir, "song.properties").outputStream().use { properties.store(it, "歌曲信息") }
         }
@@ -118,6 +119,7 @@ class OfflineDownloadManager(context: Context, private val tokenProvider: TokenP
             vip = properties.getProperty("vip") == "true",
             // 旧版本下载的歌没有记音质，显示成未知而不是猜一个。
             localQuality = properties.getProperty("quality")?.toIntOrNull(),
+            source = properties.getProperty("source", "tencent"),
         )
     }
 
