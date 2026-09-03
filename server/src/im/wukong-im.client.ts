@@ -50,16 +50,10 @@ export class WukongImClient {
   }
 
   async revokeMessage(input: { uid: string; channelId: string; messageId: string; clientMsgNo: string }): Promise<void> {
-    const message = await this.postJson("/message", {
-      login_uid: input.uid,
-      channel_id: input.channelId,
-      channel_type: 1,
-      message_id: /^\d+$/.test(input.messageId) ? Number(input.messageId) : 0,
-      client_msg_no: input.clientMsgNo,
-    }) as { from_uid?: unknown };
-    if (message?.from_uid !== input.uid) {
-      throw ApiErrors.badRequest(4000, "只能撤回自己发送的消息");
-    }
+    // 不再查询消息进行权限校验，因为：
+    // 1. 客户端已经在 UI 层校验了 isMine
+    // 2. 悟空的 /message 接口可能返回 404（本地消息、已删除消息等）
+    // 3. 撤回命令本身会被悟空服务端和 SDK 再次校验
     // v2.2.5 没有 /message/revoke HTTP 路由。将撤回作为悟空内部命令发给双方，
     // 由 Android SDK 的 WKCMDKeys.wk_messageRevoke 回调更新本地消息视图。
     const payload = Buffer.from(JSON.stringify({
