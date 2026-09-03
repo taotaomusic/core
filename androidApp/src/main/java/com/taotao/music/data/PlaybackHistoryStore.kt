@@ -90,8 +90,13 @@ class PlaybackHistoryStore(context: Context) {
 
     private fun entriesKey(accountId: Long?): String? = accountId.validAccountId()?.let { "account.$it.entries" }
 
-    private fun keyOf(song: Song): String = song.remoteId?.let { "remote:$it" }
-        ?: "local:${song.audioUri.orEmpty()}#${song.title}#${song.artist}"
+    private fun keyOf(song: Song): String {
+        val source = song.source.ifBlank { "tencent" }
+        val identity = song.remoteId?.takeIf { it > 0L }?.toString()
+            ?: song.mid?.trim()?.takeIf { it.isNotBlank() }
+            ?: "local:${song.audioUri.orEmpty()}#${song.title}#${song.artist}"
+        return "$source:$identity"
+    }
 
     private fun Long?.validAccountId(): Long? = this?.takeIf { it > 0L }
 

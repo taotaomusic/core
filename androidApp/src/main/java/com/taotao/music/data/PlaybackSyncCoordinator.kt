@@ -95,6 +95,7 @@ class PlaybackSyncCoordinator(
                 val result = api.reportPlayback(
                     sessionId = snapshot.sessionId,
                     deviceId = deviceId,
+                    source = snapshot.source,
                     songId = snapshot.songId,
                     startedAt = snapshot.startedAt,
                     lastPlayedAt = snapshot.lastPlayedAt,

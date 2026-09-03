@@ -13,6 +13,8 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URLEncoder
 import java.net.URL
+import java.net.URLDecoder
+import java.util.Locale
 import android.net.Uri
 
 /** 桃桃音乐后端客户端：移动端不直接请求第三方音乐接口。 */
@@ -36,6 +38,68 @@ class TencentMusicApi(
     data class FavoriteLibrary(val ids: Set<String>, val songs: List<Song>)
     /** 服务端生成的稳定分享短链；客户端只负责交给系统分享面板。 */
     data class SongShare(val token: String, val url: String)
+
+    /**
+     * 云端歌单中的歌曲快照。
+     *
+     * 歌曲身份始终由 [source] + [songId] 组成；腾讯 songID=0 的结果会在上传前改用
+     * [mid] 作为 songId，因此歌单可以在不同设备间稳定同步。音频和歌词地址只保存
+     * 服务端占位地址，`file:` 本地路径不会被上传。
+     */
+    data class PlaylistSong(
+        val source: String,
+        val songId: String,
+        val mid: String?,
+        val title: String,
+        val artist: String,
+        val album: String,
+        val coverUrl: String?,
+        val duration: String?,
+        val audioUrl: String?,
+        val lyricUrl: String?,
+        val type: Int?,
+        val position: Int,
+        val addedAt: Long,
+        val updatedAt: Long,
+    ) {
+        /** 把云端快照还原成播放器和列表使用的共享歌曲模型。 */
+        fun toSong(quality: Int = AudioQuality.Default.value): Song {
+            val numericId = songId.toLongOrNull()?.takeIf { it > 0L }
+            val stableAudio = audioUrl?.takeUnless { it.equals("null", ignoreCase = true) }
+            val stableLyric = lyricUrl?.takeUnless { it.equals("null", ignoreCase = true) }
+            return Song(
+                title = title.ifBlank { "未知歌曲" },
+                artist = artist.ifBlank { "未知歌手" },
+                duration = duration?.ifBlank { null } ?: "网络歌曲",
+                color = 0xFFFFB4A2,
+                remoteId = numericId,
+                mid = mid,
+                type = type,
+                source = source.ifBlank { "tencent" },
+                album = album,
+                coverUri = coverUrl,
+                // 数字 ID 使用当前播放音质重新生成永不过期占位地址；mid-only 结果
+                // 则沿用服务端保存的可播放地址，避免把身份误当成 Long。
+                audioUri = placeholderUri(numericId, mid, type, quality, source) ?: stableAudio,
+                lyricUri = stableLyric?.let { value ->
+                    if (value.startsWith("http", ignoreCase = true)) value else "$ENDPOINT$value"
+                } ?: lyricUri(numericId, mid, source),
+            )
+        }
+    }
+
+    /** 云端歌单及其版本号；列表接口只返回元数据，详情接口同时返回 songs。 */
+    data class Playlist(
+        val id: Long,
+        val name: String,
+        val description: String,
+        val coverUrl: String?,
+        val songCount: Int,
+        val revision: Long,
+        val createdAt: Long,
+        val updatedAt: Long,
+        val songs: List<PlaylistSong> = emptyList(),
+    )
     /** 账号资料仅由本人读取；邮箱不写入本地持久化。 */
     data class UserProfile(val username: String, val email: String?, val nickname: String, val avatarUrl: String?)
     /** 首页公告为公开数据，按服务端置顶和发布时间排序。 */
@@ -65,6 +129,15 @@ class TencentMusicApi(
         val playCount: Int,
         val completedCount: Int,
         val totalListenedMs: Long,
+    )
+
+    /** 播放占位地址中恢复出的完整路由信息。数字 ID 缺失时用 mid 继续路由。 */
+    data class Placeholder(
+        val remoteId: Long?,
+        val mid: String?,
+        val type: Int?,
+        val quality: Int,
+        val source: String,
     )
 
     /** 服务端历史快照；revision 让客户端识别跨设备执行的清空。 */
@@ -163,11 +236,13 @@ class TencentMusicApi(
      * 真正的直链在取流的那一刻才换上。
      */
     fun resolveLink(song: Song, quality: Int): ResolvedLink {
-        val id = requireNotNull(song.remoteId) { "网络歌曲缺少歌曲 ID" }
+        val id = song.remoteId?.takeIf { it > 0L } ?: 0L
+        require(id > 0L || !song.mid.isNullOrBlank()) { "网络歌曲缺少歌曲 ID 或 mid" }
         val query = buildString {
             append("?quality=${quality.coerceIn(0, MAX_QUALITY)}")
             song.mid?.takeIf { it.isNotBlank() }?.let { append("&mid=${encode(it)}") }
             song.type?.let { append("&type=$it") }
+            append("&source=${encode(song.source.ifBlank { DEFAULT_SOURCE })}")
         }
         return authorized("/api/v1/songs/$id/link$query") { connection ->
             val result = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
@@ -182,23 +257,35 @@ class TencentMusicApi(
         }
     }
 
-    /**
-     * 只按歌曲 ID 解析直链，供取流时使用。
-     *
-     * 取流时手上只有占位地址,拿不到 mid 与 type;但占位地址只在 `remoteId > 0` 时才生成,
-     * 所以按 ID 解析一定够用。
-     */
-    fun resolveDirectUrl(remoteId: Long, quality: Int): String =
-        authorized("/api/v1/songs/$remoteId/link?quality=${quality.coerceIn(0, MAX_QUALITY)}") { connection ->
+    /** 按占位地址中的身份解析直链；兼容旧调用方的数字 ID 重载保留。 */
+    fun resolveDirectUrl(remoteId: Long, quality: Int, source: String = DEFAULT_SOURCE): String =
+        resolveDirectUrl(Placeholder(remoteId, null, null, quality, source))
+
+    /** 按占位地址中的完整身份解析直链，支持腾讯 mid-only 歌曲。 */
+    fun resolveDirectUrl(placeholder: Placeholder): String {
+        val id = placeholder.remoteId?.takeIf { it > 0L } ?: 0L
+        require(id > 0L || !placeholder.mid.isNullOrBlank()) { "网络歌曲缺少歌曲 ID 或 mid" }
+        val query = buildString {
+            append("?quality=${placeholder.quality.coerceIn(0, MAX_QUALITY)}")
+            placeholder.mid?.takeIf { it.isNotBlank() }?.let { append("&mid=${encode(it)}") }
+            placeholder.type?.let { append("&type=$it") }
+            append("&source=${encode(placeholder.source.ifBlank { DEFAULT_SOURCE })}")
+        }
+        return authorized("/api/v1/songs/$id/link$query") { connection ->
             val result = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
             check(result.optInt("code") == 0) { result.optString("message", "无法获取播放地址") }
             result.getJSONObject("data").getString("url")
         }
+    }
 
     /** 这首歌真实存在的音质档位，用于让选择器只列出能选的档并提示体积。 */
     fun requestQualities(song: Song): List<QualityOption> {
-        val id = requireNotNull(song.remoteId) { "网络歌曲缺少歌曲 ID" }
-        val query = song.mid?.takeIf { it.isNotBlank() }?.let { "?mid=${encode(it)}" } ?: ""
+        val id = song.remoteId?.takeIf { it > 0L } ?: 0L
+        require(id > 0L || !song.mid.isNullOrBlank()) { "网络歌曲缺少歌曲 ID 或 mid" }
+        val query = buildString {
+            append("?source=${encode(song.source.ifBlank { DEFAULT_SOURCE })}")
+            song.mid?.takeIf { it.isNotBlank() }?.let { append("&mid=${encode(it)}") }
+        }
         return authorized("/api/v1/songs/$id/info$query") { connection ->
             val result = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
             check(result.optInt("code") == 0) { result.optString("message", "无法获取音质列表") }
@@ -221,14 +308,20 @@ class TencentMusicApi(
      */
     suspend fun favoriteLibrary(knownSongs: List<Song>, quality: Int = AudioQuality.Default.value): FavoriteLibrary {
         val orderedIds = withContext(Dispatchers.IO) { favoriteSongIds() }
-        val knownById = knownSongs.mapNotNull { song -> song.remoteId?.let { it to song } }.toMap()
+        val knownById = knownSongs.flatMap { song -> favoriteKeysOf(song).map { it to song } }.toMap()
         // 单曲信息接口最多四路并发，避免收藏较多时串行等待，同时不给上游制造瞬时洪峰。
         val songs = orderedIds.chunked(FAVORITE_INFO_CONCURRENCY).flatMap { batch ->
             coroutineScope {
                 batch.map { value ->
                     async(Dispatchers.IO) {
-                        val remoteId = value.toLongOrNull() ?: return@async null
-                        knownById[remoteId]?.copy(favorited = true) ?: requestSongInfo(remoteId, quality, favorited = true)
+                        val separator = value.indexOf(':')
+                        val source = if (separator > 0) value.substring(0, separator) else DEFAULT_SOURCE
+                        val identity = if (separator > 0) value.substring(separator + 1) else value
+                        knownById[value]?.copy(favorited = true)
+                            ?: identity.toLongOrNull()?.takeIf { it > 0L }?.let {
+                                requestSongInfo(it, quality, favorited = true, source = source)
+                            }
+                            ?: unavailableSong(identity, quality, favorited = true, source = source)
                     }
                 }.awaitAll().filterNotNull()
             }
@@ -242,7 +335,7 @@ class TencentMusicApi(
             "歌曲缺少可分享的远端身份"
         }
         val body = JSONObject()
-            .put("source", song.source.ifBlank { "tencent" })
+            .put("source", song.source.ifBlank { DEFAULT_SOURCE })
             .apply {
                 song.remoteId?.takeIf { it > 0L }?.let { put("remoteId", it) }
                 song.mid?.takeIf { it.isNotBlank() }?.let { put("mid", it) }
@@ -256,12 +349,21 @@ class TencentMusicApi(
         }
     }
 
+    /** 一个歌曲可能同时带数字 ID 与 mid，两个键都登记以便服务端身份补全后仍能命中缓存。 */
+    private fun favoriteKeysOf(song: Song): Set<String> = buildSet {
+        val source = song.source.ifBlank { DEFAULT_SOURCE }
+        song.remoteId?.takeIf { it > 0L }?.let { add("$source:$it") }
+        song.mid?.trim()?.takeIf { it.isNotBlank() }?.let { add("$source:$it") }
+    }
+
     private fun favoriteSongIds(): List<String> = authorized("/api/v1/favorites") { connection ->
         val result = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
         val favorites = result.optJSONArray("data") ?: return@authorized emptyList()
         (0 until favorites.length()).mapNotNull { index ->
             val item = favorites.optJSONObject(index) ?: return@mapNotNull null
-            item.optString("songId").takeIf { it.isNotBlank() && item.optString("source") == "tencent" }
+                item.optString("songId").takeIf { it.isNotBlank() }?.let {
+                    "${item.optString("source").ifBlank { DEFAULT_SOURCE }}:$it"
+                }
         }
     }
 
@@ -274,14 +376,21 @@ class TencentMusicApi(
     ): PlaybackHistoryLibrary {
         val page = withContext(Dispatchers.IO) { recentPlaybackPage() }
         val records = page.entries
-        val knownById = knownSongs.mapNotNull { song -> song.remoteId?.let { it to song } }.toMap()
-        val remoteRecords = records.filter { it.source == "tencent" }
-        val missingIds = remoteRecords.mapNotNull { it.songId.toLongOrNull() }.filterNot { it in knownById }.distinct()
-        // 服务端批量接口每次最多补 60 首；500 条历史只需 9 个客户端请求，不再形成 125 轮单曲请求。
-        val resolved = missingIds.chunked(BATCH_INFO_SIZE).flatMap { batch -> requestSongInfoBatch(batch, quality) }
-        val songs = knownById + resolved.associateBy { it.remoteId }
-        val entries = remoteRecords.mapNotNull { record ->
-            val song = record.songId.toLongOrNull()?.let(songs::get) ?: return@mapNotNull null
+        val knownByKey = knownSongs.flatMap { song ->
+            songIdentityKeys(song).map { it to song }
+        }.toMap()
+        val missingNumericBySource = records
+            .filter { record -> "${record.source.lowercase(Locale.ROOT)}:${record.songId}" !in knownByKey }
+            .mapNotNull { record -> record.songId.toLongOrNull()?.takeIf { it > 0L }?.let { record.source.lowercase(Locale.ROOT) to it } }
+            .groupBy({ it.first }, { it.second })
+        // 服务端批量接口每次最多补 60 首；500 条历史只需按来源分批，不再形成逐首请求。
+        val resolvedByKey = missingNumericBySource.flatMap { (source, ids) ->
+            ids.distinct().chunked(BATCH_INFO_SIZE).flatMap { batch -> requestSongInfoBatch(batch, quality, source) }
+        }.flatMap { song -> songIdentityKeys(song).map { it to song } }.toMap()
+        val songs = knownByKey + resolvedByKey
+        val entries = records.mapNotNull { record ->
+            val key = "${record.source.lowercase(Locale.ROOT)}:${record.songId}"
+            val song = songs[key] ?: unavailableSong(record.songId, quality, false, record.source)
             PlaybackHistoryEntry(
                 song = song,
                 playedAtMillis = record.playedAtMillis,
@@ -294,10 +403,17 @@ class TencentMusicApi(
         return PlaybackHistoryLibrary(entries, page.clearedBeforeMillis, page.revision)
     }
 
+    private fun songIdentityKeys(song: Song): Set<String> = buildSet {
+        val source = song.source.trim().ifBlank { DEFAULT_SOURCE }.lowercase(Locale.ROOT)
+        song.remoteId?.takeIf { it > 0L }?.let { add("$source:$it") }
+        song.mid?.trim()?.takeIf { it.isNotBlank() }?.let { add("$source:$it") }
+    }
+
     fun reportPlayback(
         sessionId: String,
         deviceId: String,
-        songId: Long,
+        source: String,
+        songId: String,
         startedAt: Long,
         lastPlayedAt: Long,
         listenedMs: Long,
@@ -311,8 +427,8 @@ class TencentMusicApi(
             JSONObject()
                 .put("sessionId", sessionId)
                 .put("deviceId", deviceId)
-                .put("source", "tencent")
-                .put("songId", songId.toString())
+                .put("source", source.ifBlank { DEFAULT_SOURCE })
+                .put("songId", songId)
                 .put("startedAt", startedAt)
                 .put("lastPlayedAt", lastPlayedAt.coerceAtLeast(startedAt))
                 .put("listenedMs", listenedMs.coerceAtLeast(0L))
@@ -327,6 +443,30 @@ class TencentMusicApi(
             )
         }
     }
+
+    /** 兼容仍以腾讯数字 ID 调用的旧业务代码。 */
+    fun reportPlayback(
+        sessionId: String,
+        deviceId: String,
+        songId: Long,
+        startedAt: Long,
+        lastPlayedAt: Long,
+        listenedMs: Long,
+        durationSeconds: Int?,
+        completed: Boolean = false,
+        historyRevision: Long? = null,
+    ): PlaybackReportResult = reportPlayback(
+        sessionId = sessionId,
+        deviceId = deviceId,
+        source = DEFAULT_SOURCE,
+        songId = songId.toString(),
+        startedAt = startedAt,
+        lastPlayedAt = lastPlayedAt,
+        listenedMs = listenedMs,
+        durationSeconds = durationSeconds,
+        completed = completed,
+        historyRevision = historyRevision,
+    )
 
     /**
      * 清空历史并取回服务端确认的 revision。marker 是客户端持久化的 UUID，同一网络重试
@@ -405,78 +545,136 @@ class TencentMusicApi(
      * 最近播放资料只能以批量请求补全。若批次或其中的某首失败，直接给缺失项本地占位，
      * 不能回退为逐首 HTTP 请求：500 条历史在弱网下会把一次失败放大成数百次串行请求。
      */
-    private fun requestSongInfoBatch(remoteIds: List<Long>, quality: Int): List<Song> {
+    private fun requestSongInfoBatch(
+        remoteIds: List<Long>,
+        quality: Int,
+        source: String = DEFAULT_SOURCE,
+    ): List<Song> {
+        val normalizedSource = source.ifBlank { DEFAULT_SOURCE }
         val resolvedById = runCatching {
-            authorized("/api/v1/songs/batch-info?ids=${remoteIds.joinToString(",")}") { connection ->
+            authorized(
+                "/api/v1/songs/batch-info?ids=${remoteIds.joinToString(",")}" +
+                    "&source=${encode(normalizedSource)}",
+            ) { connection ->
                 val result = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
                 val songs = result.optJSONObject("data")?.optJSONArray("songs") ?: JSONArray()
                 (0 until songs.length()).mapNotNull { index ->
                     songs.optJSONObject(index)?.let { item ->
                         item.optLong("songId", -1).takeIf { it > 0 }?.let { id ->
-                            id to songFromInfo(item, id, quality, false)
+                            id to songFromInfo(item, id, quality, false, normalizedSource)
                         }
                     }
                 }.toMap()
             }
         }.getOrDefault(emptyMap())
         return remoteIds.map { remoteId ->
-            resolvedById[remoteId] ?: unavailableSong(remoteId, quality, favorited = false)
+            resolvedById[remoteId] ?: unavailableSong(remoteId, quality, favorited = false, normalizedSource)
         }
     }
 
     /** 单首补全失败时仍保留可播放占位项，不能让服务端历史从页面上凭空消失。 */
-    private fun requestSongInfo(remoteId: Long, quality: Int, favorited: Boolean): Song = runCatching {
-        authorized("/api/v1/songs/$remoteId/info") { connection ->
+    private fun requestSongInfo(
+        remoteId: Long,
+        quality: Int,
+        favorited: Boolean,
+        source: String = DEFAULT_SOURCE,
+    ): Song = runCatching {
+        val normalizedSource = source.ifBlank { DEFAULT_SOURCE }
+        authorized("/api/v1/songs/$remoteId/info?source=${encode(normalizedSource)}") { connection ->
             val result = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
             check(result.optInt("code") == 0) { result.optString("message", "无法获取收藏歌曲") }
             val data = result.getJSONObject("data")
-            songFromInfo(data, remoteId, quality, favorited)
+            songFromInfo(data, remoteId, quality, favorited, normalizedSource)
         }
     }.getOrElse {
-        unavailableSong(remoteId, quality, favorited)
+        unavailableSong(remoteId, quality, favorited, source)
     }
 
     /** 单首收藏和批量最近播放都复用同一套离线占位，保证列表不会因资料接口失败而消失。 */
-    private fun unavailableSong(remoteId: Long, quality: Int, favorited: Boolean): Song =
-        Song(
+    private fun unavailableSong(
+        remoteId: Long,
+        quality: Int,
+        favorited: Boolean,
+        source: String = DEFAULT_SOURCE,
+    ): Song {
+        val normalizedSource = source.ifBlank { DEFAULT_SOURCE }
+        return Song(
             title = "歌曲 $remoteId",
             artist = "歌曲信息暂不可用",
             duration = "网络歌曲",
             color = 0xFFFFB4A2,
-            audioUri = placeholderUri(remoteId, quality),
+            audioUri = placeholderUri(remoteId, quality, normalizedSource),
             remoteId = remoteId,
-            lyricUri = "$ENDPOINT/api/v1/songs/$remoteId/lyrics",
+            lyricUri = lyricUri(remoteId, normalizedSource),
             favorited = favorited,
+            source = normalizedSource,
         )
+    }
 
-    private fun songFromInfo(data: JSONObject, remoteId: Long, quality: Int, favorited: Boolean): Song {
+    /** mid-only 收藏没有数字 ID 时的可播放占位项；服务端会在取流时按 mid 解析。 */
+    private fun unavailableSong(
+        identity: String,
+        quality: Int,
+        favorited: Boolean,
+        source: String,
+    ): Song {
+        val numericId = identity.toLongOrNull()?.takeIf { it > 0L }
+        val mid = numericId?.let { null } ?: identity
+        return Song(
+            title = "歌曲 $identity",
+            artist = "歌曲信息暂不可用",
+            duration = "网络歌曲",
+            color = 0xFFFFB4A2,
+            audioUri = placeholderUri(numericId, mid, null, quality, source),
+            remoteId = numericId,
+            mid = mid,
+            lyricUri = lyricUri(numericId, mid, source),
+            favorited = favorited,
+            source = source,
+        )
+    }
+
+    private fun songFromInfo(
+        data: JSONObject,
+        remoteId: Long,
+        quality: Int,
+        favorited: Boolean,
+        source: String = DEFAULT_SOURCE,
+    ): Song {
+        val normalizedSource = data.optString("source").ifBlank { source.ifBlank { DEFAULT_SOURCE } }
         val seconds = data.optInt("durationSeconds")
         return Song(
             title = data.optString("title", "未知歌曲"),
             artist = data.optString("artist", "未知歌手"),
             duration = if (seconds > 0) "%02d:%02d".format(seconds / 60, seconds % 60) else "网络歌曲",
             color = 0xFFFFB4A2,
-            audioUri = placeholderUri(remoteId, quality),
+            audioUri = placeholderUri(remoteId, quality, normalizedSource),
             remoteId = remoteId,
             coverUri = data.optString("coverUrl").ifBlank { null },
-            lyricUri = "$ENDPOINT/api/v1/songs/$remoteId/lyrics",
+            lyricUri = lyricUri(remoteId, normalizedSource),
             album = data.optString("album", "未知专辑"),
             mid = data.optString("mid").ifBlank { null },
             vip = data.optBoolean("vip"),
             favorited = favorited,
+            source = normalizedSource,
         )
     }
 
     fun setFavorite(song: Song, favorite: Boolean) {
-        val id = requireNotNull(song.remoteId) { "网络歌曲缺少歌曲 ID" }
-        authorized("/api/v1/favorites/tencent/$id", if (favorite) "POST" else "DELETE") { connection ->
+        val id = song.remoteId?.takeIf { it > 0L }?.toString()
+            ?: song.mid?.trim()?.takeIf { it.isNotBlank() }
+            ?: throw IllegalArgumentException("网络歌曲缺少歌曲 ID 或 mid")
+        val source = encode(song.source.ifBlank { DEFAULT_SOURCE })
+        authorized("/api/v1/favorites/$source/$id", if (favorite) "POST" else "DELETE") { connection ->
             connection.inputStream.close()
         }
     }
 
     fun requestLyric(song: Song): String {
-        val id = requireNotNull(song.remoteId) { "网络歌曲缺少歌曲 ID" }
-        return authorized("/api/v1/songs/$id/lyrics") { connection ->
+        val id = song.remoteId?.takeIf { it > 0L } ?: 0L
+        require(id > 0L || !song.mid.isNullOrBlank()) { "网络歌曲缺少歌曲 ID 或 mid" }
+        val mid = song.mid?.takeIf { it.isNotBlank() }?.let { "&mid=${encode(it)}" }.orEmpty()
+        return authorized("/api/v1/songs/$id/lyrics?source=${encode(song.source.ifBlank { DEFAULT_SOURCE })}$mid") { connection ->
             connection.inputStream.bufferedReader().use { it.readText() }
         }
     }
@@ -486,8 +684,11 @@ class TencentMusicApi(
      * 服务端默认返回纯文本以兼容旧客户端，必须显式带 `format=json` 才给到 yrc。
      */
     fun requestRichLyric(song: Song): RichLyric {
-        val id = requireNotNull(song.remoteId) { "网络歌曲缺少歌曲 ID" }
-        return authorized("/api/v1/songs/$id/lyrics?format=json") { connection ->
+        val id = song.remoteId?.takeIf { it > 0L } ?: 0L
+        require(id > 0L || !song.mid.isNullOrBlank()) { "网络歌曲缺少歌曲 ID 或 mid" }
+        val source = encode(song.source.ifBlank { DEFAULT_SOURCE })
+        val mid = song.mid?.takeIf { it.isNotBlank() }?.let { "&mid=${encode(it)}" }.orEmpty()
+        return authorized("/api/v1/songs/$id/lyrics?format=json&source=$source$mid") { connection ->
             val body = connection.inputStream.bufferedReader().use { it.readText() }
             // 服务端若还没部署 format=json，旧版本会忽略该参数直接返回纯 LRC 文本。
             // 这里把解析失败的响应体当作 LRC 使用，避免客户端先发版时所有歌词都变成「暂无歌词」。
@@ -661,6 +862,153 @@ class TencentMusicApi(
         }
     }
 
+    // ---------------------------------------------------------------------
+    // 云端歌单
+    // ---------------------------------------------------------------------
+
+    /** 读取当前账号的歌单元数据。服务端只返回当前账号所属的记录。 */
+    fun listPlaylists(): List<Playlist> = authorized("/api/v1/playlists") { connection ->
+        val envelope = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+        val data = envelope.optJSONArray("data")
+            ?: envelope.optJSONObject("data")?.optJSONArray("playlists")
+            ?: JSONArray()
+        (0 until data.length()).mapNotNull { index -> data.optJSONObject(index)?.toPlaylist() }
+    }
+
+    /** 读取一个歌单的完整详情（含按 position 排序的歌曲）。 */
+    fun getPlaylist(playlistId: Long): Playlist = authorized("/api/v1/playlists/${playlistId.requirePlaylistId()}") { connection ->
+        val envelope = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+        (envelope.optJSONObject("data") ?: envelope).toPlaylist()
+    }
+
+    /** 创建云端歌单。 */
+    fun createPlaylist(name: String, description: String = "", coverUrl: String? = null): Playlist =
+        authorizedJson(
+            "/api/v1/playlists",
+            "POST",
+            JSONObject().apply {
+                put("name", name)
+                put("description", description)
+                coverUrl?.let { put("coverUrl", it) }
+            },
+        ) { it.toPlaylist() }
+
+    /** 更新歌单名称、简介或封面；未传的字段保持原值。 */
+    fun updatePlaylist(
+        playlistId: Long,
+        name: String? = null,
+        description: String? = null,
+        coverUrl: String? = null,
+        clearCover: Boolean = false,
+    ): Playlist = authorizedJson(
+        "/api/v1/playlists/${playlistId.requirePlaylistId()}",
+        "PATCH",
+        JSONObject().apply {
+            name?.let { put("name", it) }
+            description?.let { put("description", it) }
+            if (clearCover) put("coverUrl", JSONObject.NULL) else coverUrl?.let { put("coverUrl", it) }
+        },
+    ) { it.toPlaylist() }
+
+    /** 删除歌单；服务端以 204 返回，重复删除会报告资源不存在。 */
+    fun deletePlaylist(playlistId: Long) {
+        authorizedJson(
+            "/api/v1/playlists/${playlistId.requirePlaylistId()}",
+            "DELETE",
+            JSONObject(),
+        ) { Unit }
+    }
+
+    /** 添加或更新歌单中的歌曲快照；同一 source + songId 重复调用是幂等的。 */
+    fun addSongToPlaylist(playlistId: Long, song: Song): Playlist = authorizedJson(
+        "/api/v1/playlists/${playlistId.requirePlaylistId()}/songs",
+        "POST",
+        song.toPlaylistJson(),
+    ) { it.toPlaylist() }
+
+    /** 从歌单删除歌曲，返回删除后的完整详情。 */
+    fun removeSongFromPlaylist(playlistId: Long, song: PlaylistSong): Playlist = authorizedJson(
+        "/api/v1/playlists/${playlistId.requirePlaylistId()}/songs/${encode(song.source)}/${encode(song.songId)}",
+        "DELETE",
+        JSONObject(),
+    ) { data ->
+        (data.optJSONObject("playlist") ?: data).toPlaylist()
+    }
+
+    /** 以完整的稳定键列表调整顺序；服务端会拒绝缺歌或多歌的旧设备请求。 */
+    fun reorderPlaylist(playlistId: Long, songs: List<PlaylistSong>): Playlist = authorizedJson(
+        "/api/v1/playlists/${playlistId.requirePlaylistId()}/songs/order",
+        "PATCH",
+        JSONObject().put(
+            "songs",
+            JSONArray().apply {
+                songs.forEach { put(JSONObject().put("source", it.source).put("songId", it.songId).put("mid", it.mid)) }
+            },
+        ),
+    ) { it.toPlaylist() }
+
+    /** 以完整快照替换歌单内容，用于本地拖动或离线批量同步。 */
+    fun replacePlaylistSongs(playlistId: Long, songs: List<Song>): Playlist = authorizedJson(
+        "/api/v1/playlists/${playlistId.requirePlaylistId()}/songs",
+        "PUT",
+        JSONObject().put("songs", JSONArray().apply { songs.forEach { put(it.toPlaylistJson()) } }),
+    ) { it.toPlaylist() }
+
+    /** Song -> 服务端歌曲快照；mid-only 结果使用 mid 作为稳定 songId。 */
+    private fun Song.toPlaylistJson(): JSONObject {
+        val songId = playlistSongId(this) ?: throw IllegalArgumentException("歌曲缺少可同步的 source 或 mid")
+        return JSONObject().apply {
+            put("source", source.ifBlank { DEFAULT_SOURCE })
+            put("songId", songId)
+            mid?.takeIf { it.isNotBlank() }?.let { put("mid", it) }
+            put("title", title)
+            put("artist", artist)
+            put("album", album)
+            coverUri?.takeUnless { it.startsWith("file:", ignoreCase = true) }?.let { put("coverUrl", it) }
+            put("duration", duration)
+            audioUri?.takeUnless { it.startsWith("file:", ignoreCase = true) }?.let { put("audioUrl", it) }
+            lyricUri?.takeUnless { it.startsWith("file:", ignoreCase = true) }?.let { put("lyricUrl", it) }
+            type?.let { put("type", it) }
+        }
+    }
+
+    private fun JSONObject.toPlaylist(): Playlist {
+        val songs = optJSONArray("songs")?.let { rows ->
+            (0 until rows.length()).mapNotNull { index -> rows.optJSONObject(index)?.toPlaylistSong() }
+        }.orEmpty()
+        return Playlist(
+            id = optLong("id"),
+            name = optString("name", optString("title", "未命名歌单")),
+            description = optString("description"),
+            coverUrl = nullableString("coverUrl"),
+            songCount = optInt("songCount", songs.size).coerceAtLeast(songs.size),
+            revision = optLong("revision", 1L).coerceAtLeast(1L),
+            createdAt = optLong("createdAt"),
+            updatedAt = optLong("updatedAt"),
+            songs = songs.sortedBy { it.position },
+        )
+    }
+
+    private fun JSONObject.toPlaylistSong(): PlaylistSong = PlaylistSong(
+        source = optString("source").ifBlank { DEFAULT_SOURCE },
+        songId = optString("songId").ifBlank { optString("id") },
+        mid = nullableString("mid"),
+        title = optString("title"),
+        artist = optString("artist", optString("singer")),
+        album = optString("album"),
+        coverUrl = nullableString("coverUrl"),
+        duration = nullableString("duration"),
+        audioUrl = nullableString("audioUrl"),
+        lyricUrl = nullableString("lyricUrl"),
+        type = if (has("type") && !isNull("type")) optInt("type") else null,
+        position = optInt("position", 0),
+        addedAt = optLong("addedAt"),
+        updatedAt = optLong("updatedAt"),
+    )
+
+    private fun Long.requirePlaylistId(): Long = takeIf { it > 0L }
+        ?: throw IllegalArgumentException("歌单 ID 不合法")
+
     /**
      * 发起需要访问令牌的请求：令牌被服务端拒绝时自动续期并重放一次。
      * 续期失败说明刷新令牌同样失效，抛出 [SessionExpiredException] 让界面回到登录页。
@@ -823,6 +1171,9 @@ class TencentMusicApi(
 
     private fun JSONObject.toSong(quality: Int): Song {
         val id = optLong("id")
+        val source = optString("source").ifBlank { DEFAULT_SOURCE }
+        val mid = optString("mid").ifBlank { null }
+        val type = if (has("type") && !isNull("type")) optInt("type") else null
         return Song(
             title = optString("title", "未知歌曲"),
             artist = optString("artist", "未知歌手"),
@@ -831,17 +1182,18 @@ class TencentMusicApi(
             remoteId = id.takeIf { it > 0 },
             // 队列里存的是永不过期的占位地址，真正的上游直链在取流那一刻才解析。
             // 服务端下发的 audioUrl 只是同样的占位地址，这里直接自己拼，音质才跟得上偏好。
-            audioUri = id.takeIf { it > 0 }?.let { placeholderUri(it, quality) }
+            audioUri = placeholderUri(id.takeIf { it > 0 }, mid, type, quality, source)
                 ?: optString("audioUrl").takeIf { it.isNotBlank() },
             coverUri = optString("coverUrl").ifBlank { null },
             lyricUri = optString("lyricUrl").ifBlank { null }?.let {
                 if (it.startsWith("http")) it else "$ENDPOINT$it"
-            } ?: id.takeIf { it > 0 }?.let { "$ENDPOINT/api/v1/songs/$it/lyrics" },
+            } ?: lyricUri(id.takeIf { it > 0 }, mid, source),
             album = optString("album", "未知专辑"), subtitle = optString("subtitle"), releaseTime = optString("time"),
-            mid = optString("mid").ifBlank { null },
-            type = if (has("type") && !isNull("type")) optInt("type") else null,
+            mid = mid,
+            type = type,
             vip = optBoolean("vip"),
             favorited = optBoolean("favorited"),
+            source = source,
         )
     }
 
@@ -864,6 +1216,11 @@ class TencentMusicApi(
         private const val MAX_AUTH_ATTEMPTS = 2
         private const val FAVORITE_INFO_CONCURRENCY = 4
         private const val BATCH_INFO_SIZE = 60
+        private const val DEFAULT_SOURCE = "tencent"
+
+        /** 网络歌曲的稳定键；remoteId=0 或 null 时回退到上游 mid。 */
+        fun playlistSongId(song: Song): String? = song.remoteId?.takeIf { it > 0L }?.toString()
+            ?: song.mid?.trim()?.takeIf { it.isNotBlank() }
 
         /** 音质取值上限。实测上游档位到 18（NAC）。 */
         const val MAX_QUALITY = 18
@@ -881,17 +1238,67 @@ class TencentMusicApi(
          * 认得它，取流时由 PlaybackService 的 ResolvingDataSource 换成直链；
          * 换不成就照这个地址走服务器代理，正好是天然的兜底。
          */
-        fun placeholderUri(remoteId: Long, quality: Int): String =
-            "$ENDPOINT/api/v1/songs/$remoteId/play?quality=${quality.coerceIn(0, MAX_QUALITY)}"
+        fun placeholderUri(remoteId: Long, quality: Int, source: String = DEFAULT_SOURCE): String =
+            requireNotNull(placeholderUri(remoteId, null, null, quality, source))
 
-        /** 从占位地址里取回歌曲 ID 与音质，供 ResolvingDataSource 解析用。 */
-        fun parsePlaceholder(url: String): Pair<Long, Int>? = runCatching {
+        /** 永不过期的播放占位地址；数字 ID 缺失时把 mid/type 一起写入查询参数。 */
+        fun placeholderUri(
+            remoteId: Long?,
+            mid: String?,
+            type: Int?,
+            quality: Int,
+            source: String = DEFAULT_SOURCE,
+        ): String? {
+            val id = remoteId?.takeIf { it > 0L } ?: 0L
+            val validMid = mid?.trim()?.takeIf { it.isNotBlank() }
+            if (id <= 0L && validMid == null) return null
+            return buildString {
+                append("$ENDPOINT/api/v1/songs/$id/play?quality=${quality.coerceIn(0, MAX_QUALITY)}")
+                validMid?.let { append("&mid=${URLEncoder.encode(it, Charsets.UTF_8.name())}") }
+                type?.let { append("&type=$it") }
+                append("&source=${URLEncoder.encode(source.ifBlank { DEFAULT_SOURCE }, Charsets.UTF_8.name())}")
+            }
+        }
+
+        /** 歌词地址与播放占位地址使用同一来源，避免相同 ID 被路由到另一个上游。 */
+        fun lyricUri(remoteId: Long, source: String = DEFAULT_SOURCE): String =
+            requireNotNull(lyricUri(remoteId, null, source))
+
+        /** 歌词占位地址；mid-only 歌曲使用 `id=0&mid=...`。 */
+        fun lyricUri(remoteId: Long?, mid: String?, source: String = DEFAULT_SOURCE): String? {
+            val id = remoteId?.takeIf { it > 0L } ?: 0L
+            val validMid = mid?.trim()?.takeIf { it.isNotBlank() }
+            if (id <= 0L && validMid == null) return null
+            return buildString {
+                append("$ENDPOINT/api/v1/songs/$id/lyrics?source=")
+                append(URLEncoder.encode(source.ifBlank { DEFAULT_SOURCE }, Charsets.UTF_8.name()))
+                validMid?.let { append("&mid=${URLEncoder.encode(it, Charsets.UTF_8.name())}") }
+            }
+        }
+
+        /** 从占位地址里取回歌曲 ID、音质和来源，供 ResolvingDataSource 解析用。 */
+        fun parsePlaceholderDetails(url: String): Placeholder? = runCatching {
             val parsed = URL(url)
             if (parsed.host != URL(ENDPOINT).host) return null
-            val id = Regex("""/api/v1/songs/(\d+)/play""").find(parsed.path)?.groupValues?.get(1)?.toLong() ?: return null
-            val quality = Regex("""(?:^|&)quality=(\d+)""").find(parsed.query ?: "")?.groupValues?.get(1)?.toIntOrNull()
-            id to (quality ?: AudioQuality.Default.value)
+            val id = Regex("""/api/v1/songs/(\d+)/play""").find(parsed.path)?.groupValues?.get(1)?.toLongOrNull()
+                ?: return null
+            val query = parsed.query.orEmpty()
+            val quality = Regex("""(?:^|&)quality=(\d+)""").find(query)?.groupValues?.get(1)?.toIntOrNull()
+                ?: AudioQuality.Default.value
+            val encodedSource = Regex("""(?:^|&)source=([^&]*)""").find(query)?.groupValues?.get(1)
+            val source = encodedSource
+                ?.let { URLDecoder.decode(it, Charsets.UTF_8.name()) }
+                ?.ifBlank { DEFAULT_SOURCE }
+                ?: DEFAULT_SOURCE
+            val encodedMid = Regex("""(?:^|&)mid=([^&]*)""").find(query)?.groupValues?.get(1)
+            val mid = encodedMid?.let { URLDecoder.decode(it, Charsets.UTF_8.name()) }?.ifBlank { null }
+            val type = Regex("""(?:^|&)type=(-?\d+)""").find(query)?.groupValues?.get(1)?.toIntOrNull()
+            Placeholder(id.takeIf { it > 0L }, mid, type, quality, source)
         }.getOrNull()
+
+        /** 从占位地址里取回歌曲 ID 与音质，供 ResolvingDataSource 解析用。 */
+        fun parsePlaceholder(url: String): Pair<Long, Int>? =
+            parsePlaceholderDetails(url)?.let { placeholder -> placeholder.remoteId?.let { it to placeholder.quality } }
 
         /** 媒体地址是否由本服务提供，只有自家地址才附带访问令牌。 */
         fun isOwnEndpoint(url: String): Boolean = runCatching { URL(url).host == URL(ENDPOINT).host }.getOrDefault(false)

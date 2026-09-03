@@ -77,9 +77,18 @@ class PlaybackSnapshotPolicyTest {
     fun `同曲重播与单曲循环必须新建会话`() {
         val active = snapshot(playbackCycle = 12)
 
-        assertTrue(PlaybackSnapshotPolicy.shouldReuseSession(active, 101, active.songId, 12))
-        assertFalse(PlaybackSnapshotPolicy.shouldReuseSession(active, 101, active.songId, 13))
-        assertFalse(PlaybackSnapshotPolicy.shouldReuseSession(active, 202, active.songId, 12))
+        assertTrue(PlaybackSnapshotPolicy.shouldReuseSession(active, 101, "tencent", active.songId, 12))
+        assertFalse(PlaybackSnapshotPolicy.shouldReuseSession(active, 101, "tencent", active.songId, 13))
+        assertFalse(PlaybackSnapshotPolicy.shouldReuseSession(active, 202, "tencent", active.songId, 12))
+    }
+
+    @Test
+    fun `mid-only 会话按来源和字符串身份复用`() {
+        val active = snapshot().copy(source = "tencent", songId = "mid-only-abc")
+
+        assertTrue(PlaybackSnapshotPolicy.shouldReuseSession(active, 101, "tencent", "mid-only-abc", 1))
+        assertFalse(PlaybackSnapshotPolicy.shouldReuseSession(active, 101, "netease", "mid-only-abc", 1))
+        assertFalse(PlaybackSnapshotPolicy.shouldReuseSession(active, 101, "tencent", "other", 1))
     }
 
     @Test
@@ -128,7 +137,7 @@ class PlaybackSnapshotPolicyTest {
     ) = PendingPlaybackSnapshot(
         sessionId = sessionId,
         accountId = 101,
-        songId = 9527,
+        songId = "9527",
         startedAt = 10_000,
         lastPlayedAt = lastPlayedAt,
         listenedMs = listenedMs,

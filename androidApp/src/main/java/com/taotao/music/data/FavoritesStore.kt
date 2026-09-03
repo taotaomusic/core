@@ -2,6 +2,7 @@ package com.taotao.music.data
 
 import android.content.Context
 import com.taotao.music.model.Song
+import java.util.Locale
 
 /**
  * 收藏状态本地缓存。
@@ -22,9 +23,17 @@ class FavoritesStore(context: Context) {
         preferences.edit().remove(LEGACY_KEY_SONGS).apply()
     }
 
+    /** 返回带来源前缀的稳定键；旧版本只存数字 ID，读取时按腾讯来源兼容。 */
     fun ids(): Set<String> = preferences.getStringSet(KEY_IDS, emptySet()).orEmpty()
+        .map(::normalizeKey)
+        .toSet()
 
-    fun contains(remoteId: Long?): Boolean = remoteId != null && ids().contains(remoteId.toString())
+    fun contains(remoteId: Long?): Boolean = remoteId != null && ids().contains(key("tencent", remoteId.toString()))
+
+    fun contains(song: Song): Boolean {
+        val favoriteIds = ids()
+        return song.favoriteKeys().any(favoriteIds::contains)
+    }
 
     /**
      * 读取收藏页的本地展示缓存。
@@ -34,25 +43,29 @@ class FavoritesStore(context: Context) {
     fun cachedSongs(): List<Song> {
         val favoriteIds = ids()
         return SongCodec.decodeList(preferences.getString(KEY_LIBRARY_CACHE, null))
-            .filter { it.remoteId?.toString() in favoriteIds }
+            .filter { song -> song.favoriteKeys().any(favoriteIds::contains) }
             .map { it.copy(favorited = true) }
     }
 
     /** 用服务端的全量收藏列表覆盖本地。 */
     fun replaceAll(remoteIds: Set<String>) {
         // 存进 SharedPreferences 的 Set 不能原地改，取出来的实例是内部引用，必须传新集合。
-        val retainedSongs = cachedSongs().filter { it.remoteId?.toString() in remoteIds }
+        val normalizedIds = remoteIds.map(::normalizeKey).toSet()
+        val retainedSongs = cachedSongs().filter { song -> song.favoriteKeys().any(normalizedIds::contains) }
         preferences.edit()
-            .putStringSet(KEY_IDS, remoteIds.toSet())
+            .putStringSet(KEY_IDS, normalizedIds)
             .putString(KEY_LIBRARY_CACHE, SongCodec.encodeList(retainedSongs))
             .apply()
     }
 
     /** 云端全量同步成功后，同时刷新关系 ID 与下一次冷启动要展示的歌曲缓存。 */
     fun replaceLibrary(remoteIds: Set<String>, songs: List<Song>) {
-        val cached = songs.filter { it.remoteId?.toString() in remoteIds }.map { it.copy(favorited = true) }
+        val normalizedIds = remoteIds.map(::normalizeKey).toSet()
+        val cached = songs
+            .filter { song -> song.favoriteKeys().any(normalizedIds::contains) }
+            .map { it.copy(favorited = true) }
         preferences.edit()
-            .putStringSet(KEY_IDS, remoteIds.toSet())
+            .putStringSet(KEY_IDS, normalizedIds)
             .putString(KEY_LIBRARY_CACHE, SongCodec.encodeList(cached))
             .apply()
     }
@@ -63,12 +76,13 @@ class FavoritesStore(context: Context) {
      * 只调整本次出现过的歌:没出现的歌不能因为「这次没提到」就被当成未收藏。
      */
     fun merge(songs: List<Song>) {
-        val seenSongs = songs.mapNotNull { song -> song.remoteId?.let { it.toString() to song } }.toMap()
+        val seenSongs = songs.mapNotNull { song -> song.favoriteKey()?.let { it to song } }.toMap()
         val favoritedIds = seenSongs.filterValues { it.favorited }.keys
         val merged = ids().toMutableSet()
         merged.removeAll(seenSongs.keys)
         merged.addAll(favoritedIds)
-        val cachedById = cachedSongs().associateByTo(linkedMapOf()) { it.remoteId.toString() }
+        val cachedById = cachedSongs().mapNotNull { song -> song.favoriteKey()?.let { it to song } }
+            .toMap(linkedMapOf())
         seenSongs.forEach { (id, song) ->
             if (song.favorited) cachedById[id] = song.copy(favorited = true) else cachedById.remove(id)
         }
@@ -80,9 +94,25 @@ class FavoritesStore(context: Context) {
 
     fun set(remoteId: Long, favorite: Boolean, song: Song? = null) {
         val updated = ids().toMutableSet()
-        if (favorite) updated.add(remoteId.toString()) else updated.remove(remoteId.toString())
+        val stableKey = key("tencent", remoteId.toString())
+        if (favorite) updated.add(stableKey) else updated.remove(stableKey)
         val cached = cachedSongs().filterNot { it.remoteId == remoteId }.toMutableList()
         if (favorite && song != null) cached.add(0, song.copy(favorited = true))
+        preferences.edit()
+            .putStringSet(KEY_IDS, updated)
+            .putString(KEY_LIBRARY_CACHE, SongCodec.encodeList(cached))
+            .apply()
+    }
+
+    /** 按歌曲稳定键乐观更新收藏；支持腾讯 mid-only 和未来其他来源。 */
+    fun set(song: Song, favorite: Boolean) {
+        val stableKey = song.favoriteKey() ?: return
+        val updated = ids().toMutableSet()
+        updated.removeAll(song.favoriteKeys())
+        if (favorite) updated.add(stableKey)
+        val aliases = song.favoriteKeys()
+        val cached = cachedSongs().filterNot { cachedSong -> cachedSong.favoriteKeys().any(aliases::contains) }.toMutableList()
+        if (favorite) cached.add(0, song.copy(favorited = true))
         preferences.edit()
             .putStringSet(KEY_IDS, updated)
             .putString(KEY_LIBRARY_CACHE, SongCodec.encodeList(cached))
@@ -95,6 +125,31 @@ class FavoritesStore(context: Context) {
         .remove(KEY_LIBRARY_CACHE)
         .remove(LEGACY_KEY_SONGS)
         .apply()
+
+    private fun Song.favoriteKey(): String? {
+        return favoriteKeys().firstOrNull()
+    }
+
+    /** 数字 ID 与 mid 都是同一歌曲的合法别名，云端返回任一形式都应命中缓存。 */
+    private fun Song.favoriteKeys(): Set<String> = buildSet {
+        val normalizedSource = source.trim().lowercase(Locale.ROOT).ifBlank { "tencent" }
+        remoteId?.takeIf { it > 0L }?.let { add(key(normalizedSource, it.toString())) }
+        mid?.trim()?.takeIf { it.isNotBlank() }?.let { add(key(normalizedSource, it)) }
+    }
+
+    private fun normalizeKey(value: String): String {
+        val trimmed = value.trim()
+        if (trimmed.isBlank()) return "tencent:"
+        return if (trimmed.contains(':')) {
+            val separator = trimmed.indexOf(':')
+            "${trimmed.substring(0, separator).lowercase(Locale.ROOT)}:${trimmed.substring(separator + 1)}"
+        } else {
+            key("tencent", trimmed)
+        }
+    }
+
+    private fun key(source: String, identity: String): String =
+        "${source.trim().lowercase(Locale.ROOT).ifBlank { "tencent" }}:$identity"
 
     private companion object {
         const val KEY_IDS = "favorite_ids"

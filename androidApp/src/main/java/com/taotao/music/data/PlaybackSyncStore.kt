@@ -209,6 +209,7 @@ class PlaybackSyncStore(context: Context) {
     private fun PendingPlaybackSnapshot.toJson() = JSONObject()
         .put("sessionId", sessionId)
         .put("accountId", accountId)
+        .put("source", source)
         .put("songId", songId)
         .put("startedAt", startedAt)
         .put("lastPlayedAt", lastPlayedAt)
@@ -223,13 +224,16 @@ class PlaybackSyncStore(context: Context) {
     private fun JSONObject.toSnapshot(): PendingPlaybackSnapshot? {
         val sessionId = optString("sessionId")
         val accountId = optLong("accountId", 0L)
-        val songId = optLong("songId", -1)
+        // 旧版本写入的是数字，JSONObject.optString 会自然兼容；新版本允许 mid。
+        val songId = optString("songId").trim()
+        val source = optString("source").trim().ifBlank { "tencent" }
         val startedAt = optLong("startedAt", 0)
         // v1.0.102 及以前的全局队列没有 accountId，不能安全迁移到任意账号，直接隔离丢弃。
-        if (sessionId.isBlank() || accountId <= 0L || songId < 0 || startedAt <= 0) return null
+        if (sessionId.isBlank() || accountId <= 0L || songId.isBlank() || startedAt <= 0) return null
         return PendingPlaybackSnapshot(
             sessionId = sessionId,
             accountId = accountId,
+            source = source,
             songId = songId,
             startedAt = startedAt,
             lastPlayedAt = optLong("lastPlayedAt", startedAt).coerceAtLeast(startedAt),
@@ -261,7 +265,10 @@ data class PendingPlaybackSnapshot(
     val sessionId: String,
     /** 创建该远端会话时的服务端用户 ID；后续登录切换不能改变它。 */
     val accountId: Long,
-    val songId: Long,
+    /** 音乐来源；与 [songId] 一起构成稳定歌曲身份。 */
+    val source: String = "tencent",
+    /** 可为数字 ID，也可为上游 mid，不能再用 Long 限制跨端契约。 */
+    val songId: String,
     val startedAt: Long,
     val lastPlayedAt: Long,
     val listenedMs: Long,
@@ -321,13 +328,23 @@ object PlaybackSnapshotPolicy {
     fun shouldReuseSession(
         session: PendingPlaybackSnapshot?,
         accountId: Long?,
-        songId: Long,
+        source: String,
+        songId: String,
         playbackCycle: Long,
     ): Boolean = session?.let {
         it.accountId == accountId &&
+            it.source == source &&
             it.songId == songId &&
             it.playbackCycle == playbackCycle
     } == true
+
+    /** 旧调用方兼容重载；新代码应显式传来源和字符串 ID。 */
+    fun shouldReuseSession(
+        session: PendingPlaybackSnapshot?,
+        accountId: Long?,
+        songId: Long,
+        playbackCycle: Long,
+    ): Boolean = shouldReuseSession(session, accountId, "tencent", songId.toString(), playbackCycle)
 
     /** 清空后旧 effect 的 finally 不能再写回会话或本地历史。 */
     fun shouldPersistAfterClear(sessionClearEpoch: Int, currentClearEpoch: Int): Boolean =
