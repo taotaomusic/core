@@ -11,7 +11,7 @@
 //   $env:NODE_ENV="test"; $env:EMAIL_VERIFICATION_TEST_CODE="123456"
 //   npm run dev
 //   node tools/verify-contract.mjs http://127.0.0.1:4720 verify-token
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 
 const base = (process.argv[2] ?? "http://127.0.0.1:4720").replace(/\/+$/, "");
 const adminToken = process.argv[3] ?? "verify-token";
@@ -176,13 +176,127 @@ async function main() {
     `${firstFavoritedAt} -> ${afterReAdd.data?.[0]?.firstFavoritedAt}`,
   );
 
+  section("云端歌单");
+  const playlistHeaders = { authorization: `Bearer ${token}`, "content-type": "application/json" };
+  const createdPlaylistResponse = await fetch(`${base}/api/v1/playlists`, {
+    method: "POST",
+    headers: playlistHeaders,
+    body: JSON.stringify({
+      name: `验证歌单-${randomBytes(3).toString("hex")}`,
+      description: "契约验证",
+    }),
+  });
+  const createdPlaylistText = await createdPlaylistResponse.text();
+  const createdPlaylist = {
+    status: createdPlaylistResponse.status,
+    body: createdPlaylistText ? JSON.parse(createdPlaylistText) : {},
+  };
+  const playlistId = createdPlaylist.body.data?.id;
+  check("创建歌单返回 201/信封", createdPlaylist.status === 201 && createdPlaylist.body.code === 0 && Number.isInteger(playlistId));
+
+  const addedSong = await fetch(`${base}/api/v1/playlists/${playlistId}/songs`, {
+    method: "POST",
+    headers: playlistHeaders,
+    body: JSON.stringify({ source: "tencent", songId: "97773", title: "验证歌曲", artist: "桃桃" }),
+  });
+  const addedSongBody = await addedSong.json();
+  check(
+    "向歌单添加歌曲成功",
+    addedSong.status === 200 && addedSongBody.code === 0 && addedSongBody.data?.songs?.length === 1,
+    JSON.stringify(addedSongBody).slice(0, 300),
+  );
+
+  const duplicateSong = await fetch(`${base}/api/v1/playlists/${playlistId}/songs`, {
+    method: "POST",
+    headers: playlistHeaders,
+    body: JSON.stringify({ source: "tencent", songId: "97773", title: "验证歌曲（更新快照）" }),
+  });
+  const duplicateSongBody = await duplicateSong.json();
+  check(
+    "重复歌曲幂等且不产生重复项",
+    duplicateSong.status === 200 && duplicateSongBody.data?.songs?.length === 1,
+    JSON.stringify(duplicateSongBody).slice(0, 300),
+  );
+
+  const midOnlySong = await fetch(`${base}/api/v1/playlists/${playlistId}/songs`, {
+    method: "POST",
+    headers: playlistHeaders,
+    body: JSON.stringify({ source: "tencent", songId: 0, mid: "contract-mid-only", title: "MID 歌曲" }),
+  });
+  const midOnlySongBody = await midOnlySong.json();
+  check(
+    "songID=0 时用 mid 保存稳定歌单键",
+    midOnlySong.status === 200 && midOnlySongBody.data?.songs?.some((item) => item.songId === "contract-mid-only"),
+    JSON.stringify(midOnlySongBody).slice(0, 300),
+  );
+  await fetch(`${base}/api/v1/playlists/${playlistId}/songs/tencent/contract-mid-only`, {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${token}` },
+  });
+
+  const unsupportedSource = await fetch(`${base}/api/v1/playlists/${playlistId}/songs`, {
+    method: "POST",
+    headers: playlistHeaders,
+    body: JSON.stringify({ source: "unknown", songId: "123", title: "不可播放来源" }),
+  });
+  const unsupportedSourceBody = await unsupportedSource.json();
+  check(
+    "歌单拒绝当前音乐路由不支持的来源",
+    unsupportedSource.status === 400 && unsupportedSourceBody.code === 4004,
+    JSON.stringify(unsupportedSourceBody),
+  );
+
+  const secondSong = await fetch(`${base}/api/v1/playlists/${playlistId}/songs`, {
+    method: "POST",
+    headers: playlistHeaders,
+    body: JSON.stringify({ source: "netease", songId: "123456", title: "第二首" }),
+  });
+  const secondSongBody = await secondSong.json();
+  check(
+    "可添加不同来源的同值 ID 歌曲",
+    secondSong.status === 200 && secondSongBody.data?.songs?.length === 2,
+    JSON.stringify(secondSongBody).slice(0, 300),
+  );
+
+  const reordered = await fetch(`${base}/api/v1/playlists/${playlistId}/songs/order`, {
+    method: "PATCH",
+    headers: playlistHeaders,
+    body: JSON.stringify({ songs: [
+      { source: "netease", songId: "123456" },
+      { source: "tencent", songId: "97773" },
+    ] }),
+  });
+  const reorderedBody = await reordered.json();
+  check("完整键列表可以调整歌单顺序", reordered.status === 200 && reorderedBody.data?.songs?.[0]?.source === "netease");
+
+  const removedPlaylistSong = await fetch(`${base}/api/v1/playlists/${playlistId}/songs/tencent/97773`, {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${token}` },
+  });
+  const removedPlaylistSongBody = await removedPlaylistSong.json();
+  check("移除歌曲后自动压紧顺序", removedPlaylistSong.status === 200 && removedPlaylistSongBody.data?.removed === true && removedPlaylistSongBody.data?.playlist?.songs?.length === 1);
+
+  const updatedPlaylist = await fetch(`${base}/api/v1/playlists/${playlistId}`, {
+    method: "PATCH",
+    headers: playlistHeaders,
+    body: JSON.stringify({ name: "验证歌单（已重命名）" }),
+  });
+  const updatedPlaylistBody = await updatedPlaylist.json();
+  check("歌单可以重命名并递增版本", updatedPlaylist.status === 200 && updatedPlaylistBody.data?.name === "验证歌单（已重命名）" && updatedPlaylistBody.data?.revision > 1);
+
+  const deletedPlaylist = await fetch(`${base}/api/v1/playlists/${playlistId}`, {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${token}` },
+  });
+  check("删除歌单返回 204", deletedPlaylist.status === 204);
+
   section("搜索（NDJSON 流）");
   const emptyKeyword = await fetch(`${base}/api/v1/search?keyword=`, { headers: { authorization: `Bearer ${token}` } });
   const emptyBody = await emptyKeyword.json();
   check("空关键词 400 且 code 4001", emptyKeyword.status === 400 && emptyBody.code === 4001, JSON.stringify(emptyBody));
 
   const started = Date.now();
-  const search = await fetch(`${base}/api/v1/search?keyword=${encodeURIComponent("周杰伦")}&num=20&quality=10`, {
+  const search = await fetch(`${base}/api/v1/search?keyword=${encodeURIComponent("周杰伦")}&num=20&quality=10&source=tencent`, {
     headers: { authorization: `Bearer ${token}` },
   });
   const ndjson = await search.text();
@@ -247,6 +361,118 @@ async function main() {
     body: JSON.stringify({ versionCode: 999999 }),
   });
   check("缺少全量版本时抬高下限被拒（409 / code 4091）", guard.status === 409 && (await guard.json()).code === 4091, `实际 ${guard.status}`);
+
+  section("Windows 模块化发布");
+  const noDesktopAdmin = await fetch(`${base}/api/v1/desktop/admin/releases`, {
+    headers: { "x-admin-token": "wrong" },
+  });
+  check(
+    "Windows 管理接口错误令牌仍返回 4013",
+    noDesktopAdmin.status === 401 && (await noDesktopAdmin.json()).code === 4013,
+    `实际 ${noDesktopAdmin.status}`,
+  );
+  const moduleBytes = Buffer.from(("taotao-desktop-module-".repeat(10_000)) + "v999101");
+  const moduleSha = createHash("sha256").update(moduleBytes).digest("hex");
+  const uploadedModule = await fetch(`${base}/api/v1/desktop/admin/artifacts?sha256=${moduleSha}`, {
+    method: "POST",
+    headers: { "x-admin-token": adminToken },
+    body: moduleBytes,
+  });
+  check("内容寻址模块上传成功", uploadedModule.status === 201, `实际 ${uploadedModule.status}`);
+
+  const desktopManifest = {
+    versionCode: 999101,
+    versionName: "9.9.101",
+    architecture: "windows-x64",
+    entrypoint: "taotao-app.jar",
+    releaseNote: "契约验证",
+    rollout: 0,
+    files: [{ path: "taotao-app.jar", category: "core", size: moduleBytes.length, sha256: moduleSha }],
+  };
+  const publishedDesktop = await fetch(`${base}/api/v1/desktop/admin/releases`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-admin-token": adminToken },
+    body: JSON.stringify(desktopManifest),
+  });
+  check("Windows 清单登记成功", publishedDesktop.status === 201, `实际 ${publishedDesktop.status}`);
+  const hiddenDesktop = await (
+    await fetch(`${base}/api/v1/desktop/bootstrap?versionCode=999100&architecture=windows-x64&deviceId=verify-desktop`)
+  ).json();
+  check("Windows rollout=0 不下发", hiddenDesktop.data?.update?.available === false, JSON.stringify(hiddenDesktop.data?.update));
+
+  await fetch(`${base}/api/v1/desktop/admin/rollout`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-admin-token": adminToken },
+    body: JSON.stringify({ versionCode: 999101, architecture: "windows-x64", percent: 100 }),
+  });
+  const offeredDesktopResponse = await fetch(
+    `${base}/api/v1/desktop/bootstrap?versionCode=999100&architecture=windows-x64&deviceId=verify-desktop`,
+    { headers: { authorization: "Bearer expired.invalid.token" } },
+  );
+  const offeredDesktop = await offeredDesktopResponse.json();
+  check("过期令牌访问 Windows bootstrap 仍是 200", offeredDesktopResponse.status === 200, `实际 ${offeredDesktopResponse.status}`);
+  check(
+    "Windows bootstrap 下发模块清单",
+    offeredDesktop.data?.update?.available === true &&
+      offeredDesktop.data.update.versionCode === 999101 &&
+      offeredDesktop.data.update.files?.[0]?.sha256 === moduleSha &&
+      typeof offeredDesktop.data.update.totalSize === "number",
+    JSON.stringify(offeredDesktop.data?.update),
+  );
+  const artifactRange = await fetch(offeredDesktop.data.update.files[0].url, {
+    headers: { range: "bytes=1-3" },
+  });
+  check(
+    "Windows 内容寻址下载支持 Range",
+    artifactRange.status === 206 && artifactRange.headers.get("content-range") === `bytes 1-3/${moduleBytes.length}`,
+    `${artifactRange.status} ${artifactRange.headers.get("content-range")}`,
+  );
+
+  const nextModuleBytes = Buffer.from(("taotao-desktop-module-".repeat(10_000)) + "v999102");
+  const nextModuleSha = createHash("sha256").update(nextModuleBytes).digest("hex");
+  const uploadedNextModule = await fetch(`${base}/api/v1/desktop/admin/artifacts?sha256=${nextModuleSha}`, {
+    method: "POST",
+    headers: { "x-admin-token": adminToken },
+    body: nextModuleBytes,
+  });
+  check("Windows 第二版模块上传成功", uploadedNextModule.status === 201, `实际 ${uploadedNextModule.status}`);
+  const nextDesktop = await fetch(`${base}/api/v1/desktop/admin/releases`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-admin-token": adminToken },
+    body: JSON.stringify({
+      ...desktopManifest,
+      versionCode: 999102,
+      versionName: "9.9.102",
+      files: [{ path: "taotao-app.jar", category: "core", size: nextModuleBytes.length, sha256: nextModuleSha }],
+      rollout: 100,
+    }),
+  });
+  check("Windows 第二版清单登记成功", nextDesktop.status === 201, `实际 ${nextDesktop.status}`);
+  const patchedDesktop = await (
+    await fetch(`${base}/api/v1/desktop/bootstrap?versionCode=999101&architecture=windows-x64&deviceId=verify-desktop-patch`)
+  ).json();
+  const desktopPatch = patchedDesktop.data?.update?.files?.[0]?.patch;
+  check(
+    "Windows 相邻版本生成 bsdiff",
+    patchedDesktop.data?.update?.versionCode === 999102 && desktopPatch?.algorithm === "bsdiff" && desktopPatch.size < nextModuleBytes.length,
+    JSON.stringify(desktopPatch),
+  );
+  const patchDownload = desktopPatch ? await fetch(desktopPatch.url) : undefined;
+  check(
+    "Windows bsdiff 补丁可下载",
+    patchDownload?.status === 200 && Number(patchDownload.headers.get("content-length")) === desktopPatch?.size,
+    `${patchDownload?.status ?? 0} ${patchDownload?.headers.get("content-length") ?? ""}`,
+  );
+  const desktopGuard = await fetch(`${base}/api/v1/desktop/admin/min-version`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-admin-token": adminToken },
+    body: JSON.stringify({ versionCode: 999999, architecture: "windows-x64" }),
+  });
+  check(
+    "Windows 强制更新下限同样要求全量救援版本",
+    desktopGuard.status === 409 && (await desktopGuard.json()).code === 4091,
+    `实际 ${desktopGuard.status}`,
+  );
 
   section("PostgreSQL 迁移专项");
   // 以下每一项都对应一处「SQLite 能过、PostgreSQL 会错」的差异，
@@ -385,7 +611,7 @@ async function main() {
   // 播放地址解析已从搜索里拆出去，搜索只返回元信息。这一组覆盖拆分后的新契约。
 
   const wideStarted = Date.now();
-  const wide = await fetch(`${base}/api/v1/search?keyword=${encodeURIComponent("周杰伦")}&num=60`, {
+  const wide = await fetch(`${base}/api/v1/search?keyword=${encodeURIComponent("周杰伦")}&num=60&source=tencent`, {
     headers: { authorization: `Bearer ${token}` },
   });
   const wideBody = await wide.text();
@@ -416,7 +642,7 @@ async function main() {
     method: "POST",
     headers: { authorization: `Bearer ${token}` },
   });
-  const afterFav = (await (await fetch(`${base}/api/v1/search?keyword=${encodeURIComponent("周杰伦")}&num=60`, {
+  const afterFav = (await (await fetch(`${base}/api/v1/search?keyword=${encodeURIComponent("周杰伦")}&num=60&source=tencent`, {
     headers: { authorization: `Bearer ${token}` },
   })).text())
     .split("\n").filter(Boolean).map((line) => JSON.parse(line))
@@ -472,12 +698,12 @@ async function main() {
 
   section("参数健壮性");
   // Math.max(1, Number("abc")) 是 NaN，会拼出字面量 page=NaN 打给上游。
-  const nanPage = await fetch(`${base}/api/v1/search?keyword=test&page=abc&num=3`, {
+  const nanPage = await fetch(`${base}/api/v1/search?keyword=test&page=abc&num=3&source=tencent`, {
     headers: { authorization: `Bearer ${token}` },
   });
   check("page 非法时不炸（回落默认值）", nanPage.status === 200, `实际 ${nanPage.status}`);
   // Number("") 是 0 且 Number.isInteger(0) 为真，空 quality 曾静默落到最低档。
-  const blankQuality = await (await fetch(`${base}/api/v1/search?keyword=test&quality=&num=3`, {
+  const blankQuality = await (await fetch(`${base}/api/v1/search?keyword=test&quality=&num=3&source=tencent`, {
     headers: { authorization: `Bearer ${token}` },
   })).text();
   const blankMeta = blankQuality.split("\n").filter(Boolean).map((line) => JSON.parse(line)).at(-1)?.meta;
@@ -515,7 +741,7 @@ async function main() {
   check("放量 100% 后出现在响应头", (await headerOf("/health")) === "999910", String(await headerOf("/health")));
 
   // setHeader 设的头不会被各端点自己的 writeHead 覆盖，流式响应也要带上。
-  const streamed = await headerOf(`/api/v1/search?keyword=test&num=3`, {
+  const streamed = await headerOf(`/api/v1/search?keyword=test&num=3&source=tencent`, {
     headers: { authorization: `Bearer ${token}` },
   });
   check("搜索 NDJSON 也带这个头（writeHead 不覆盖 setHeader）", streamed === "999910", String(streamed));
@@ -529,6 +755,21 @@ async function main() {
   });
   await fetch(`${base}/health`);
   check("停用后立刻从响应头消失（缓存已失效）", (await headerOf("/health")) !== "999910", String(await headerOf("/health")));
+
+  section("悟空 IM 会话入口");
+  // 验证进程刻意不连接真实悟空 IM；未启用时仍要确认这个新增受保护路由不会被误判为
+  // 未登录或落成 200。真实环境的 Token 签发与 Gateway CONNECT 由部署冒烟测试覆盖。
+  const imDisabled = await fetch(`${base}/api/v1/im/session`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({ deviceId: "verify-device-id-0001" }),
+  });
+  const imDisabledBody = await imDisabled.json();
+  check(
+    "未启用 IM 时会话入口返回 503/5031",
+    imDisabled.status === 503 && imDisabledBody.code === 5031,
+    JSON.stringify(imDisabledBody),
+  );
 
   console.log(`\n通过 ${passed} 项，失败 ${failed} 项`);  process.exitCode = failed === 0 ? 0 : 1;
 }
