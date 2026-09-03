@@ -270,7 +270,7 @@ node dist/main.js
 - **`DATABASE_URL` 没有默认值**,缺失或不是 `postgres://` 开头会启动即失败。
 - **不能用 esbuild / tsx 构建或跑开发。** 它们不支持 `emitDecoratorMetadata`,NestJS 的构造器注入拿不到 `design:paramtypes`,启动时报 `Cannot read properties of undefined`。构建用 `tsc`,开发用 `ts-node`。
 - **`vue` / `element-plus` 在 `devDependencies` 里,这是刻意的。** 管理后台编译成自包含的静态文件,运行时不需要它们;放进 `dependencies` 会让服务器白装一套前端库。
-- **改动后必须跑契约脚本**,当前 91 项要全绿:
+- **改动后必须跑契约脚本**，以脚本实际输出为准，全部要全绿：
 
   ```powershell
   cd server
@@ -313,3 +313,33 @@ node dist/main.js
 
 - **新增整页时要同步三处**:`switchTab`(底部标签切换时收起)、`AnimatedContent` 的 `targetState`、`BackHandler`。漏掉 `switchTab` 的表现是"点了底部标签却还停在原页面"—— 这个坑踩过两次。
 - **队列里只存永不过期的占位地址** `/api/v1/songs/{id}/play?quality=N`,上游直链在 `ResolvingDataSource` 里取流那一刻才换上。直链是限时的,存进 `MediaItem` 或持久化队列后冷启动恢复时就失效了;而占位地址还顺带保证了 `AudioPlayer` 的 `queueHasAllAudio` 判断不会把整条队列塌陷成单首。
+
+---
+
+## 九、Windows 模块化桌面版发布
+
+Windows 客户端按 `current/` 模块目录发布。稳定启动器负责启动和失败回滚,更新器只在应用退出后替换文件；应用本身只检查清单、续传文件并生成更新计划。发布清单按模块的 SHA-256 寻址,服务端会自动为相邻版本生成 bsdiff,配置 `COURGETTE_PATH` 后对 DLL/EXE 优先使用 Courgette。
+
+### 1. 生成便携更新包
+
+```powershell
+.\gradlew.bat :desktopApp:packageDesktopUpdateBundle
+```
+
+产物在 `desktopApp/build/desktop-update-bundle/`,包含 `current/`、精简 JRE、`taotao-launcher.jar`、`taotao-updater.jar`、JDK `jpackage` 生成的 `launcher.exe`/`updater.exe` 和 `manifest.json`。若已安装 GraalVM Native Image,也可执行 `:desktopLauncher:nativeLauncher` 与 `:desktopUpdater:nativeUpdater` 生成更小的原生入口；没有 GraalVM 时不影响包的使用。
+
+### 2. 上传和登记
+
+管理台选择该目录即可完成逐模块校验、内容寻址上传和清单登记；命令行可使用：
+
+```powershell
+$env:DESKTOP_RELEASE_BASE_URL = "https://music.xydaigua.cn"
+$env:ADMIN_TOKEN = "<管理令牌>"
+.\gradlew.bat :desktopApp:publishDesktopRelease
+```
+
+默认渠道是 `release`，可用 `-PdesktopChannel=beta` 生成其他渠道。登记默认放量 0，先用 `/api/v1/desktop/bootstrap` 自测，再通过管理台或 `POST /api/v1/desktop/admin/rollout` 灰度放量。`POST /api/v1/desktop/admin/min-version` 与 Android 使用同一条规则：抬高下限前必须已有版本号不低于该值、放量 100% 且包含完整模块清单的救援版本。
+
+### 3. 客户端回滚
+
+更新器替换前把 `current/` 移到 `backup/` 并在注册表 `HKCU\\Software\\TaotaoMusic\UpdateAttempts` 写入 1；启动器发现启动未稳定完成时自动恢复 `backup/`。应用稳定运行后会清零计数。不要手工删除 `backup/` 或更新计划文件，排障时先停用对应发布再保留现场文件。
