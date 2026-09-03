@@ -95,6 +95,44 @@ export async function runMigrations(pool: Pool): Promise<void> {
       CREATE INDEX IF NOT EXISTS idx_favorites_active_user
         ON favorites (user_id, favorited_at DESC) WHERE is_favorite = 1;
 
+      -- 用户云端歌单。歌单属于账号，删除账号时级联清理；歌曲只保存稳定身份和一份
+      -- 元信息快照，客户端换设备后可以先直接展示，再按 source + song_id 向音乐接口补全。
+      -- position 使用唯一约束保证同一歌单内不会出现两个相同位置，所有重排都在事务中完成。
+      CREATE TABLE IF NOT EXISTS playlists (
+        id            integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        user_id       integer NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        name          text NOT NULL,
+        description   text NOT NULL DEFAULT '',
+        cover_url     text,
+        revision      integer NOT NULL DEFAULT 1 CHECK (revision > 0),
+        created_at    bigint NOT NULL,
+        updated_at    bigint NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_playlists_user_updated
+        ON playlists (user_id, updated_at DESC, id DESC);
+
+      CREATE TABLE IF NOT EXISTS playlist_songs (
+        playlist_id    integer NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+        source         text NOT NULL,
+        song_id        text NOT NULL,
+        mid            text,
+        title          text NOT NULL DEFAULT '',
+        artist         text NOT NULL DEFAULT '',
+        album          text NOT NULL DEFAULT '',
+        cover_url      text,
+        duration       text,
+        audio_url      text,
+        lyric_url      text,
+        song_type      integer,
+        position       integer NOT NULL CHECK (position >= 0),
+        added_at       bigint NOT NULL,
+        updated_at     bigint NOT NULL,
+        PRIMARY KEY (playlist_id, source, song_id),
+        UNIQUE (playlist_id, position)
+      );
+      CREATE INDEX IF NOT EXISTS idx_playlist_songs_order
+        ON playlist_songs (playlist_id, position);
+
       -- 歌曲分享短链。只保存稳定歌曲身份和元数据快照；上游直链有时效，绝不能落库。
       -- preview_file 仅指向服务端裁剪出的最多 60 秒低码率试听文件。
       CREATE TABLE IF NOT EXISTS song_share (

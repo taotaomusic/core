@@ -18,6 +18,7 @@ import { ImModule } from "./im/im.module";
 import { MusicModule } from "./music/music.module";
 import { MailModule } from "./mail/mail.module";
 import { PlaybackModule } from "./playback/playback.module";
+import { PlaylistsModule } from "./playlists/playlists.module";
 import { LatestVersionModule } from "./release/latest-version.cache";
 import { ReleaseModule } from "./release/release.module";
 import { SongShareModule } from "./shares/song-share.module";
@@ -40,6 +41,7 @@ import { UserAdminModule } from "./user-admin/user-admin.module";
     AnnouncementModule,
     FavoritesModule,
     PlaybackModule,
+    PlaylistsModule,
     MusicModule,
     ImageGenerationModule,
     ImModule,
