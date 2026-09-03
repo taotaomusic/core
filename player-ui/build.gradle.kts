@@ -1,3 +1,5 @@
+@file:OptIn(org.jetbrains.kotlin.gradle.ExperimentalWasmDsl::class)
+
 plugins {
     kotlin("multiplatform")
     kotlin("plugin.compose")
@@ -8,6 +10,7 @@ plugins {
 kotlin {
     androidTarget()
     jvm("desktop")
+    wasmJs { browser() }
     jvmToolchain(21)
 
     sourceSets {

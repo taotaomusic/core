@@ -24,6 +24,7 @@ enum class PlayerRepeatMode {
 data class PlayerActions(
     val onTogglePlaying: () -> Unit,
     val onSeek: (Long) -> Unit,
+    val onSeekFinished: () -> Unit = {},
     val onToggleRepeat: () -> Unit,
     val onPrevious: (() -> Unit)? = null,
     val onNext: (() -> Unit)? = null,

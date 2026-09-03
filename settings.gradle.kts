@@ -4,7 +4,9 @@ pluginManagement {
     repositories { google(); mavenCentral(); gradlePluginPortal() }
 }
 dependencyResolutionManagement {
-    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    // Kotlin/Wasm 的生产优化任务会按目标平台动态注册 Node/Binaryen 分发仓库。
+    // FAIL_ON_PROJECT_REPOS 会在任务图解析阶段直接拒绝这些工具链仓库。
+    repositoriesMode.set(RepositoriesMode.PREFER_PROJECT)
     repositories {
         google()
         mavenCentral()
@@ -13,4 +15,4 @@ dependencyResolutionManagement {
     }
 }
 rootProject.name = "TaotaoMusic"
-include(":shared", ":player-ui", ":androidApp", ":patch", ":desktopApp", ":desktopLauncher", ":desktopUpdater")
+include(":shared", ":player-ui", ":androidApp", ":patch", ":desktopApp", ":desktopLauncher", ":desktopUpdater", ":webApp")

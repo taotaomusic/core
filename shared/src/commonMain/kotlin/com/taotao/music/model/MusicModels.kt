@@ -32,4 +32,6 @@ data class Song(
      * 只有离线歌曲才有值；为 null 表示这首歌不是本地文件，或是旧版本下载的没有记录。
      */
     val localQuality: Int? = null,
+    /** 音乐来源。腾讯与网易的歌曲 ID 可能相同，桌面端所有云端操作都按来源区分。 */
+    val source: String = "tencent",
 )

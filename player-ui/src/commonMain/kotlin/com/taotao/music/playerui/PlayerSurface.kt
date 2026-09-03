@@ -3,12 +3,12 @@ package com.taotao.music.playerui
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Repeat
@@ -29,7 +29,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -53,42 +54,107 @@ fun PlayerArtworkSlot(
 @Composable
 fun PlayerSongHeader(
     song: Song,
-    qualityLabel: String? = null,
     modifier: Modifier = Modifier,
+    titleTrailingContent: (@Composable RowScope.() -> Unit)? = null,
+    metadataTrailingContent: (@Composable RowScope.() -> Unit)? = null,
 ) {
     Column(modifier = modifier.fillMaxWidth()) {
-        androidx.compose.material3.Text(
-            text = song.title,
-            style = MaterialTheme.typography.headlineSmall,
-            maxLines = 1,
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            androidx.compose.material3.Text(
+                text = song.title,
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            titleTrailingContent?.invoke(this)
+        }
         Row(
             modifier = Modifier.padding(top = 5.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             androidx.compose.material3.Text(
-                text = song.artist,
+                text = buildString {
+                    append(song.artist)
+                    song.album.takeIf { it.isNotBlank() }?.let { append(" · ").append(it) }
+                },
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodyMedium,
                 maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
             )
-            if (song.album.isNotBlank()) {
+            metadataTrailingContent?.invoke(this)
+        }
+    }
+}
+
+/**
+ * Android 与 Windows 共用的播放详情主体。
+ *
+ * 封面、歌词、下载和收藏仍由平台页面负责；这层统一歌曲信息、时间轴和主控制区，
+ * 后续 Web 只需提供同一份 [PlayerUiState] 和少量平台插槽即可保持视觉一致。
+ */
+@Composable
+fun PlayerPlaybackDetails(
+    state: PlayerUiState,
+    actions: PlayerActions,
+    positionLabel: String,
+    durationLabel: String,
+    modifier: Modifier = Modifier,
+    capabilities: PlayerCapabilities = PlayerCapabilities(),
+    titleTrailingContent: (@Composable RowScope.() -> Unit)? = null,
+    metadataTrailingContent: (@Composable RowScope.() -> Unit)? = null,
+    headerActions: (@Composable RowScope.() -> Unit)? = null,
+    controlLeadingContent: (@Composable () -> Unit)? = null,
+    controlTrailingContent: (@Composable () -> Unit)? = null,
+) {
+    Column(modifier = modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            PlayerSongHeader(
+                song = state.song,
+                modifier = Modifier.weight(1f),
+                titleTrailingContent = titleTrailingContent,
+                metadataTrailingContent = metadataTrailingContent,
+            )
+            headerActions?.invoke(this)
+        }
+        if (capabilities.showProgress) {
+            Spacer(Modifier.height(12.dp))
+            PlayerProgress(
+                positionMs = state.positionMs,
+                durationMs = state.durationMs,
+                onSeek = actions.onSeek,
+                onSeekFinished = actions.onSeekFinished,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
                 androidx.compose.material3.Text(
-                    text = " · ${song.album}",
+                    text = positionLabel,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodyMedium,
-                    maxLines = 1,
-                )
-            }
-            if (!qualityLabel.isNullOrBlank()) {
-                androidx.compose.material3.Text(
-                    text = qualityLabel,
-                    color = MaterialTheme.colorScheme.primary,
                     fontSize = 12.sp,
-                    modifier = Modifier.padding(start = 10.dp),
+                )
+                androidx.compose.material3.Text(
+                    text = durationLabel,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 12.sp,
                 )
             }
         }
+        Spacer(Modifier.height(14.dp))
+        PlayerTransportControls(
+            state = state,
+            actions = actions,
+            capabilities = capabilities,
+            leadingContent = controlLeadingContent,
+            trailingContent = controlTrailingContent,
+        )
     }
 }
 
