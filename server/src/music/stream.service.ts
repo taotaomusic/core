@@ -4,6 +4,8 @@ import type { Request, Response } from "express";
 import { ApiErrors } from "../common/api.exception";
 import { AppConfigService } from "../config/app-config.service";
 import { TencentClient } from "../upstream/tencent.client";
+import { NeteaseClient } from "../upstream/netease.client";
+import type { MusicSource } from "./search.service";
 
 @Injectable()
 export class StreamService {
@@ -12,6 +14,7 @@ export class StreamService {
   constructor(
     private readonly config: AppConfigService,
     private readonly upstream: TencentClient,
+    private readonly netease: NeteaseClient,
   ) {}
 
   /**
@@ -27,7 +30,7 @@ export class StreamService {
    */
   async proxy(request: Request, response: Response, target: string): Promise<void> {
     const parsed = new URL(target);
-    if (!this.config.allowedMediaHosts.has(parsed.hostname)) {
+    if (!this.config.isAllowedMediaHost(parsed.hostname)) {
       throw ApiErrors.badRequest(4002, "不允许转发此地址");
     }
 
@@ -68,8 +71,12 @@ export class StreamService {
   }
 
   /** 只取播放地址，供转发使用。跳过可用性探测，让实际转发去暴露问题。 */
-  async resolvePlayUrl(id: number, quality: number, type?: number): Promise<string> {
-    const link = await this.upstream.resolveLink({ id, type }, quality);
+  async resolvePlayUrl(
+    key: { id?: number; mid?: string; type?: number },
+    quality: number,
+    source: MusicSource = "tencent",
+  ): Promise<string> {
+    const link = await (source === "netease" ? this.netease : this.upstream).resolveLink(key, quality);
     return link.url;
   }
 }

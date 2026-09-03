@@ -30,6 +30,8 @@ export type Song = {
   vip: boolean;
   /** 当前用户是否已收藏。由 [SearchService] 批量查询后填入。 */
   favorited: boolean;
+  /** 音乐数据源。新客户端据此把后续链接、歌词与收藏请求路由到同一上游。 */
+  source: "tencent" | "netease";
 };
 
 /** 音质档位上限。实测上游 `qualityInfo` 到 18（NAC），README 里写的 16 是旧的。 */
@@ -61,8 +63,23 @@ export class SongMapper {
    * 给它一个自家地址正是它们今天实际在播的东西。新客户端会忽略它，
    * 自己走 `/songs/{id}/link` 拿直链。
    */
-  toSong(item: UpstreamSong, playBase: string, quality: number, favorited = false): Song {
+  toSong(
+    item: UpstreamSong,
+    playBase: string,
+    quality: number,
+    favorited = false,
+    source: "tencent" | "netease" = "tencent",
+  ): Song {
     const id = Number(item.songID);
+    const mid = String(item.songMID ?? "").trim();
+    const hasIdentity = id > 0 || (source === "tencent" && mid.length > 0);
+    const playParams = new URLSearchParams({ quality: String(quality), source });
+    const lyricParams = new URLSearchParams({ source });
+    if (mid) {
+      playParams.set("mid", mid);
+      lyricParams.set("mid", mid);
+    }
+    if (Number.isInteger(item.type)) playParams.set("type", String(item.type));
     return {
       id,
       title: item.title ?? "未知歌曲",
@@ -74,12 +91,13 @@ export class SongMapper {
       coverUrl: item.cover ?? item.albumImage,
       // 歌词一律给出自家地址：客户端拉取时才知道有没有，没有就显示「暂无歌词」。
       // 早先在搜索里逐首探测歌词是否存在，每首多一次上游请求却没有任何界面用到。
-      lyricUrl: id > 0 ? `/api/v1/songs/${id}/lyrics` : undefined,
-      audioUrl: id > 0 ? `${playBase}/api/v1/songs/${id}/play?quality=${quality}` : undefined,
-      mid: item.songMID,
+      lyricUrl: hasIdentity ? `/api/v1/songs/${id > 0 ? id : 0}/lyrics?${lyricParams}` : undefined,
+      audioUrl: hasIdentity ? `${playBase}/api/v1/songs/${id > 0 ? id : 0}/play?${playParams}` : undefined,
+      mid: mid || undefined,
       type: item.type,
       vip: (item.pay ?? "").includes("付费"),
       favorited,
+      source,
     };
   }
 

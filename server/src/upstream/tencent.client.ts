@@ -189,8 +189,19 @@ export class TencentClient {
     }
   }
 
-  /** 歌词（v2）。v3 没有等价接口，且只有 v2 同时给出逐字时间轴与翻译。 */
-  async requestLyric(id: number): Promise<RichLyric> {
+  /**
+   * 歌词（v2）。v3 没有等价接口，且只有 v2 同时给出逐字时间轴与翻译。
+   *
+   * v2 只接受数字 ID；搜索结果为 mid-only 时，先用 v3 单曲信息把 mid 解析成正 ID。
+   */
+  async requestLyric(key: { id?: number; mid?: string }): Promise<RichLyric> {
+    this.identityOf(key);
+    let id = Number(key.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      const info = await this.requestSongInfo({ mid: key.mid?.trim() });
+      id = Number(info.songID);
+      if (!Number.isInteger(id) || id <= 0) throw ApiErrors.upstream("歌词歌曲信息不可用");
+    }
     const data = this.unwrap(await this.requestJson(`${this.config.upstreamV2BaseUrl}/lyric?id=${id}`), "没有歌词");
     const lrc = String(data.lrc ?? data.lyric ?? "").trim();
     const yrc = String(data.yrc ?? "").trim();
@@ -201,7 +212,10 @@ export class TencentClient {
 
   /** 身份参数：优先用数字 id，没有正整数 id 时退回 mid。 */
   private identityOf(key: { id?: number; mid?: string }): string {
-    return key.id && key.id > 0 ? `id=${key.id}` : `mid=${encodeURIComponent(key.mid ?? "")}`;
+    if (key.id && Number.isInteger(key.id) && key.id > 0) return `id=${key.id}`;
+    const mid = key.mid?.trim();
+    if (!mid) throw ApiErrors.badRequest(4001, "请提供歌曲 ID 或 mid");
+    return `mid=${encodeURIComponent(mid)}`;
   }
 
   /**
@@ -237,4 +251,5 @@ export class TencentClient {
     if (!response.ok) throw ApiErrors.upstream(`上游接口错误：${response.status}`);
     return response.json();
   }
+
 }

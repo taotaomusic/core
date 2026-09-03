@@ -6,6 +6,8 @@ import { RawResponse } from "../common/decorators/raw-response.decorator";
 import type { SessionUser } from "../common/request.types";
 import { AppConfigService } from "../config/app-config.service";
 import { TencentClient } from "../upstream/tencent.client";
+import { NeteaseClient } from "../upstream/netease.client";
+import type { MusicSource, SearchSource } from "./search.service";
 import { SearchService } from "./search.service";
 import { SongMapper } from "./song.mapper";
 import { StreamService } from "./stream.service";
@@ -14,6 +16,7 @@ import { StreamService } from "./stream.service";
 const DEFAULT_PAGE_SIZE = 60;
 const MAX_PAGE_SIZE = 60;
 const MAX_INFO_BATCH_SIZE = 60;
+type SongKey = { id?: number; mid?: string };
 
 /**
  * 搜索、播放与歌词。
@@ -28,6 +31,7 @@ export class MusicController {
     private readonly search: SearchService,
     private readonly stream: StreamService,
     private readonly upstream: TencentClient,
+    private readonly netease: NeteaseClient,
     private readonly mapper: SongMapper,
   ) {}
 
@@ -42,6 +46,7 @@ export class MusicController {
     @Query("num") num?: string,
     @Query("limit") limit?: string,
     @Query("quality") quality?: string,
+    @Query("source") source?: string,
   ): Promise<void> {
     const trimmed = (keyword ?? "").trim();
     if (!trimmed) throw ApiErrors.badRequest(4001, "请输入搜索关键词");
@@ -54,6 +59,7 @@ export class MusicController {
       Math.min(MAX_PAGE_SIZE, this.positiveIntOr(num ?? limit, DEFAULT_PAGE_SIZE)),
       this.mapper.qualityOf(quality),
       this.playBaseOf(request),
+      this.searchSourceOf(source),
     );
   }
 
@@ -75,17 +81,31 @@ export class MusicController {
     @Query("quality") quality?: string,
     @Query("mid") mid?: string,
     @Query("type") type?: string,
+    @Query("source") source?: string,
   ) {
     const requested = this.mapper.qualityOf(quality);
+    const selectedSource = this.sourceOf(source);
+    const key = this.songKeyOf(id, mid, selectedSource);
+    if (selectedSource === "netease") {
+      const link = await this.netease.resolveLink({ id: key.id }, requested);
+      return {
+        songId: id,
+        url: link.url,
+        quality: link.quality,
+        requestedQuality: requested,
+        kbps: link.kbps,
+        fallback: false,
+      };
+    }
     // 先问一次可用档位，能直接命中真实存在的档，省掉逐级试错的多次请求。
     // info 自己失败不算致命，退回音质阶梯。
     const available = await this.upstream
-      .requestSongInfo({ id, mid })
+      .requestSongInfo(key)
       .then((info) => new Set(info.tiers.filter((tier) => tier.size > 0).map((tier) => tier.type)))
       .catch(() => undefined);
 
     const link = await this.upstream.resolveLink(
-      { id, mid, type: this.optionalInt(type) },
+      { ...key, type: this.optionalInt(type) },
       requested,
       undefined,
       available,
@@ -107,8 +127,13 @@ export class MusicController {
    * 标准音质；`size` 同时用来提示流量。
    */
   @Get("songs/:id/info")
-  async info(@Param("id", ParseIntPipe) id: number, @Query("mid") mid?: string) {
-    return this.songInfo(id, mid);
+  async info(
+    @Param("id", ParseIntPipe) id: number,
+    @Query("mid") mid?: string,
+    @Query("source") source?: string,
+  ) {
+    const selectedSource = this.sourceOf(source);
+    return this.songInfo(this.songKeyOf(id, mid, selectedSource), selectedSource);
   }
 
   /**
@@ -119,21 +144,48 @@ export class MusicController {
    * 缺失项由客户端以本地可播放占位项展示，下一次刷新再尝试补全。
    */
   @Get("songs/batch-info")
-  async infoBatch(@Query("ids") ids?: string) {
+  async infoBatch(
+    @Query("ids") ids?: string,
+    @Query("mids") mids?: string,
+    @Query("source") source?: string,
+  ) {
+    const selectedSource = this.sourceOf(source);
     const uniqueIds = [...new Set((ids ?? "").split(",").map((value) => Number(value.trim())))]
-      .filter((value) => Number.isInteger(value) && value > 0)
-      .slice(0, MAX_INFO_BATCH_SIZE);
-    if (uniqueIds.length === 0) throw ApiErrors.badRequest(4001, "请提供歌曲 ID");
+      .filter((value) => Number.isInteger(value) && value > 0);
+    const uniqueMids = [
+      ...new Set(
+        (mids ?? "")
+          .split(",")
+          .map((value) => value.trim())
+          .filter(Boolean),
+      ),
+    ];
+    if (selectedSource === "netease" && uniqueMids.length > 0) {
+      throw ApiErrors.badRequest(4001, "网易云歌曲必须提供正整数 ID");
+    }
+    const keys: SongKey[] = [
+      ...uniqueIds.map((id) => ({ id })),
+      ...uniqueMids.map((mid) => ({ mid })),
+    ];
+    if (keys.length === 0) throw ApiErrors.badRequest(4001, "请提供歌曲 ID 或 mid");
+    if (keys.length > MAX_INFO_BATCH_SIZE) {
+      throw ApiErrors.badRequest(4001, `单次最多查询 ${MAX_INFO_BATCH_SIZE} 首歌曲`);
+    }
     const songs = [];
-    for (let index = 0; index < uniqueIds.length; index += 8) {
-      const batch = await Promise.allSettled(uniqueIds.slice(index, index + 8).map((id) => this.songInfo(id)));
+    for (let index = 0; index < keys.length; index += 8) {
+      const batch = await Promise.allSettled(
+        keys.slice(index, index + 8).map((key) => this.songInfo(key, selectedSource)),
+      );
       songs.push(...batch.flatMap((result) => (result.status === "fulfilled" ? [result.value] : [])));
     }
     return { songs };
   }
 
-  private async songInfo(id: number, mid?: string) {
-    const info = await this.upstream.requestSongInfo({ id, mid });
+  private async songInfo(key: SongKey, source: MusicSource = "tencent") {
+    const info = await (source === "netease" ? this.netease : this.upstream).requestSongInfo({
+      id: key.id,
+      mid: key.mid,
+    });
     return {
       songId: info.songID,
       mid: info.songMID,
@@ -157,9 +209,17 @@ export class MusicController {
     @Res() response: Response,
     @Param("id", ParseIntPipe) id: number,
     @Query("quality") quality?: string,
+    @Query("mid") mid?: string,
     @Query("type") type?: string,
+    @Query("source") source?: string,
   ): Promise<void> {
-    const target = await this.stream.resolvePlayUrl(id, this.mapper.qualityOf(quality), this.optionalInt(type));
+    const selectedSource = this.sourceOf(source);
+    const key = this.songKeyOf(id, mid, selectedSource);
+    const target = await this.stream.resolvePlayUrl(
+      { ...key, type: this.optionalInt(type) },
+      this.mapper.qualityOf(quality),
+      selectedSource,
+    );
     await this.stream.proxy(request, response, target);
   }
 
@@ -178,8 +238,15 @@ export class MusicController {
     @Res() response: Response,
     @Param("id", ParseIntPipe) id: number,
     @Query("format") format?: string,
+    @Query("mid") mid?: string,
+    @Query("source") source?: string,
   ): Promise<void> {
-    const rich = await this.upstream.requestLyric(id);
+    const selectedSource = this.sourceOf(source);
+    const key = this.songKeyOf(id, mid, selectedSource);
+    const rich =
+      selectedSource === "netease"
+        ? await this.netease.requestLyric(key.id)
+        : await this.upstream.requestLyric(key);
     if (format === "json") {
       response.status(200).json({ code: 0, message: "success", data: rich });
       return;
@@ -215,5 +282,29 @@ export class MusicController {
     if (value === undefined || value.trim() === "") return undefined;
     const parsed = Number(value);
     return Number.isInteger(parsed) ? parsed : undefined;
+  }
+
+  /** 单曲接口统一校验身份；QQ 音乐允许 mid-only，网易云只接受正整数 ID。 */
+  private songKeyOf(id: number, mid: string | undefined, source: MusicSource): SongKey {
+    const normalizedMid = mid?.trim();
+    if (Number.isInteger(id) && id > 0) {
+      return { id, ...(normalizedMid ? { mid: normalizedMid } : {}) };
+    }
+    if (source === "tencent" && normalizedMid) return { mid: normalizedMid };
+    const message = source === "netease" ? "网易云歌曲必须提供正整数 ID" : "请提供歌曲 ID 或 mid";
+    throw ApiErrors.badRequest(4001, message);
+  }
+
+  /** 默认 QQ 音乐，未知来源必须明确拒绝，避免悄悄把网易云 ID 发给 QQ 上游。 */
+  private sourceOf(value: string | undefined): MusicSource {
+    if (value === undefined || value === "" || value === "tencent") return "tencent";
+    if (value === "netease") return "netease";
+    throw ApiErrors.badRequest(4001, "不支持的音乐来源");
+  }
+
+  /** 搜索默认聚合两个音源；其余单曲接口必须指定为某一个实际来源。 */
+  private searchSourceOf(value: string | undefined): SearchSource {
+    if (value === undefined || value === "" || value === "all") return "all";
+    return this.sourceOf(value);
   }
 }

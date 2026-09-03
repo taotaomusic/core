@@ -2,15 +2,18 @@ import { Injectable } from "@nestjs/common";
 import type { Response } from "express";
 import { FavoritesRepository } from "../favorites/favorites.repository";
 import { TencentClient } from "../upstream/tencent.client";
+import type { UpstreamSong } from "../upstream/tencent.client";
+import { NeteaseClient } from "../upstream/netease.client";
 import { SongMapper } from "./song.mapper";
 
-/** 收藏的渠道标识。客户端硬编码 `tencent`，两侧必须一致。 */
-const FAVORITE_SOURCE = "tencent";
+export type MusicSource = "tencent" | "netease";
+export type SearchSource = MusicSource | "all";
 
 @Injectable()
 export class SearchService {
   constructor(
     private readonly upstream: TencentClient,
+    private readonly netease: NeteaseClient,
     private readonly mapper: SongMapper,
     private readonly favorites: FavoritesRepository,
   ) {}
@@ -34,13 +37,39 @@ export class SearchService {
     limit: number,
     quality: number,
     playBase: string,
+    source: SearchSource = "all",
   ): Promise<void> {
-    const result = await this.upstream.searchSongs(keyword, page, limit);
+    const sources: MusicSource[] = source === "all" ? ["tencent", "netease"] : [source];
+    const attempts = await Promise.allSettled(
+      sources.map(async (itemSource) => ({
+        source: itemSource,
+        result: await (itemSource === "netease" ? this.netease : this.upstream).searchSongs(keyword, page, limit),
+      })),
+    );
+    // 聚合搜索允许单个上游短暂故障：另一个音源仍然可用。两个都失败时才沿用原来的上游错误。
+    const results = attempts.flatMap((attempt) => (attempt.status === "fulfilled" ? [attempt.value] : []));
+    if (results.length === 0) {
+      const failed = attempts.find((attempt) => attempt.status === "rejected");
+      throw (failed as PromiseRejectedResult | undefined)?.reason;
+    }
 
     // 收藏状态一次查完，且必须在 writeHead **之前** ——
     // 响应头一旦发出，异常就只能截断连接，没法再返回干净的 JSON 错误。
-    const ids = result.list.map((item) => String(Number(item.songID))).filter((id) => id !== "0");
-    const favorited = await this.favorites.favoritedIds(userId, FAVORITE_SOURCE, ids);
+    const favoritedBySource = new Map(
+      await Promise.all(
+        results.map(async ({ source: itemSource, result }) => [
+          itemSource,
+          await this.favorites.favoritedIds(
+            userId,
+            itemSource,
+            result.list.flatMap((item) => {
+              const identity = this.identityOf(item);
+              return identity ? [identity] : [];
+            }),
+          ),
+        ] as const),
+      ),
+    );
 
     response.writeHead(200, {
       "content-type": "application/x-ndjson; charset=utf-8",
@@ -52,13 +81,40 @@ export class SearchService {
     });
 
     let count = 0;
-    for (const item of result.list) {
-      const song = this.mapper.toSong(item, playBase, quality, favorited.has(String(Number(item.songID))));
-      response.write(`${JSON.stringify({ type: "song", data: song })}\n`);
-      count++;
+    for (const { source: itemSource, result } of results) {
+      const favorited = favoritedBySource.get(itemSource) ?? new Set<string>();
+      for (const item of result.list) {
+        const identity = this.identityOf(item);
+        const song = this.mapper.toSong(
+          item,
+          playBase,
+          quality,
+          identity !== undefined && favorited.has(identity),
+          itemSource,
+        );
+        response.write(`${JSON.stringify({ type: "song", data: song })}\n`);
+        count++;
+      }
     }
     // dropped 恒为 0：不再逐首探测，也就不再丢歌。装机的旧客户端会读这个字段，不能删。
-    const meta = { page, limit, quality, count, dropped: 0, total: result.total, hasMore: result.nextPage !== null };
+    const meta = {
+      page,
+      limit,
+      quality,
+      count,
+      dropped: 0,
+      total: results.reduce((sum, { result }) => sum + result.total, 0),
+      hasMore: results.some(({ result }) => result.nextPage !== null),
+      source,
+    };
     response.end(`${JSON.stringify({ type: "end", meta })}\n`);
+  }
+
+  /** 收藏与队列使用同一稳定身份：优先正数字 ID，否则退回上游 mid。 */
+  private identityOf(item: UpstreamSong): string | undefined {
+    const id = Number(item.songID);
+    if (Number.isInteger(id) && id > 0) return String(id);
+    const mid = String(item.songMID ?? "").trim();
+    return mid || undefined;
   }
 }
