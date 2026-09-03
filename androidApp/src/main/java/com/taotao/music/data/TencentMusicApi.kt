@@ -34,6 +34,8 @@ class TencentMusicApi(
         val userId: Long? = null,
     )
     data class FavoriteLibrary(val ids: Set<String>, val songs: List<Song>)
+    /** 服务端生成的稳定分享短链；客户端只负责交给系统分享面板。 */
+    data class SongShare(val token: String, val url: String)
     /** 账号资料仅由本人读取；邮箱不写入本地持久化。 */
     data class UserProfile(val username: String, val email: String?, val nickname: String, val avatarUrl: String?)
     /** 首页公告为公开数据，按服务端置顶和发布时间排序。 */
@@ -232,6 +234,26 @@ class TencentMusicApi(
             }
         }
         return FavoriteLibrary(orderedIds.toSet(), songs)
+    }
+
+    /** 为一首具备远端身份的歌曲生成或复用当前账号的分享短链。 */
+    fun createSongShare(song: Song): SongShare {
+        require(song.remoteId?.let { it > 0L } == true || !song.mid.isNullOrBlank()) {
+            "歌曲缺少可分享的远端身份"
+        }
+        val body = JSONObject()
+            .put("source", song.source.ifBlank { "tencent" })
+            .apply {
+                song.remoteId?.takeIf { it > 0L }?.let { put("remoteId", it) }
+                song.mid?.takeIf { it.isNotBlank() }?.let { put("mid", it) }
+                song.type?.let { put("type", it) }
+            }
+        return authorizedJson("/api/v1/shares/songs", "POST", body) { data ->
+            SongShare(
+                token = data.getString("token"),
+                url = data.getString("url"),
+            )
+        }
     }
 
     private fun favoriteSongIds(): List<String> = authorized("/api/v1/favorites") { connection ->

@@ -97,6 +97,10 @@ import com.taotao.music.data.ImPeerStore
 import com.taotao.music.data.SavedPlaybackState
 import com.taotao.music.data.im.WukongImClient
 import com.taotao.music.player.AudioPlayer
+import com.taotao.music.playerui.PlayerActions
+import com.taotao.music.playerui.PlayerPlaybackDetails
+import com.taotao.music.playerui.PlayerRepeatMode
+import com.taotao.music.playerui.PlayerUiState
 import com.taotao.music.update.UpdateManager
 import com.taotao.music.update.UpdateStage
 import kotlinx.coroutines.flow.collectLatest
@@ -368,6 +372,23 @@ fun TaotaoMusicApp() {
                 favoriteLibraryError = it.message ?: "收藏列表加载失败"
             }
             favoriteLibrarySyncing = false
+        }
+    }
+
+    /** 分享动作只传短链，不暴露音频直链；短链生成失败时仍留在当前页面。 */
+    fun requestSongShare(song: Song) {
+        if (!signedIn) {
+            message = "登录后才能分享歌曲"
+            return
+        }
+        if (song.remoteId?.let { it > 0L } != true && song.mid.isNullOrBlank()) {
+            message = "本地歌曲缺少可分享的远端身份"
+            return
+        }
+        scope.launch {
+            runCatching { withContext(Dispatchers.IO) { musicApi.createSongShare(song) } }
+                .onSuccess { share -> shareSongLink(context, song, share.url) }
+                .onFailure { message = it.message ?: "分享链接生成失败" }
         }
     }
 
@@ -1235,6 +1256,7 @@ fun TaotaoMusicApp() {
                             else -> downloadTarget = target to selectedIndex
                         }
                     },
+                    onShare = { requestSongShare(playbackSongs[selectedIndex.coerceIn(playbackSongs.indices)]) },
                     musicApi = musicApi,
                     onTogglePlaying = { togglePlayback() },
                     onPrevious = { audioPlayer.previous() },
@@ -1889,6 +1911,16 @@ private fun shareLogFile(context: android.content.Context, file: java.io.File) {
     })
 }
 
+/** 把歌曲短链交给 Android 系统，不附带服务端试听文件或上游音频地址。 */
+private fun shareSongLink(context: android.content.Context, song: Song, url: String) {
+    val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(android.content.Intent.EXTRA_SUBJECT, "${song.title} - ${song.artist}")
+        putExtra(android.content.Intent.EXTRA_TEXT, "我在桃桃音乐分享了《${song.title}》\n$url")
+    }
+    context.startActivity(android.content.Intent.createChooser(intent, "分享歌曲"))
+}
+
 @Composable private fun SectionTitle(title: String, modifier: Modifier = Modifier) {
     Text(title, fontSize = 21.sp, fontWeight = FontWeight.Bold, modifier = modifier.padding(top = 14.dp, bottom = 12.dp))
 }
@@ -1926,6 +1958,7 @@ private fun PlayerDetailPage(
     isPlaying: Boolean,
     onBack: () -> Unit,
     onDownload: () -> Unit,
+    onShare: () -> Unit,
     onTogglePlaying: () -> Unit,
     musicApi: TencentMusicApi,
     onPrevious: () -> Unit,
@@ -2100,107 +2133,60 @@ private fun PlayerDetailPage(
             total = 2,
             modifier = Modifier.align(Alignment.CenterHorizontally).padding(vertical = 12.dp),
         )
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        song.title,
-                        fontSize = 22.sp,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1,
-                        modifier = Modifier.weight(1f, fill = false),
-                    )
-                    if (song.vip) VipBadge(Modifier.padding(start = 8.dp))
-                }
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 5.dp)) {
-                    Text(song.artist, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp, maxLines = 1)
-                    if (song.remoteId != null) {
-                        // 本地文件也要显示音质：它是下载时记下来的实际档位。
-                        // 不显示的话用户没法知道手里这份是无损还是标准。
-                        QualityChip(
-                            quality = displayedQuality,
-                            modifier = Modifier.padding(start = 10.dp),
-                            local = isLocalFile,
-                            // 本地文件换档要重新下载，不能就地切，所以不给点。
-                            onClick = onPickQuality.takeIf { !isLocalFile },
-                        )
-                    }
-                }
-            }
-            FavoriteButton(
-                favorited = favorited,
-                onClick = onToggleFavorite,
-                // 收藏依赖服务端歌曲 ID，纯本地歌曲不提供该操作。
-                enabled = song.remoteId != null,
-            )
-        }
-        Spacer(Modifier.height(12.dp))
-        // positionMs 已在详情页顶部读取为播放器的唯一状态源。这里直接计算，避免
-        // 无 key 的 remember 捕获初始值而让进度条停在首次进入详情页的位置。
-        val progress = if (durationMs > 0) {
-            (positionMs.toFloat() / durationMs).coerceIn(0f, 1f)
-        } else {
-            0f
-        }
-        Slider(
-            value = progress,
-            onValueChange = { dragging = true; draggedPositionMs = (it * durationMs).toInt() },
-            onValueChangeFinished = {
-                audioPlayer.seekTo(draggedPositionMs)
-                dragging = false
-            },
-            colors = SliderDefaults.colors(thumbColor = TaotaoCoral, activeTrackColor = TaotaoCoral),
-        )
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(formatTime(positionSeconds * 1000), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
-            Text(
-                formatTime(durationMs).takeIf { durationMs > 0 } ?: "--:--",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontSize = 12.sp,
-            )
-        }
-        Spacer(Modifier.height(14.dp))
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceEvenly) {
-            IconButton(onClick = onToggleRepeat) {
-                val repeatEnabled = repeatMode != androidx.media3.common.Player.REPEAT_MODE_OFF
-                val tint by animateColorAsState(
-                    targetValue = if (repeatEnabled) TaotaoCoral else MaterialTheme.colorScheme.onSurfaceVariant,
-                    animationSpec = taotaoTween(AnimationDurations.MICRO),
-                    label = "循环着色",
-                )
-                Icon(
-                    if (repeatMode == androidx.media3.common.Player.REPEAT_MODE_ONE) Icons.Default.RepeatOne else Icons.Default.Repeat,
-                    repeatModeTitle(repeatMode),
-                    tint = tint,
-                )
-            }
-            IconButton(onClick = onPrevious) { Icon(Icons.Default.SkipPrevious, "上一首", modifier = Modifier.size(34.dp)) }
-            val playPressSource = remember { MutableInteractionSource() }
-            val playPressed by playPressSource.collectIsPressedAsState()
-            val playScale by animateFloatAsState(
-                targetValue = if (playPressed && !reduceMotion) 0.97f else 1f,
-                animationSpec = taotaoTween(AnimationDurations.PRESS, easing = AnimationCurves.standardOut),
-                label = "主播放键按压",
-            )
-            FilledIconButton(
-                onClick = onTogglePlaying,
-                modifier = Modifier.size(64.dp).graphicsLayer {
-                    scaleX = playScale
-                    scaleY = playScale
+        PlayerPlaybackDetails(
+            state = PlayerUiState(
+                song = song,
+                isPlaying = actualPlaying,
+                positionMs = positionMs.toLong(),
+                durationMs = durationMs.toLong(),
+                repeatMode = when (repeatMode) {
+                    androidx.media3.common.Player.REPEAT_MODE_ONE -> PlayerRepeatMode.ONE
+                    androidx.media3.common.Player.REPEAT_MODE_ALL -> PlayerRepeatMode.ALL
+                    else -> PlayerRepeatMode.OFF
                 },
-                interactionSource = playPressSource,
-                colors = IconButtonDefaults.filledIconButtonColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary,
-                ),
-            ) {
-                PlayPauseIcon(actualPlaying, Modifier.size(34.dp), tint = MaterialTheme.colorScheme.onPrimary)
-            }
-            IconButton(onClick = onNext) { Icon(Icons.Default.SkipNext, "下一首", modifier = Modifier.size(34.dp)) }
-            IconButton(onClick = { showQueue = true }) {
-                Icon(Icons.AutoMirrored.Filled.QueueMusic, "播放队列", tint = if (queue.isEmpty()) MaterialTheme.colorScheme.onSurfaceVariant else TaotaoCoral)
-            }
-        }
+            ),
+            actions = PlayerActions(
+                onTogglePlaying = onTogglePlaying,
+                onSeek = { target -> dragging = true; draggedPositionMs = target.toInt() },
+                onSeekFinished = {
+                    audioPlayer.seekTo(draggedPositionMs)
+                    dragging = false
+                },
+                onToggleRepeat = onToggleRepeat,
+                onPrevious = onPrevious,
+                onNext = onNext,
+            ),
+            positionLabel = formatTime(positionSeconds * 1000),
+            durationLabel = formatTime(durationMs).takeIf { durationMs > 0 } ?: "--:--",
+            titleTrailingContent = {
+                if (song.vip) VipBadge(Modifier.padding(start = 8.dp))
+            },
+            metadataTrailingContent = {
+                if (song.remoteId != null) {
+                    QualityChip(
+                        quality = displayedQuality,
+                        modifier = Modifier.padding(start = 10.dp),
+                        local = isLocalFile,
+                        onClick = onPickQuality.takeIf { !isLocalFile },
+                    )
+                }
+            },
+            headerActions = {
+                IconButton(onClick = onShare) {
+                    Icon(Icons.Default.Share, "分享歌曲", tint = TaotaoCoral)
+                }
+                FavoriteButton(
+                    favorited = favorited,
+                    onClick = onToggleFavorite,
+                    enabled = song.remoteId != null,
+                )
+            },
+            controlTrailingContent = {
+                IconButton(onClick = { showQueue = true }) {
+                    Icon(Icons.AutoMirrored.Filled.QueueMusic, "播放队列", tint = if (queue.isEmpty()) MaterialTheme.colorScheme.onSurfaceVariant else TaotaoCoral)
+                }
+            },
+        )
         Spacer(Modifier.height(10.dp))
         // 已下载的歌不再显示下载入口：可点却只会提示"已经下载过了"是白给的一次失望。
         Row(
