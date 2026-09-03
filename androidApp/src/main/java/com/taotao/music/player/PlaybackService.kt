@@ -6,6 +6,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.Build
+import android.os.SystemClock
 import android.util.Log
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -19,6 +20,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
+import androidx.media3.session.SessionResult
 import com.taotao.music.data.AuthSession
 import com.taotao.music.data.SongCodec
 import com.taotao.music.data.TencentMusicApi
@@ -26,6 +28,9 @@ import com.taotao.music.model.Song
 import java.io.File
 import java.io.IOException
 import java.util.concurrent.Executors
+import com.google.common.util.concurrent.Futures
+import com.google.common.util.concurrent.ListenableFuture
+import com.google.common.util.concurrent.SettableFuture
 
 /**
  * Media3 系统媒体服务，负责后台播放、锁屏控制和系统媒体通知。
@@ -42,6 +47,50 @@ class PlaybackService : MediaSessionService() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val lyricExecutor = Executors.newSingleThreadExecutor()
     private var lyricRequestGeneration = 0L
+
+    /** 定时器只在播放服务中倒计时，页面退出后仍能按时停止后台播放。 */
+    private var sleepTimerRemainingMs = 0L
+    private var sleepTimerLastTickMs = 0L
+    private val sleepTimerRunnable = object : Runnable {
+        override fun run() {
+            tickSleepTimer()
+        }
+    }
+
+    /** Media3 自定义命令：设置、取消或查询定时播放。 */
+    private val mediaSessionCallback = object : MediaSession.Callback {
+        override fun onConnect(
+            session: MediaSession,
+            controllerInfo: MediaSession.ControllerInfo,
+        ): MediaSession.ConnectionResult {
+            val commands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS
+                .buildUpon()
+                .add(SleepTimerContract.command)
+                .build()
+            return MediaSession.ConnectionResult.accept(
+                commands,
+                MediaSession.ConnectionResult.DEFAULT_PLAYER_COMMANDS,
+            )
+        }
+
+        override fun onCustomCommand(
+            session: MediaSession,
+            controllerInfo: MediaSession.ControllerInfo,
+            customCommand: androidx.media3.session.SessionCommand,
+            args: Bundle,
+        ): ListenableFuture<SessionResult> {
+            if (customCommand.customAction != SleepTimerContract.COMMAND) {
+                return Futures.immediateFuture(SessionResult(SessionResult.RESULT_ERROR_NOT_SUPPORTED))
+            }
+            // Media3 当前会话回调通常已经在主线程，但显式切回可避免不同控制器实现
+            // 从 Binder 线程直接操作 ExoPlayer，且让定时器的读写始终串行。
+            val result = SettableFuture.create<SessionResult>()
+            mainHandler.post {
+                result.set(handleSleepTimerCommand(args))
+            }
+            return result
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -74,18 +123,18 @@ class PlaybackService : MediaSessionService() {
         val resolvingFactory = ResolvingDataSource.Factory(upstreamFactory) { dataSpec ->
             val url = dataSpec.uri.toString()
             if (!TencentMusicApi.isOwnEndpoint(url)) return@Factory dataSpec
-            val placeholder = TencentMusicApi.parsePlaceholder(url)
+            val placeholder = TencentMusicApi.parsePlaceholderDetails(url)
                 // 自家地址但不是占位地址：不该出现，附上令牌按原样放过去。
                 ?: return@Factory authSession.validToken()?.takeIf { it.isNotBlank() }
                     ?.let { dataSpec.withAdditionalHeaders(mapOf("Authorization" to "Bearer $it")) }
                     ?: dataSpec
             val direct = try {
-                musicApi.resolveDirectUrl(placeholder.first, placeholder.second)
+                musicApi.resolveDirectUrl(placeholder)
             } catch (error: Throwable) {
                 Log.e(TAG, "解析直链失败：$url", error)
                 throw IOException("无法获取播放地址：${error.message ?: "请稍后重试"}", error)
             }
-            // 直链在 QQ 的 CDN 上，不需要也不应该带上我们的访问令牌。
+            // 直链在上游 CDN 上，不需要也不应该带上我们的访问令牌。
             dataSpec.withUri(Uri.parse(direct))
         }
         val createdPlayer = ExoPlayer.Builder(this)
@@ -120,10 +169,32 @@ class PlaybackService : MediaSessionService() {
                         setWakeMode(if (needsNetwork) C.WAKE_MODE_NETWORK else C.WAKE_MODE_LOCAL)
                         publishOplusLyrics(mediaItem)
                     }
+
+                    override fun onIsPlayingChanged(isPlaying: Boolean) {
+                        updateSleepTimerTicker()
+                    }
+
+                    override fun onEvents(player: Player, events: Player.Events) {
+                        // 外部媒体控制器可能直接清空队列；这种显式停止也应取消定时器，
+                        // 否则服务会在没有媒体时继续驻留。
+                        // 队列自然播完同样没有后续播放，定时器不应把服务一直挂住；
+                        // 用户主动暂停则保留定时器，稍后恢复播放仍会继续倒计时。
+                        if (
+                            sleepTimerRemainingMs > 0L &&
+                            (player.mediaItemCount == 0 || player.playbackState == Player.STATE_ENDED)
+                        ) {
+                            cancelSleepTimer()
+                        } else {
+                            updateSleepTimerTicker()
+                        }
+                    }
                 })
             }
         player = createdPlayer
-        mediaSession = MediaSession.Builder(this, createdPlayer).build()
+        mediaSession = MediaSession.Builder(this, createdPlayer)
+            .setCallback(mediaSessionCallback)
+            .setSessionExtras(sleepTimerExtras())
+            .build()
         // Android 12 起后台启动前台服务可能被拒绝，注册监听避免 Media3 内部异常无人处理。
         setListener(object : Listener {
             override fun onForegroundServiceStartNotAllowedException() {
@@ -138,13 +209,16 @@ class PlaybackService : MediaSessionService() {
     /** 任务被划掉时若已暂停就结束服务，避免留下一个不再播放的常驻通知。 */
     override fun onTaskRemoved(rootIntent: Intent?) {
         val current = player
-        if (current == null || !current.playWhenReady || current.mediaItemCount == 0) {
+        if (sleepTimerRemainingMs <= 0L && (current == null || !current.playWhenReady || current.mediaItemCount == 0)) {
             stopSelf()
         }
     }
 
     override fun onDestroy() {
         lyricRequestGeneration++
+        mainHandler.removeCallbacks(sleepTimerRunnable)
+        sleepTimerRemainingMs = 0L
+        sleepTimerLastTickMs = 0L
         lyricExecutor.shutdownNow()
         runCatching { mediaSession?.release() }
         runCatching { player?.release() }
@@ -202,9 +276,124 @@ class PlaybackService : MediaSessionService() {
             val yrc = fileText(song.lyricWordsUri)
             return lrc to yrc
         }
-        if (song.remoteId == null) return null to null
+        if (song.remoteId?.let { it > 0L } != true && song.mid.isNullOrBlank()) return null to null
         val rich = musicApi.requestRichLyric(song)
         return rich.lrc to rich.yrc
+    }
+
+    /** 处理来自应用内 AudioPlayer 的定时器命令。 */
+    private fun handleSleepTimerCommand(args: Bundle): SessionResult {
+        return when (args.getString(SleepTimerContract.OPERATION)) {
+            SleepTimerContract.SET -> {
+                val durationMs = args.getLong(SleepTimerContract.DURATION_MS, -1L)
+                if (durationMs !in 1L..SleepTimerContract.MAX_DURATION_MS) {
+                    SessionResult(SessionResult.RESULT_ERROR_BAD_VALUE)
+                } else {
+                    setSleepTimer(durationMs)
+                    SessionResult(SessionResult.RESULT_SUCCESS, sleepTimerExtras())
+                }
+            }
+
+            SleepTimerContract.CANCEL -> {
+                cancelSleepTimer()
+                SessionResult(SessionResult.RESULT_SUCCESS, sleepTimerExtras())
+            }
+
+            SleepTimerContract.QUERY, null -> {
+                publishSleepTimerState()
+                SessionResult(SessionResult.RESULT_SUCCESS, sleepTimerExtras())
+            }
+
+            else -> SessionResult(SessionResult.RESULT_ERROR_BAD_VALUE)
+        }
+    }
+
+    /** 设置新的总时长；重新设置会从当前时刻重新计时。 */
+    private fun setSleepTimer(durationMs: Long) {
+        sleepTimerRemainingMs = durationMs.coerceIn(1L, SleepTimerContract.MAX_DURATION_MS)
+        sleepTimerLastTickMs = SystemClock.elapsedRealtime()
+        publishSleepTimerState()
+        updateSleepTimerTicker()
+    }
+
+    /** 显式取消定时器，并通知所有已连接的控制器刷新显示。 */
+    private fun cancelSleepTimer() {
+        mainHandler.removeCallbacks(sleepTimerRunnable)
+        sleepTimerRemainingMs = 0L
+        sleepTimerLastTickMs = 0L
+        publishSleepTimerState()
+    }
+
+    /**
+     * 只累计实际播放时间：暂停期间保留剩余时长，切歌不重置定时器。
+     * 使用 elapsedRealtime 而不是 wall clock，避免用户修改系统时间造成提前停止。
+     */
+    private fun tickSleepTimer() {
+        if (sleepTimerRemainingMs <= 0L) return
+        val now = SystemClock.elapsedRealtime()
+        val elapsed = (now - sleepTimerLastTickMs).coerceIn(0L, SleepTimerContract.MAX_DURATION_MS)
+        sleepTimerLastTickMs = now
+        if (player?.isPlaying != true) {
+            // 暂停时不递减，也不继续每秒唤醒服务；恢复播放会由
+            // onIsPlayingChanged 重新安排下一次 tick。
+            sleepTimerLastTickMs = 0L
+            publishSleepTimerState()
+            return
+        }
+        sleepTimerRemainingMs = SleepTimerPolicy.remainingAfterTick(
+            remainingMs = sleepTimerRemainingMs,
+            elapsedMs = elapsed,
+            isPlaying = true,
+        )
+        if (sleepTimerRemainingMs <= 0L) {
+            expireSleepTimer()
+        } else {
+            publishSleepTimerState()
+            mainHandler.postDelayed(sleepTimerRunnable, SLEEP_TIMER_TICK_MS)
+        }
+    }
+
+    /** 播放到期后真正停止 ExoPlayer、清空媒体队列并结束服务。 */
+    private fun expireSleepTimer() {
+        mainHandler.removeCallbacks(sleepTimerRunnable)
+        sleepTimerRemainingMs = 0L
+        sleepTimerLastTickMs = 0L
+        publishSleepTimerState()
+        player?.let { activePlayer ->
+            runCatching {
+                activePlayer.stop()
+                activePlayer.clearMediaItems()
+            }.onFailure { error -> Log.w(TAG, "定时停止播放器失败", error) }
+        }
+        stopSelf()
+    }
+
+    /** 根据当前播放态决定是否继续调度倒计时。 */
+    private fun updateSleepTimerTicker() {
+        if (sleepTimerRemainingMs <= 0L) {
+            mainHandler.removeCallbacks(sleepTimerRunnable)
+            return
+        }
+        val activePlayer = player
+        if (activePlayer?.isPlaying != true) {
+            // 暂停期间不调度空转任务；恢复播放时再以恢复时刻作为新的计时锚点，
+            // 因而暂停多久都不会消耗定时器剩余时长。
+            mainHandler.removeCallbacks(sleepTimerRunnable)
+            sleepTimerLastTickMs = 0L
+            return
+        }
+        if (sleepTimerLastTickMs <= 0L) sleepTimerLastTickMs = SystemClock.elapsedRealtime()
+        mainHandler.removeCallbacks(sleepTimerRunnable)
+        mainHandler.postDelayed(sleepTimerRunnable, SLEEP_TIMER_TICK_MS)
+    }
+
+    private fun sleepTimerExtras(): Bundle = Bundle().apply {
+        putBoolean(SleepTimerContract.ACTIVE, sleepTimerRemainingMs > 0L)
+        putLong(SleepTimerContract.REMAINING_MS, sleepTimerRemainingMs.coerceAtLeast(0L))
+    }
+
+    private fun publishSleepTimerState() {
+        mediaSession?.setSessionExtras(sleepTimerExtras())
     }
 
     private fun fileText(uri: String?): String? = uri
@@ -217,5 +406,6 @@ class PlaybackService : MediaSessionService() {
     private companion object {
         const val TAG = "PlaybackService"
         const val EXTRA_SONG = "com.taotao.music.SONG"
+        const val SLEEP_TIMER_TICK_MS = 1_000L
     }
 }

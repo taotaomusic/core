@@ -44,7 +44,7 @@ import java.util.Date
 import java.util.Locale
 
 /** 「我的」页下的三个独立音乐空间。 */
-enum class MineLibrarySection { FAVORITES, HISTORY, LOCAL }
+enum class MineLibrarySection { FAVORITES, HISTORY, LOCAL, PLAYLISTS }
 
 /** 收藏夹与本地歌曲共用的歌曲页，差异只通过明确的回调注入。 */
 @OptIn(ExperimentalFoundationApi::class)
@@ -60,6 +60,7 @@ fun MusicLibraryPage(
     isFavorite: ((Song) -> Boolean)? = null,
     onToggleFavorite: ((Song) -> Unit)? = null,
     onPlayNext: ((Song) -> Unit)? = null,
+    onAddToPlaylist: ((Song) -> Unit)? = null,
     onDelete: ((Song) -> Unit)? = null,
     loading: Boolean = false,
     error: String? = null,
@@ -104,6 +105,9 @@ fun MusicLibraryPage(
                         downloaded = song.audioUri?.startsWith("file:") == true,
                         onToggleFavorite = onToggleFavorite?.let { callback -> { callback(song) } },
                         onPlayNext = onPlayNext?.let { callback -> { callback(song) } },
+                        onAddToPlaylist = onAddToPlaylist
+                            ?.takeIf { song.remoteId?.let { it > 0L } == true || !song.mid.isNullOrBlank() }
+                            ?.let { callback -> { callback(song) } },
                         onDelete = onDelete?.let { callback -> { callback(song) } },
                         modifier = Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null),
                         onClick = { onSongClick(index) },
@@ -155,7 +159,7 @@ fun PlaybackHistoryPage(
                         onClick = { onSongClick(index) },
                         onPlayNext = { onPlayNext(entry.song) },
                         favorited = isFavorite(entry.song),
-                        onToggleFavorite = onToggleFavorite.takeIf { entry.song.remoteId != null }
+                        onToggleFavorite = onToggleFavorite.takeIf { entry.song.remoteId?.let { it > 0L } == true || !entry.song.mid.isNullOrBlank() }
                             ?.let { callback -> { callback(entry.song) } },
                     )
                 }
@@ -206,8 +210,13 @@ private fun LibraryPageHeader(
     }
 }
 
-private fun librarySongKey(song: Song): String = song.remoteId?.let { "remote:$it" }
-    ?: "local:${song.audioUri.orEmpty()}#${song.title}#${song.artist}"
+private fun librarySongKey(song: Song): String {
+    val source = song.source.ifBlank { "tencent" }
+    val identity = song.remoteId?.takeIf { it > 0L }?.toString()
+        ?: song.mid?.trim()?.takeIf { it.isNotBlank() }
+        ?: "local:${song.audioUri.orEmpty()}#${song.title}#${song.artist}"
+    return "$source:$identity"
+}
 
 private fun formatHistoryTime(timestamp: Long): String {
     if (timestamp <= 0L) return "最近"

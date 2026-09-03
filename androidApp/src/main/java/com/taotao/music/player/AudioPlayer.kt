@@ -17,6 +17,7 @@ import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
+import androidx.media3.session.SessionResult
 import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.ListenableFuture
 import com.taotao.music.data.SongCodec
@@ -45,6 +46,10 @@ class AudioPlayer(context: Context) {
     /** 来自 Media3 状态机的整条队列结束监听器，后台播放结束时也会即时触发。 */
     private val completionListeners = linkedSetOf<(Song) -> Unit>()
     private var lastPlaybackState = Player.STATE_IDLE
+    /** 转场期间持续保留“切完继续播放”的用户意图，直到新媒体项真正开始播放。 */
+    private var resumeAfterTransition = false
+    /** 当前队列中已经加载失败的项目，防止连续死链之间无限来回跳转。 */
+    private val failedQueueIndices = linkedSetOf<Int>()
 
     /** 连接完成前收到的播放请求，连接成功后立即补发。 */
     private var pendingCommand: ((MediaController) -> Unit)? = null
@@ -108,9 +113,36 @@ class AudioPlayer(context: Context) {
     var playError by mutableStateOf<String?>(null)
         private set
 
+    /** 播放服务持有的定时器剩余时长；页面重建时由 MediaSession extras 恢复。 */
+    var sleepTimerRemainingMs by mutableLongStateOf(0L)
+        private set
+
+    private val controllerListener = object : MediaController.Listener {
+        override fun onExtrasChanged(controller: MediaController, extras: Bundle) {
+            updateSleepTimer(extras)
+        }
+    }
+
     private val listener = object : Player.Listener {
         override fun onEvents(player: Player, events: Player.Events) {
             syncFrom(player)
+            if (resumeAfterTransition && !player.isPlaying) {
+                controller?.play()
+            }
+        }
+
+        /** 自动切到歌单下一项时保持原来的播放意图，避免短暂缓冲把队列停住。 */
+        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+            val activeController = controller ?: return
+            if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) {
+                resumeAfterTransition = true
+                activeController.prepare()
+                activeController.play()
+            }
+        }
+
+        override fun onIsPlayingChanged(isPlaying: Boolean) {
+            if (isPlaying) resumeAfterTransition = false
         }
 
         /**
@@ -136,7 +168,28 @@ class AudioPlayer(context: Context) {
         }
 
         override fun onPlayerError(error: PlaybackException) {
-            playError = error.message ?: "播放失败"
+            val activeController = controller
+            val failedIndex = activeController?.currentMediaItemIndex ?: -1
+            if (failedIndex >= 0) failedQueueIndices += failedIndex
+            val nextIndex = activeController?.let { nextRecoverableIndex(it, failedIndex) }
+            if (activeController?.playWhenReady == true && nextIndex != null) {
+                val failedTitle = queue.getOrNull(failedIndex)?.title.orEmpty()
+                playError = if (failedTitle.isBlank()) {
+                    "当前歌曲暂时无法播放，已继续下一首"
+                } else {
+                    "「$failedTitle」暂时无法播放，已继续下一首"
+                }
+                // 等 Media3 完成当前错误回调后再重建目标媒体源，避免在回调栈内二次 prepare。
+                mainHandler.post {
+                    val current = controller ?: return@post
+                    if (nextIndex !in 0 until current.mediaItemCount) return@post
+                    current.seekToDefaultPosition(nextIndex)
+                    current.prepare()
+                    current.play()
+                }
+            } else {
+                playError = error.message ?: "播放失败"
+            }
         }
     }
 
@@ -149,6 +202,7 @@ class AudioPlayer(context: Context) {
         if (controllerFuture != null) return
         val token = SessionToken(appContext, ComponentName(appContext, PlaybackService::class.java))
         val future = MediaController.Builder(appContext, token)
+            .setListener(controllerListener)
             // 显式绑定主线程，之后所有 controller 调用都必须来自主线程。
             .setApplicationLooper(Looper.getMainLooper())
             .buildAsync()
@@ -162,6 +216,7 @@ class AudioPlayer(context: Context) {
                 }
                 controller = connected
                 connected.addListener(listener)
+                updateSleepTimer(connected.sessionExtras)
                 syncFrom(connected)
                 pendingCommand?.let { command ->
                     pendingCommand = null
@@ -189,6 +244,7 @@ class AudioPlayer(context: Context) {
         val mediaItems = songs.map(::mediaItemOf)
         if (newPlaybackCycle) playbackCycle += 1L
         submit { activeController ->
+            failedQueueIndices.clear()
             activeController.setMediaItems(
                 mediaItems,
                 startIndex.coerceIn(mediaItems.indices),
@@ -200,7 +256,10 @@ class AudioPlayer(context: Context) {
         }
     }
 
-    fun pause() = submit { it.pause() }
+    fun pause() = submit {
+        resumeAfterTransition = false
+        it.pause()
+    }
 
     /**
      * 冷启动恢复：把队列装载进播放器并定位到上次的进度，但**不开始播放**。
@@ -216,6 +275,7 @@ class AudioPlayer(context: Context) {
         val mediaItems = songs.map(::mediaItemOf)
         submit { activeController ->
             if (activeController.mediaItemCount > 0) return@submit
+            failedQueueIndices.clear()
             activeController.setMediaItems(
                 mediaItems,
                 index.coerceIn(mediaItems.indices),
@@ -235,8 +295,26 @@ class AudioPlayer(context: Context) {
         updateProgress(activeController)
     }
 
-    fun next() = submit { it.seekToNextMediaItem() }
-    fun previous() = submit { it.seekToPreviousMediaItem() }
+    /** 切歌后恢复切换前的播放意图，避免 Media3 的短暂转场状态把歌单停住。 */
+    fun next() = submit { activeController ->
+        val shouldPlay = activeController.isPlaying || activeController.playWhenReady
+        resumeAfterTransition = shouldPlay
+        activeController.seekToNextMediaItem()
+        if (shouldPlay) {
+            activeController.prepare()
+            activeController.play()
+        }
+    }
+
+    fun previous() = submit { activeController ->
+        val shouldPlay = activeController.isPlaying || activeController.playWhenReady
+        resumeAfterTransition = shouldPlay
+        activeController.seekToPreviousMediaItem()
+        if (shouldPlay) {
+            activeController.prepare()
+            activeController.play()
+        }
+    }
     fun updateRepeatMode(mode: Int) = submit { it.repeatMode = mode }
 
     fun addCompletionListener(listener: (Song) -> Unit) {
@@ -273,6 +351,7 @@ class AudioPlayer(context: Context) {
     /** 从播放队列里直接跳到某一首，供播放队列面板使用。 */
     fun playAt(index: Int) = submit { activeController ->
         if (index !in 0 until activeController.mediaItemCount) return@submit
+        failedQueueIndices.remove(index)
         if (index == activeController.currentMediaItemIndex) playbackCycle += 1L
         activeController.seekToDefaultPosition(index)
         activeController.play()
@@ -310,8 +389,26 @@ class AudioPlayer(context: Context) {
 
     /** 停止播放并清空队列，用于退出登录或会话失效。 */
     fun stop() = submit { activeController ->
+        // 显式停止代表用户结束本次播放，也要取消服务端倒计时，避免服务在后台
+        // 没有媒体时仍被定时器持有；真正的到期停止由 PlaybackService 自己处理。
+        sendSleepTimerCommand(activeController, SleepTimerContract.CANCEL)
         activeController.stop()
         activeController.clearMediaItems()
+    }
+
+    /** 设置按实际播放时长计时的定时停止。暂停会保留剩余时间，切歌不会重置。 */
+    fun setSleepTimer(minutes: Int) {
+        sendSleepTimerCommand(SleepTimerContract.SET, SleepTimerPolicy.durationForMinutes(minutes))
+    }
+
+    /** 取消定时停止，但不影响当前播放。 */
+    fun cancelSleepTimer() {
+        sendSleepTimerCommand(SleepTimerContract.CANCEL)
+    }
+
+    /** 重新向服务查询状态；主要用于界面重建或服务重新连接。 */
+    fun querySleepTimer() {
+        sendSleepTimerCommand(SleepTimerContract.QUERY)
     }
 
     /** 断开与播放服务的连接，界面销毁时调用；播放中的服务会继续在后台运行。 */
@@ -330,6 +427,44 @@ class AudioPlayer(context: Context) {
         hasMedia = false
         durationMs = 0
         positionMs = 0
+    }
+
+    private fun sendSleepTimerCommand(operation: String, durationMs: Long = 0L) {
+        submit { activeController ->
+            sendSleepTimerCommand(activeController, operation, durationMs)
+        }
+    }
+
+    private fun sendSleepTimerCommand(
+        activeController: MediaController,
+        operation: String,
+        durationMs: Long = 0L,
+    ) {
+        val args = Bundle().apply {
+            putString(SleepTimerContract.OPERATION, operation)
+            if (operation == SleepTimerContract.SET) {
+                putLong(SleepTimerContract.DURATION_MS, durationMs)
+            }
+        }
+        val resultFuture = activeController.sendCustomCommand(SleepTimerContract.command, args)
+        resultFuture.addListener(
+            {
+                val result = runCatching { resultFuture.get() }.getOrNull()
+                if (result?.resultCode == SessionResult.RESULT_SUCCESS) {
+                    updateSleepTimer(result.extras)
+                } else if (result != null) {
+                    playError = "定时播放设置失败"
+                }
+            },
+            mainHandler::post,
+        )
+    }
+
+    private fun updateSleepTimer(extras: Bundle?) {
+        if (extras == null || !extras.containsKey(SleepTimerContract.REMAINING_MS)) return
+        sleepTimerRemainingMs = extras
+            .getLong(SleepTimerContract.REMAINING_MS, 0L)
+            .coerceIn(0L, SleepTimerContract.MAX_DURATION_MS)
     }
 
     /**
@@ -353,6 +488,14 @@ class AudioPlayer(context: Context) {
     }
 
     private fun isMainThread(): Boolean = Looper.myLooper() == Looper.getMainLooper()
+
+    /** 优先向后找未失败歌曲；列表循环模式到末尾后才从头继续。 */
+    private fun nextRecoverableIndex(player: Player, failedIndex: Int): Int? {
+        if (failedIndex !in 0 until player.mediaItemCount) return null
+        val forward = (failedIndex + 1 until player.mediaItemCount)
+        val wrapped = if (player.repeatMode == Player.REPEAT_MODE_ALL) (0 until failedIndex) else IntRange.EMPTY
+        return (forward + wrapped).firstOrNull { it !in failedQueueIndices }
+    }
 
     private companion object {
         /** MediaMetadata extras 中存放整首歌 JSON 的键。 */

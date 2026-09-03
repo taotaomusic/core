@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.OfflinePin
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.MaterialTheme
@@ -111,6 +112,10 @@ fun SongRow(
     favorited: Boolean = false,
     onToggleFavorite: (() -> Unit)? = null,
     onPlayNext: (() -> Unit)? = null,
+    /** 将歌曲保存到云端歌单；为空时不显示该菜单项。 */
+    onAddToPlaylist: (() -> Unit)? = null,
+    /** 由平台层生成短链并打开系统分享面板。 */
+    onShare: (() -> Unit)? = null,
     onDelete: (() -> Unit)? = null,
     dragHandle: (@Composable (Modifier) -> Unit)? = null,
 ) {
@@ -208,7 +213,24 @@ fun SongRow(
                         },
                     )
                 }
-                if (onDelete == null && onPlayNext == null && onToggleFavorite == null) {
+                if (onAddToPlaylist != null) {
+                    DropdownMenuItem(
+                        text = { Text("加入歌单") },
+                        onClick = { showActions = false; onAddToPlaylist() },
+                        leadingIcon = { Icon(Icons.AutoMirrored.Filled.PlaylistPlay, null) },
+                    )
+                }
+                if (onShare != null) {
+                    DropdownMenuItem(
+                        text = { Text("分享歌曲") },
+                        onClick = { showActions = false; onShare() },
+                        leadingIcon = { Icon(Icons.Default.Share, null) },
+                    )
+                }
+                if (
+                    onDelete == null && onPlayNext == null && onToggleFavorite == null &&
+                    onAddToPlaylist == null && onShare == null
+                ) {
                     DropdownMenuItem(
                         text = { Text("暂无可用操作") },
                         onClick = { showActions = false },
@@ -230,6 +252,8 @@ fun SongListItem(
     modifier: Modifier = Modifier,
     onToggleFavorite: (() -> Unit)? = null,
     onPlayNext: (() -> Unit)? = null,
+    onAddToPlaylist: (() -> Unit)? = null,
+    onShare: (() -> Unit)? = null,
     onDelete: (() -> Unit)? = null,
     onClick: () -> Unit,
 ) {
@@ -242,6 +266,8 @@ fun SongListItem(
         favorited = favorited,
         onToggleFavorite = onToggleFavorite,
         onPlayNext = onPlayNext,
+        onAddToPlaylist = onAddToPlaylist,
+        onShare = onShare,
         onDelete = onDelete,
     )
 }

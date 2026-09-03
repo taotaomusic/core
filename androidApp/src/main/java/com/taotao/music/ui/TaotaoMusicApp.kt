@@ -39,6 +39,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
+import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.*
@@ -78,6 +79,7 @@ import com.taotao.music.data.CrashLog
 import com.taotao.music.data.CrashReporter
 import com.taotao.music.data.DownloadNotifier
 import com.taotao.music.data.FavoritesStore
+import com.taotao.music.data.bindDownloadedSongs
 import com.taotao.music.data.GreetingFormatter
 import com.taotao.music.data.OfflineDownloadManager
 import com.taotao.music.data.QualityStore
@@ -105,6 +107,7 @@ import com.taotao.music.update.UpdateManager
 import com.taotao.music.update.UpdateStage
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -114,6 +117,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import android.net.Uri
 import java.io.File
 import java.util.Calendar
+import java.util.Locale
 import java.util.UUID
 
 @Composable
@@ -205,8 +209,25 @@ fun TaotaoMusicApp() {
     var favoriteLibrarySyncing by remember { mutableStateOf(false) }
     var favoriteLibraryError by remember { mutableStateOf<String?>(null) }
     var showSettingsPage by remember { mutableStateOf(false) }
+    var showSleepTimerDialog by remember { mutableStateOf(false) }
     var showProfilePage by remember { mutableStateOf(false) }
     var mineLibrarySection by remember { mutableStateOf<MineLibrarySection?>(null) }
+    /** 云端歌单只按当前登录账号加载；详情单独缓存，避免列表页每次重组都请求网络。 */
+    var playlists by remember { mutableStateOf(emptyList<TencentMusicApi.Playlist>()) }
+    var playlistsLoading by remember { mutableStateOf(false) }
+    var playlistsError by remember { mutableStateOf<String?>(null) }
+    var selectedPlaylist by remember { mutableStateOf<TencentMusicApi.Playlist?>(null) }
+    var showPlaylistPicker by remember { mutableStateOf(false) }
+    var playlistPickerSong by remember { mutableStateOf<Song?>(null) }
+    var showPlaylistSongPicker by remember { mutableStateOf(false) }
+    var playlistSongPickerTarget by remember { mutableStateOf<TencentMusicApi.Playlist?>(null) }
+    // 从歌曲菜单新建歌单时暂存原歌曲；创建成功后重新打开选择器，避免两个弹窗叠在一起。
+    var pendingPlaylistSongAfterCreate by remember { mutableStateOf<Song?>(null) }
+    var playlistEditorMode by remember { mutableStateOf<PlaylistEditorMode?>(null) }
+    var playlistBusy by remember { mutableStateOf(false) }
+    // 歌单请求绑定当前账号代际；退出/换号时取消旧请求并拒绝其回写。
+    var playlistRequestGeneration by remember { mutableIntStateOf(0) }
+    var playlistRequestJob by remember { mutableStateOf<Job?>(null) }
     var playbackQuality by remember { mutableStateOf(qualityStore.playbackQuality()) }
     var downloadQuality by remember { mutableStateOf(qualityStore.downloadQuality()) }
     /** 待删除确认的已下载歌曲。删除是不可逆的，不做二次确认容易误触。 */
@@ -232,8 +253,20 @@ fun TaotaoMusicApp() {
 
     /** 已下载歌曲的 ID 集合，用于在搜索结果里标出「已下载」。 */
     val downloadedIds = remember(downloadedSongs) { downloadedSongs.mapNotNull { it.remoteId }.toSet() }
+    /** 歌单详情的添加候选：合并用户当前已经看过或播放过的歌曲，避免额外复制一套搜索状态。 */
+    val playlistCandidates = remember(
+        searchResults,
+        playbackSongs,
+        favoriteLibrarySongs,
+        playbackHistory,
+        downloadedSongs,
+    ) {
+        dedupeSongs(
+            (searchResults + playbackSongs + favoriteLibrarySongs + playbackHistory.map { it.song } + downloadedSongs)
+                .filter { TencentMusicApi.playlistSongId(it) != null },
+        )
+    }
     // SharedPreferences 不是可观察状态；把修订号纳入 remember，点击收藏后当前页面立刻重组。
-    val favoriteIds = remember(favoriteRevision) { favoritesStore.ids() }
 
     /**
      * 临时切换当前这首歌的音质，不改默认设置。
@@ -245,12 +278,15 @@ fun TaotaoMusicApp() {
         val index = selectedIndex
         val song = playbackSongs.getOrNull(index) ?: return
         val remoteId = song.remoteId
-        if (remoteId == null || song.audioUri?.startsWith("file:") == true) {
+        if ((remoteId?.let { it > 0L } != true && song.mid.isNullOrBlank()) || song.audioUri?.startsWith("file:") == true) {
             message = "本地歌曲的音质由文件本身决定"
             return
         }
         val position = audioPlayer.currentPositionMs()
-        val updated = song.copy(audioUri = TencentMusicApi.placeholderUri(remoteId, quality))
+        val updated = song.copy(
+            audioUri = TencentMusicApi.placeholderUri(remoteId, song.mid, song.type, quality, song.source)
+                ?: song.audioUri,
+        )
         val queue = playbackSongs.toMutableList().also { it[index] = updated }
         playbackSongs = queue
         // 仅切换音质并从原进度继续，不能被统计成一轮新的完整重播。
@@ -329,20 +365,23 @@ fun TaotaoMusicApp() {
      * 弱网下点一下要等半秒才有反应。
      */
     fun toggleFavorite(song: Song) {
-        val remoteId = song.remoteId ?: return
-        val target = !favoritesStore.contains(remoteId)
+        if (song.remoteId?.let { it > 0L } != true && song.mid.isNullOrBlank()) return
+        val account = authSession.accountId
+        val target = !favoritesStore.contains(song)
         val previousLibrary = favoriteLibrarySongs
-        favoritesStore.set(remoteId, target, song)
+        favoritesStore.set(song, target)
         favoriteLibrarySongs = if (target) {
-            listOf(song.copy(favorited = true)) + favoriteLibrarySongs.filterNot { it.remoteId == remoteId }
+            listOf(song.copy(favorited = true)) + favoriteLibrarySongs.filterNot { favoritesStore.contains(it) && it.sameSongIdentity(song) }
         } else {
-            favoriteLibrarySongs.filterNot { it.remoteId == remoteId }
+            favoriteLibrarySongs.filterNot { it.sameSongIdentity(song) }
         }
         favoriteRevision++
         scope.launch {
             runCatching { withContext(Dispatchers.IO) { musicApi.setFavorite(song, target) } }
                 .onFailure {
-                    favoritesStore.set(remoteId, !target, song)
+                    // 请求跨过退出/换号边界时，本地缓存已经被清空，不要把旧账号的回滚写回来。
+                    if (authSession.accountId != account || !signedIn) return@onFailure
+                    favoritesStore.set(song, !target)
                     favoriteLibrarySongs = previousLibrary
                     favoriteRevision++
                     message = it.message ?: "收藏操作失败，请稍后重试"
@@ -356,6 +395,7 @@ fun TaotaoMusicApp() {
      * 缓存只负责首屏展示，收藏关系仍完全以服务端返回的 ID 为准，因此不会形成第二套收藏夹。
      */
     fun refreshFavoriteLibrary() {
+        val account = authSession.accountId ?: return
         if (favoriteLibrarySyncing) return
         favoriteLibrarySyncing = true
         favoriteLibraryError = null
@@ -365,13 +405,16 @@ fun TaotaoMusicApp() {
             runCatching {
                 withContext(Dispatchers.IO) { musicApi.favoriteLibrary(knownSongs, playbackQuality.value) }
             }.onSuccess { library ->
+                if (authSession.accountId != account || !signedIn) return@onSuccess
                 favoritesStore.replaceLibrary(library.ids, library.songs)
                 favoriteLibrarySongs = library.songs
                 favoriteRevision++
             }.onFailure {
-                favoriteLibraryError = it.message ?: "收藏列表加载失败"
+                if (authSession.accountId == account && signedIn) {
+                    favoriteLibraryError = it.message ?: "收藏列表加载失败"
+                }
             }
-            favoriteLibrarySyncing = false
+            if (authSession.accountId == account && signedIn) favoriteLibrarySyncing = false
         }
     }
 
@@ -390,6 +433,275 @@ fun TaotaoMusicApp() {
                 .onSuccess { share -> shareSongLink(context, song, share.url) }
                 .onFailure { message = it.message ?: "分享链接生成失败" }
         }
+    }
+
+    fun beginPlaylistRequest(): Int {
+        playlistRequestJob?.cancel()
+        playlistRequestGeneration += 1
+        playlistsLoading = false
+        playlistBusy = false
+        return playlistRequestGeneration
+    }
+
+    fun isCurrentPlaylistRequest(account: Long, generation: Int): Boolean =
+        signedIn && authSession.accountId == account && playlistRequestGeneration == generation
+
+    fun finishPlaylistRequest(generation: Int) {
+        if (playlistRequestGeneration == generation) playlistRequestJob = null
+    }
+
+    fun refreshPlaylists() {
+        val account = authSession.accountId ?: return
+        if (playlistsLoading) return
+        val generation = beginPlaylistRequest()
+        playlistsLoading = true
+        playlistsError = null
+        val job = scope.launch {
+            try {
+                runCatching { withContext(Dispatchers.IO) { musicApi.listPlaylists() } }
+                    .onSuccess { result ->
+                        if (isCurrentPlaylistRequest(account, generation)) playlists = result
+                    }
+                    .onFailure { error ->
+                        if (isCurrentPlaylistRequest(account, generation)) {
+                            playlistsError = error.message ?: "歌单加载失败"
+                        }
+                    }
+            } finally {
+                if (isCurrentPlaylistRequest(account, generation)) {
+                    playlistsLoading = false
+                    finishPlaylistRequest(generation)
+                }
+            }
+        }
+        playlistRequestJob = job
+    }
+
+    /** 账号退出或会话失效时清掉歌单内存快照，避免下一账号看到上一账号的云端资料。 */
+    fun clearPlaylistState() {
+        playlistRequestGeneration += 1
+        playlistRequestJob?.cancel()
+        playlistRequestJob = null
+        playlists = emptyList()
+        playlistsLoading = false
+        playlistsError = null
+        selectedPlaylist = null
+        showPlaylistPicker = false
+        playlistPickerSong = null
+        showPlaylistSongPicker = false
+        playlistSongPickerTarget = null
+        pendingPlaylistSongAfterCreate = null
+        playlistEditorMode = null
+        playlistBusy = false
+    }
+
+    /** 清理账号级内存缓存；收藏关系不是设备级数据，退出或会话失效后不得留在界面。 */
+    fun clearAccountScopedLibraryState() {
+        favoritesStore.clear()
+        favoriteLibrarySongs = emptyList()
+        favoriteLibrarySyncing = false
+        favoriteLibraryError = null
+        favoriteRevision += 1
+        userProfile = null
+        profileLoading = false
+    }
+
+    fun openPlaylistLibrary() {
+        selectedPlaylist = null
+        mineLibrarySection = MineLibrarySection.PLAYLISTS
+        refreshPlaylists()
+    }
+
+    /** 打开歌单详情时重新读取歌曲，列表元数据仍保留以便快速返回。 */
+    fun openPlaylist(playlist: TencentMusicApi.Playlist) {
+        selectedPlaylist = playlist
+        val account = authSession.accountId ?: return
+        val generation = beginPlaylistRequest()
+        val job = scope.launch {
+            try {
+                val detail = runCatching { withContext(Dispatchers.IO) { musicApi.getPlaylist(playlist.id) } }
+                    .getOrElse {
+                        if (isCurrentPlaylistRequest(account, generation)) {
+                            playlistsError = it.message ?: "歌单读取失败"
+                        }
+                        return@launch
+                    }
+                if (isCurrentPlaylistRequest(account, generation) && playlists.any { it.id == detail.id }) {
+                    playlists = playlists.map { if (it.id == detail.id) detail else it }
+                    selectedPlaylist = detail
+                }
+            } finally {
+                finishPlaylistRequest(generation)
+            }
+        }
+        playlistRequestJob = job
+    }
+
+    fun savePlaylistEditor(name: String, description: String) {
+        if (name.isBlank() || playlistBusy) return
+        val mode = playlistEditorMode ?: return
+        val account = authSession.accountId ?: return
+        val generation = beginPlaylistRequest()
+        playlistBusy = true
+        val job = scope.launch {
+            try {
+                runCatching {
+                    withContext(Dispatchers.IO) {
+                        when (mode) {
+                            PlaylistEditorMode.CREATE -> musicApi.createPlaylist(name, description)
+                            is PlaylistEditorMode.EDIT -> musicApi.updatePlaylist(mode.playlist.id, name, description)
+                        }
+                    }
+                }.onSuccess { result ->
+                    if (!isCurrentPlaylistRequest(account, generation)) return@onSuccess
+                    val pendingSong = if (mode == PlaylistEditorMode.CREATE) pendingPlaylistSongAfterCreate else null
+                    playlists = when (mode) {
+                        PlaylistEditorMode.CREATE -> listOf(result) + playlists
+                        is PlaylistEditorMode.EDIT -> playlists.map { if (it.id == result.id) result else it }
+                    }
+                    if (selectedPlaylist?.id == result.id) selectedPlaylist = result
+                    playlistEditorMode = null
+                    pendingPlaylistSongAfterCreate = null
+                    // 歌曲菜单里的“新建歌单”完成后回到原来的歌单选择器，
+                    // 用户只需再点一次新歌单即可完成添加，不会丢掉刚才的歌曲。
+                    if (pendingSong != null) {
+                        playlistPickerSong = pendingSong
+                        showPlaylistPicker = true
+                    }
+                    message = if (mode == PlaylistEditorMode.CREATE) "歌单已创建" else "歌单已更新"
+                }.onFailure {
+                    if (isCurrentPlaylistRequest(account, generation)) message = it.message ?: "歌单保存失败"
+                }
+            } finally {
+                if (isCurrentPlaylistRequest(account, generation)) {
+                    playlistBusy = false
+                    finishPlaylistRequest(generation)
+                }
+            }
+        }
+        playlistRequestJob = job
+    }
+
+    fun removePlaylist(playlist: TencentMusicApi.Playlist) {
+        if (playlistBusy) return
+        val account = authSession.accountId ?: return
+        val generation = beginPlaylistRequest()
+        playlistBusy = true
+        val job = scope.launch {
+            try {
+                runCatching { withContext(Dispatchers.IO) { musicApi.deletePlaylist(playlist.id) } }
+                    .onSuccess {
+                        if (!isCurrentPlaylistRequest(account, generation)) return@onSuccess
+                        playlists = playlists.filterNot { it.id == playlist.id }
+                        if (selectedPlaylist?.id == playlist.id) selectedPlaylist = null
+                        message = "已删除歌单「${playlist.name}」"
+                    }
+                    .onFailure { if (isCurrentPlaylistRequest(account, generation)) message = it.message ?: "歌单删除失败" }
+            } finally {
+                if (isCurrentPlaylistRequest(account, generation)) {
+                    playlistBusy = false
+                    finishPlaylistRequest(generation)
+                }
+            }
+        }
+        playlistRequestJob = job
+    }
+
+    fun addSongToPlaylist(playlist: TencentMusicApi.Playlist, song: Song) {
+        if (playlistBusy) return
+        val account = authSession.accountId ?: return
+        val generation = beginPlaylistRequest()
+        playlistBusy = true
+        val job = scope.launch {
+            try {
+                runCatching { withContext(Dispatchers.IO) { musicApi.addSongToPlaylist(playlist.id, song) } }
+                    .onSuccess { updated ->
+                        if (!isCurrentPlaylistRequest(account, generation)) return@onSuccess
+                        playlists = playlists.map { if (it.id == updated.id) updated.copy(songs = emptyList()) else it }
+                        if (selectedPlaylist?.id == updated.id) selectedPlaylist = updated
+                        showPlaylistPicker = false
+                        playlistPickerSong = null
+                        showPlaylistSongPicker = false
+                        playlistSongPickerTarget = null
+                        message = "已加入「${updated.name}」"
+                    }
+                    .onFailure { if (isCurrentPlaylistRequest(account, generation)) message = it.message ?: "加入歌单失败" }
+            } finally {
+                if (isCurrentPlaylistRequest(account, generation)) {
+                    playlistBusy = false
+                    finishPlaylistRequest(generation)
+                }
+            }
+        }
+        playlistRequestJob = job
+    }
+
+    /** 从歌曲列表打开“加入歌单”选择器，并确保详情页的另一套选择器已关闭。 */
+    fun requestAddToPlaylist(song: Song) {
+        if (!signedIn) {
+            message = "登录后才能加入歌单"
+            return
+        }
+        if (TencentMusicApi.playlistSongId(song) == null) return
+        showPlaylistSongPicker = false
+        playlistSongPickerTarget = null
+        playlistPickerSong = song
+        showPlaylistPicker = true
+        if (playlists.isEmpty()) refreshPlaylists()
+    }
+
+    fun removeSongFromPlaylist(item: TencentMusicApi.PlaylistSong) {
+        val playlist = selectedPlaylist ?: return
+        if (playlistBusy) return
+        val account = authSession.accountId ?: return
+        val generation = beginPlaylistRequest()
+        playlistBusy = true
+        val job = scope.launch {
+            try {
+                runCatching { withContext(Dispatchers.IO) { musicApi.removeSongFromPlaylist(playlist.id, item) } }
+                    .onSuccess { updated ->
+                        if (!isCurrentPlaylistRequest(account, generation)) return@onSuccess
+                        selectedPlaylist = updated
+                        playlists = playlists.map { if (it.id == updated.id) updated.copy(songs = emptyList()) else it }
+                    }
+                    .onFailure { if (isCurrentPlaylistRequest(account, generation)) message = it.message ?: "移除歌曲失败" }
+            } finally {
+                if (isCurrentPlaylistRequest(account, generation)) {
+                    playlistBusy = false
+                    finishPlaylistRequest(generation)
+                }
+            }
+        }
+        playlistRequestJob = job
+    }
+
+    fun movePlaylistSong(from: Int, to: Int) {
+        val playlist = selectedPlaylist ?: return
+        if (to !in playlist.songs.indices || from !in playlist.songs.indices || playlistBusy) return
+        val account = authSession.accountId ?: return
+        val reordered = playlist.songs.toMutableList().apply { add(to, removeAt(from)) }
+        // 先更新界面，再把完整稳定键列表交给服务端；失败时回读详情恢复权威顺序。
+        selectedPlaylist = playlist.copy(songs = reordered)
+        val generation = beginPlaylistRequest()
+        playlistBusy = true
+        val job = scope.launch {
+            try {
+                runCatching { withContext(Dispatchers.IO) { musicApi.reorderPlaylist(playlist.id, reordered) } }
+                    .onSuccess { updated -> if (isCurrentPlaylistRequest(account, generation)) selectedPlaylist = updated }
+                    .onFailure {
+                        if (!isCurrentPlaylistRequest(account, generation)) return@onFailure
+                        message = it.message ?: "歌单排序失败"
+                        runCatching { withContext(Dispatchers.IO) { musicApi.getPlaylist(playlist.id) } }
+                            .onSuccess { detail -> if (isCurrentPlaylistRequest(account, generation)) selectedPlaylist = detail }
+                    }
+            } finally {
+                if (isCurrentPlaylistRequest(account, generation)) {
+                    playlistBusy = false
+                    finishPlaylistRequest(generation)
+                }
+            }
+        }
+        playlistRequestJob = job
     }
 
     /**
@@ -421,16 +733,16 @@ fun TaotaoMusicApp() {
                 val remoteEntries = if (remoteHistory.revision < localHistoryRevision) emptyList() else remoteHistory.entries
                 // 空数组同样是权威结果；只有 generation 未过期的待上传本地会话才应保留在 UI 中。
                 val pendingBySongId = playbackSync.pendingSnapshots()
-                    .groupBy { it.songId }
+                    .groupBy { "${it.source}:${it.songId}" }
                     .mapValues { (_, snapshots) -> snapshots.maxByOrNull { it.lastPlayedAt } }
                 val localUnsynced = playbackHistory.filter { entry ->
-                    entry.song.remoteId
+                    playbackStableKey(entry.song)
                         ?.let(pendingBySongId::get)
-                        ?.let { snapshot -> snapshot != null && snapshot.historyRevision >= remoteHistory.revision } == true
+                        ?.let { snapshot -> snapshot.historyRevision >= remoteHistory.revision } == true
                 }
                 val merged = (remoteEntries + localUnsynced)
                     .sortedByDescending { it.playedAtMillis }
-                    .distinctBy { entry -> entry.song.remoteId ?: entry.song.audioUri }
+                    .distinctBy { entry -> playbackStableKey(entry.song) ?: entry.song.audioUri }
                     .take(500)
                 playbackHistory = withContext(Dispatchers.IO) {
                     playbackHistoryStore.replace(historyAccountId, merged)
@@ -461,12 +773,13 @@ fun TaotaoMusicApp() {
      * 物理返回键：详情页先收起详情，搜索页先退出搜索，都不在时禁用拦截，
      * 交回系统默认行为（退出应用）—— 这样不必自己去拿 onBackPressedDispatcher。
      */
-    BackHandler(enabled = showPlayerDetail || showSearchPage || showSettingsPage || showProfilePage || mineLibrarySection != null) {
+    BackHandler(enabled = showPlayerDetail || showSearchPage || showSettingsPage || showProfilePage || selectedPlaylist != null || mineLibrarySection != null) {
         when {
             showPlayerDetail -> showPlayerDetail = false
             showProfilePage -> showProfilePage = false
             showSettingsPage -> showSettingsPage = false
             showSearchPage -> showSearchPage = false
+            selectedPlaylist != null -> selectedPlaylist = null
             mineLibrarySection != null -> mineLibrarySection = null
         }
     }
@@ -543,7 +856,12 @@ fun TaotaoMusicApp() {
         authSession.onSessionExpired = {
             // 回调来自取流线程，切回主线程再改播放器和界面状态；连接由 DisposableEffect 负责断开。
             scope.launch {
+                audioPlayer.cancelSleepTimer()
                 audioPlayer.stop()
+                showSleepTimerDialog = false
+                clearAccountScopedLibraryState()
+                clearPlaylistState()
+                playbackSession = null
                 signedIn = false
             }
         }
@@ -555,7 +873,9 @@ fun TaotaoMusicApp() {
             // 登录成功到账号分桶缓存异步读取之间不能保留前一账号的界面数据。
             playbackHistory = emptyList()
             restoredPlayback = null
+            clearAccountScopedLibraryState()
             authSession.save(tokens)
+            clearPlaylistState()
             signedIn = true
         }
         return
@@ -595,24 +915,36 @@ fun TaotaoMusicApp() {
         playbackHistory = restored.second
     }
 
+    // 歌单是账号级云端数据；登录/换号后主动刷新，首页“我的歌单”数量不会滞后到手动打开页面。
+    LaunchedEffect(signedIn, authSession.accountId) {
+        if (signedIn && authSession.accountId != null) {
+            refreshPlaylists()
+        } else {
+            clearPlaylistState()
+        }
+    }
+
     /**
      * 播种收藏缓存。
      *
      * 拉一次完整收藏列表就够了 —— 之后靠搜索结果里的 `favorited` 校正、靠本地乐观更新维持。
      * 失败不提示：收藏状态不是主流程，缓存里还有上次的值可用。
      */
-    LaunchedEffect(signedIn) {
-        if (!signedIn) return@LaunchedEffect
+    LaunchedEffect(signedIn, authSession.accountId) {
+        val account = authSession.accountId
+        if (!signedIn || account == null) return@LaunchedEffect
         profileLoading = true
         runCatching { withContext(Dispatchers.IO) { musicApi.profile() } }
-            .onSuccess { userProfile = it }
-            .onFailure { message = it.message ?: "账号资料读取失败" }
-        profileLoading = false
+            .onSuccess { if (authSession.accountId == account && signedIn) userProfile = it }
+            .onFailure { if (authSession.accountId == account && signedIn) message = it.message ?: "账号资料读取失败" }
+        if (authSession.accountId == account && signedIn) profileLoading = false
         runCatching { withContext(Dispatchers.IO) { musicApi.favoriteIds() } }
             .onSuccess { remoteIds ->
-                favoritesStore.replaceAll(remoteIds)
-                favoriteLibrarySongs = favoritesStore.cachedSongs()
-                favoriteRevision++
+                if (authSession.accountId == account && signedIn) {
+                    favoritesStore.replaceAll(remoteIds)
+                    favoriteLibrarySongs = favoritesStore.cachedSongs()
+                    favoriteRevision++
+                }
             }
     }
 
@@ -661,7 +993,12 @@ fun TaotaoMusicApp() {
     DisposableEffect(audioPlayer, playbackSync) {
         val completionListener: (Song) -> Unit = { completedSong ->
             val activeSession = playbackSession
-            if (activeSession != null && activeSession.songId == completedSong.remoteId && activeSession.listenedMs > 0) {
+            if (
+                activeSession != null &&
+                activeSession.source == playbackSource(completedSong) &&
+                activeSession.songId == playbackSongId(completedSong) &&
+                activeSession.listenedMs > 0
+            ) {
                 val persisted = playbackSync.persistTerminalSnapshot(activeSession, completed = true)
                 if (playbackSession?.sessionId == persisted.sessionId) playbackSession = persisted
                 scope.launch { runCatching { syncPendingPlayback() } }
@@ -696,7 +1033,9 @@ fun TaotaoMusicApp() {
     val activePlayerSong = audioPlayer.queue.getOrNull(audioPlayer.currentIndex)
     val expectedPlayerSong = playbackSongs.getOrNull(selectedIndex)
     LaunchedEffect(
+        activePlayerSong?.source,
         activePlayerSong?.remoteId,
+        activePlayerSong?.mid,
         activePlayerSong?.audioUri,
         audioPlayer.isPlaying,
         audioPlayer.playbackCycle,
@@ -708,11 +1047,12 @@ fun TaotaoMusicApp() {
         val sessionClearEpoch = playbackHistoryClearEpoch
         // 点击新歌时 Compose 先更新播放队列，再等 MediaController 切换媒体项；这段极短窗口
         // 仍会读到上一首。跳过它，避免把“点下一首”误建成上一首的一轮重播。
-        if (expectedPlayerSong?.remoteId != played.remoteId) return@LaunchedEffect
-        val remoteId = played.remoteId
+        if (expectedPlayerSong?.let(::playbackIdentity) != playbackIdentity(played)) return@LaunchedEffect
+        val remoteSongId = playbackSongId(played)
+        val remoteSource = playbackSource(played)
         val historyAccountId = authSession.accountId
         // 本地歌曲同样听满三秒才进入最近播放，和云端歌曲保持同一准入规则。
-        if (remoteId == null) {
+        if (remoteSongId == null) {
             if (!audioPlayer.isPlaying || historyAccountId == null) return@LaunchedEffect
             delay(3_000)
             if (
@@ -732,7 +1072,7 @@ fun TaotaoMusicApp() {
         // 把匿名/上一账号的内存数据在下一次登录时上传给错误用户。
         val sessionAccountId = historyAccountId ?: return@LaunchedEffect
         var session = playbackSession?.takeIf {
-            PlaybackSnapshotPolicy.shouldReuseSession(it, sessionAccountId, remoteId, playbackCycle)
+            PlaybackSnapshotPolicy.shouldReuseSession(it, sessionAccountId, remoteSource, remoteSongId, playbackCycle)
         } ?: run {
             if (!audioPlayer.isPlaying) return@LaunchedEffect
             // 新会话优先刷新服务端清空代际；请求慢或离线时 1.5 秒后使用本地已知值继续，
@@ -746,7 +1086,8 @@ fun TaotaoMusicApp() {
             PendingPlaybackSnapshot(
                 sessionId = UUID.randomUUID().toString(),
                 accountId = sessionAccountId,
-                songId = remoteId,
+                source = remoteSource,
+                songId = remoteSongId,
                 startedAt = System.currentTimeMillis(),
                 lastPlayedAt = System.currentTimeMillis(),
                 listenedMs = 0,
@@ -776,7 +1117,7 @@ fun TaotaoMusicApp() {
         try {
             while (
                 audioPlayer.isPlaying &&
-                audioPlayer.queue.getOrNull(audioPlayer.currentIndex)?.remoteId == remoteId &&
+                audioPlayer.queue.getOrNull(audioPlayer.currentIndex)?.let(::playbackIdentity) == playbackIdentity(played) &&
                 audioPlayer.playbackCycle == playbackCycle &&
                 PlaybackSnapshotPolicy.shouldPersistAfterClear(sessionClearEpoch, playbackHistoryClearEpoch)
             ) {
@@ -945,26 +1286,31 @@ fun TaotaoMusicApp() {
     }
 
     fun playSong(queue: List<Song>, index: Int, positionMs: Int = 0) {
-        val requestedSong = queue.getOrNull(index) ?: return
+        if (index !in queue.indices) return
         scope.launch {
+            // 云端歌单只保存跨设备稳定身份，不保存本机 file: 地址。整条队列必须在入队前
+            // 一次性绑定本地下载文件，不能只处理用户点击的第一首，否则下一首会错误走网络。
+            val localDownloads = withContext(Dispatchers.IO) { downloadManager.listDownloaded() }
+            val queueWithLocalFiles = bindDownloadedSongs(queue, localDownloads)
+            val requestedSong = queueWithLocalFiles[index]
             val isLocalFile = requestedSong.audioUri?.startsWith("file:") == true
             // remoteId 是别的模块的 public 属性，Kotlin 不做智能转换，先取成局部变量。
             val remoteId = requestedSong.remoteId
             // 下载过就直接放本地文件。搜索结果里的歌与已下载的是同一个 remoteId，
             // 不查这一步的话，明明下载过还是从云端拉流 —— 白费流量，离线也放不了。
-            val offline = if (!isLocalFile && remoteId != null) {
-                withContext(Dispatchers.IO) { downloadManager.findDownloaded(remoteId) }
-            } else {
-                null
-            }
             // 网络歌曲统一用占位地址入队，真正的上游直链在取流那一刻才解析 ——
             // 直链是限时的，存进队列后冷启动恢复时就失效了。
             val playable = when {
-                offline != null -> offline.copy(favorited = requestedSong.favorited)
-                !isLocalFile && remoteId != null -> requestedSong.copy(
-                    audioUri = TencentMusicApi.placeholderUri(remoteId, qualityStore.playbackQuality().value),
-                    lyricUri = requestedSong.lyricUri
-                        ?: "${TencentMusicApi.ENDPOINT}/api/v1/songs/$remoteId/lyrics",
+                isLocalFile -> requestedSong
+                !isLocalFile && (remoteId?.let { it > 0L } == true || !requestedSong.mid.isNullOrBlank()) -> requestedSong.copy(
+                    audioUri = TencentMusicApi.placeholderUri(
+                        remoteId,
+                        requestedSong.mid,
+                        requestedSong.type,
+                        qualityStore.playbackQuality().value,
+                        requestedSong.source,
+                    ) ?: requestedSong.audioUri,
+                    lyricUri = requestedSong.lyricUri ?: TencentMusicApi.lyricUri(remoteId, requestedSong.mid, requestedSong.source),
                 )
                 else -> requestedSong
             }
@@ -976,15 +1322,20 @@ fun TaotaoMusicApp() {
             // 一次点击会把来源列表稳定地变成整条播放队列。以前只给被点中的一首补地址，
             // AudioPlayer 发现其它歌曲没有地址后会把整队列退化为单曲，界面却还短暂显示整列，
             // 这正是播放列表规则看起来忽多忽少的根源。
-            val prepared = queue.mapIndexedNotNull { originalIndex, candidate ->
+            val prepared = queueWithLocalFiles.mapIndexedNotNull { originalIndex, candidate ->
                 val candidateId = candidate.remoteId
                 val ready = when {
                     originalIndex == index -> playable
                     candidate.audioUri?.startsWith("file:") == true -> candidate
-                    candidateId != null -> candidate.copy(
-                        audioUri = TencentMusicApi.placeholderUri(candidateId, qualityStore.playbackQuality().value),
-                        lyricUri = candidate.lyricUri
-                            ?: "${TencentMusicApi.ENDPOINT}/api/v1/songs/$candidateId/lyrics",
+                    candidateId?.let { it > 0L } == true || !candidate.mid.isNullOrBlank() -> candidate.copy(
+                        audioUri = TencentMusicApi.placeholderUri(
+                            candidateId,
+                            candidate.mid,
+                            candidate.type,
+                            qualityStore.playbackQuality().value,
+                            candidate.source,
+                        ) ?: candidate.audioUri,
+                        lyricUri = candidate.lyricUri ?: TencentMusicApi.lyricUri(candidateId, candidate.mid, candidate.source),
                     )
                     else -> candidate
                 }
@@ -1005,6 +1356,24 @@ fun TaotaoMusicApp() {
     }
 
     /**
+     * 手动上一首/下一首必须按目标歌曲重新发起完整播放，不能只移动 Media3 的队列游标。
+     * 歌单歌曲还需要在 [playSong] 中重新绑定本机下载文件；只 seek 会绕过这一步。
+     */
+    fun playAdjacentSong(offset: Int) {
+        val queue = playbackSongs
+        if (queue.isEmpty() || offset == 0) return
+        val current = selectedIndex.coerceIn(queue.indices)
+        val requested = current + offset
+        val target = when {
+            requested in queue.indices -> requested
+            audioPlayer.repeatMode == androidx.media3.common.Player.REPEAT_MODE_ALL && offset > 0 -> 0
+            audioPlayer.repeatMode == androidx.media3.common.Player.REPEAT_MODE_ALL -> queue.lastIndex
+            else -> return
+        }
+        playSong(queue, target)
+    }
+
+    /**
      * 将歌曲加入当前曲目的下一首。
      *
      * 与正常播放共用离线优先和占位地址规则，队列里永远不保存会过期的上游直链；没有已装载
@@ -1021,9 +1390,15 @@ fun TaotaoMusicApp() {
             }
             val playable = when {
                 offline != null -> offline.copy(favorited = song.favorited)
-                !isLocalFile && remoteId != null -> song.copy(
-                    audioUri = TencentMusicApi.placeholderUri(remoteId, qualityStore.playbackQuality().value),
-                    lyricUri = song.lyricUri ?: "${TencentMusicApi.ENDPOINT}/api/v1/songs/$remoteId/lyrics",
+                !isLocalFile && (remoteId?.let { it > 0L } == true || !song.mid.isNullOrBlank()) -> song.copy(
+                    audioUri = TencentMusicApi.placeholderUri(
+                        remoteId,
+                        song.mid,
+                        song.type,
+                        qualityStore.playbackQuality().value,
+                        song.source,
+                    ) ?: song.audioUri,
+                    lyricUri = song.lyricUri ?: TencentMusicApi.lyricUri(remoteId, song.mid, song.source),
                 )
                 else -> song
             }
@@ -1105,8 +1480,8 @@ fun TaotaoMusicApp() {
                                 current,
                                 isPlaying,
                                 onOpen = { showPlayerDetail = true },
-                                onPrevious = { audioPlayer.previous() },
-                                onNext = { audioPlayer.next() },
+                                onPrevious = { playAdjacentSong(-1) },
+                                onNext = { playAdjacentSong(1) },
                             ) {
                                 togglePlayback()
                             }
@@ -1129,6 +1504,13 @@ fun TaotaoMusicApp() {
                             showSettingsPage = false
                             showProfilePage = false
                             mineLibrarySection = null
+                            selectedPlaylist = null
+                            showPlaylistPicker = false
+                            playlistPickerSong = null
+                            showPlaylistSongPicker = false
+                            playlistSongPickerTarget = null
+                            playlistEditorMode = null
+                            pendingPlaylistSongAfterCreate = null
                         }
                         val navigationColors = NavigationBarItemDefaults.colors(
                             selectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
@@ -1179,6 +1561,8 @@ fun TaotaoMusicApp() {
                     mineLibrarySection == MineLibrarySection.FAVORITES -> "mine-favorites"
                     mineLibrarySection == MineLibrarySection.HISTORY -> "mine-history"
                     mineLibrarySection == MineLibrarySection.LOCAL -> "mine-local"
+                    selectedPlaylist != null -> "playlist-detail"
+                    mineLibrarySection == MineLibrarySection.PLAYLISTS -> "mine-playlists"
                     // 底部标签也参与：不带上它的话音乐 ⇄ 我的是硬切，
                     // 而其它换页都有过渡，观感上很不一致。
                     bottomTab == 1 -> "ai"
@@ -1256,11 +1640,10 @@ fun TaotaoMusicApp() {
                             else -> downloadTarget = target to selectedIndex
                         }
                     },
-                    onShare = { requestSongShare(playbackSongs[selectedIndex.coerceIn(playbackSongs.indices)]) },
                     musicApi = musicApi,
                     onTogglePlaying = { togglePlayback() },
-                    onPrevious = { audioPlayer.previous() },
-                    onNext = { audioPlayer.next() },
+                    onPrevious = { playAdjacentSong(-1) },
+                    onNext = { playAdjacentSong(1) },
                     repeatMode = audioPlayer.repeatMode,
                     onToggleRepeat = {
                         val nextMode = when (audioPlayer.repeatMode) {
@@ -1273,9 +1656,7 @@ fun TaotaoMusicApp() {
                     queue = playbackSongs,
                     queueIndex = selectedIndex,
                     onQueueItemClick = { index ->
-                        // 播放器里已经装载了同一条队列，直接跳转即可，不必重新解析地址。
-                        if (audioPlayer.hasMedia) audioPlayer.playAt(index)
-                        else playSong(playbackSongs, index)
+                        playSong(playbackSongs, index)
                     },
                     onRemoveQueueItem = { index -> audioPlayer.removeQueueItem(index) },
                     onMoveQueueItem = { from, to ->
@@ -1294,17 +1675,21 @@ fun TaotaoMusicApp() {
                     },
                     onPlayLocal = { index -> playSong(downloadedSongs, index) },
                     onPlayNext = { song -> playNext(song) },
-                    isFavorite = { song -> favoritesStore.contains(song.remoteId) },
+                    onAddToPlaylist = ::requestAddToPlaylist,
+                    onShare = { requestSongShare(playbackSongs[selectedIndex.coerceIn(playbackSongs.indices)]) },
+                    isFavorite = { song -> favoritesStore.contains(song) },
                     onToggleSongFavorite = { song -> toggleFavorite(song) },
                     onMessage = { message = it },
                     favorited = remember(selectedIndex, favoriteRevision, playbackSongs) {
-                        favoritesStore.contains(playbackSongs.getOrNull(selectedIndex)?.remoteId)
+                        playbackSongs.getOrNull(selectedIndex)?.let { favoritesStore.contains(it) } == true
                     },
                     onToggleFavorite = {
                         playbackSongs.getOrNull(selectedIndex)?.let { toggleFavorite(it) }
                     },
                     playbackQuality = playbackQuality.value,
                     onPickQuality = { qualitySheet = QualitySheetKind.CURRENT_SONG },
+                    sleepTimerRemainingMs = audioPlayer.sleepTimerRemainingMs,
+                    onOpenSleepTimer = { showSleepTimerDialog = true },
                 )
             } else if (page == "search") {
                 SearchPage(
@@ -1325,9 +1710,10 @@ fun TaotaoMusicApp() {
                     },
                     // 读一下 revision 让收藏变化能触发重组：SharedPreferences 本身不可观察。
                     favoriteRevision = favoriteRevision,
-                    isFavorite = { song -> favoritesStore.contains(song.remoteId) },
+                    isFavorite = { song -> favoritesStore.contains(song) },
                     onToggleFavorite = { song -> toggleFavorite(song) },
                     onPlayNext = { song -> playNext(song) },
+                    onAddToPlaylist = ::requestAddToPlaylist,
                     downloadedRevision = downloadedSongs.size,
                     isDownloaded = { song -> song.remoteId != null && song.remoteId in downloadedIds },
                     onLoadMore = { loadMoreSearch() },
@@ -1350,6 +1736,7 @@ fun TaotaoMusicApp() {
                 SettingsPage(
                     playbackQuality = playbackQuality,
                     downloadQuality = downloadQuality,
+                    sleepTimerRemainingMs = audioPlayer.sleepTimerRemainingMs,
                     appearance = appearance,
                     profile = userProfile,
                     profileLoading = profileLoading,
@@ -1367,6 +1754,7 @@ fun TaotaoMusicApp() {
                     },
                     onPickPlaybackQuality = { qualitySheet = QualitySheetKind.PLAYBACK_DEFAULT },
                     onPickDownloadQuality = { qualitySheet = QualitySheetKind.DOWNLOAD_DEFAULT },
+                    onOpenSleepTimer = { showSleepTimerDialog = true },
                     onPickAppearance = { mode ->
                         appearance = mode
                         appearanceStore.setMode(mode)
@@ -1382,9 +1770,10 @@ fun TaotaoMusicApp() {
                     emptyDescription = "点击歌曲旁的心形后，会通过收藏接口同步到这里",
                     onBack = { mineLibrarySection = null },
                     onSongClick = { index -> playSong(favoriteLibrarySongs, index) },
-                    isFavorite = { song -> song.remoteId?.toString() in favoriteIds },
+                    isFavorite = { song -> favoritesStore.contains(song) },
                     onToggleFavorite = { song -> toggleFavorite(song) },
                     onPlayNext = { song -> playNext(song) },
+                    onAddToPlaylist = ::requestAddToPlaylist,
                     error = favoriteLibraryError,
                     onRetry = { refreshFavoriteLibrary() },
                 )
@@ -1395,7 +1784,7 @@ fun TaotaoMusicApp() {
                     onBack = { mineLibrarySection = null },
                     onSongClick = { index -> playSong(playbackHistory.map { it.song }, index) },
                     onPlayNext = { song -> playNext(song) },
-                    isFavorite = { song -> favoritesStore.contains(song.remoteId) },
+                    isFavorite = { song -> favoritesStore.contains(song) },
                     onToggleFavorite = { song -> toggleFavorite(song) },
                     onClear = {
                         playbackSync.markClearPending()
@@ -1415,23 +1804,56 @@ fun TaotaoMusicApp() {
                     emptyDescription = "下载完成的音乐会集中显示在这里",
                     onBack = { mineLibrarySection = null },
                     onSongClick = { index -> playSong(downloadedSongs, index) },
-                    isFavorite = { song -> song.remoteId?.toString() in favoriteIds },
+                    isFavorite = { song -> favoritesStore.contains(song) },
                     onToggleFavorite = { song -> toggleFavorite(song) },
                     onPlayNext = { song -> playNext(song) },
                     onDelete = { song -> pendingDelete = song },
                 )
+            } else if (page == "mine-playlists") {
+                PlaylistLibraryPage(
+                    playlists = playlists,
+                    loading = playlistsLoading,
+                    error = playlistsError,
+                    onBack = { mineLibrarySection = null },
+                    onRefresh = { refreshPlaylists() },
+                    onCreate = { playlistEditorMode = PlaylistEditorMode.CREATE },
+                    onOpen = { openPlaylist(it) },
+                    onRename = { playlistEditorMode = PlaylistEditorMode.EDIT(it) },
+                    onDelete = { removePlaylist(it) },
+                )
+            } else if (page == "playlist-detail") {
+                selectedPlaylist?.let { playlist ->
+                    PlaylistDetailPage(
+                        playlist = playlist,
+                        // 下载列表必须放在去重候选之前，确保歌单详情能直接关联本机 file: 音频。
+                        knownSongs = downloadedSongs + playlistCandidates,
+                        onBack = { selectedPlaylist = null },
+                        onPlayAll = { songs -> playSong(songs, 0) },
+                        onPlaySong = { songs, index -> playSong(songs, index) },
+                        onRemoveSong = { removeSongFromPlaylist(it) },
+                        onMoveSong = { from, to -> movePlaylistSong(from, to) },
+                        onAddSong = {
+                            showPlaylistPicker = false
+                            playlistPickerSong = null
+                            playlistSongPickerTarget = playlist
+                            showPlaylistSongPicker = true
+                        },
+                        onRename = { playlistEditorMode = PlaylistEditorMode.EDIT(playlist) },
+                        onDelete = { removePlaylist(playlist) },
+                    )
+                }
             } else if (page == "mine") {
                 MinePage(
                     onLogout = {
+                        audioPlayer.cancelSleepTimer()
                         audioPlayer.stop()
+                        showSleepTimerDialog = false
                         playbackStateStore.clear()
                         playbackHistoryStore.clear(authSession.accountId)
                         playbackHistory = emptyList()
                         // 收藏是账号状态，换账号不能沿用上一个人的。
-                        favoritesStore.clear()
-                        favoriteLibrarySongs = emptyList()
-                        favoriteLibraryError = null
-                        userProfile = null
+                        clearAccountScopedLibraryState()
+                        clearPlaylistState()
                         // 撤销刷新令牌需要访问网络，放到 IO 线程；本地会话已在 signOut 内同步清空。
                         scope.launch(Dispatchers.IO) { authSession.signOut() }
                         signedIn = false
@@ -1450,6 +1872,8 @@ fun TaotaoMusicApp() {
                     },
                     onOpenHistory = { mineLibrarySection = MineLibrarySection.HISTORY },
                     onOpenLocal = { mineLibrarySection = MineLibrarySection.LOCAL },
+                    onOpenPlaylists = { openPlaylistLibrary() },
+                    playlistCount = playlists.size,
                     profile = userProfile,
                     profileLoading = profileLoading,
                     imUid = imConnection.uid,
@@ -1485,6 +1909,68 @@ fun TaotaoMusicApp() {
     TaotaoTheme(darkTheme = darkTheme) {
         if (showAnnouncementDialog) {
             AnnouncementDialog(announcements = announcements, onDismiss = { showAnnouncementDialog = false })
+        }
+        if (showSleepTimerDialog) {
+            SleepTimerDialog(
+                remainingMs = audioPlayer.sleepTimerRemainingMs,
+                onSet = { minutes ->
+                    audioPlayer.setSleepTimer(minutes)
+                    showSleepTimerDialog = false
+                    message = "已设置 ${minutes} 分钟后停止播放"
+                },
+                onCancelTimer = {
+                    audioPlayer.cancelSleepTimer()
+                    showSleepTimerDialog = false
+                    message = "已关闭定时播放"
+                },
+                onDismiss = { showSleepTimerDialog = false },
+            )
+        }
+        playlistPickerSong?.let { song ->
+            if (showPlaylistPicker) {
+                PlaylistPickerDialog(
+                    song = song,
+                    playlists = playlists,
+                    loading = playlistsLoading || playlistBusy,
+                    onDismiss = { showPlaylistPicker = false; playlistPickerSong = null },
+                    onPick = { playlist -> addSongToPlaylist(playlist, song) },
+                    onCreate = {
+                        pendingPlaylistSongAfterCreate = song
+                        showPlaylistPicker = false
+                        playlistEditorMode = PlaylistEditorMode.CREATE
+                    },
+                )
+            }
+        }
+        playlistSongPickerTarget?.let { target ->
+            if (showPlaylistSongPicker) {
+                PlaylistSongPickerDialog(
+                    candidates = playlistCandidates,
+                    existingSongs = target.songs,
+                    loading = playlistBusy,
+                    onDismiss = {
+                        showPlaylistSongPicker = false
+                        playlistSongPickerTarget = null
+                    },
+                    onPick = { song ->
+                        showPlaylistSongPicker = false
+                        playlistSongPickerTarget = null
+                        addSongToPlaylist(target, song)
+                    },
+                )
+            }
+        }
+        playlistEditorMode?.let { mode ->
+            PlaylistEditorDialog(
+                title = if (mode == PlaylistEditorMode.CREATE) "新建歌单" else "编辑歌单",
+                initialName = (mode as? PlaylistEditorMode.EDIT)?.playlist?.name.orEmpty(),
+                initialDescription = (mode as? PlaylistEditorMode.EDIT)?.playlist?.description.orEmpty(),
+                onDismiss = {
+                    playlistEditorMode = null
+                    pendingPlaylistSongAfterCreate = null
+                },
+                onConfirm = { name, description -> savePlaylistEditor(name, description) },
+            )
         }
         pendingDelete?.let { target ->
             AlertDialog(
@@ -1601,7 +2087,36 @@ private fun dedupeSongs(songs: List<Song>): List<Song> {
 }
 
 /** 列表项的稳定唯一键。必须与 [dedupeSongs] 的判重口径一致。 */
-fun songKeyOf(song: Song): String = "${song.remoteId ?: 0}#${song.title}#${song.artist}"
+fun songKeyOf(song: Song): String = "${playbackIdentity(song)}#${song.title}#${song.artist}"
+
+/** 播放/歌单列表的稳定身份；mid-only 歌曲不能都折叠成 remoteId=null。 */
+private fun playbackIdentity(song: Song): String = buildString {
+    append(playbackSource(song))
+    append(':')
+    append(playbackSongId(song) ?: song.audioUri.orEmpty())
+}
+
+private fun playbackSource(song: Song): String = song.source.trim().ifBlank { "tencent" }.lowercase(Locale.ROOT)
+
+/** 云端播放统计使用字符串身份，数字 ID 缺失时回退到上游 mid。 */
+private fun playbackSongId(song: Song): String? = song.remoteId?.takeIf { it > 0L }?.toString()
+    ?: song.mid?.trim()?.takeIf { it.isNotBlank() }
+
+private fun playbackStableKey(song: Song): String? = playbackSongId(song)?.let { "${playbackSource(song)}:$it" }
+
+/** 收藏、歌单和播放列表统一按来源 + 数字 ID/mid 判断同一首歌。 */
+private fun Song.sameSongIdentity(other: Song): Boolean {
+    if (!source.equals(other.source, ignoreCase = true)) return false
+    val left = buildSet {
+        remoteId?.takeIf { it > 0L }?.let { add(it.toString()) }
+        mid?.trim()?.takeIf { it.isNotBlank() }?.let(::add)
+    }
+    val right = buildSet {
+        other.remoteId?.takeIf { it > 0L }?.let { add(it.toString()) }
+        other.mid?.trim()?.takeIf { it.isNotBlank() }?.let(::add)
+    }
+    return left.isNotEmpty() && left.intersect(right).isNotEmpty()
+}
 
 /** 返回列表项从 [from] 移到 [to] 后，原 [index] 对应的新下标。 */
 private fun movedQueueIndex(index: Int, from: Int, to: Int): Int = when {
@@ -1641,6 +2156,8 @@ private fun MinePage(
     onOpenFavorites: () -> Unit,
     onOpenHistory: () -> Unit,
     onOpenLocal: () -> Unit,
+    onOpenPlaylists: () -> Unit,
+    playlistCount: Int,
     profile: TencentMusicApi.UserProfile?,
     profileLoading: Boolean,
     imUid: String?,
@@ -1734,6 +2251,16 @@ private fun MinePage(
                     modifier = Modifier.weight(1f),
                 )
             }
+        }
+        item {
+            MineActionRow(
+                icon = Icons.Default.LibraryMusic,
+                iconDescription = "云端歌单",
+                title = "我的歌单",
+                subtitle = if (playlistCount == 0) "创建后同步到所有设备" else "$playlistCount 个歌单 · 云端同步",
+                iconTint = TaotaoCoral,
+                onClick = onOpenPlaylists,
+            )
         }
         item { Text("应用", fontSize = 17.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 12.dp)) }
         item {
@@ -1976,6 +2503,7 @@ private fun PlayerDetailPage(
     onPlayHistory: (Int) -> Unit,
     onPlayLocal: (Int) -> Unit,
     onPlayNext: (Song) -> Unit,
+    onAddToPlaylist: ((Song) -> Unit)? = null,
     isFavorite: (Song) -> Boolean,
     onToggleSongFavorite: (Song) -> Unit,
     onMessage: (String) -> Unit,
@@ -1983,6 +2511,8 @@ private fun PlayerDetailPage(
     onToggleFavorite: () -> Unit,
     playbackQuality: Int,
     onPickQuality: () -> Unit,
+    sleepTimerRemainingMs: Long,
+    onOpenSleepTimer: () -> Unit,
 ) {
     // 播放器维护唯一进度源；拖动期间才暂存本地位置，松手立即交回播放器同步。
     var draggedPositionMs by remember(song) { mutableIntStateOf(audioPlayer.positionMs) }
@@ -1991,8 +2521,8 @@ private fun PlayerDetailPage(
     // 这两组状态的 remember key 必须与下面对应 LaunchedEffect 的 key 一致：
     // 解析播放地址后队列里的 Song 会被换成新副本，song 变了但 remoteId / lyricUri 没变，
     // key 不一致就会出现「状态被清空、拉取逻辑却不重跑」的空白歌词和收藏状态丢失。
-    var lyricText by remember(song.lyricUri, song.remoteId) { mutableStateOf<String?>(null) }
-    var lyricWords by remember(song.lyricUri, song.remoteId) { mutableStateOf<String?>(null) }
+    var lyricText by remember(song.lyricUri, song.remoteId, song.mid) { mutableStateOf<String?>(null) }
+    var lyricWords by remember(song.lyricWordsUri, song.remoteId, song.mid) { mutableStateOf<String?>(null) }
     // 解析结果按原文缓存，避免每帧进度变化都重新解析整段歌词。
     val lyric = remember(lyricText, lyricWords) { LyricParser.parse(lyricText, lyricWords) }
     var showQueue by remember { mutableStateOf(false) }
@@ -2005,7 +2535,7 @@ private fun PlayerDetailPage(
     // 用 song 做 key 会重建 Animatable，封面转到一半突然弹回 0°。
     val coverRotation = remember(song.remoteId, song.audioUri) { Animatable(0f) }
     val reduceMotion = LocalReduceMotion.current
-    LaunchedEffect(song.lyricUri, song.remoteId) {
+    LaunchedEffect(song.lyricUri, song.remoteId, song.mid, song.source) {
         // 离线歌曲的行级与逐字时间轴分别存成两个文件，两个都要读 ——
         // 早先这里只读一个文本文件，离线播放于是永远没有逐字高亮。
         val loaded = runCatching {
@@ -2017,7 +2547,7 @@ private fun PlayerDetailPage(
                         ?.let { Uri.parse(it).path }
                         ?.let(::File)?.takeIf(File::isFile)?.readText()
                     text to words
-                } else if (song.remoteId != null) {
+                } else if (song.remoteId?.let { it > 0L } == true || !song.mid.isNullOrBlank()) {
                     val rich = musicApi.requestRichLyric(song)
                     rich.lrc to rich.yrc
                 } else {
@@ -2057,7 +2587,7 @@ private fun PlayerDetailPage(
      * 少了最后一个，用户看歌词的整段时间里这个动画仍在每 16 毫秒请求一帧，
      * 而封面那一页已经被 pager 销毁 —— 驱动的是一个没人读的值，纯耗电。
      */
-    LaunchedEffect(song.remoteId, song.audioUri, isPlaying, lifecycleOwner, reduceMotion) {
+    LaunchedEffect(song.remoteId, song.mid, song.audioUri, isPlaying, lifecycleOwner, reduceMotion) {
         if (reduceMotion) {
             coverRotation.snapTo(0f)
             return@LaunchedEffect
@@ -2094,7 +2624,21 @@ private fun PlayerDetailPage(
                 fontWeight = FontWeight.Bold,
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
             )
-            IconButton(onClick = {}) { Icon(Icons.Default.MoreVert, "更多") }
+            TextButton(
+                onClick = onOpenSleepTimer,
+                contentPadding = PaddingValues(horizontal = 4.dp),
+            ) {
+                Icon(Icons.Default.Timer, "定时播放", modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(4.dp))
+                Text(
+                    if (sleepTimerRemainingMs > 0L) {
+                        "剩余 ${formatSleepTimerRemaining(sleepTimerRemainingMs)}"
+                    } else {
+                        "定时播放"
+                    },
+                    fontSize = 12.sp,
+                )
+            }
         }
         HorizontalPager(
             state = pagerState,
@@ -2162,7 +2706,8 @@ private fun PlayerDetailPage(
                 if (song.vip) VipBadge(Modifier.padding(start = 8.dp))
             },
             metadataTrailingContent = {
-                if (song.remoteId != null) {
+                if (song.remoteId?.let { it > 0L } == true || !song.mid.isNullOrBlank()) {
+                    // 本地文件也要显示音质；本地换档要重新下载，因此只让在线歌曲可点。
                     QualityChip(
                         quality = displayedQuality,
                         modifier = Modifier.padding(start = 10.dp),
@@ -2178,8 +2723,17 @@ private fun PlayerDetailPage(
                 FavoriteButton(
                     favorited = favorited,
                     onClick = onToggleFavorite,
-                    enabled = song.remoteId != null,
+                    enabled = song.remoteId?.let { it > 0L } == true || !song.mid.isNullOrBlank(),
                 )
+                // 本地文件仍保留远端身份，可以和在线播放歌曲一样加入云端歌单。
+                if (
+                    onAddToPlaylist != null &&
+                    (song.remoteId?.let { it > 0L } == true || !song.mid.isNullOrBlank())
+                ) {
+                    IconButton(onClick = { onAddToPlaylist(song) }) {
+                        Icon(Icons.AutoMirrored.Filled.PlaylistAdd, "加入歌单", tint = TaotaoCoral)
+                    }
+                }
             },
             controlTrailingContent = {
                 IconButton(onClick = { showQueue = true }) {
@@ -2485,7 +3039,7 @@ private fun CurrentPlaybackQueue(
                                 },
                             )
                             .graphicsLayer { translationY = rowOffsetY },
-                        onToggleFavorite = onToggleFavorite.takeIf { item.remoteId != null }
+                        onToggleFavorite = onToggleFavorite.takeIf { item.remoteId?.let { it > 0L } == true || !item.mid.isNullOrBlank() }
                             ?.let { callback -> { callback(item) } },
                         dragHandle = { modifier ->
                             Icon(
@@ -2606,7 +3160,7 @@ private fun PlaybackSourceList(
                         onClick = { onItemClick(index) },
                         onPlayNext = { onPlayNext(item) },
                         favorited = isFavorite(item),
-                        onToggleFavorite = onToggleFavorite.takeIf { item.remoteId != null }
+                        onToggleFavorite = onToggleFavorite.takeIf { item.remoteId?.let { it > 0L } == true || !item.mid.isNullOrBlank() }
                             ?.let { callback -> { callback(item) } },
                     )
                 }

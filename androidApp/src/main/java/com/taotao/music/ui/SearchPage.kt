@@ -70,6 +70,8 @@ fun SearchPage(
     onToggleFavorite: ((Song) -> Unit)? = null,
     /** 将歌曲插到当前曲目的下一首；没有活动队列时由上层直接开始播放。 */
     onPlayNext: ((Song) -> Unit)? = null,
+    /** 将搜索结果保存到云端歌单。 */
+    onAddToPlaylist: ((Song) -> Unit)? = null,
     /** 已下载列表变化后自增，理由同 [favoriteRevision]。 */
     downloadedRevision: Int = 0,
     isDownloaded: (Song) -> Boolean = { false },
@@ -175,9 +177,12 @@ fun SearchPage(
                         favorited = favorited,
                         downloaded = remember(key, downloadedRevision) { isDownloaded(song) },
                         onToggleFavorite = onToggleFavorite
-                            ?.takeIf { song.remoteId != null }
+                            ?.takeIf { song.remoteId?.let { it > 0L } == true || !song.mid.isNullOrBlank() }
                             ?.let { toggle -> { toggle(song) } },
                         onPlayNext = onPlayNext?.let { callback -> { callback(song) } },
+                        onAddToPlaylist = onAddToPlaylist
+                            ?.takeIf { song.remoteId?.let { it > 0L } == true || !song.mid.isNullOrBlank() }
+                            ?.let { callback -> { callback(song) } },
                         modifier = Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null),
                     ) { onSongClick(index, song) }
                 }

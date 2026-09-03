@@ -44,12 +44,14 @@ import com.taotao.music.data.TencentMusicApi
 fun SettingsPage(
     playbackQuality: AudioQuality,
     downloadQuality: AudioQuality,
+    sleepTimerRemainingMs: Long,
     appearance: AppearanceMode,
     profile: TencentMusicApi.UserProfile?,
     profileLoading: Boolean,
     onOpenProfile: () -> Unit,
     onPickPlaybackQuality: () -> Unit,
     onPickDownloadQuality: () -> Unit,
+    onOpenSleepTimer: () -> Unit,
     onPickAppearance: (AppearanceMode) -> Unit,
     onBack: () -> Unit,
 ) {
@@ -88,6 +90,23 @@ fun SettingsPage(
                     onClick = onPickDownloadQuality,
                 )
             }
+        }
+
+        CardWithTitle(
+            "播放",
+            Modifier.fillMaxWidth().padding(top = 12.dp),
+            titleColor = MaterialTheme.colorScheme.primary,
+        ) {
+            SettingRow(
+                title = "定时播放",
+                value = if (sleepTimerRemainingMs > 0L) {
+                    formatSleepTimerRemaining(sleepTimerRemainingMs)
+                } else {
+                    "关闭"
+                },
+                description = "播放达到设定时长后自动停止；暂停会保留剩余时间，切歌不会重置。",
+                onClick = onOpenSleepTimer,
+            )
         }
 
         Text(
