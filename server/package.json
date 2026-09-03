@@ -4,8 +4,9 @@
   "scripts": {
     "dev": "node --watch --require ts-node/register src/main.ts",
     "dev:frontend": "vite",
-    "build": "rimraf --glob dist/* && tsc -p tsconfig.json && npm run minify:server && node tools/copy-manifest.mjs && npm run build:frontend",
+    "build": "rimraf --glob dist/* && tsc -p tsconfig.json && npm run minify:server && node tools/copy-manifest.mjs && npm run build:frontend && npm run build:web-player",
     "build:frontend": "vite build",
+    "build:web-player": "node tools/build-web-player.mjs",
     "minify:server": "node tools/minify-server.mjs",
     "start": "node dist/main.js",
     "send-mail": "ts-node --project tools/tsconfig.json tools/send-outlook-mail.ts",

@@ -95,6 +95,31 @@ export async function runMigrations(pool: Pool): Promise<void> {
       CREATE INDEX IF NOT EXISTS idx_favorites_active_user
         ON favorites (user_id, favorited_at DESC) WHERE is_favorite = 1;
 
+      -- 歌曲分享短链。只保存稳定歌曲身份和元数据快照；上游直链有时效，绝不能落库。
+      -- preview_file 仅指向服务端裁剪出的最多 60 秒低码率试听文件。
+      CREATE TABLE IF NOT EXISTS song_share (
+        token            text PRIMARY KEY CHECK (token ~ '^[A-Za-z0-9_-]{8,24}$'),
+        user_id          integer NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        source           text NOT NULL CHECK (source IN ('tencent', 'netease')),
+        song_id          text NOT NULL,
+        remote_id        text,
+        mid              text,
+        song_type        integer,
+        title            text NOT NULL,
+        artist           text NOT NULL,
+        album            text NOT NULL DEFAULT '',
+        cover_url        text,
+        duration_seconds integer NOT NULL DEFAULT 0 CHECK (duration_seconds >= 0),
+        vip              smallint NOT NULL DEFAULT 0 CHECK (vip IN (0, 1)),
+        preview_file     text,
+        enabled          smallint NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+        access_count     integer NOT NULL DEFAULT 0 CHECK (access_count >= 0),
+        created_at       bigint NOT NULL,
+        updated_at       bigint NOT NULL,
+        UNIQUE (user_id, source, song_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_song_share_lookup ON song_share (source, song_id, enabled);
+
       -- 播放会话由客户端生成稳定 session_id，并以累计快照重复上报。服务端只累加相对旧快照
       -- 增长的部分，所以断线重传、超时重试都不会重复增加听歌时间或播放次数。
       CREATE TABLE IF NOT EXISTS playback_sessions (

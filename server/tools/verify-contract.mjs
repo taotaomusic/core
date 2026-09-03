@@ -96,6 +96,66 @@ async function main() {
   const badToken = await fetch(`${base}/api/v1/favorites`, { headers: { authorization: "Bearer abc.def" } });
   check("伪造令牌同样 401", badToken.status === 401, `实际 ${badToken.status}`);
 
+  section("歌曲分享门禁");
+  const shareWithoutToken = await postJson("/api/v1/shares/songs", { source: "tencent", remoteId: 97773 });
+  check(
+    "创建分享短链必须登录",
+    shareWithoutToken.status === 401 && shareWithoutToken.body.code === 4010,
+    `${shareWithoutToken.status} ${JSON.stringify(shareWithoutToken.body)}`,
+  );
+  const invalidShare = await fetch(`${base}/api/v1/public/shares/not-valid!`);
+  const invalidShareBody = await invalidShare.json();
+  check(
+    "公开分享元数据无需令牌，非法短码返回 404/4045",
+    invalidShare.status === 404 && invalidShareBody.code === 4045,
+    `${invalidShare.status} ${JSON.stringify(invalidShareBody)}`,
+  );
+  const invalidPreview = await fetch(`${base}/api/v1/public/shares/not-valid!/preview`);
+  const invalidPreviewBody = await invalidPreview.json();
+  check(
+    "公开试听无需令牌，非法短码仍返回 404/4045",
+    invalidPreview.status === 404 && invalidPreviewBody.code === 4045,
+    `${invalidPreview.status} ${JSON.stringify(invalidPreviewBody)}`,
+  );
+
+  const createdShareResponse = await fetch(`${base}/api/v1/shares/songs`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({ source: "tencent", remoteId: 97773 }),
+  });
+  const createdShareBody = await createdShareResponse.json();
+  const shareToken = createdShareBody.data?.token;
+  check(
+    "登录后可创建歌曲短链",
+    createdShareResponse.status === 201 &&
+      /^[A-Za-z0-9_-]{8,24}$/.test(shareToken) &&
+      new URL(createdShareBody.data.url).pathname === `/s/${shareToken}`,
+    `${createdShareResponse.status} ${JSON.stringify(createdShareBody)}`,
+  );
+  const shareMetadataResponse = await fetch(`${base}/api/v1/public/shares/${shareToken}`);
+  const shareMetadataBody = await shareMetadataResponse.json();
+  check(
+    "短链元数据公开且只暴露受限试听地址",
+    shareMetadataResponse.status === 200 &&
+      shareMetadataBody.data?.title === "晴天" &&
+      shareMetadataBody.data?.previewDurationSeconds === 60 &&
+      String(shareMetadataBody.data?.previewUrl).endsWith(`/api/v1/public/shares/${shareToken}/preview`),
+    `${shareMetadataResponse.status} ${JSON.stringify(shareMetadataBody)}`,
+  );
+  const sharePreviewResponse = await fetch(`${base}/api/v1/public/shares/${shareToken}/preview`, {
+    headers: { range: "bytes=0-1023" },
+  });
+  const sharePreviewBytes = Buffer.from(await sharePreviewResponse.arrayBuffer());
+  check(
+    "试听由服务器生成低码率 MP3 并支持 Range",
+    sharePreviewResponse.status === 206 &&
+      sharePreviewResponse.headers.get("content-type")?.startsWith("audio/mpeg") === true &&
+      sharePreviewResponse.headers.get("content-range")?.startsWith("bytes 0-1023/") === true &&
+      sharePreviewBytes.length === 1_024 &&
+      sharePreviewBytes.subarray(0, 3).toString("latin1") === "ID3",
+    `${sharePreviewResponse.status} ${sharePreviewResponse.headers.get("content-range")} ${sharePreviewBytes.length}`,
+  );
+
   section("收藏");
   const added = await fetch(`${base}/api/v1/favorites/tencent/97773`, { method: "POST", headers: { authorization: `Bearer ${token}` } });
   check("无请求体的 POST 不被校验拦截", added.status >= 200 && added.status < 300, `实际 ${added.status}`);

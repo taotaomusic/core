@@ -26,6 +26,10 @@ export class AppConfigService {
   readonly adminToken: string;
 
   readonly apkDirectory: string;
+  /** 分享试听文件缓存目录；只保存服务端裁出的最多 60 秒低码率音频。 */
+  readonly sharePreviewDirectory: string;
+  /** 试听裁剪程序，默认从 PATH 查找 ffmpeg。 */
+  readonly ffmpegExecutable: string;
   readonly defaultChannel: string;
 
   /**
@@ -72,12 +76,19 @@ export class AppConfigService {
   /** 只允许转发这些主机的媒体地址，防止把服务端当成任意 URL 的代理。 */
   readonly allowedMediaHosts = new Set(["ws.stream.qqmusic.qq.com", "y.qq.com"]);
 
+  /** 只允许已接入音源的 CDN，避免音频代理被用于请求任意站点。 */
+  isAllowedMediaHost(hostname: string): boolean {
+    return this.allowedMediaHosts.has(hostname) || hostname.endsWith(".music.126.net");
+  }
+
   constructor(config: ConfigService) {
     this.port = Number(config.get("PORT") ?? 4500);
     this.databaseUrl = String(config.get("DATABASE_URL") ?? "");
     this.authSecret = String(config.get("AUTH_SECRET") ?? "taotao-development-secret-change-me");
     this.adminToken = String(config.get("ADMIN_TOKEN") ?? "");
     this.apkDirectory = resolve(String(config.get("APK_DIR") ?? "./data/apk"));
+    this.sharePreviewDirectory = resolve(String(config.get("SHARE_PREVIEW_DIR") ?? "./data/share-preview"));
+    this.ffmpegExecutable = String(config.get("FFMPEG_BIN") ?? "ffmpeg").trim() || "ffmpeg";
     this.defaultChannel = String(config.get("DEFAULT_CHANNEL") ?? "release");
     this.publicBaseUrl = String(config.get("PUBLIC_BASE_URL") ?? "").replace(/\/+$/, "");
     this.searchConcurrency = Math.max(1, Number(config.get("SEARCH_CONCURRENCY") ?? 8));

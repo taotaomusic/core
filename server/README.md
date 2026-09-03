@@ -68,6 +68,7 @@ src/
   auth/                   注册、登录、令牌轮换、访问令牌守卫
   favorites/              收藏
   playback/               最近播放、播放会话与听歌统计
+  shares/                 分享短链、公开元数据与 60 秒低码率试听
   upstream/               第三方接口适配（成功码、字段名、音质降级都收敛在此）
   music/                  搜索、播放转发、歌词
   image-generation/       gpt-image-2 图片生成任务适配
@@ -80,6 +81,10 @@ src/
     src/App.vue             令牌输入与管理标签页
     src/components/         发布、补丁、公告、用户统计、AI 密钥与系统设置
 ```
+
+根目录的 `webApp/` 是 Kotlin/Wasm 分享播放器，复用 `player-ui` 的歌曲信息、进度和播放控制。
+执行 `npm run build:web-player` 会构建它并复制到 `dist/share-player/`；完整的 `npm run build`
+会同时生成 NestJS、管理后台和分享播放器三类产物。
 
 ### 管理后台
 
@@ -135,6 +140,8 @@ npm run dev:frontend      # 独立开发服务器（5173），API 代理到本�
 | `AUTH_SECRET` | 访问令牌签名密钥，生产环境必须为至少 32 位随机值（启动时校验） |
 | `ADMIN_TOKEN` | 发布管理令牌，留空则管理接口全部拒绝 |
 | `APK_DIR` | APK 存放目录，默认 `./data/apk` |
+| `SHARE_PREVIEW_DIR` | 分享试听缓存目录，默认 `./data/share-preview` |
+| `FFMPEG_BIN` | ffmpeg 可执行文件，默认从 `PATH` 查找；用于裁剪最多 60 秒、64 kbps MP3 |
 | `DEFAULT_CHANNEL` | 默认渠道，默认 `release` |
 | `PUBLIC_BASE_URL` | 对外基地址，用于拼装 APK 下载地址 |
 | `SEARCH_CONCURRENCY` | 搜索时解析播放地址的并发上限，默认 `8` |
@@ -152,6 +159,7 @@ npm run dev:frontend      # 独立开发服务器（5173），API 代理到本�
 - `GET /api/v1/songs/{id}/play` —— 音频流
 - `GET /api/v1/songs/{id}/lyrics` —— 默认纯文本（带 `format=json` 时才是信封）
 - `GET /api/v1/app/apk/{versionCode}` —— 二进制
+- `GET /api/v1/public/shares/{token}/preview` —— 最多 60 秒的低码率 MP3，支持 Range
 
 ## 接口
 
@@ -192,6 +200,17 @@ npm run dev:frontend      # 独立开发服务器（5173），API 代理到本�
 `createdAt` 与 `firstFavoritedAt` 都表示第一次收藏时间，取消后重新收藏也不会改变；
 `favoritedAt` 表示当前这一轮收藏开始的时间。取消收藏采用软删除，旧客户端的列表和搜索结果
 仍只会看到当前有效收藏，不会感知到软删除记录。
+
+### 歌曲分享
+
+- `POST /api/v1/shares/songs`：需要访问令牌；JSON 传 `source`、`remoteId`/`mid`、可选 `type`，
+  返回 `{token,url}`。同一账号重复分享同一来源和歌曲身份会复用原短链。
+- `GET /api/v1/public/shares/{token}`：公开读取网页展示元数据、试听地址与最新稳定 APK 下载地址。
+- `GET /api/v1/public/shares/{token}/preview`：公开试听流。服务端按最低音质重新解析上游地址，
+  再用 ffmpeg 裁成最多 60 秒、64 kbps MP3 并缓存；响应不下发原始完整音频地址。
+- `GET /s/{token}`：Kotlin/Wasm 分享页，循环播放这一首试听，不包含播放列表和下载歌曲能力。
+
+生产环境应显式配置 `PUBLIC_BASE_URL`，否则短链会按请求的 Host 和代理协议头推导。
 
 ### 最近播放与听歌统计（需要访问令牌）
 
@@ -402,7 +421,7 @@ npm run dev
 node tools/verify-contract.mjs http://127.0.0.1:4720 verify-token
 ```
 
-当前共 91 项，必须全绿。脚本会核对状态码、业务码、信封形状、NDJSON 行格式、字段类型（`data.id` 必须是 number、`songId` 必须是字符串、`createdAt` / `configVersion` / `apkSize` 必须是 number）、纯文本歌词、Range 行为，以及「无效令牌访问 bootstrap 仍返回 200」这类红线。
+以脚本实际输出为准，所有契约必须全绿。脚本会核对状态码、业务码、信封形状、NDJSON 行格式、字段类型（`data.id` 必须是 number、`songId` 必须是字符串、`createdAt` / `configVersion` / `apkSize` 必须是 number）、纯文本歌词、Range 行为，以及「无效令牌访问 bootstrap 仍返回 200」这类红线。
 
 后面三组分别覆盖：PostgreSQL 迁移的四条硬规矩（并发注册、并发刷新同一令牌、停用版本不可下载、灰度分桶稳定）；搜索拆分后的新契约（60 首的耗时、`X-Accel-Buffering`、`favorited` / `vip` / `mid` 字段、批量收藏查询、`/link` 给的是上游直链、请求不存在的档位会降级、`/info` 过滤掉不存在的档位）；以及参数健壮性（`page=abc` 不会拼出 `page=NaN`、`quality=` 空串回落到 10 而不是 0）。
 

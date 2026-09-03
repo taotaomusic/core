@@ -36,6 +36,15 @@ function resolvePublicDir(): string | null {
   return candidates.find((dir) => existsSync(join(dir, "index.html"))) ?? null;
 }
 
+/** Kotlin/Wasm 分享播放器构建产物；开发态与编译后运行各尝试一个固定位置。 */
+function resolveSharePlayerDir(): string | null {
+  const candidates = [
+    join(__dirname, "share-player"),
+    join(__dirname, "..", "dist", "share-player"),
+  ];
+  return candidates.find((dir) => existsSync(join(dir, "index.html"))) ?? null;
+}
+
 async function bootstrap(): Promise<void> {
   // 关掉内置 body parser，改为按路由挂载：安装包上传是 14MB+ 的原始字节流，
   // 一旦被 JSON 解析器接手，要么报 413，要么把整个包缓进内存。
@@ -64,6 +73,19 @@ async function bootstrap(): Promise<void> {
     );
   } else {
     new Logger("Bootstrap").warn("未找到管理后台构建产物，跳过静态资源。执行 npm run build:frontend 生成");
+  }
+
+  // 分享页只托管 Kotlin/Wasm 静态产物；歌曲身份和试听地址仍由公开 API 按短码读取。
+  // 资源使用独立 /share 前缀，避免 /s/{token} 下的相对路径被浏览器解析成错误地址。
+  const sharePlayerDir = resolveSharePlayerDir();
+  if (sharePlayerDir) {
+    app.use("/share", expressStatic(sharePlayerDir, { immutable: true, maxAge: "1d" }));
+    app.getHttpAdapter().getInstance().get(
+      /^\/s\/[A-Za-z0-9_-]{8,24}\/?$/,
+      (_request: Request, response: Response) => response.sendFile(join(sharePlayerDir, "index.html")),
+    );
+  } else {
+    new Logger("Bootstrap").warn("未找到分享播放器构建产物。执行 npm run build:web-player 生成");
   }
 
   // health 保持在 /health，其余接口统一挂在 /api/v1 下。
