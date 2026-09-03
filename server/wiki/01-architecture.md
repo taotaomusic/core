@@ -10,6 +10,7 @@
 
 - 用户注册、登录、访问令牌和刷新令牌轮换。
 - 收藏数据持久化。
+- 用户云端歌单、歌曲快照与顺序持久化。
 - 腾讯音乐搜索、歌曲信息、播放链接和歌词适配。
 - APK 登记、灰度、下载、最低版本和远程配置。
 - ApiSweet `gpt-image-2` 任务创建、Key 配额与状态轮询。
@@ -29,12 +30,14 @@ flowchart TD
     App --> Database["DatabaseModule"]
     App --> Auth["AuthModule"]
     App --> Favorites["FavoritesModule"]
+    App --> Playlists["PlaylistsModule"]
     App --> Music["MusicModule"]
     App --> Image["ImageGenerationModule"]
     App --> Release["ReleaseModule"]
     Music --> Upstream["UpstreamModule"]
     Auth --> Database
     Favorites --> Database
+    Playlists --> Database
     Image --> Database
     Release --> Database
 ```
@@ -57,6 +60,7 @@ src/
 ├─ config/
 ├─ database/
 ├─ favorites/
+├─ playlists/
 ├─ health/
 ├─ image-generation/
 ├─ music/
@@ -177,7 +181,7 @@ sequenceDiagram
 - 是否跨网络请求持有数据库连接？
 - 是否复制了已有 Client、Repository 或错误映射逻辑？
 - 是否更新对应专题文档？
-- 是否完成生产构建和 88 项契约验证？
+- 是否完成生产构建，并让契约脚本全部通过？
 
 ## 8. 应用启动生命周期
 

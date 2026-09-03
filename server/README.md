@@ -67,6 +67,7 @@ src/
   database/               PostgreSQL 连接池与建表迁移
   auth/                   注册、登录、令牌轮换、访问令牌守卫
   favorites/              收藏
+  playlists/              云端歌单与歌曲顺序
   playback/               最近播放、播放会话与听歌统计
   shares/                 分享短链、公开元数据与 60 秒低码率试听
   upstream/               第三方接口适配（成功码、字段名、音质降级都收敛在此）
@@ -201,6 +202,32 @@ npm run dev:frontend      # 独立开发服务器（5173），API 代理到本�
 `favoritedAt` 表示当前这一轮收藏开始的时间。取消收藏采用软删除，旧客户端的列表和搜索结果
 仍只会看到当前有效收藏，不会感知到软删除记录。
 
+### 云端歌单（需要访问令牌）
+
+歌单数据按账号保存在 PostgreSQL，歌单 ID 只在当前账号下有效。歌曲以
+`source + songId` 作为稳定键，同时保存标题、歌手、专辑、封面、时长和链接的快照，
+换设备时客户端可以先展示云端内容，再按歌曲来源补全最新信息。普通成功响应仍使用
+`{ code: 0, message: "success", data: ... }` 信封。
+
+当前歌单来源只接受 `tencent` 和 `netease`，必须与音乐路由支持的来源一致。
+`songId` 一律按字符串传输；腾讯搜索返回 `id=0` 时，调用方必须同时提供非空 `mid`，
+服务端会用 `mid` 作为稳定键，不会把所有这类歌曲折叠成同一个数字 ID。
+
+- `GET /api/v1/playlists`：读取当前账号的歌单摘要（按最近更新时间倒序）
+- `POST /api/v1/playlists`，JSON `{"name":"通勤","description":"","coverUrl":null}`：创建歌单，HTTP 201
+- `GET /api/v1/playlists/{playlistId}`：读取歌单详情及按 `position` 排序的 `songs`
+- `PATCH /api/v1/playlists/{playlistId}`（也接受 `PUT`），JSON 可更新 `name`、`description`、`coverUrl`
+- `DELETE /api/v1/playlists/{playlistId}`：删除歌单及其中歌曲，HTTP 204
+- `POST /api/v1/playlists/{playlistId}/songs`：添加歌曲；重复键只更新快照，不生成重复项
+- `DELETE /api/v1/playlists/{playlistId}/songs/{source}/{songId}`：移除歌曲并自动压紧顺序
+- `PATCH /api/v1/playlists/{playlistId}/songs/order`（也接受 `PUT`），JSON
+  `{"songs":[{"source":"tencent","songId":"105648974"},...]}`：重排歌曲（`songIds`、`order` 也是兼容字段）
+- `PUT /api/v1/playlists/{playlistId}/songs`，JSON `{"songs":[...]}`：完整替换歌曲集合，供首次同步或导入使用
+
+每次资料、歌曲或顺序发生变化都会递增歌单 `revision`。排序接口要求提交的歌曲集合与
+服务端当前集合完全一致；不一致返回 400/4004，客户端应先重新读取详情再重试，避免旧设备
+覆盖另一台设备刚添加的歌曲。单个歌单最多保存 5,000 首歌曲。
+
 ### 歌曲分享
 
 - `POST /api/v1/shares/songs`：需要访问令牌；JSON 传 `source`、`remoteId`/`mid`、可选 `type`，
@@ -241,7 +268,12 @@ npm run dev:frontend      # 独立开发服务器（5173），API 代理到本�
 
 ### 搜索、播放与歌词（需要访问令牌）
 
-`GET /api/v1/search?keyword=歌曲名&page=1&num=60&quality=10`
+搜索默认并发聚合 QQ 音乐与网易云音乐；可传 `source=tencent` 或 `source=netease` 只查询一个
+音源。所有搜索结果均携带 `source`，同一首歌的后续播放、歌词、详情、收藏和播放记录必须使用该
+来源，不能仅按数字 ID 匹配，否则两个平台恰好相同的 ID 会串歌。`audioUrl`、`lyricUrl` 已经带上
+对应来源，旧客户端可以直接播放。其它音乐接口默认仍是 QQ 音乐，传 `source=netease` 切换网易云。
+
+`GET /api/v1/search?keyword=歌曲名&page=1&num=60&quality=10&source=netease`
 
 `num` 范围 1–60（也接受 `limit`），默认 60，`quality` 范围 0–18。返回 NDJSON 流，每行一个 `{"type":"song","data":{...}}`，末行为 `{"type":"end","meta":{...}}`。
 
@@ -256,7 +288,7 @@ npm run dev:frontend      # 独立开发服务器（5173），API 代理到本�
 
 响应带 `X-Accel-Buffering: no`：nginx 默认 `proxy_buffering on` 会把整个响应缓完再转发，逐行下发就白做了。代理配置不在版本库里，只能由服务端主动声明。
 
-`GET /api/v1/songs/{id}/link?quality=10&mid=&type=` 解析播放地址，返回**上游直链**：
+`GET /api/v1/songs/{id}/link?quality=10&mid=&type=&source=netease` 解析播放地址，返回**上游直链**：
 
 ```json
 { "code": 0, "data": { "songId": 97773, "url": "https://ws.stream.qqmusic.qq.com/...",
@@ -265,11 +297,11 @@ npm run dev:frontend      # 独立开发服务器（5173），API 代理到本�
 
 客户端直接拉 QQ 的 CDN，音频字节不再经过本服务。`quality` 是**实际拿到的**档位 —— 上游不会自动降级，阶梯是我们自己走的，`fallback` 为真表示发生了降级，客户端据此提示「这首只有 320kbps」。拿不到地址走 502，**绝不能 401**。
 
-`GET /api/v1/songs/{id}/info?mid=` 给出歌曲信息与**真实存在**的音质档位（含各档字节数），已过滤掉 `size` 为 0 的档位。客户端的音质选择器用它只列出能选的档，并在下载前提示体积。
+`GET /api/v1/songs/{id}/info?mid=&source=netease` 给出歌曲信息与**真实存在**的音质档位（含各档字节数），已过滤掉 `size` 为 0 的档位。客户端的音质选择器用它只列出能选的档，并在下载前提示体积。网易云上游没有音质列表接口，此时仅返回实际请求到的最高可用档位。
 
-`GET /api/v1/songs/{id}/play?quality=10` 仍然保留：装机的旧客户端在用，也是新客户端解析失败时的兜底。支持 Range 断点续传（透传给上游并回写 206 与 `Content-Range`）；无 Range 时返回 200 全量。上游非 2xx 一律归成 502，**不透传上游的状态码** —— 上游的 401 会被客户端当成自己的令牌失效。
+`GET /api/v1/songs/{id}/play?quality=10&source=netease` 仍然保留：装机的旧客户端在用，也是新客户端解析失败时的兜底。支持 Range 断点续传（透传给上游并回写 206 与 `Content-Range`）；无 Range 时返回 200 全量。上游非 2xx 一律归成 502，**不透传上游的状态码** —— 上游的 401 会被客户端当成自己的令牌失效。
 
-`GET /api/v1/songs/{id}/lyrics` 默认返回纯 LRC 文本；带 `format=json` 时返回 `{lrc, yrc, trans}`，其中 `yrc` 是逐字时间轴，格式为 `[行起始ms,行时长ms]文本(字起始ms,字时长ms)…`。
+`GET /api/v1/songs/{id}/lyrics?source=netease` 默认返回纯 LRC 文本；带 `format=json` 时返回 `{lrc, yrc, trans}`，其中 `yrc` 是逐字时间轴，格式为 `[行起始ms,行时长ms]文本(字起始ms,字时长ms)…`。
 
 ### 图片生成（需要访问令牌）
 

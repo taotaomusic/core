@@ -66,6 +66,18 @@ DatabaseService.onModuleInit
 `deleted_at`、`updated_at` 并递增 `revision`；重新收藏只刷新 `favorited_at`，必须继续保留
 原来的 `created_at`。普通收藏列表和搜索页批量判断都只查询 `is_favorite = 1`。
 
+### `playlists` 与 `playlist_songs`
+
+`playlists` 以 `(user_id, id)` 归属账号，保存名称、简介、封面、当前 `revision` 和时间戳；
+删除用户时通过外键级联删除。`playlist_songs` 以 `(playlist_id, source, song_id)` 唯一标识
+歌曲，`position` 在歌单内唯一并建立顺序索引。歌曲标题、歌手、专辑、封面、时长和链接是
+可更新的展示快照，不作为身份判断依据。
+
+添加、删除、完整替换和排序都在同一事务中先锁定所属歌单。排序交换位置前先把所有位置
+整体平移到临时区，避开 PostgreSQL 立即唯一约束；删除后同样先平移再用窗口函数压紧位置。
+排序接口要求键集合完全匹配当前数据库集合，防止旧设备同步时覆盖其它设备刚添加的歌曲。
+单歌单最多 5,000 首，由 Repository 和 Controller 双重限制。
+
 ### `playback_sessions`
 
 保存客户端按 `(user_id, session_id)` 幂等上报的播放会话累计快照。同一个会话的
@@ -230,7 +242,7 @@ WHERE id = 1;
 2. 重置验证库。
 3. 重启服务，让迁移重新执行。
 4. 运行生产构建。
-5. 执行 88 项契约验证。
+5. 执行契约验证，并确保脚本输出全部通过。
 6. 对新增并发路径做专项并发验证。
 
 重置后不重启服务会得到“关系不存在”，因为建表只在服务启动时运行一次。

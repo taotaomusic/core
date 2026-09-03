@@ -193,7 +193,7 @@ npm run dev
 node tools/verify-contract.mjs http://127.0.0.1:4720 verify-token
 ```
 
-当前应为 88 项全绿。
+以验证脚本的实际汇总数量为准，必须全部通过。
 
 ## 10. 提交前流程
 
