@@ -47,6 +47,7 @@ class WukongImClient(
     private val applicationContext = context.applicationContext
     private val wkIm = WKIM.getInstance()
     private val syncScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val notifier = ImNotifier(applicationContext)
     private val _connection = MutableStateFlow(ImConnectionInfo())
     private val _messages = MutableStateFlow(emptyList<ImChatMessage>())
     private val _syncedPeers = MutableStateFlow(emptyList<String>())
@@ -81,6 +82,10 @@ class WukongImClient(
     /** 当前可见的私聊。在线新消息只有落在这里时才自动回传已读，避免后台误标已读。 */
     @Volatile
     private var activePeerUid: String? = null
+
+    /** 应用是否在前台；切后台后收到消息时需要显示系统通知。 */
+    @Volatile
+    private var isAppInForeground: Boolean = true
 
     init {
         // 悟空 SDK 在每次重连时都会询问 Gateway；地址只接受服务端下发的 tcp URL。
@@ -137,14 +142,25 @@ class WukongImClient(
             }
         }
         wkIm.msgManager.addOnNewMsgListener(NEW_MESSAGE_LISTENER) { received ->
-            val currentUid = _connection.value.uid ?: return@addOnNewMsgListener
+            val currentUid = _connection.value.uid?.trim()?.lowercase() ?: return@addOnNewMsgListener
             val newlyReadIds = ArrayList<String>()
             val added = received.mapNotNull { message ->
-                val fromUid = message.fromUID?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                val fromUid = message.fromUID?.trim()?.lowercase()?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
                 val content = message.baseContentMsgModel?.displayContent?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
                 val peerUid = if (fromUid == currentUid) message.channelID else fromUid
-                if (fromUid != currentUid && peerUid == activePeerUid) {
-                    (message.messageID ?: message.clientMsgNO)?.takeIf { it.isNotBlank() }?.let(newlyReadIds::add)
+                // 不是自己发的消息
+                if (fromUid != currentUid) {
+                    // 如果在后台，显示系统通知
+                    if (!isAppInForeground) {
+                        syncScope.launch {
+                            val peerName = _peerNames.value[peerUid] ?: peerUid.take(8)
+                            notifier.showMessage(peerName, content)
+                        }
+                    }
+                    // 只有在前台且是当前聊天对象时才标记为已读
+                    if (isAppInForeground && peerUid == activePeerUid) {
+                        (message.messageID ?: message.clientMsgNO)?.takeIf { it.isNotBlank() }?.let(newlyReadIds::add)
+                    }
                 }
                 ImChatMessage(
                     id = message.messageID ?: message.clientMsgNO,
@@ -161,11 +177,11 @@ class WukongImClient(
             mergeMessages(added)
             // 双方都在线时历史加载不会再次发生；这里对正在看的会话即时确认已读。
             val activePeer = activePeerUid
-            if (activePeer != null) sendReadReceipt(activePeer, newlyReadIds)
+            if (activePeer != null && isAppInForeground) sendReadReceipt(activePeer, newlyReadIds)
         }
         // 自己发送的消息不会走“新消息”监听；以 SDK 回调提供的 clientMsgNo 为准，不能保留自造的 local-* ID。
         wkIm.msgManager.addOnSendMsgCallback(SEND_MESSAGE_LISTENER) { message ->
-            val currentUid = _connection.value.uid ?: return@addOnSendMsgCallback
+            val currentUid = _connection.value.uid?.trim()?.lowercase() ?: return@addOnSendMsgCallback
             val content = message.baseContentMsgModel?.displayContent?.takeIf { it.isNotBlank() } ?: return@addOnSendMsgCallback
             val chatMessage = ImChatMessage(
                 id = message.messageID ?: message.clientMsgNO,
@@ -174,14 +190,14 @@ class WukongImClient(
                 content = content,
                 sentAtMillis = message.timestamp * 1000,
                 messageSeq = message.messageSeq,
-                isMine = message.fromUID == currentUid || message.fromUID.isNullOrBlank(),
+                isMine = message.fromUID?.trim()?.lowercase() == currentUid || message.fromUID.isNullOrBlank(),
                 isRead = message.remoteExtra?.readed == 1 || isReadConfirmed(message.messageID, message.clientMsgNO),
                 isRevoked = message.remoteExtra?.revoke == 1,
             )
             mergeMessage(chatMessage)
         }
         wkIm.msgManager.addOnRefreshMsgListener(REFRESH_MESSAGE_LISTENER) { message, _ ->
-            val currentUid = _connection.value.uid ?: return@addOnRefreshMsgListener
+            val currentUid = _connection.value.uid?.trim()?.lowercase() ?: return@addOnRefreshMsgListener
             val content = message.baseContentMsgModel?.displayContent?.takeIf { it.isNotBlank() } ?: return@addOnRefreshMsgListener
             mergeMessage(ImChatMessage(
                 id = message.messageID ?: message.clientMsgNO,
@@ -190,7 +206,7 @@ class WukongImClient(
                 content = if (message.remoteExtra?.revoke == 1) "消息已撤回" else content,
                 sentAtMillis = message.timestamp * 1000,
                 messageSeq = message.messageSeq,
-                isMine = message.fromUID == currentUid || message.fromUID.isNullOrBlank(),
+                isMine = message.fromUID?.trim()?.lowercase() == currentUid || message.fromUID.isNullOrBlank(),
                 isRead = message.remoteExtra?.readed == 1 || isReadConfirmed(message.messageID, message.clientMsgNO),
                 isRevoked = message.remoteExtra?.revoke == 1,
             ))
@@ -262,11 +278,8 @@ class WukongImClient(
         require(message.id.isNotBlank() || message.clientMsgNo.isNotBlank()) { "消息尚未送达，暂不能撤回" }
         syncScope.launch {
             runCatching { api.revokeImMessage(message.peerUid, message.id, message.clientMsgNo) }
-                .onSuccess {
-                    // 命令会异步回送；HTTP 成功即表示悟空已接受撤回，不能再让界面等待回送。
-                    markMessageRevoked(message.id, message.clientMsgNo)
-                }
-                .onFailure { error -> _syncDetail.value = "撤回失败：${error.message ?: "悟空 IM 服务暂不可用"}" }
+                .onSuccess { markMessageRevoked(message.id, message.clientMsgNo) }
+                .onFailure { error -> _syncDetail.value = "撤回失败：${error.message ?: "网络错误"}" }
         }
     }
 
@@ -297,7 +310,7 @@ class WukongImClient(
                 override fun onSyncing() = Unit
 
                 override fun onResult(rows: List<com.xinbida.wukongim.entity.WKMsg>) {
-                    val currentUid = _connection.value.uid ?: return
+                    val currentUid = _connection.value.uid?.trim()?.lowercase() ?: return
                     val restored = rows.mapNotNull { message ->
                         val fromUid = message.fromUID?.trim()?.lowercase()?.takeIf { it.isNotBlank() }
                             ?: return@mapNotNull null
@@ -366,6 +379,11 @@ class WukongImClient(
         activePeerUid = peerUid?.trim()?.lowercase()?.takeIf(UUID_PATTERN::matches)
     }
 
+    /** 设置应用前后台状态，用于决定是否显示系统通知。 */
+    fun setAppForeground(inForeground: Boolean) {
+        isAppInForeground = inForeground
+    }
+
     /** 退出账号或会话彻底失效时停止重连并清除 SDK 中保留的 Token。 */
     fun signOut() {
         gateway = null
@@ -429,7 +447,7 @@ class WukongImClient(
      * 展示的是状态流，因此这里同步更新内存投影，避免「已同步但页面空白」。
      */
     private fun mergeSyncedConversations(rows: org.json.JSONArray): Int {
-        val currentUid = _connection.value.uid ?: return 0
+        val currentUid = _connection.value.uid?.trim()?.lowercase() ?: return 0
         // 先扫描整批内部命令。会话最近消息的顺序不是状态顺序，若先建气泡再遇到回执，
         // 冷启动时仍可能短暂甚至永久显示为未读。
         for (rowIndex in 0 until rows.length()) {
@@ -637,14 +655,14 @@ class WukongImClient(
 
         // SDK 写入完成后，再持久化 extra 表（此时 getWithMessageID 才能成功）
         val peerUid = _messages.value.firstOrNull { sameMessage(it, messageId, clientMsgNo) }?.peerUid
-        if (peerUid != null) persistMessageExtra(peerUid, listOf(messageId, clientMsgNo), readed = false, revoked = true)
+        if (peerUid != null) {
+            persistMessageExtra(peerUid, listOf(messageId, clientMsgNo), readed = false, revoked = true)
+        }
 
         _messages.value = _messages.value.map { message ->
             if (sameMessage(message, messageId, clientMsgNo)) {
                 message.copy(content = "消息已撤回", isRevoked = true)
-            } else {
-                message
-            }
+            } else message
         }
     }
 

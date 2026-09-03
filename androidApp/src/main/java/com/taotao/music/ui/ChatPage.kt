@@ -141,7 +141,7 @@ fun ChatPage(
                     modifier = Modifier.weight(1f).fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    items(peerMessages, key = { it.id }) { ChatBubble(it, onRevoke, Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)) }
+                    items(peerMessages, key = { it.id }) { ChatBubble(it, onRevoke) }
                 }
             }
             Row(verticalAlignment = Alignment.Bottom) {
