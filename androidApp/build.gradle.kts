@@ -56,6 +56,7 @@ tasks.register("incrementVersion") {
 
 dependencies {
     implementation(project(":shared"))
+    implementation(project(":player-ui"))
     testImplementation(kotlin("test"))
     implementation(platform("androidx.compose:compose-bom:2024.12.01"))
     implementation("androidx.activity:activity-compose:1.10.0")
