@@ -1,4 +1,6 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Patch, Post } from "@nestjs/common";
+import { Body, Controller, Get, HttpCode, HttpStatus, Patch, Post, UploadedFile, UseInterceptors } from "@nestjs/common";
+import { FileInterceptor } from "@nestjs/platform-express";
+import type { Express } from "express";
 import { ApiErrors } from "../common/api.exception";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
 import { Public } from "../common/decorators/public.decorator";
@@ -7,6 +9,7 @@ import type { SessionUser } from "../common/request.types";
 import { AuthService } from "./auth.service";
 import { UsersRepository } from "./users.repository";
 import { EmailVerificationService } from "./email-verification.service";
+import { AppConfigService } from "../config/app-config.service";
 
 /** 用户名 3 至 32 位，允许字母数字下划线与汉字。与迁移前完全一致。 */
 const USERNAME_PATTERN = /^[\w一-龥]{3,32}$/;
@@ -35,6 +38,7 @@ export class AuthController {
     private readonly auth: AuthService,
     private readonly users: UsersRepository,
     private readonly emailVerification: EmailVerificationService,
+    private readonly config: AppConfigService,
   ) {}
 
   /** 向邮箱发送注册验证码。邮箱统一转小写，保证同一地址不会绕过冷却与唯一约束。 */
@@ -140,6 +144,40 @@ export class AuthController {
     }
     const current = await this.requireProfile(user);
     return (await this.users.updateProfile(current.id, nickname, avatarUrl))!;
+  }
+
+  /** 接收头像图片并转存到兰空图床，Key 仅保留在服务端环境变量。 */
+  @Post("avatar")
+  @UseInterceptors(FileInterceptor("file", { limits: { fileSize: 5 * 1024 * 1024 } }))
+  async uploadAvatar(@CurrentUser() user: SessionUser | undefined, @UploadedFile() file: Express.Multer.File) {
+    const current = await this.requireProfile(user);
+    if (!file || !file.mimetype.startsWith("image/")) throw ApiErrors.badRequest(4000, "请选择图片文件");
+    if (!this.config.lskyApiKey) throw ApiErrors.badRequest(4000, "头像上传服务未配置");
+    const form = new FormData();
+    form.append("image", new Blob([file.buffer], { type: file.mimetype }), file.originalname || "avatar.jpg");
+    form.append("token", this.config.lskyApiKey);
+    const response = await fetch(this.config.lskyUploadUrl, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "User-Agent": "TaotaoMusic-AvatarUploader/1.0",
+      },
+      body: form,
+    });
+    const raw = await response.text();
+    let payload: { result?: string; code?: number; message?: string; url?: string };
+    try {
+      payload = JSON.parse(raw) as typeof payload;
+    } catch {
+      const contentType = response.headers.get("content-type") || "未知类型";
+      const preview = raw.replace(/\s+/g, " ").slice(0, 160);
+      throw ApiErrors.badRequest(4000, `头像上传接口返回了无效响应（HTTP ${response.status}，${contentType}）：${preview}`);
+    }
+    const url = payload.url;
+    if (!response.ok || payload.result !== "success" || !url) {
+      throw ApiErrors.badRequest(4000, payload.message || "头像上传失败");
+    }
+    return (await this.users.updateProfile(current.id, undefined, url))!;
   }
 
   /** 老账号补绑邮箱：仅允许当前尚未绑定邮箱的已登录用户使用。 */
