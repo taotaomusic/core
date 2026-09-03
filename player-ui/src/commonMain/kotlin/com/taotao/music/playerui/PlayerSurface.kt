@@ -98,6 +98,7 @@ fun PlayerProgress(
     positionMs: Long,
     durationMs: Long,
     onSeek: (Long) -> Unit,
+    onSeekFinished: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val duration = durationMs.coerceAtLeast(0L)
@@ -109,6 +110,7 @@ fun PlayerProgress(
     Slider(
         value = progress,
         onValueChange = { onSeek((it * duration).toLong()) },
+        onValueChangeFinished = onSeekFinished,
         enabled = duration > 0L,
         colors = SliderDefaults.colors(
             thumbColor = MaterialTheme.colorScheme.primary,
@@ -125,12 +127,15 @@ fun PlayerTransportControls(
     actions: PlayerActions,
     capabilities: PlayerCapabilities = PlayerCapabilities(),
     modifier: Modifier = Modifier,
+    leadingContent: (@Composable () -> Unit)? = null,
+    trailingContent: (@Composable () -> Unit)? = null,
 ) {
     Row(
         modifier = modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceEvenly,
     ) {
+        leadingContent?.invoke()
         if (capabilities.showRepeat) {
             IconButton(onClick = actions.onToggleRepeat) {
                 Icon(
@@ -173,6 +178,7 @@ fun PlayerTransportControls(
                 Icon(Icons.Default.SkipNext, "下一首", modifier = Modifier.size(30.dp))
             }
         }
+        trailingContent?.invoke()
     }
     if (state.isBuffering) {
         Spacer(Modifier.height(8.dp))
