@@ -7,6 +7,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.Email
@@ -164,6 +166,7 @@ fun AccountProfilePage(
 ) {
     var nickname by remember(profile.nickname) { mutableStateOf(profile.nickname) }
     var avatarUrl by remember(profile.avatarUrl) { mutableStateOf(profile.avatarUrl.orEmpty()) }
+    var selectedAvatarUri by remember { mutableStateOf<android.net.Uri?>(null) }
     var email by remember { mutableStateOf("") }
     var code by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(false) }
@@ -171,6 +174,8 @@ fun AccountProfilePage(
     val scope = rememberCoroutineScope()
     val changingEmail = profile.email != null
     val emailAccepted = EMAIL_INPUT_PATTERN.matches(email.trim())
+    val avatarPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { selectedAvatarUri = it }
+    val context = androidx.compose.ui.platform.LocalContext.current
     LaunchedEffect(resendRemainingSeconds) {
         if (resendRemainingSeconds > 0) {
             delay(1_000)
@@ -213,13 +218,18 @@ fun AccountProfilePage(
                     }
                 }
                 OutlinedTextField(value = nickname, onValueChange = { nickname = it.take(24) }, label = { Text("昵称") }, modifier = Modifier.fillMaxWidth(), singleLine = true, enabled = !loading)
-                OutlinedTextField(value = avatarUrl, onValueChange = { avatarUrl = it.trim() }, label = { Text("头像 HTTPS 地址") }, supportingText = { Text("留空后保存即可清除头像") }, modifier = Modifier.fillMaxWidth(), singleLine = true, enabled = !loading, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
+                OutlinedButton(onClick = { avatarPicker.launch("image/*") }, enabled = !loading) { Text(if (selectedAvatarUri == null) "选择头像图片" else "已选择头像图片") }
                 Button(
-                    enabled = !loading && nickname.isNotBlank() && (nickname != profile.nickname || avatarUrl != profile.avatarUrl.orEmpty()),
+                    enabled = !loading && nickname.isNotBlank() && (nickname != profile.nickname || selectedAvatarUri != null),
                     onClick = {
                         request({
-                            val updated = api.updateProfile(nickname.trim(), avatarUrl.takeIf { it.isNotBlank() }, clearAvatar = avatarUrl.isBlank())
-                            onProfileChanged(updated)
+                            val updated = selectedAvatarUri?.let { api.uploadAvatar(it, context.contentResolver) }
+                            val finalProfile = if (updated != null && nickname.trim() != updated.nickname) {
+                                api.updateProfile(nickname.trim())
+                            } else {
+                                updated ?: api.updateProfile(nickname.trim())
+                            }
+                            onProfileChanged(finalProfile)
                         }, "个人资料已保存")
                     }, modifier = Modifier.fillMaxWidth(),
                 ) { Text("保存个人资料") }
