@@ -1,16 +1,40 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <application android:theme="@style/Theme.Taotao" android:label="桃桃音乐" android:icon="@drawable/app_icon" android:roundIcon="@drawable/app_icon">
+    <!-- 应用内更新需要唤起系统安装器。注意：声明此权限的应用不符合 Google Play 上架政策，
+         当前为自签名分发，若将来要上架必须改为商店内更新。 -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- Android 9 及以下保存 AI 图片到公共图库需要运行时授权；Android 10 起走 MediaStore 无需该权限。 -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
+    <application android:name=".TaotaoApplication" android:theme="@style/Theme.Taotao" android:label="桃桃音乐" android:icon="@drawable/app_icon" android:roundIcon="@drawable/app_icon">
         <activity android:name=".MainActivity" android:screenOrientation="portrait" android:exported="true">
             <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
+            <!-- 应用内 Deep Link：taotaomusic://open 可唤起桃桃音乐。 -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="taotaomusic" android:host="open" />
+            </intent-filter>
         </activity>
         <service android:name=".player.PlaybackService" android:exported="true" android:stopWithTask="false" android:foregroundServiceType="mediaPlayback">
             <intent-filter>
                 <action android:name="androidx.media3.session.MediaSessionService" />
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
             </intent-filter>
         </service>
+        <!-- Android 7 起不允许把 file:// 交给别的应用，安装包必须经 FileProvider 换成 content://。 -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 </manifest>

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    FileProvider 可共享的目录。只开放明确需要交给外部应用的两处，不暴露其它私有数据：
+    - update/：热更新安装包，要交给系统安装器
+    - crash/export/：导出的崩溃日志，要交给分享面板
+-->
+<paths>
+    <files-path name="update" path="update/" />
+    <files-path name="crash-export" path="crash/export/" />
+</paths>

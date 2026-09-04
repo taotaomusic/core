@@ -1,24 +1,50 @@
 {
   "name": "taotao-music-proxy",
   "private": true,
-  "type": "module",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "build": "tsc --noEmit -p tsconfig.json && esbuild src/index.ts --bundle --platform=node --format=esm --external:better-sqlite3 --minify --legal-comments=none --outfile=dist/app.js && node -e \"require('fs').copyFileSync('package.json','dist/package.json')\"",
-    "start": "node dist/app.js"
+    "dev": "node --watch --require ts-node/register src/main.ts",
+    "dev:frontend": "vite",
+    "build": "rimraf --glob dist/* && tsc -p tsconfig.json && npm run minify:server && node tools/copy-manifest.mjs && npm run build:frontend && npm run build:web-player",
+    "build:frontend": "vite build",
+    "build:web-player": "node tools/build-web-player.mjs",
+    "minify:server": "node tools/minify-server.mjs",
+    "start": "node dist/main.js",
+    "send-mail": "ts-node --project tools/tsconfig.json tools/send-outlook-mail.ts",
+    "verify": "node tools/verify-contract.mjs"
   },
   "engines": {
     "node": ">=20"
   },
-  "devDependencies": {
-    "@types/node": "^22.10.2",
-    "esbuild": "^0.24.2",
-    "rimraf": "^6.0.1",
-    "tsx": "^4.19.2",
-    "typescript": "^5.7.2"
-  },
   "dependencies": {
-    "@types/better-sqlite3": "^9.6.0",
-    "better-sqlite3": "^13.0.3"
+    "@nestjs/common": "^11.0.0",
+    "@nestjs/config": "^4.0.0",
+    "@nestjs/core": "^11.0.0",
+    "@nestjs/platform-express": "^11.0.0",
+    "@types/nodemailer": "^8.0.1",
+    "@vueuse/core": "^14.4.0",
+    "bsdiff-wasm": "^0.1.4",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.14.1",
+    "multer": "^2.2.0",
+    "nodemailer": "^9.0.5",
+    "pg": "^8.13.1",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/multer": "^2.2.0",
+    "@types/node": "^22.10.2",
+    "@types/pg": "^8.11.10",
+    "@vitejs/plugin-vue": "^5.2.1",
+    "element-plus": "^2.14.5",
+    "rimraf": "^6.0.1",
+    "terser": "^5.50.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.7.2",
+    "unplugin-auto-import": "^21.1.0",
+    "unplugin-vue-components": "^32.1.0",
+    "vite": "^6.0.7",
+    "vue": "^3.5.41"
   }
 }

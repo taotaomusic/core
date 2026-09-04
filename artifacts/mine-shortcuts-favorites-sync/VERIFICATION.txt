@@ -1,0 +1,96 @@
+桃桃音乐“我的音乐入口与收藏同步修复”交付验证
+
+分支：codex/mine-shortcuts-favorites-sync
+基线提交：7d2b424589c38d25929ac75345c86aa0ac8ef017
+
+变更分支/字段：
+1. MinePage / MineLibraryShortcut：收藏夹、最近播放、本地歌曲改为同一行三个等宽入口。
+2. FavoritesStore：只缓存服务端收藏 ID；删除本地歌曲快照逻辑，并清理 1.0.75 遗留的 favorite_songs。
+3. TencentMusicApi.favoriteLibrary：直接读取 /api/v1/favorites 的账号收藏顺序，复用已知歌曲数据，并通过 /songs/{id}/info 四路补全元信息。
+4. TaotaoMusicApp.favoriteLibrarySongs：收藏页、心形按钮和收藏接口共用同一状态；乐观更新失败时同时回滚 ID 和页面列表。
+5. MusicLibraryPage：增加收藏同步加载态、失败态和重试入口。
+
+四个交付物：
+MODIFIED_FILE=F:\music\artifacts\mine-shortcuts-favorites-sync\MODIFIED_FILE.zip
+DIFF_FILE=F:\music\artifacts\mine-shortcuts-favorites-sync\DIFF_FILE.patch
+VERIFICATION=F:\music\artifacts\mine-shortcuts-favorites-sync\VERIFICATION.txt
+ROLLBACK=F:\music\artifacts\mine-shortcuts-favorites-sync\ROLLBACK.sh
+
+源码 SHA-256（原始 -> 修改后）：
+androidApp/src/main/java/com/taotao/music/data/FavoritesStore.kt
+b9ee41fac85ed6f7c06cc62a490ffc918a4be5ad20efc0d28ec725d2b7fc74a1 -> 2311239255a9af2336de5e337db12c2180492e696bf1e6bed47328bd1ff5d197
+androidApp/src/main/java/com/taotao/music/data/TencentMusicApi.kt
+a6a2f2c714dd123b93eac9462aac9c75d741b8d8d315852653065d18d5c50a4e -> b20d195602b5123fadfb093c15ae433d2abc71b2288b6777e0c8fdca342773ed
+androidApp/src/main/java/com/taotao/music/ui/TaotaoMusicApp.kt
+b41f8993f165d76735aaa59cbd62bd40e03d739b824c75d5187e4152a225b822 -> 9f945c39c1b845ee2237aed57556dd20809b621d49aaba67b19938747467a272
+androidApp/src/main/java/com/taotao/music/ui/MineLibraryPages.kt
+e065384919eb5a3d4497fdc8e6f09aaaf08d64b32d598840d07e5d76373d50a1 -> 7ddc349b6bd620f47215ef2259d37fce4a86cb9ba6b39806f1abdb2710d798a7
+
+BASELINE
+命令：.\gradlew.bat :androidApp:compileDebugKotlin --console=plain
+输入：提交 7d2b424589c38d25929ac75345c86aa0ac8ef017 的原始源码。
+字面输出/结果：
+BUILD SUCCESSFUL in 39s
+30 actionable tasks: 5 executed, 25 up-to-date
+EXIT_STATUS=0
+退出状态：0
+
+MODIFIED
+命令：.\gradlew.bat :androidApp:compileDebugKotlin --console=plain
+输入：修改后的 FavoritesStore.kt、TencentMusicApi.kt、TaotaoMusicApp.kt、MineLibraryPages.kt。
+字面输出/结果：
+BUILD SUCCESSFUL in 6s
+30 actionable tasks: 5 executed, 25 up-to-date
+EXIT_STATUS=0
+退出状态：0
+
+MODIFIED_TESTS
+命令：.\gradlew.bat :shared:test :androidApp:testDebugUnitTest :androidApp:compileDebugKotlin --console=plain
+输入：修改后源码、共享测试和 Android 单元测试任务。
+字面输出/结果：
+BUILD SUCCESSFUL in 16s
+58 actionable tasks: 4 executed, 54 up-to-date
+EXIT_STATUS=0
+退出状态：0
+
+ROLLBACK
+命令：F:\Git\bin\bash.exe F:/music/artifacts/mine-shortcuts-favorites-sync/ROLLBACK.sh F:/music-rollback-check-20260824-favorites
+输入：基线提交的独立工作树副本，先应用 DIFF_FILE.patch，再执行 ROLLBACK.sh。
+字面输出/结果：ROLLBACK_RESULT=mine shortcuts and favorite source restored
+退出状态：0
+恢复状态：git status 为空；四个源码 SHA-256 全部恢复为上述原始值。
+
+ROLLBACK_RESTORED_BUILD
+命令：.\gradlew.bat :androidApp:compileDebugKotlin --console=plain
+输入：执行回滚后的独立工作树副本，并复制本机 local.properties 提供 Android SDK 路径。
+字面输出/结果：
+BUILD SUCCESSFUL in 20s
+30 actionable tasks: 30 executed
+ROLLBACK_COMPILE_EXIT_STATUS=0
+退出状态：0
+恢复行为：回滚副本恢复为纵向三个入口与 1.0.75 本地收藏歌曲快照逻辑并重新编译成功；主工作树仍保留同一行入口和账号收藏接口单一来源。
+
+RELEASE
+命令：.\gradlew.bat :androidApp:assembleRelease --console=plain
+输入：修改后源码与本机 Release 签名配置；未调用 adb，未启动虚拟机。
+字面输出/结果：
+BUILD SUCCESSFUL in 1m 34s
+89 actionable tasks: 18 executed, 71 up-to-date
+EXIT_STATUS=0
+退出状态：0
+APK：F:\music\androidApp\build\outputs\apk\release\androidApp-release.apk
+版本：versionCode=77，versionName=1.0.76
+大小：14298937 字节
+SHA-256：266341c379dd6184013bbb6333fa588e4e4f82486b9a4cc91e086d9f91faa8b3
+签名结果：Verifies；Verified using v2 scheme (APK Signature Scheme v2): true；Number of signers: 1；EXIT_STATUS=0。
+
+ONLINE_RELEASE
+登记命令：POST /api/v1/app/admin/releases?versionCode=77&versionName=1.0.76&rollout=0，输入 APK 原始字节及 SHA-256。
+登记结果：HTTP 201；versionCode=77；rollout_percent=0；enabled=1。
+下载结果：RANGE_HTTP=206；RANGE_SIZE=100；CONTENT_RANGE=Content-Range: bytes 100-199/14298937；OVERFLOW_HTTP=416；FULL_HTTP=200；HASH_MATCH=True。
+放量命令：POST /api/v1/app/admin/rollout，输入 {"versionCode":77,"percent":100,"enabled":true}。
+放量结果：HTTP 200；versionCode=77；rollout_percent=100；enabled=1。
+旧版命令：POST /api/v1/app/admin/rollout，输入 {"versionCode":76,"percent":0,"enabled":false}。
+旧版结果：HTTP 200；versionCode=76；rollout_percent=0；enabled=0。
+引导命令：GET /api/v1/app/bootstrap?versionCode=76&sdk=36&deviceId=codex-release-check-77&channel=release。
+引导结果：HTTP 200；available=true；versionCode=77；versionName=1.0.76；apkSha256=266341c379dd6184013bbb6333fa588e4e4f82486b9a4cc91e086d9f91faa8b3。

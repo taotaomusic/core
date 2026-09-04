@@ -1,6 +1,13 @@
 package com.taotao.music.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -18,6 +25,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Visibility
@@ -63,6 +71,9 @@ private const val MAX_USERNAME_LENGTH = 32
 
 /** 服务端要求的最短密码长度。 */
 private const val MIN_PASSWORD_LENGTH = 6
+/** 客户端只校验邮箱格式，域名白名单由服务端维护，避免将内部规则暴露在客户端。 */
+private const val SUPPORTED_EMAIL_HINT = "请输入有效的邮箱地址"
+private val EMAIL_INPUT_PATTERN = Regex("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$")
 
 /**
  * 登录与注册页面：只负责收集凭据，令牌保存由调用方的会话层完成。
@@ -71,10 +82,16 @@ private const val MIN_PASSWORD_LENGTH = 6
  * 注册模式额外要求确认密码，防止密码输错后账号再也进不去。
  */
 @Composable
-fun AuthPage(api: TencentMusicApi, onAuthenticated: (TencentMusicApi.TokenPair) -> Unit) {
+fun AuthPage(
+    api: TencentMusicApi,
+    darkTheme: Boolean = isSystemInDarkTheme(),
+    onAuthenticated: (TencentMusicApi.TokenPair) -> Unit,
+) {
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var confirmPassword by remember { mutableStateOf("") }
+    var email by remember { mutableStateOf("") }
+    var verificationCode by remember { mutableStateOf("") }
     var passwordVisible by remember { mutableStateOf(false) }
     var registerMode by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
@@ -85,11 +102,14 @@ fun AuthPage(api: TencentMusicApi, onAuthenticated: (TencentMusicApi.TokenPair) 
     val usernameError = "用户名需为 3 至 32 位".takeIf { username.isNotEmpty() && !USERNAME_PATTERN.matches(username) }
     val passwordError = "密码至少 $MIN_PASSWORD_LENGTH 位".takeIf { password.isNotEmpty() && password.length < MIN_PASSWORD_LENGTH }
     val confirmError = "两次输入的密码不一致".takeIf { registerMode && confirmPassword.isNotEmpty() && confirmPassword != password }
+    val emailAccepted = EMAIL_INPUT_PATTERN.matches(email.trim())
+    val emailError = SUPPORTED_EMAIL_HINT.takeIf { registerMode && email.isNotEmpty() && !emailAccepted }
+    val verificationError = "请输入 6 位验证码".takeIf { registerMode && verificationCode.isNotEmpty() && verificationCode.length != 6 }
 
     val canSubmit = !loading &&
         USERNAME_PATTERN.matches(username) &&
         password.length >= MIN_PASSWORD_LENGTH &&
-        (!registerMode || confirmPassword == password)
+        (!registerMode || (confirmPassword == password && emailAccepted && verificationCode.length == 6))
 
     fun submit() {
         if (!canSubmit) return
@@ -98,15 +118,15 @@ fun AuthPage(api: TencentMusicApi, onAuthenticated: (TencentMusicApi.TokenPair) 
         scope.launch {
             runCatching {
                 withContext(Dispatchers.IO) {
-                    if (registerMode) api.register(username, password) else api.login(username, password)
+                    if (registerMode) api.register(username, password, email, verificationCode) else api.login(username, password)
                 }
             }.onSuccess(onAuthenticated).onFailure { message = it.readableMessage() }
             loading = false
         }
     }
 
-    TaotaoTheme {
-        Surface(color = TaotaoBackground, modifier = Modifier.fillMaxSize()) {
+    TaotaoTheme(darkTheme = darkTheme) {
+        Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize()) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -123,14 +143,14 @@ fun AuthPage(api: TencentMusicApi, onAuthenticated: (TencentMusicApi.TokenPair) 
                 Text("桃桃音乐", fontSize = 27.sp, fontWeight = FontWeight.Bold)
                 Text(
                     if (registerMode) "注册后即可收藏和离线下载" else "登录后同步你的收藏与下载",
-                    color = Color.Gray,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 14.sp,
                     textAlign = TextAlign.Center,
                     modifier = Modifier.padding(top = 8.dp),
                 )
                 Spacer(Modifier.height(30.dp))
                 Column(
-                    Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp)).background(Color.White).padding(20.dp),
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp)).background(MaterialTheme.colorScheme.surface).padding(20.dp),
                 ) {
                     OutlinedTextField(
                         value = username,
@@ -176,7 +196,33 @@ fun AuthPage(api: TencentMusicApi, onAuthenticated: (TencentMusicApi.TokenPair) 
                         ),
                         keyboardActions = KeyboardActions(onDone = { submit() }),
                     )
-                    AnimatedVisibility(visible = registerMode) {
+                    // 明确只使用透明度与位移：默认 AnimatedVisibility 会展开高度，表单布局会在输入时抖动。
+                    val reduceMotion = LocalReduceMotion.current
+                    AnimatedVisibility(
+                        visible = registerMode,
+                        enter = fadeIn(animationSpec = taotaoTween(AnimationDurations.SHORT)) +
+                            if (reduceMotion) {
+                                EnterTransition.None
+                            } else {
+                                slideInVertically(
+                                    animationSpec = taotaoTween(
+                                        AnimationDurations.SHORT,
+                                        easing = AnimationCurves.emphasizedIn,
+                                    ),
+                                ) { height -> height / 12 }
+                            },
+                        exit = fadeOut(animationSpec = taotaoTween(AnimationDurations.MICRO)) +
+                            if (reduceMotion) {
+                                ExitTransition.None
+                            } else {
+                                slideOutVertically(
+                                    animationSpec = taotaoTween(
+                                        AnimationDurations.MICRO,
+                                        easing = AnimationCurves.emphasizedOut,
+                                    ),
+                                ) { height -> height / 12 }
+                            },
+                    ) {
                         Column {
                             Spacer(Modifier.height(10.dp))
                             OutlinedTextField(
@@ -194,6 +240,50 @@ fun AuthPage(api: TencentMusicApi, onAuthenticated: (TencentMusicApi.TokenPair) 
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
                                 keyboardActions = KeyboardActions(onDone = { submit() }),
                             )
+                            Spacer(Modifier.height(10.dp))
+                            OutlinedTextField(
+                                value = email,
+                                onValueChange = { email = it.trim(); message = null },
+                                label = { Text("邮箱") },
+                                leadingIcon = { Icon(Icons.Default.Email, null) },
+                                isError = emailError != null,
+                                supportingText = { Text(emailError ?: "$SUPPORTED_EMAIL_HINT，用于验证账号与找回凭据") },
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(14.dp),
+                                singleLine = true,
+                                enabled = !loading,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = ImeAction.Next),
+                            )
+                            Spacer(Modifier.height(10.dp))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                OutlinedTextField(
+                                    value = verificationCode,
+                                    onValueChange = { verificationCode = it.filter(Char::isDigit).take(6); message = null },
+                                    label = { Text("邮箱验证码") },
+                                    leadingIcon = { Icon(Icons.Default.Lock, null) },
+                                    isError = verificationError != null,
+                                    supportingText = { Text(verificationError ?: "验证码有效期 10 分钟") },
+                                    modifier = Modifier.weight(1f),
+                                    shape = RoundedCornerShape(14.dp),
+                                    singleLine = true,
+                                    enabled = !loading,
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
+                                    keyboardActions = KeyboardActions(onDone = { submit() }),
+                                )
+                                TextButton(
+                                    enabled = !loading && emailAccepted,
+                                    onClick = {
+                                        loading = true
+                                        message = null
+                                        scope.launch {
+                                            runCatching { withContext(Dispatchers.IO) { api.sendRegistrationVerification(email) } }
+                                                .onSuccess { message = "验证码已发送，请查收邮箱" }
+                                                .onFailure { message = it.readableMessage() }
+                                            loading = false
+                                        }
+                                    },
+                                ) { Text("发送验证码") }
+                            }
                         }
                     }
                 }
@@ -223,6 +313,8 @@ fun AuthPage(api: TencentMusicApi, onAuthenticated: (TencentMusicApi.TokenPair) 
                         registerMode = !registerMode
                         // 切换模式时清掉确认密码和上一次的报错，避免残留状态误导。
                         confirmPassword = ""
+                        email = ""
+                        verificationCode = ""
                         message = null
                     },
                 ) { Text(if (registerMode) "已有账号？返回登录" else "还没有账号？立即注册", fontSize = 14.sp) }
@@ -266,7 +358,7 @@ private fun AuthErrorBanner(text: String) {
  * 网络故障时 [IOException] 携带的是主机名解析之类的英文信息，直接展示等于没有提示，
  * 统一引导检查网络；服务端明确返回的中文文案（如「用户名已存在」）保持原样。
  */
-private fun Throwable.readableMessage(): String = when (this) {
+fun Throwable.readableMessage(): String = when (this) {
     is IOException -> "网络连接失败，请检查网络后重试"
     else -> message?.takeIf { it.isNotBlank() } ?: "操作失败，请稍后重试"
 }

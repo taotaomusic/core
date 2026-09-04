@@ -1,0 +1,368 @@
+diff --git a/androidApp/src/main/java/com/taotao/music/data/FavoritesStore.kt b/androidApp/src/main/java/com/taotao/music/data/FavoritesStore.kt
+index 411d1fe..e9ba392 100644
+--- a/androidApp/src/main/java/com/taotao/music/data/FavoritesStore.kt
++++ b/androidApp/src/main/java/com/taotao/music/data/FavoritesStore.kt
+@@ -4 +3,0 @@ import android.content.Context
+-import com.taotao.music.model.Song
+@@ -14 +13 @@ import com.taotao.music.model.Song
+- * [toggle] 只做乐观更新，请求失败由调用方回滚。
++ * [set] 只做乐观更新，请求失败由调用方回滚。
+@@ -19 +18,4 @@ class FavoritesStore(context: Context) {
+-    fun ids(): Set<String> = preferences.getStringSet(KEY_IDS, emptySet()).orEmpty()
++    init {
++        // 1.0.75 曾把歌曲快照写进收藏缓存，升级后立即清掉，避免它继续与账号收藏接口分叉。
++        preferences.edit().remove(LEGACY_KEY_SONGS).apply()
++    }
+@@ -21,2 +23 @@ class FavoritesStore(context: Context) {
+-    /** 收藏夹页面使用的歌曲快照；服务端目前只保存歌曲 ID，所以元信息在本机补齐。 */
+-    fun songs(): List<Song> = SongCodec.decodeList(preferences.getString(KEY_SONGS, null))
++    fun ids(): Set<String> = preferences.getStringSet(KEY_IDS, emptySet()).orEmpty()
+@@ -29,5 +30 @@ class FavoritesStore(context: Context) {
+-        val retainedSongs = songs().filter { it.remoteId?.toString() in remoteIds }
+-        preferences.edit()
+-            .putStringSet(KEY_IDS, remoteIds.toSet())
+-            .putString(KEY_SONGS, SongCodec.encodeList(retainedSongs))
+-            .apply()
++        preferences.edit().putStringSet(KEY_IDS, remoteIds.toSet()).apply()
+@@ -41 +38 @@ class FavoritesStore(context: Context) {
+-    fun merge(favoritedIds: Set<String>, seenIds: Set<String>, seenSongs: List<Song> = emptyList()) {
++    fun merge(favoritedIds: Set<String>, seenIds: Set<String>) {
+@@ -45,8 +42 @@ class FavoritesStore(context: Context) {
+-        val refreshedIds = favoritedIds.toSet()
+-        val refreshedSongs = seenSongs.filter { it.remoteId?.toString() in refreshedIds }
+-        val cachedSongs = songs().filterNot { it.remoteId?.toString() in seenIds }
+-        val songSnapshots = dedupeSongs(refreshedSongs + cachedSongs).filter { it.remoteId?.toString() in merged }
+-        preferences.edit()
+-            .putStringSet(KEY_IDS, merged)
+-            .putString(KEY_SONGS, SongCodec.encodeList(songSnapshots))
+-            .apply()
++        preferences.edit().putStringSet(KEY_IDS, merged).apply()
+@@ -55,2 +45 @@ class FavoritesStore(context: Context) {
+-    fun set(song: Song, favorite: Boolean) {
+-        val remoteId = song.remoteId ?: return
++    fun set(remoteId: Long, favorite: Boolean) {
+@@ -59,9 +48 @@ class FavoritesStore(context: Context) {
+-        val songSnapshots = if (favorite) {
+-            dedupeSongs(listOf(song) + songs())
+-        } else {
+-            songs().filterNot { it.remoteId == remoteId }
+-        }
+-        preferences.edit()
+-            .putStringSet(KEY_IDS, updated)
+-            .putString(KEY_SONGS, SongCodec.encodeList(songSnapshots))
+-            .apply()
++        preferences.edit().putStringSet(KEY_IDS, updated).apply()
+@@ -71,10 +52 @@ class FavoritesStore(context: Context) {
+-    fun clear() = preferences.edit().remove(KEY_IDS).remove(KEY_SONGS).apply()
+-
+-    private fun dedupeSongs(songs: List<Song>): List<Song> {
+-        val seen = HashSet<String>(songs.size)
+-        return songs.filter { song ->
+-            val key = song.remoteId?.let { "remote:$it" }
+-                ?: "local:${song.audioUri.orEmpty()}#${song.title}#${song.artist}"
+-            seen.add(key)
+-        }
+-    }
++    fun clear() = preferences.edit().remove(KEY_IDS).remove(LEGACY_KEY_SONGS).apply()
+@@ -84 +56 @@ class FavoritesStore(context: Context) {
+-        const val KEY_SONGS = "favorite_songs"
++        const val LEGACY_KEY_SONGS = "favorite_songs"
+diff --git a/androidApp/src/main/java/com/taotao/music/data/TencentMusicApi.kt b/androidApp/src/main/java/com/taotao/music/data/TencentMusicApi.kt
+index 0834c20..69673fc 100644
+--- a/androidApp/src/main/java/com/taotao/music/data/TencentMusicApi.kt
++++ b/androidApp/src/main/java/com/taotao/music/data/TencentMusicApi.kt
+@@ -4,0 +5,5 @@ import com.taotao.music.model.Song
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.async
++import kotlinx.coroutines.awaitAll
++import kotlinx.coroutines.coroutineScope
++import kotlinx.coroutines.withContext
+@@ -12,0 +18 @@ class TencentMusicApi(private val tokenProvider: TokenProvider) {
++    data class FavoriteLibrary(val ids: Set<String>, val songs: List<Song>)
+@@ -123,2 +129,27 @@ class TencentMusicApi(private val tokenProvider: TokenProvider) {
+-    /** 当前用户收藏的全部歌曲 ID，用于播种本地缓存。 */
+-    fun favoriteIds(): Set<String> = authorized("/api/v1/favorites") { connection ->
++    /** 当前用户收藏的全部歌曲 ID，用于播种本地状态缓存。 */
++    fun favoriteIds(): Set<String> = favoriteSongIds().toSet()
++
++    /**
++     * 从既有收藏接口读取收藏顺序，再通过歌曲信息接口补全展示数据。
++     *
++     * 收藏关系只有服务端这一份权威数据；[knownSongs] 只是复用客户端已经拿到的歌曲元信息，
++     * 不再另建一套“收藏夹快照”。这样搜索页心形、收藏页和 `/favorites` 始终指向同一状态。
++     */
++    suspend fun favoriteLibrary(knownSongs: List<Song>, quality: Int = AudioQuality.Default.value): FavoriteLibrary {
++        val orderedIds = withContext(Dispatchers.IO) { favoriteSongIds() }
++        val knownById = knownSongs.mapNotNull { song -> song.remoteId?.let { it to song } }.toMap()
++        // 单曲信息接口最多四路并发，避免收藏较多时串行等待，同时不给上游制造瞬时洪峰。
++        val songs = orderedIds.chunked(FAVORITE_INFO_CONCURRENCY).flatMap { batch ->
++            coroutineScope {
++                batch.map { value ->
++                    async(Dispatchers.IO) {
++                        val remoteId = value.toLongOrNull() ?: return@async null
++                        knownById[remoteId]?.copy(favorited = true) ?: requestFavoriteSong(remoteId, quality)
++                    }
++                }.awaitAll().filterNotNull()
++            }
++        }
++        return FavoriteLibrary(orderedIds.toSet(), songs)
++    }
++
++    private fun favoriteSongIds(): List<String> = authorized("/api/v1/favorites") { connection ->
+@@ -126,3 +157,3 @@ class TencentMusicApi(private val tokenProvider: TokenProvider) {
+-        val favorites = result.optJSONArray("data") ?: return@authorized emptySet()
+-        (0 until favorites.length()).mapNotNullTo(mutableSetOf()) { index ->
+-            val item = favorites.optJSONObject(index) ?: return@mapNotNullTo null
++        val favorites = result.optJSONArray("data") ?: return@authorized emptyList()
++        (0 until favorites.length()).mapNotNull { index ->
++            val item = favorites.optJSONObject(index) ?: return@mapNotNull null
+@@ -132,0 +164,35 @@ class TencentMusicApi(private val tokenProvider: TokenProvider) {
++    /** 单首补全失败时仍保留可播放占位项，不能让服务端已有收藏从页面上凭空消失。 */
++    private fun requestFavoriteSong(remoteId: Long, quality: Int): Song = runCatching {
++        authorized("/api/v1/songs/$remoteId/info") { connection ->
++            val result = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
++            check(result.optInt("code") == 0) { result.optString("message", "无法获取收藏歌曲") }
++            val data = result.getJSONObject("data")
++            val seconds = data.optInt("durationSeconds")
++            Song(
++                title = data.optString("title", "未知歌曲"),
++                artist = data.optString("artist", "未知歌手"),
++                duration = if (seconds > 0) "%02d:%02d".format(seconds / 60, seconds % 60) else "网络歌曲",
++                color = 0xFFFFB4A2,
++                audioUri = placeholderUri(remoteId, quality),
++                remoteId = remoteId,
++                coverUri = data.optString("coverUrl").ifBlank { null },
++                lyricUri = "$ENDPOINT/api/v1/songs/$remoteId/lyrics",
++                album = data.optString("album", "未知专辑"),
++                mid = data.optString("mid").ifBlank { null },
++                vip = data.optBoolean("vip"),
++                favorited = true,
++            )
++        }
++    }.getOrElse {
++        Song(
++            title = "收藏歌曲 $remoteId",
++            artist = "歌曲信息暂不可用",
++            duration = "网络歌曲",
++            color = 0xFFFFB4A2,
++            audioUri = placeholderUri(remoteId, quality),
++            remoteId = remoteId,
++            lyricUri = "$ENDPOINT/api/v1/songs/$remoteId/lyrics",
++            favorited = true,
++        )
++    }
++
+@@ -240,0 +307 @@ class TencentMusicApi(private val tokenProvider: TokenProvider) {
++        private const val FAVORITE_INFO_CONCURRENCY = 4
+diff --git a/androidApp/src/main/java/com/taotao/music/ui/MineLibraryPages.kt b/androidApp/src/main/java/com/taotao/music/ui/MineLibraryPages.kt
+index a0c0a80..64e2cf6 100644
+--- a/androidApp/src/main/java/com/taotao/music/ui/MineLibraryPages.kt
++++ b/androidApp/src/main/java/com/taotao/music/ui/MineLibraryPages.kt
+@@ -17,0 +18 @@ import androidx.compose.material.icons.filled.PlayArrow
++import androidx.compose.material3.CircularProgressIndicator
+@@ -53,0 +55,3 @@ fun MusicLibraryPage(
++    loading: Boolean = false,
++    error: String? = null,
++    onRetry: (() -> Unit)? = null,
+@@ -57 +61,14 @@ fun MusicLibraryPage(
+-        if (songs.isEmpty()) {
++        if (loading && songs.isEmpty()) {
++            Column(
++                modifier = Modifier.fillMaxSize(),
++                horizontalAlignment = Alignment.CenterHorizontally,
++                verticalArrangement = Arrangement.Center,
++            ) {
++                CircularProgressIndicator(color = TaotaoCoral)
++                Text(
++                    "正在读取账号收藏",
++                    color = MaterialTheme.colorScheme.onSurfaceVariant,
++                    modifier = Modifier.padding(top = 14.dp),
++                )
++            }
++        } else if (songs.isEmpty()) {
+@@ -59,2 +76,2 @@ fun MusicLibraryPage(
+-                title = emptyTitle,
+-                description = emptyDescription,
++                title = if (error == null) emptyTitle else "收藏列表加载失败",
++                description = error ?: emptyDescription,
+@@ -62,0 +80,5 @@ fun MusicLibraryPage(
++            if (error != null && onRetry != null) {
++                TextButton(onClick = onRetry, modifier = Modifier.align(Alignment.CenterHorizontally)) {
++                    Text("重新加载")
++                }
++            }
+diff --git a/androidApp/src/main/java/com/taotao/music/ui/TaotaoMusicApp.kt b/androidApp/src/main/java/com/taotao/music/ui/TaotaoMusicApp.kt
+index 1b4eae4..0da4df1 100644
+--- a/androidApp/src/main/java/com/taotao/music/ui/TaotaoMusicApp.kt
++++ b/androidApp/src/main/java/com/taotao/music/ui/TaotaoMusicApp.kt
+@@ -129,0 +130,3 @@ fun TaotaoMusicApp() {
++    var favoriteLibrarySongs by remember { mutableStateOf(emptyList<Song>()) }
++    var favoriteLibraryLoading by remember { mutableStateOf(false) }
++    var favoriteLibraryError by remember { mutableStateOf<String?>(null) }
+@@ -251 +254,7 @@ fun TaotaoMusicApp() {
+-        favoritesStore.set(song, target)
++        val previousLibrary = favoriteLibrarySongs
++        favoritesStore.set(remoteId, target)
++        favoriteLibrarySongs = if (target) {
++            listOf(song.copy(favorited = true)) + favoriteLibrarySongs.filterNot { it.remoteId == remoteId }
++        } else {
++            favoriteLibrarySongs.filterNot { it.remoteId == remoteId }
++        }
+@@ -256 +265,2 @@ fun TaotaoMusicApp() {
+-                    favoritesStore.set(song, !target)
++                    favoritesStore.set(remoteId, !target)
++                    favoriteLibrarySongs = previousLibrary
+@@ -262,0 +273,23 @@ fun TaotaoMusicApp() {
++    /**
++     * 收藏页直接读取账号收藏接口；本地只复用已经拿到的歌曲元信息，不再维护第二套收藏夹。
++     */
++    fun refreshFavoriteLibrary() {
++        if (favoriteLibraryLoading) return
++        favoriteLibraryLoading = true
++        favoriteLibraryError = null
++        val knownSongs = favoriteLibrarySongs + playbackSongs + searchResults +
++            playbackHistory.map { it.song } + downloadedSongs
++        scope.launch {
++            runCatching {
++                withContext(Dispatchers.IO) { musicApi.favoriteLibrary(knownSongs, playbackQuality.value) }
++            }.onSuccess { library ->
++                favoritesStore.replaceAll(library.ids)
++                favoriteLibrarySongs = library.songs
++                favoriteRevision++
++            }.onFailure {
++                favoriteLibraryError = it.message ?: "收藏列表加载失败"
++            }
++            favoriteLibraryLoading = false
++        }
++    }
++
+@@ -496 +529 @@ fun TaotaoMusicApp() {
+-        withContext(Dispatchers.IO) { favoritesStore.merge(favorited, seen, songs) }
++        withContext(Dispatchers.IO) { favoritesStore.merge(favorited, seen) }
+@@ -833 +865,0 @@ fun TaotaoMusicApp() {
+-                val favoriteSongs = remember(favoriteRevision) { favoritesStore.songs() }
+@@ -836,2 +868,5 @@ fun TaotaoMusicApp() {
+-                    subtitle = "${favoriteSongs.size} 首已缓存歌曲",
+-                    songs = favoriteSongs,
++                    subtitle = when {
++                        favoriteLibraryLoading -> "正在同步账号收藏…"
++                        else -> "${favoriteLibrarySongs.size} 首 · 与账号收藏同步"
++                    },
++                    songs = favoriteLibrarySongs,
+@@ -839 +874 @@ fun TaotaoMusicApp() {
+-                    emptyDescription = "收藏过的歌曲会在播放或搜索后显示在这里",
++                    emptyDescription = "点击歌曲旁的心形后，会通过收藏接口同步到这里",
+@@ -841 +876 @@ fun TaotaoMusicApp() {
+-                    onSongClick = { index -> playSong(favoriteSongs, index) },
++                    onSongClick = { index -> playSong(favoriteLibrarySongs, index) },
+@@ -843,0 +879,3 @@ fun TaotaoMusicApp() {
++                    loading = favoriteLibraryLoading,
++                    error = favoriteLibraryError,
++                    onRetry = { refreshFavoriteLibrary() },
+@@ -876,0 +915,2 @@ fun TaotaoMusicApp() {
++                        favoriteLibrarySongs = emptyList()
++                        favoriteLibraryError = null
+@@ -886 +926 @@ fun TaotaoMusicApp() {
+-                    favoriteCount = favoritesStore.songs().size,
++                    favoriteCount = remember(favoriteRevision) { favoritesStore.ids().size },
+@@ -889 +929,4 @@ fun TaotaoMusicApp() {
+-                    onOpenFavorites = { mineLibrarySection = MineLibrarySection.FAVORITES },
++                    onOpenFavorites = {
++                        mineLibrarySection = MineLibrarySection.FAVORITES
++                        refreshFavoriteLibrary()
++                    },
+@@ -1095,31 +1138,29 @@ private fun MinePage(
+-            MineActionRow(
+-                icon = Icons.Default.Favorite,
+-                iconDescription = "收藏夹",
+-                title = "收藏夹",
+-                subtitle = "$favoriteCount 首",
+-                iconTint = TaotaoCoral,
+-                trailing = { Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+-                onClick = onOpenFavorites,
+-            )
+-        }
+-        item {
+-            MineActionRow(
+-                icon = Icons.Default.History,
+-                iconDescription = "最近播放",
+-                title = "最近播放",
+-                subtitle = "$historyCount 首",
+-                iconTint = TaotaoCoral,
+-                trailing = { Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+-                onClick = onOpenHistory,
+-            )
+-        }
+-        item {
+-            MineActionRow(
+-                icon = Icons.Default.DownloadDone,
+-                iconDescription = "本地歌曲",
+-                title = "本地歌曲",
+-                subtitle = "$localCount 首 · 已下载到当前设备",
+-                iconTint = TaotaoCoral,
+-                trailing = { Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+-                onClick = onOpenLocal,
+-            )
++            Row(
++                modifier = Modifier.fillMaxWidth(),
++                horizontalArrangement = Arrangement.spacedBy(10.dp),
++            ) {
++                MineLibraryShortcut(
++                    icon = Icons.Default.Favorite,
++                    iconDescription = "收藏夹",
++                    title = "收藏夹",
++                    count = favoriteCount,
++                    onClick = onOpenFavorites,
++                    modifier = Modifier.weight(1f),
++                )
++                MineLibraryShortcut(
++                    icon = Icons.Default.History,
++                    iconDescription = "最近播放",
++                    title = "最近播放",
++                    count = historyCount,
++                    onClick = onOpenHistory,
++                    modifier = Modifier.weight(1f),
++                )
++                MineLibraryShortcut(
++                    icon = Icons.Default.DownloadDone,
++                    iconDescription = "本地歌曲",
++                    title = "本地歌曲",
++                    count = localCount,
++                    onClick = onOpenLocal,
++                    modifier = Modifier.weight(1f),
++                )
++            }
+@@ -1217,0 +1259,33 @@ private fun MinePage(
++/** “我的音乐”三个入口固定在同一行，数量与入口含义一眼即可比较。 */
++@Composable
++private fun MineLibraryShortcut(
++    icon: ImageVector,
++    iconDescription: String,
++    title: String,
++    count: Int,
++    onClick: () -> Unit,
++    modifier: Modifier = Modifier,
++) {
++    Column(
++        modifier = modifier.height(118.dp).clip(RoundedCornerShape(18.dp))
++            .background(MaterialTheme.colorScheme.surface).clickable(onClick = onClick).padding(14.dp),
++        verticalArrangement = Arrangement.SpaceBetween,
++    ) {
++        Box(
++            modifier = Modifier.size(34.dp).clip(CircleShape).background(TaotaoCoral.copy(alpha = 0.14f)),
++            contentAlignment = Alignment.Center,
++        ) {
++            Icon(icon, iconDescription, tint = TaotaoCoral, modifier = Modifier.size(19.dp))
++        }
++        Column {
++            Text(title, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
++            Text(
++                "$count 首",
++                color = MaterialTheme.colorScheme.onSurfaceVariant,
++                fontSize = 12.sp,
++                modifier = Modifier.padding(top = 3.dp),
++            )
++        }
++    }
++}
++

@@ -1,0 +1,102 @@
+分支：codex/playback-history-playlist
+基线提交：cfdf1688bda13fee37d134451ddb3243f25922e7
+变更分支/字段：我的 > 最近播放；播放列表 > 整列表入队、顺序播放/列表循环/单曲循环、移除单曲、只留当前。
+
+四个交付制品：
+MODIFIED_FILE=F:\music\artifacts\playback-history-playlist\MODIFIED_FILE.zip
+DIFF_FILE=F:\music\artifacts\playback-history-playlist\DIFF_FILE.patch
+VERIFICATION=F:\music\artifacts\playback-history-playlist\VERIFICATION.txt
+ROLLBACK=F:\music\artifacts\playback-history-playlist\ROLLBACK.sh
+
+原始文件 SHA-256：
+androidApp/src/main/java/com/taotao/music/ui/TaotaoMusicApp.kt=e967075d14c2b0ec94a7002f69589c78553e298c281063cc0a7edafbffe39c34
+androidApp/src/main/java/com/taotao/music/player/AudioPlayer.kt=347667a1841308b16e14c40ca684853725c5cba4d32033afd0b94b0ab612af62
+androidApp/src/main/java/com/taotao/music/data/PlaybackStateStore.kt=e18ef92509ff95ff4e04d94c7df080c20d2c31f83ed92e58a4d25036fd31ee13
+
+修改后文件 SHA-256：
+androidApp/src/main/java/com/taotao/music/ui/TaotaoMusicApp.kt=d5e3463d0ce8fa647cb5b0f05463036abbf1a0149c29273f38de5d60b8e8d66a
+androidApp/src/main/java/com/taotao/music/player/AudioPlayer.kt=0b4505bd2fe88bead2bd58eeaed1b2ece9251faa515a7219b940b2af484763be
+androidApp/src/main/java/com/taotao/music/data/PlaybackHistoryStore.kt=a09f62d5a0467645b89a4721458120bb95b65dbb7857b14da5fc92fac8bd1c78
+
+BASELINE
+命令：.\gradlew.bat :androidApp:compileDebugKotlin --console=plain
+输入：基线提交 cfdf1688bda13fee37d134451ddb3243f25922e7；上述原始文件 SHA-256。
+字面输出/结果：
+BUILD SUCCESSFUL in 1m 13s
+30 actionable tasks: 6 executed, 24 up-to-date
+EXIT_STATUS=0
+退出状态：0
+
+MODIFIED
+命令：.\gradlew.bat :androidApp:compileDebugKotlin --console=plain
+输入：上述三个修改后源码文件。
+字面输出/结果：
+BUILD SUCCESSFUL in 8s
+30 actionable tasks: 5 executed, 25 up-to-date
+EXIT_STATUS=0
+退出状态：0
+
+MODIFIED_TESTS
+命令：.\gradlew.bat :shared:test :androidApp:testDebugUnitTest :androidApp:compileDebugKotlin --console=plain
+输入：最终源码工作树。
+字面输出/结果：
+BUILD SUCCESSFUL in 31s
+58 actionable tasks: 9 executed, 49 up-to-date
+MODIFIED_TESTS_EXIT_STATUS=0
+退出状态：0
+
+ROLLBACK
+命令：F:\Git\bin\bash.exe F:/music/artifacts/playback-history-playlist/ROLLBACK.sh F:/music-rollback-check-20260824-1430
+输入：在独立 Git worktree 中先应用 DIFF_FILE.patch 后的三个源码变更。
+字面输出/结果：
+ROLLBACK_RESULT=source changes restored
+ROLLBACK_EXIT_STATUS=0
+RESTORED_STATUS=<empty>
+NEW_FILE_ABSENT=True
+androidApp/src/main/java/com/taotao/music/ui/TaotaoMusicApp.kt=True (28b77e53cc1d6ca7bf710b9bfd28b8bf75f13b51)
+androidApp/src/main/java/com/taotao/music/player/AudioPlayer.kt=True (105556ef53917c612fb2e2e642e2cf69e0921f5c)
+androidApp/src/main/java/com/taotao/music/data/PlaybackStateStore.kt=True (01c0942df8d83b9eb22de82c075691a934cf8e1b)
+退出状态：0
+
+ROLLBACK_COMPILE
+命令：.\gradlew.bat :androidApp:compileDebugKotlin --console=plain
+输入：ROLLBACK.sh 处理后的独立 worktree。
+字面输出/结果：
+BUILD SUCCESSFUL in 22s
+30 actionable tasks: 26 executed, 4 up-to-date
+ROLLBACK_COMPILE_EXIT_STATUS=0
+退出状态：0
+恢复行为/状态：Git 状态为空；新增 PlaybackHistoryStore.kt 已移除；三个基线文件的 Git blob 与 HEAD 完全一致；原播放列表代码可重新编译。
+
+RELEASE
+命令：.\gradlew.bat :androidApp:assembleRelease --console=plain
+输入：最终源码；构建时 version.properties 为 VERSION_CODE=75、VERSION_NAME=1.0.74。
+字面输出/结果：
+BUILD SUCCESSFUL in 1m 8s
+89 actionable tasks: 17 executed, 72 up-to-date
+EXIT_STATUS=0
+退出状态：0
+APK=F:\music\androidApp\build\outputs\apk\release\androidApp-release.apk
+VERSION_CODE=75
+VERSION_NAME=1.0.74
+APK_SIZE=14282553
+APK_SHA256=dd445c1cfeed9b014ee1f6ce2080b97fdc13bc3c084a18963fa0d0da1968dd47
+构建后 version.properties=VERSION_CODE=76、VERSION_NAME=1.0.75（按发布铁律未回滚）。
+
+SIGNATURE
+命令：C:\Users\kiwi\AppData\Local\Android\Sdk\build-tools\36.1.0\apksigner.bat verify --verbose androidApp/build/outputs/apk/release/androidApp-release.apk
+字面输出/结果：
+Verifies
+Verified using v2 scheme (APK Signature Scheme v2): true
+Number of signers: 1
+SIGNATURE_EXIT_STATUS=0
+退出状态：0
+
+线上发布验证：
+登记：HTTP 201；version_code=75；version_name=1.0.74；rollout_percent=0。
+分段下载：HTTP 206；Content-Range: bytes 100-199/14282553；100 字节。
+越界下载：HTTP 416。
+全量下载：HTTP 200；SHA-256=dd445c1cfeed9b014ee1f6ce2080b97fdc13bc3c084a18963fa0d0da1968dd47；HASH_MATCH=True。
+放量：HTTP 200；version_code=75；rollout_percent=100；enabled=1。
+旧过渡版本：version_code=74；rollout_percent=0；enabled=0。
+bootstrap：HTTP 200；available=true；versionCode=75；apkSha256=dd445c1cfeed9b014ee1f6ce2080b97fdc13bc3c084a18963fa0d0da1968dd47。

@@ -1,1 +1,11 @@
-<resources><style name="Theme.Taotao" parent="android:style/Theme.Material.Light.NoActionBar"><item name="android:fontFamily">sans</item><item name="android:colorAccent">#FF6B5F</item><item name="android:navigationBarColor">#FFF9F7</item><item name="android:statusBarColor">#FFF9F7</item><item name="android:windowLightStatusBar">true</item></style></resources>
+<resources>
+    <!--
+        状态栏与导航栏颜色不在这里写死：暗色主题下浅色栏会变成白底白字。
+        改由 MainActivity 在 Compose 侧按当前主题设置（enableEdgeToEdge + 图标明暗）。
+    -->
+    <style name="Theme.Taotao" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:colorAccent">#FF6B5F</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+    </style>
+</resources>

@@ -1,0 +1,92 @@
+桃桃音乐“暗色主题细节修复”交付验证
+
+分支：codex/dark-theme-polish
+基线提交：7505a92ddf90d2dae0c5ed11a6d2e92c030fe1d3
+
+变更分支/字段：
+1. Theme：补齐亮暗两套 primaryContainer / onPrimaryContainer，供推荐卡等强调容器使用。
+2. QualitySheet：下载音质、默认播放音质、默认下载音质面板显式使用 surface / onSurface / primary；选中项增加主题色弱背景。
+3. SettingsPage：播放音质、下载音质值标签与设置卡标题改用当前主题 primary，暗色不再使用亮色固定珊瑚红。
+4. RecommendationCard：今日推荐背景、主副文字与封面占位色改用 primaryContainer 配色对。
+5. PlayerDetailPage：主播放/暂停按钮改用 primary / onPrimary，暗色下按钮和图标同时切换。
+
+四个交付物：
+MODIFIED_FILE=F:\music\artifacts\dark-theme-polish\MODIFIED_FILE.zip
+DIFF_FILE=F:\music\artifacts\dark-theme-polish\DIFF_FILE.patch
+VERIFICATION=F:\music\artifacts\dark-theme-polish\VERIFICATION.txt
+ROLLBACK=F:\music\artifacts\dark-theme-polish\ROLLBACK.sh
+
+源码 SHA-256（原始 -> 修改后）：
+androidApp/src/main/java/com/taotao/music/ui/Theme.kt
+85b911efec87eee3d56c3ed0be0856b7c2a26f5478384f5e8db1a2fb0486e5c7 -> ce264af95f0e0e20fb3c39f57dd759ee215416bb3c6d51d50e717230440736ca
+androidApp/src/main/java/com/taotao/music/ui/QualitySheet.kt
+148e5d0d03e371341a987ae6205730b0f5188fd8f3ab59437890dcd5e1461714 -> c8622b5f1b8f9180ac95d3025a43a0093f688081ac2e2fb3d2449851421bd712
+androidApp/src/main/java/com/taotao/music/ui/SettingsPage.kt
+f11890254d62e5c701db170df72aa82d74338833efc175b44f8bf1d611d4cb71 -> 8d08f4fbad7c3efc9881dec8f2fb6362788b09218cce1294738e3d9f83491d5d
+androidApp/src/main/java/com/taotao/music/ui/TaotaoMusicApp.kt
+9f945c39c1b845ee2237aed57556dd20809b621d49aaba67b19938747467a272 -> e6b7eaf4dbce743724a8c1b598fd365f71903d13f4a08b07edc183573388b889
+
+BASELINE
+命令：.\gradlew.bat :androidApp:compileDebugKotlin --console=plain
+输入：提交 7505a92ddf90d2dae0c5ed11a6d2e92c030fe1d3 的原始源码。
+字面输出/结果：
+BUILD SUCCESSFUL in 4s
+30 actionable tasks: 30 up-to-date
+EXIT_STATUS=0
+退出状态：0
+
+MODIFIED
+命令：.\gradlew.bat :androidApp:compileDebugKotlin --console=plain
+输入：修改后的 Theme.kt、QualitySheet.kt、SettingsPage.kt、TaotaoMusicApp.kt。
+字面输出/结果：
+BUILD SUCCESSFUL in 15s
+30 actionable tasks: 1 executed, 29 up-to-date
+EXIT_STATUS=0
+退出状态：0
+
+MODIFIED_TESTS
+命令：.\gradlew.bat :shared:test :androidApp:testDebugUnitTest :androidApp:compileDebugKotlin --console=plain
+输入：修改后源码、共享测试和 Android 单元测试任务。
+字面输出/结果：
+BUILD SUCCESSFUL in 8s
+58 actionable tasks: 3 executed, 55 up-to-date
+EXIT_STATUS=0
+退出状态：0
+
+ROLLBACK
+命令：F:\Git\bin\bash.exe F:/music/artifacts/dark-theme-polish/ROLLBACK.sh F:/music-rollback-check-20260824-dark
+输入：基线提交的独立工作树副本，先用 --unidiff-zero 应用 DIFF_FILE.patch，再执行 ROLLBACK.sh。
+字面输出/结果：ROLLBACK_RESULT=dark theme color fields restored
+退出状态：0
+恢复状态：git status 为空；四个源码 SHA-256 全部恢复为上述原始值。
+
+ROLLBACK_RESTORED_BUILD
+命令：.\gradlew.bat :androidApp:compileDebugKotlin --console=plain
+输入：执行回滚后的独立工作树副本，并复制本机 local.properties 提供 Android SDK 路径。
+字面输出/结果：
+BUILD SUCCESSFUL in 21s
+30 actionable tasks: 30 executed
+ROLLBACK_COMPILE_EXIT_STATUS=0
+退出状态：0
+恢复行为：回滚副本恢复固定亮色的音质面板、今日推荐与播放按钮并重新编译成功；主工作树仍保留亮暗主题动态配色。
+
+RELEASE
+命令：.\gradlew.bat :androidApp:assembleRelease --console=plain
+输入：修改后源码与本机 Release 签名配置；未调用 adb，未启动虚拟机。
+字面输出/结果：
+BUILD SUCCESSFUL in 1m 16s
+89 actionable tasks: 18 executed, 71 up-to-date
+EXIT_STATUS=0
+退出状态：0
+APK：F:\music\androidApp\build\outputs\apk\release\androidApp-release.apk
+版本：versionCode=78，versionName=1.0.77
+大小：14315321 字节
+SHA-256：e35e7c7dfcc4c5cd4c42017c0ab14059a439da38501e2f8ff21672e5658e9312
+签名结果：Verifies；Verified using v2 scheme (APK Signature Scheme v2): true；Number of signers: 1；EXIT_STATUS=0。
+
+ONLINE_RELEASE
+登记结果：HTTP 201；versionCode=78；rollout_percent=0；enabled=1。
+下载结果：RANGE_HTTP=206；RANGE_SIZE=100；CONTENT_RANGE=Content-Range: bytes 100-199/14315321；OVERFLOW_HTTP=416；FULL_HTTP=200；HASH_MATCH=True。
+放量结果：HTTP 200；versionCode=78；rollout_percent=100；enabled=1。
+旧版结果：HTTP 200；versionCode=77；rollout_percent=0；enabled=0。
+引导结果：HTTP 200；available=true；versionCode=78；versionName=1.0.77；apkSha256=e35e7c7dfcc4c5cd4c42017c0ab14059a439da38501e2f8ff21672e5658e9312。
