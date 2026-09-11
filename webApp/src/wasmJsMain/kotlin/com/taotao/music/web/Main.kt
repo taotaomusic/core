@@ -49,9 +49,11 @@ import com.taotao.music.model.Song
 import com.taotao.music.playerui.PlayerActions
 import com.taotao.music.playerui.PlayerArtworkSlot
 import com.taotao.music.playerui.PlayerCapabilities
-import com.taotao.music.playerui.PlayerPlaybackDetails
+import com.taotao.music.playerui.PlayerCompactLayout
 import com.taotao.music.playerui.PlayerRepeatMode
 import com.taotao.music.playerui.PlayerUiState
+import com.taotao.music.playerui.SharedContentState
+import com.taotao.music.playerui.SharedContentStateType
 import com.taotao.music.playerui.TaotaoPlayerTheme
 import kotlinx.browser.document
 import kotlinx.browser.window
@@ -116,8 +118,17 @@ private fun SharePlayerApp() {
         color = MaterialTheme.colorScheme.background,
     ) {
         when {
-            loading -> StatusPage("正在加载歌曲…")
-            loadError != null -> StatusPage(loadError.orEmpty())
+            loading -> SharedContentState(
+                type = SharedContentStateType.LOADING,
+                title = "正在加载歌曲…",
+                modifier = Modifier.fillMaxSize(),
+            )
+            loadError != null -> SharedContentState(
+                type = SharedContentStateType.ERROR,
+                title = "歌曲加载失败",
+                description = loadError,
+                modifier = Modifier.fillMaxSize(),
+            )
             share != null -> SharePlayerPage(requireNotNull(share))
         }
     }
@@ -172,7 +183,7 @@ private fun SharePlayerPage(share: ShareSong) {
                 RemoteArtwork(share.song.coverUri, Color(share.song.color))
             }
             Spacer(Modifier.height(24.dp))
-            PlayerPlaybackDetails(
+            PlayerCompactLayout(
                 state = state,
                 actions = PlayerActions(
                     onTogglePlaying = controller::togglePlaying,
@@ -201,13 +212,6 @@ private fun SharePlayerPage(share: ShareSong) {
                 modifier = Modifier.padding(top = 12.dp),
             )
         }
-    }
-}
-
-@Composable
-private fun StatusPage(message: String) {
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Text(message, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 

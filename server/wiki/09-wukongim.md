@@ -49,7 +49,7 @@ Content-Type: application/json
 管理请求。Android Gateway 地址必须是：
 
 ```text
-tcp://114.66.23.232:5100
+tcp://im.xydaigua.cn:5100
 ```
 
 NestJS 调用悟空 IM 产品 API 必须使用：
@@ -70,7 +70,7 @@ http://127.0.0.1:5001
 ```dotenv
 IM_ENABLED=true
 IM_INTERNAL_API_BASE_URL=http://127.0.0.1:5001
-IM_EXTERNAL_GATEWAY_URL=tcp://114.66.23.232:5100
+IM_EXTERNAL_GATEWAY_URL=tcp://im.xydaigua.cn:5100
 IM_API_TOKEN=
 IM_SESSION_LIFETIME_SECONDS=900
 ```
@@ -84,7 +84,7 @@ IM_SESSION_LIFETIME_SECONDS=900
 2. 把悟空 IM 产品 API 绑定到 `127.0.0.1:5001`，收紧 5001、5200、5300 的云安全组和主机防火墙。
 3. 在 NestJS `.env` 启用 `IM_ENABLED=true`，重启服务，让幂等迁移创建 `im_device_session`。
 4. 使用真实测试帐号调用 `POST /api/v1/im/session`，确认悟空 IM `/user/token` 收到成功响应。
-5. 在 Android SDK 连接 `tcp://114.66.23.232:5100`，发送文字消息并测试离线、重连和退出登录。
+5. 在 Android SDK 连接 `tcp://im.xydaigua.cn:5100`，发送文字消息并测试离线、重连和退出登录。
 6. 最后再把聊天页面加入手写导航的 `switchTab`、`AnimatedContent` 和 `BackHandler` 三处。
 
 ## 5. 故障定位

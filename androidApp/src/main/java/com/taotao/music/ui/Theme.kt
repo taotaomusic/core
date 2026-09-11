@@ -3,74 +3,29 @@ package com.taotao.music.ui
 import android.app.Activity
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
+import com.taotao.music.playerui.PlayerBackground
+import com.taotao.music.playerui.PlayerBackgroundDark
+import com.taotao.music.playerui.PlayerCoral
+import com.taotao.music.playerui.PlayerCoralDark
+import com.taotao.music.playerui.TaotaoPlayerTheme
 
 /** 主色：珊瑚红，用于强调按钮、选中态和图标。亮暗两套配色共用。 */
-val TaotaoCoral = Color(0xFFFA5E5B)
+val TaotaoCoral = PlayerCoral
 
 /** 暗色下的主色略微提亮：原色压在深底上对比度不够，长时间看容易发闷。 */
-val TaotaoCoralDark = Color(0xFFFC7773)
+val TaotaoCoralDark = PlayerCoralDark
 
 /** 亮色底：偏暖的浅色背景，卡片用近白叠在其上形成层次。 */
-val TaotaoBackground = Color(0xFFFFF9F7)
+val TaotaoBackground = PlayerBackground
 
 /** 暗色底：带一点红调的深灰，纯黑会让珊瑚红显得刺眼。 */
-val TaotaoBackgroundDark = Color(0xFF1A1615)
-
-/** 卡片色。亮色用纯白，暗色比背景略亮以保留层次。 */
-private val SurfaceLight = Color(0xFFFFFFFF)
-private val SurfaceDark = Color(0xFF262120)
-
-/** 次要文字与图标。取代此前散落各处的 `Color.Gray`。 */
-private val MutedLight = Color(0xFF8A8280)
-private val MutedDark = Color(0xFF9E9694)
-
-/** 骨架屏与弱填充。比背景略深（暗色下略亮），比纯灰更贴主题。 */
-private val SkeletonLight = Color(0xFFF3E7E4)
-private val SkeletonDark = Color(0xFF322C2B)
-
-private val TaotaoLightColors = lightColorScheme(
-    primary = TaotaoCoral,
-    onPrimary = Color.White,
-    primaryContainer = Color(0xFFFFD8D0),
-    onPrimaryContainer = Color(0xFF3A1512),
-    secondary = TaotaoCoral,
-    onSecondary = Color.White,
-    secondaryContainer = Color(0xFFFFE6E1),
-    onSecondaryContainer = Color(0xFF3A1512),
-    background = TaotaoBackground,
-    onBackground = Color(0xFF231E1D),
-    surface = SurfaceLight,
-    onSurface = Color(0xFF231E1D),
-    surfaceVariant = SkeletonLight,
-    onSurfaceVariant = MutedLight,
-    outlineVariant = Color(0xFFEADFDC),
-)
-
-private val TaotaoDarkColors = darkColorScheme(
-    primary = TaotaoCoralDark,
-    onPrimary = Color(0xFF3A1512),
-    primaryContainer = Color(0xFF4A2622),
-    onPrimaryContainer = Color(0xFFFFEDEA),
-    secondary = TaotaoCoralDark,
-    onSecondary = Color(0xFF3A1512),
-    secondaryContainer = Color(0xFF493538),
-    onSecondaryContainer = Color(0xFFFFEDEA),
-    background = TaotaoBackgroundDark,
-    onBackground = Color(0xFFF2EAE8),
-    surface = SurfaceDark,
-    onSurface = Color(0xFFF2EAE8),
-    surfaceVariant = SkeletonDark,
-    onSurfaceVariant = MutedDark,
-    outlineVariant = Color(0xFF3B3433),
-)
+val TaotaoBackgroundDark = PlayerBackgroundDark
 
 /**
  * 全局主题：所有页面统一从这里取配色。
@@ -96,14 +51,11 @@ fun TaotaoTheme(darkTheme: Boolean = isSystemInDarkTheme(), content: @Composable
             }
         }
     }
-    MaterialTheme(
-        colorScheme = if (darkTheme) TaotaoDarkColors else TaotaoLightColors,
-        content = {
-            CompositionLocalProvider(LocalReduceMotion provides rememberReduceMotion()) {
-                content()
-            }
-        },
-    )
+    TaotaoPlayerTheme(darkTheme = darkTheme) {
+        CompositionLocalProvider(LocalReduceMotion provides rememberReduceMotion()) {
+            content()
+        }
+    }
 }
 
 /**

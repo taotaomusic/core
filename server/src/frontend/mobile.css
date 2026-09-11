@@ -1,0 +1,101 @@
+/* 响应式移动端适配 */
+@media screen and (max-width: 768px) {
+  .topbar {
+    padding: 0 16px;
+    height: 54px;
+  }
+  
+  .brand h1 {
+    font-size: 16px;
+  }
+  
+  .topbar-right {
+    gap: 8px;
+  }
+  
+  .body {
+    padding: 12px 0 24px;
+  }
+  
+  :deep(.el-form-item) {
+    flex-direction: column;
+    align-items: flex-start;
+    margin-bottom: 16px;
+  }
+
+  :deep(.el-form-item__label) {
+    width: 100% !important;
+    justify-content: flex-start;
+    margin-bottom: 4px;
+    line-height: 1.5;
+    padding-bottom: 0;
+  }
+
+  :deep(.el-form-item__content) {
+    margin-left: 0 !important;
+    width: 100%;
+  }
+
+  :deep(.el-dialog) {
+    width: 92% !important;
+    margin: 20px auto !important;
+  }
+
+  :deep(.el-dialog__body) {
+    padding: 20px 16px;
+  }
+
+  :deep(.el-descriptions__cell) {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 12px 16px !important;
+  }
+
+  :deep(.el-descriptions__label) {
+    margin-right: 0 !important;
+    color: var(--el-text-color-secondary);
+  }
+
+  .custom-tabs {
+    border-radius: 0;
+    border-left: none;
+    border-right: none;
+  }
+  
+  :deep(.el-tabs__item) {
+    padding: 0 12px !important;
+  }
+  
+  :deep(.el-tabs__content) {
+    padding: 16px 12px;
+  }
+  
+  .tab-label {
+    font-size: 14px;
+    flex-direction: column;
+    gap: 2px;
+    padding: 4px 0;
+  }
+  
+  .tab-label .el-icon {
+    font-size: 18px;
+  }
+  
+  :deep(.el-table) {
+    font-size: 13px;
+  }
+  
+  :deep(.el-button--small) {
+    padding: 5px 8px;
+  }
+
+  .login-dialog :deep(.el-dialog__body) {
+    padding: 30px 20px 16px;
+  }
+
+  .login-dialog :deep(.el-dialog__footer) {
+    padding: 0 20px 30px;
+  }
+}
+</style>

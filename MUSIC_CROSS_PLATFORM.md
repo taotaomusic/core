@@ -12,7 +12,7 @@
 - 云端“我的歌单”：创建、改名、删除、查看、加入歌曲、移除歌曲和排序
 - 定时播放：选择倒计时，倒计时结束后停止当前播放并清除计时状态
 
-Windows 使用 Compose Desktop + JVM 播放器，Android 使用 Compose + Media3，Web 分享页使用 Compose Multiplatform + Kotlin/Wasm。三端复用 `player-ui` 中的歌曲信息、进度和主控制区；封面、歌词、播放队列、下载能力和实际播放引擎仍由各端适配。`shared` 继续承载 `Song`、`Lyric`、`AudioQuality` 等纯模型和业务规则。
+Windows 使用 Compose Desktop + JVM 播放器，Android 使用 Compose + Media3，Web 分享页使用 Compose Multiplatform + Kotlin/Wasm。三端复用 `player-ui` 中的品牌主题、歌曲信息、进度、主控制区以及加载、空数据、错误状态视图；Android 与 Windows 还共用歌曲行和迷你播放器骨架，通过插槽保留收藏、下载进度、菜单、拖拽、音量、定时器和队列等平台能力。封面加载、歌词、播放队列、下载能力和实际播放引擎仍由各端适配。`shared` 继续承载 `Song`、`Lyric`、`AudioQuality` 等纯模型和业务规则。
 
 ## 定时播放
 
@@ -58,8 +58,10 @@ Android 提供 15、30、45、60、90、120 分钟及 1-1440 分钟自定义时�
 
 ```powershell
 .\gradlew.bat :shared:allTests
+.\gradlew.bat :player-ui:desktopTest
 .\gradlew.bat :androidApp:compileDebugKotlin :androidApp:testDebugUnitTest
 .\gradlew.bat :desktopApp:compileKotlin :desktopApp:test
+.\gradlew.bat :webApp:compileKotlinWasmJs
 ```
 
 后端改动还需执行：

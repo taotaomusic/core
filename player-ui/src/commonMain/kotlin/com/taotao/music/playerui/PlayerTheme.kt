@@ -19,6 +19,9 @@ private val playerLightColors = lightColorScheme(
     primaryContainer = Color(0xFFFFD8D0),
     onPrimaryContainer = Color(0xFF3A1512),
     secondary = PlayerCoral,
+    onSecondary = Color.White,
+    secondaryContainer = Color(0xFFFFE6E1),
+    onSecondaryContainer = Color(0xFF3A1512),
     background = PlayerBackground,
     onBackground = Color(0xFF231E1D),
     surface = Color.White,
@@ -34,6 +37,9 @@ private val playerDarkColors = darkColorScheme(
     primaryContainer = Color(0xFF4A2622),
     onPrimaryContainer = Color(0xFFFFEDEA),
     secondary = PlayerCoralDark,
+    onSecondary = Color(0xFF3A1512),
+    secondaryContainer = Color(0xFF493538),
+    onSecondaryContainer = Color(0xFFFFEDEA),
     background = PlayerBackgroundDark,
     onBackground = Color(0xFFF2EAE8),
     surface = Color(0xFF262120),
@@ -43,7 +49,7 @@ private val playerDarkColors = darkColorScheme(
     outlineVariant = Color(0xFF3B3433),
 )
 
-/** Web 分享页直接使用此主题；Android 与 Windows 后续可逐步把外围页面主题迁到这里。 */
+/** Android、Windows 与 Web 共用的完整品牌主题。 */
 @Composable
 fun TaotaoPlayerTheme(
     darkTheme: Boolean,

@@ -30,7 +30,7 @@ export function validateEnvironment(config: Record<string, unknown>): Record<str
   const imEnabled = String(config.IM_ENABLED ?? "false").toLowerCase() === "true";
   if (imEnabled) {
     validateUrl("IM_INTERNAL_API_BASE_URL", String(config.IM_INTERNAL_API_BASE_URL ?? "http://127.0.0.1:5001"), ["http:", "https:"]);
-    validateUrl("IM_EXTERNAL_GATEWAY_URL", String(config.IM_EXTERNAL_GATEWAY_URL ?? "tcp://114.66.23.232:5100"), ["tcp:"]);
+    validateUrl("IM_EXTERNAL_GATEWAY_URL", String(config.IM_EXTERNAL_GATEWAY_URL ?? "tcp://im.xydaigua.cn:5100"), ["tcp:"]);
     const imLifetime = Number(config.IM_SESSION_LIFETIME_SECONDS ?? 900);
     if (!Number.isInteger(imLifetime) || imLifetime < 60 || imLifetime > 86_400) {
       throw new Error(`IM_SESSION_LIFETIME_SECONDS 必须在 60 至 86400 秒之间：${config.IM_SESSION_LIFETIME_SECONDS}`);

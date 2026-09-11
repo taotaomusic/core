@@ -100,9 +100,11 @@ import com.taotao.music.data.SavedPlaybackState
 import com.taotao.music.data.im.WukongImClient
 import com.taotao.music.player.AudioPlayer
 import com.taotao.music.playerui.PlayerActions
-import com.taotao.music.playerui.PlayerPlaybackDetails
 import com.taotao.music.playerui.PlayerRepeatMode
+import com.taotao.music.playerui.PlayerCompactLayout
+import com.taotao.music.playerui.SharedMiniPlayer
 import com.taotao.music.playerui.PlayerUiState
+import com.taotao.music.playerui.layout.SharedNavigationItem
 import com.taotao.music.update.UpdateManager
 import com.taotao.music.update.UpdateStage
 import kotlinx.coroutines.flow.collectLatest
@@ -1446,12 +1448,66 @@ fun TaotaoMusicApp() {
             )
         }
         Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize()) {
-            Scaffold(
-                containerColor = MaterialTheme.colorScheme.background,
-                // Material 3 默认 Snackbar 使用 inverseSurface；暗色主题下会变成浅色大块，
-                // 与应用的深色表面脱节。显式使用主题层级色，让所有全局反馈保持一致。
-                snackbarHost = {
-                    SnackbarHost(snackbarHostState) { snackbarData ->
+            com.taotao.music.playerui.layout.SharedMainLayout(
+                selectedNavigationId = bottomTab,
+                navigationItems = remember {
+                    listOf(
+                        SharedNavigationItem(0, "音乐", Icons.Default.MusicNote),
+                        SharedNavigationItem(1, "AI", Icons.Default.AutoAwesome, "AI 工作台"),
+                        SharedNavigationItem(2, "聊天", Icons.Default.ChatBubbleOutline),
+                        SharedNavigationItem(3, "我的", Icons.Default.Person),
+                    )
+                },
+                onNavigationSelected = { target ->
+                    bottomTab = target
+                    showPlayerDetail = false
+                    showSearchPage = false
+                    showSettingsPage = false
+                    showProfilePage = false
+                    mineLibrarySection = null
+                    selectedPlaylist = null
+                    showPlaylistPicker = false
+                    playlistPickerSong = null
+                    showPlaylistSongPicker = false
+                    playlistSongPickerTarget = null
+                    playlistEditorMode = null
+                    pendingPlaylistSongAfterCreate = null
+                },
+                miniPlayerContent = {
+                    val reduceMotion = LocalReduceMotion.current
+                    AnimatedVisibility(
+                        visible = !showPlayerDetail && playbackSongs.isNotEmpty(),
+                        enter = riseIn(reduceMotion),
+                        exit = if (showPlayerDetail) ExitTransition.None else sinkOut(reduceMotion),
+                    ) {
+                        val current = remember(playbackSongs, selectedIndex) {
+                            playbackSongs.getOrNull(selectedIndex.coerceIn(0, (playbackSongs.size - 1).coerceAtLeast(0)))
+                        }
+                        if (current != null) {
+                            SharedMiniPlayer(
+                                state = PlayerUiState(song = current, isPlaying = isPlaying),
+                                actions = PlayerActions(
+                                    onTogglePlaying = { togglePlayback() },
+                                    onPrevious = { playAdjacentSong(-1) },
+                                    onNext = { playAdjacentSong(1) },
+                                    onSeek = {},
+                                    onToggleRepeat = {}
+                                ),
+                                onClick = { showPlayerDetail = true },
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                artworkContent = {
+                                    AlbumArt(Color(current.color), 48.dp, 24.sp, current.coverUri)
+                                }
+                            )
+                        }
+                    }
+                }
+            ) { innerPadding ->
+                Box(Modifier.fillMaxSize()) {
+                    SnackbarHost(
+                        hostState = snackbarHostState,
+                        modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = innerPadding.calculateBottomPadding())
+                    ) { snackbarData ->
                         Snackbar(
                             snackbarData = snackbarData,
                             containerColor = MaterialTheme.colorScheme.surfaceVariant,
@@ -1459,98 +1515,7 @@ fun TaotaoMusicApp() {
                             actionColor = MaterialTheme.colorScheme.primary,
                         )
                     }
-                },
-                bottomBar = {
-                    Column {
-                    // 迷你播放器升起/落下要有过渡：原来是直接出现和消失，
-                    // 底部一整条突然多出来一块，视觉上很跳。
-                    val reduceMotion = LocalReduceMotion.current
-                    AnimatedVisibility(
-                        visible = !showPlayerDetail && playbackSongs.isNotEmpty(),
-                        enter = riseIn(reduceMotion),
-                        // 打开详情时迷你条立刻让位，只保留详情页自底部升起，避免两套位移叠在一起。
-                        exit = if (showPlayerDetail) ExitTransition.None else sinkOut(reduceMotion),
-                    ) {
-                        // 退出动画期间队列可能已被清空，用最后一次的快照撑到动画走完。
-                        val current = remember(playbackSongs, selectedIndex) {
-                            playbackSongs.getOrNull(selectedIndex.coerceIn(0, (playbackSongs.size - 1).coerceAtLeast(0)))
-                        }
-                        if (current != null) {
-                            MiniPlayer(
-                                current,
-                                isPlaying,
-                                onOpen = { showPlayerDetail = true },
-                                onPrevious = { playAdjacentSong(-1) },
-                                onNext = { playAdjacentSong(1) },
-                            ) {
-                                togglePlayback()
-                            }
-                        }
-                    }
-                    // Material 3 的默认底栏会取未配置的 surfaceContainer 色阶，容易回退成
-                    // 紫灰色，与桃桃的珊瑚主题割裂。显式使用主题语义色，亮暗主题和将来的
-                    // 配色调整都会从 ColorScheme 一处生效。
-                    NavigationBar(
-                        containerColor = MaterialTheme.colorScheme.surface,
-                        contentColor = MaterialTheme.colorScheme.onSurface,
-                    ) {
-                        // 切换底部标签时要收起详情页、搜索页和设置页，否则 AnimatedContent 仍停在
-                        // 原来的分支，用户点了「音乐」却还留在设置里。新增页面时必须同步这里、
-                        // AnimatedContent 的 targetState 和 BackHandler 三处。
-                        val switchTab = { target: Int ->
-                            bottomTab = target
-                            showPlayerDetail = false
-                            showSearchPage = false
-                            showSettingsPage = false
-                            showProfilePage = false
-                            mineLibrarySection = null
-                            selectedPlaylist = null
-                            showPlaylistPicker = false
-                            playlistPickerSong = null
-                            showPlaylistSongPicker = false
-                            playlistSongPickerTarget = null
-                            playlistEditorMode = null
-                            pendingPlaylistSongAfterCreate = null
-                        }
-                        val navigationColors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                            selectedTextColor = MaterialTheme.colorScheme.primary,
-                            indicatorColor = MaterialTheme.colorScheme.primaryContainer,
-                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        NavigationBarItem(
-                            selected = bottomTab == 0,
-                            onClick = { switchTab(0) },
-                            icon = { Icon(Icons.Default.MusicNote, "音乐") },
-                            label = { Text("音乐") },
-                            colors = navigationColors,
-                        )
-                        NavigationBarItem(
-                            selected = bottomTab == 1,
-                            onClick = { switchTab(1) },
-                            icon = { Icon(Icons.Default.AutoAwesome, "AI 工作台") },
-                            label = { Text("AI") },
-                            colors = navigationColors,
-                        )
-                        NavigationBarItem(
-                            selected = bottomTab == 2,
-                            onClick = { switchTab(2) },
-                            icon = { Icon(Icons.Default.ChatBubbleOutline, "聊天") },
-                            label = { Text("聊天") },
-                            colors = navigationColors,
-                        )
-                        NavigationBarItem(
-                            selected = bottomTab == 3,
-                            onClick = { switchTab(3) },
-                            icon = { Icon(Icons.Default.Person, "我的") },
-                            label = { Text("我的") },
-                            colors = navigationColors,
-                        )
-                    }
-                    }
-                },
-            ) { innerPadding ->
+
             val pageReduceMotion = LocalReduceMotion.current
             AnimatedContent(
                 targetState = when {
@@ -1903,6 +1868,7 @@ fun TaotaoMusicApp() {
             }
             }
         }
+    }
     }
 
     // 弹窗和底部面板位于主 Surface 之后，必须显式继承当前外观主题；否则暗色模式会退回默认亮色。
@@ -2677,7 +2643,7 @@ private fun PlayerDetailPage(
             total = 2,
             modifier = Modifier.align(Alignment.CenterHorizontally).padding(vertical = 12.dp),
         )
-        PlayerPlaybackDetails(
+        PlayerCompactLayout(
             state = PlayerUiState(
                 song = song,
                 isPlaying = actualPlaying,
@@ -3196,10 +3162,3 @@ private fun formatTime(milliseconds: Int): String {
     val totalSeconds = (milliseconds / 1000).coerceAtLeast(0)
     return "%02d:%02d".format(totalSeconds / 60, totalSeconds % 60)
 }
-
-
-
-
-
-
-

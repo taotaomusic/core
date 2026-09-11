@@ -43,6 +43,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.taotao.music.model.Song
+import com.taotao.music.playerui.SharedContentState
+import com.taotao.music.playerui.SharedContentStateType
 
 /** 搜索页面：负责关键词输入、结果展示和异步状态过渡。 */
 @OptIn(ExperimentalFoundationApi::class)
@@ -130,10 +132,11 @@ fun SearchPage(
             enter = contentFadeIn(),
             exit = contentFadeOut(),
         ) {
-            Text(
-                errorMessage.orEmpty(),
-                color = TaotaoCoral,
-                modifier = Modifier.padding(top = 28.dp).semantics { liveRegion = LiveRegionMode.Polite },
+            SharedContentState(
+                type = SharedContentStateType.ERROR,
+                title = "搜索失败",
+                description = errorMessage,
+                modifier = Modifier.fillMaxWidth(),
             )
         }
         AnimatedVisibility(

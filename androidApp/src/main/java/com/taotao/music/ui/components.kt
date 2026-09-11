@@ -24,7 +24,6 @@ import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.OfflinePin
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
@@ -53,6 +52,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -63,6 +63,10 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.taotao.music.model.Song
+import com.taotao.music.playerui.SharedContentState
+import com.taotao.music.playerui.SharedContentStateType
+import com.taotao.music.playerui.SharedSongRow
+import com.taotao.music.playerui.theme.AppleStyleTheme
 
 /**
  * 全局复用的视觉组件。
@@ -77,8 +81,13 @@ import com.taotao.music.model.Song
  * 图片加淡入：不加的话图片是"啪"一下出现的，列表滚动时一片闪烁。
  */
 @Composable
-fun AlbumArt(color: Color, size: Dp, iconSize: TextUnit, imageUri: String? = null) {
-    val shape = if (size > 80.dp) CircleShape else RoundedCornerShape(24.dp)
+fun AlbumArt(
+    color: Color,
+    size: Dp,
+    iconSize: TextUnit,
+    imageUri: String? = null,
+    shape: Shape = if (size > 80.dp) CircleShape else RoundedCornerShape(24.dp),
+) {
     if (!imageUri.isNullOrBlank()) {
         AsyncImage(
             model = ImageRequest.Builder(LocalContext.current)
@@ -120,126 +129,87 @@ fun SongRow(
     dragHandle: (@Composable (Modifier) -> Unit)? = null,
 ) {
     var showActions by remember { mutableStateOf(false) }
-    val backgroundColor by animateColorAsState(
-        targetValue = if (active) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
-        animationSpec = taotaoTween(AnimationDurations.MICRO),
-        label = "歌曲行背景",
+    SharedSongRow(
+        song = song,
+        active = active,
+        downloaded = downloaded,
+        subtitle = subtitle,
+        artworkContent = {
+            AlbumArt(
+                color = Color(song.color),
+                size = 52.dp,
+                iconSize = 24.sp,
+                imageUri = song.coverUri,
+                shape = AppleStyleTheme.ButtonShape,
+            )
+        },
+        onClick = onClick,
+        modifier = modifier,
+        trailingContent = {
+            if (dragHandle != null) {
+                dragHandle(Modifier.size(36.dp))
+            } else {
+                Box {
+                    IconButton(onClick = { showActions = true }, modifier = Modifier.size(36.dp)) {
+                        Icon(Icons.Default.MoreVert, "更多操作", tint = MaterialTheme.colorScheme.primary)
+                    }
+                    DropdownMenu(
+                        expanded = showActions,
+                        onDismissRequest = { showActions = false },
+                        containerColor = MaterialTheme.colorScheme.surface,
+                    ) {
+                        if (onDelete != null) {
+                            DropdownMenuItem(
+                                text = { Text("删除") },
+                                onClick = { showActions = false; onDelete() },
+                                leadingIcon = { Icon(Icons.Default.DeleteOutline, null) },
+                            )
+                        }
+                        if (onPlayNext != null) {
+                            DropdownMenuItem(
+                                text = { Text("下一首播放") },
+                                onClick = { showActions = false; onPlayNext() },
+                                leadingIcon = { Icon(Icons.AutoMirrored.Filled.PlaylistPlay, null) },
+                            )
+                        }
+                        if (onToggleFavorite != null) {
+                            DropdownMenuItem(
+                                text = { Text(if (favorited) "取消收藏" else "收藏") },
+                                onClick = { showActions = false; onToggleFavorite() },
+                                leadingIcon = {
+                                    Icon(if (favorited) Icons.Default.Favorite else Icons.Default.FavoriteBorder, null)
+                                },
+                            )
+                        }
+                        if (onAddToPlaylist != null) {
+                            DropdownMenuItem(
+                                text = { Text("加入歌单") },
+                                onClick = { showActions = false; onAddToPlaylist() },
+                                leadingIcon = { Icon(Icons.AutoMirrored.Filled.PlaylistPlay, null) },
+                            )
+                        }
+                        if (onShare != null) {
+                            DropdownMenuItem(
+                                text = { Text("分享歌曲") },
+                                onClick = { showActions = false; onShare() },
+                                leadingIcon = { Icon(Icons.Default.Share, null) },
+                            )
+                        }
+                        if (
+                            onDelete == null && onPlayNext == null && onToggleFavorite == null &&
+                            onAddToPlaylist == null && onShare == null
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("暂无可用操作") },
+                                onClick = { showActions = false },
+                                enabled = false,
+                            )
+                        }
+                    }
+                }
+            }
+        },
     )
-    val titleColor by animateColorAsState(
-        targetValue = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-        animationSpec = taotaoTween(AnimationDurations.MICRO),
-        label = "歌曲行标题",
-    )
-    // 服务端个别歌曲元数据曾携带换行/空白字符；列表项必须保持紧凑，不能由一条脏数据撑开整行。
-    val displayTitle = song.title.replace(Regex("\\s+"), " ").trim()
-    val displaySubtitle = subtitle.replace(Regex("\\s+"), " ").trim()
-    Row(
-        modifier
-            .fillMaxWidth()
-            .heightIn(min = 64.dp, max = 72.dp)
-            .clip(RoundedCornerShape(20.dp))
-            .background(backgroundColor)
-            .clickable(onClick = onClick)
-            .padding(vertical = 7.dp, horizontal = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        AlbumArt(Color(song.color), 48.dp, 24.sp, song.coverUri)
-        Column(Modifier.weight(1f).padding(start = 13.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    displayTitle,
-                    fontSize = 17.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = titleColor,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false),
-                )
-            }
-            Row(
-                modifier = Modifier.padding(top = 3.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    displaySubtitle,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontSize = 13.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                if (downloaded) {
-                    Icon(
-                        Icons.Default.OfflinePin,
-                        "已下载",
-                        tint = TaotaoCoral,
-                        modifier = Modifier.padding(start = 6.dp).size(14.dp),
-                    )
-                }
-                if (song.vip) VipBadge(Modifier.padding(start = 6.dp))
-            }
-        }
-        Text(song.duration, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
-        if (dragHandle != null) {
-            dragHandle(Modifier.size(36.dp))
-        } else Box {
-            IconButton(onClick = { showActions = true }, modifier = Modifier.size(36.dp)) {
-                Icon(Icons.Default.MoreVert, "更多操作", tint = MaterialTheme.colorScheme.primary)
-            }
-            DropdownMenu(
-                expanded = showActions,
-                onDismissRequest = { showActions = false },
-                containerColor = MaterialTheme.colorScheme.surface,
-            ) {
-                if (onDelete != null) {
-                    DropdownMenuItem(
-                        text = { Text("删除") },
-                        onClick = { showActions = false; onDelete() },
-                        leadingIcon = { Icon(Icons.Default.DeleteOutline, null) },
-                    )
-                }
-                if (onPlayNext != null) {
-                    DropdownMenuItem(
-                        text = { Text("下一首播放") },
-                        onClick = { showActions = false; onPlayNext() },
-                        leadingIcon = { Icon(Icons.AutoMirrored.Filled.PlaylistPlay, null) },
-                    )
-                }
-                if (onToggleFavorite != null) {
-                    DropdownMenuItem(
-                        text = { Text(if (favorited) "取消收藏" else "收藏") },
-                        onClick = { showActions = false; onToggleFavorite() },
-                        leadingIcon = {
-                            Icon(if (favorited) Icons.Default.Favorite else Icons.Default.FavoriteBorder, null)
-                        },
-                    )
-                }
-                if (onAddToPlaylist != null) {
-                    DropdownMenuItem(
-                        text = { Text("加入歌单") },
-                        onClick = { showActions = false; onAddToPlaylist() },
-                        leadingIcon = { Icon(Icons.AutoMirrored.Filled.PlaylistPlay, null) },
-                    )
-                }
-                if (onShare != null) {
-                    DropdownMenuItem(
-                        text = { Text("分享歌曲") },
-                        onClick = { showActions = false; onShare() },
-                        leadingIcon = { Icon(Icons.Default.Share, null) },
-                    )
-                }
-                if (
-                    onDelete == null && onPlayNext == null && onToggleFavorite == null &&
-                    onAddToPlaylist == null && onShare == null
-                ) {
-                    DropdownMenuItem(
-                        text = { Text("暂无可用操作") },
-                        onClick = { showActions = false },
-                        enabled = false,
-                    )
-                }
-            }
-        }
-    }
 }
 
 /** 搜索与媒体库列表的兼容封装：收藏、删除等特有操作只在这里组合。 */
@@ -332,37 +302,6 @@ fun VipBadge(modifier: Modifier = Modifier) {
     }
 }
 
-/** 底部迷你播放器。 */
-@Composable
-fun MiniPlayer(
-    song: Song,
-    isPlaying: Boolean,
-    onOpen: () -> Unit,
-    onPrevious: () -> Unit,
-    onNext: () -> Unit,
-    onTogglePlaying: () -> Unit,
-) {
-    Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(32.dp)).background(MaterialTheme.colorScheme.surface).clickable(onClick = onOpen).padding(10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        AlbumArt(Color(song.color), 44.dp, 22.sp, song.coverUri)
-        Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
-            Text(song.title, fontWeight = FontWeight.Bold, maxLines = 1)
-            Text(song.artist, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, maxLines = 1)
-        }
-        IconButton(onClick = onPrevious) {
-            Icon(Icons.Default.SkipPrevious, "上一首", tint = MaterialTheme.colorScheme.onSurface)
-        }
-        IconButton(onClick = onTogglePlaying) {
-            PlayPauseIcon(isPlaying, tint = MaterialTheme.colorScheme.onSurface)
-        }
-        IconButton(onClick = onNext) {
-            Icon(Icons.Default.SkipNext, "下一首", tint = MaterialTheme.colorScheme.onSurface)
-        }
-    }
-}
-
 /**
  * 搜索栏，首页和搜索页共用。
  * [focusRequester] 由搜索页传入以便进入时自动聚焦，首页不需要则留空。
@@ -435,19 +374,12 @@ fun CardWithTitle(
 /** 统一的空状态展示。 */
 @Composable
 fun EmptyStateView(title: String = "暂无数据", description: String? = null, modifier: Modifier = Modifier) {
-    Column(
-        modifier = modifier.fillMaxWidth().padding(40.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-    ) {
-        Text("♫", fontSize = 48.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.height(12.dp))
-        Text(title, fontSize = 18.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        if (!description.isNullOrBlank()) {
-            Spacer(Modifier.height(6.dp))
-            Text(description, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
-        }
-    }
+    SharedContentState(
+        type = SharedContentStateType.EMPTY,
+        title = title,
+        description = description,
+        modifier = modifier,
+    )
 }
 
 /** 分页指示器：几页就几个点，当前页用主色实心。选中用缩放而不是改布局尺寸。 */
@@ -486,10 +418,3 @@ fun PagerDots(current: Int, total: Int, modifier: Modifier = Modifier) {
         }
     }
 }
-
-
-
-
-
-
-

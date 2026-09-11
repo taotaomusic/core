@@ -1,6 +1,15 @@
 .gradle/
 build/
 **/build/
+
+# 本地 Gradle/Kotlin 缓存与 JVM 编译输出
+.gradle-user/
+.kotlin/
+**/bin/
+
+# 个人 IDE 配置
+.vscode/
+
 local.properties
 taotao-release.jks
 *.iml
@@ -8,3 +17,19 @@ taotao-release.jks
 
 # 根目录手工编译的 Kiwi 测试程序；正式模块的产物由模块内规则屏蔽。
 /kiwi.exe
+
+# 根目录临时调试与演示文件
+/temp.txt
+/ui_demo.html
+/新建文本文档.txt
+
+# 临时验收产物默认不入库；已经归档的历史交付物显式保留。
+artifacts/*
+!artifacts/dark-theme-polish/
+!artifacts/dark-theme-polish/**
+!artifacts/mine-library-queue-redesign/
+!artifacts/mine-library-queue-redesign/**
+!artifacts/mine-shortcuts-favorites-sync/
+!artifacts/mine-shortcuts-favorites-sync/**
+!artifacts/playback-history-playlist/
+!artifacts/playback-history-playlist/**

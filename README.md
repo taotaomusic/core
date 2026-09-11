@@ -1,6 +1,6 @@
 # 桃桃音乐
 
-Kotlin Multiplatform 音乐播放器 + 自建后端。当前提供 Android、Windows 客户端和 Web 分享播放器；`shared` 复用模型，`player-ui` 复用播放详情主体。
+Kotlin Multiplatform 音乐播放器 + 自建后端。当前提供 Android、Windows 客户端和 Web 分享播放器；`shared` 复用模型，`player-ui` 统一三端主题与播放界面组件。
 
 ## 📚 文档导航
 
@@ -35,8 +35,12 @@ webApp/       Kotlin/Wasm 分享播放器
               ├─ 循环播放一首 60 秒低码率试听
               └─ 复用 player-ui，不包含队列和歌曲下载
 
-player-ui/    Android、Windows、Web 共用的播放详情组件
-              └─ 歌曲信息、进度与主播放控制
+player-ui/    Android、Windows、Web 共用的播放界面层
+              ├─ 统一亮色/暗色主题和圆角规格
+              ├─ 歌曲信息、进度与主播放控制
+              ├─ 加载、空数据和错误状态视图
+              ├─ Android/Windows 共用歌曲行与迷你播放器
+              └─ 紧凑/宽屏响应式播放器和主布局骨架
 
 shared/       跨平台共享层（Kotlin Multiplatform）
               ├─ 歌曲、歌词、专辑数据模型

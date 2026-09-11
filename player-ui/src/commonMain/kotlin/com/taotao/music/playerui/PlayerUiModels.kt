@@ -36,3 +36,20 @@ data class PlayerCapabilities(
     val showRepeat: Boolean = true,
     val showProgress: Boolean = true,
 )
+
+/** 把播放器时间换算为 UI 进度，未知时长统一返回 0。 */
+internal fun normalizedPlayerProgress(positionMs: Long, durationMs: Long): Float {
+    if (durationMs <= 0L) return 0f
+    return (positionMs.toFloat() / durationMs).coerceIn(0f, 1f)
+}
+
+/** 把 UI 进度换回播放器时间，并限制在合法时长内。 */
+internal fun playerPositionForProgress(progress: Float, durationMs: Long): Long {
+    if (durationMs <= 0L) return 0L
+    return (progress.coerceIn(0f, 1f) * durationMs).toLong()
+}
+
+private val displayWhitespace = Regex("\\s+")
+
+/** 列表元数据可能带有换行或连续空白，三端统一压缩为单个空格。 */
+internal fun normalizedDisplayText(value: String): String = value.replace(displayWhitespace, " ").trim()

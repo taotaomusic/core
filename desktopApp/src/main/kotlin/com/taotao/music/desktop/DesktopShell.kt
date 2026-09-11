@@ -36,7 +36,6 @@ import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.DeleteOutline
@@ -113,9 +112,13 @@ import com.taotao.music.model.Lyric
 import com.taotao.music.model.LyricWord
 import com.taotao.music.model.Song
 import com.taotao.music.playerui.PlayerActions
-import com.taotao.music.playerui.PlayerPlaybackDetails
 import com.taotao.music.playerui.PlayerRepeatMode
 import com.taotao.music.playerui.PlayerUiState
+import com.taotao.music.playerui.PlayerWideLayout
+import com.taotao.music.playerui.SharedContentState
+import com.taotao.music.playerui.SharedContentStateType
+import com.taotao.music.playerui.SharedMiniPlayer
+import com.taotao.music.playerui.SharedSongRow
 import com.taotao.music.model.labelOfQuality
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -238,19 +241,51 @@ internal fun DesktopShell(
         containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
             if (!showPlayer && currentSong != null) {
-                DesktopMiniPlayer(
-                    song = currentSong,
-                    playing = playing,
-                    positionMs = currentPositionMs,
-                    durationMs = durationMs,
-                    volume = volume,
-                    sleepTimerRemainingMs = sleepTimerRemainingMs,
-                    onOpen = onOpenPlayer,
-                    onPrevious = onPrevious,
-                    onNext = onNext,
-                    onToggle = onTogglePlaying,
-                    onQueue = onOpenQueue,
-                    onVolumeChange = onVolumeChange,
+                SharedMiniPlayer(
+                    state = PlayerUiState(
+                        song = currentSong,
+                        isPlaying = playing,
+                        isBuffering = playerBusy,
+                        positionMs = currentPositionMs.toLong(),
+                        durationMs = durationMs.toLong(),
+                        errorMessage = playerError,
+                    ),
+                    actions = PlayerActions(
+                        onTogglePlaying = onTogglePlaying,
+                        onPrevious = onPrevious,
+                        onNext = onNext,
+                        onSeek = {},
+                        onToggleRepeat = {},
+                    ),
+                    onClick = onOpenPlayer,
+                    artworkContent = {
+                        AlbumCover(currentSong, size = 48)
+                    },
+                    supportingContent = {
+                        if (sleepTimerRemainingMs > 0L) {
+                            Text(
+                                text = "定时停止 · ${formatSleepTimerRemaining(sleepTimerRemainingMs)}${if (playing) "" else " · 暂停计时"}",
+                                color = Coral,
+                                fontSize = 11.sp,
+                            )
+                        }
+                    },
+                    trailingContent = {
+                        IconButton(onClick = { onVolumeChange(if (volume > 0f) 0f else 1f) }) {
+                            Icon(
+                                imageVector = if (volume <= 0f) Icons.Default.VolumeOff else Icons.Default.VolumeUp,
+                                contentDescription = if (volume <= 0f) "取消静音" else "静音",
+                            )
+                        }
+                        Slider(
+                            value = volume.coerceIn(0f, 1f),
+                            onValueChange = onVolumeChange,
+                            modifier = Modifier.width(104.dp),
+                        )
+                        IconButton(onClick = onOpenQueue) {
+                            Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = "播放队列")
+                        }
+                    },
                 )
             }
         },
@@ -604,7 +639,15 @@ private fun MusicPage(
             item {
                 Text(if (searching && results.isEmpty()) "正在搜索…" else if (total > 0) "搜索结果 · 共 $total 首" else "搜索结果", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 24.dp, bottom = 8.dp))
                 if (searching && results.isEmpty()) LinearProgressIndicator(Modifier.fillMaxWidth(), color = Coral)
-                error?.let { Text(it, color = Coral, modifier = Modifier.padding(vertical = 12.dp)) }
+                if (error != null && results.isEmpty()) {
+                    SharedContentState(
+                        type = SharedContentStateType.ERROR,
+                        title = "搜索失败",
+                        description = error,
+                    )
+                } else {
+                    error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(vertical = 12.dp)) }
+                }
             }
             itemsIndexed(results, key = { _, song -> DesktopStorage.songKey(song) }) { index, song ->
                 DesktopSongRow(
@@ -617,7 +660,7 @@ private fun MusicPage(
                     downloadProgress = downloadProgress[DesktopStorage.songKey(song)],
                     onClick = { onPlay(song, results, index) },
                     onFavorite = { onFavorite(song) },
-                    onDownload = { onDownload?.invoke(song) },
+                    onDownload = onDownload?.let { callback -> { callback(song) } },
                     onNext = { onNext(song) },
                 )
             }
@@ -648,51 +691,52 @@ private fun DesktopSongRow(
     downloadProgress: DesktopDownloadProgress? = null,
     onClick: () -> Unit,
     onFavorite: () -> Unit,
-    onDownload: () -> Unit,
+    onDownload: (() -> Unit)?,
     onNext: () -> Unit,
 ) {
     var menu by remember { mutableStateOf(false) }
-    Surface(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp).clip(RoundedCornerShape(12.dp)).clickable(onClick = onClick),
-        color = if (active) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
-    ) {
-        Row(Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            AlbumCover(song)
-            Column(Modifier.weight(1f).padding(start = 14.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(song.title.cleanDisplay(), maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Bold)
-                    if (song.vip) Badge("VIP", Coral, Modifier.padding(start = 8.dp))
+    SharedSongRow(
+        song = song,
+        active = active,
+        downloaded = downloaded,
+        subtitle = "${song.artist} · ${song.source.sourceLabel()}",
+        artworkContent = { AlbumCover(song, size = 52) },
+        onClick = onClick,
+        supportingContent = {
+            if (downloadBusy) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(top = 5.dp)) {
+                    downloadProgress?.fraction?.let { fraction ->
+                        LinearProgressIndicator(progress = { fraction }, modifier = Modifier.weight(1f).height(3.dp), color = Coral)
+                    } ?: LinearProgressIndicator(modifier = Modifier.weight(1f).height(3.dp), color = Coral)
+                    Text(
+                        downloadProgress?.let { progress ->
+                            if (progress.totalBytes > 0L) "${((progress.fraction ?: 0f) * 100).toInt()}%" else formatBytes(progress.completedBytes)
+                        } ?: "下载中…",
+                        fontSize = 10.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = 7.dp),
+                    )
                 }
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
-                    Text(song.artist.cleanDisplay(), maxLines = 1, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
-                    Text(" · ${song.source.sourceLabel()}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
-                    if (downloaded) Icon(Icons.Default.CloudOff, "已下载", tint = Coral, modifier = Modifier.padding(start = 7.dp).size(15.dp))
-                }
-                if (downloadBusy) {
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(top = 5.dp)) {
-                        downloadProgress?.fraction?.let { fraction ->
-                            LinearProgressIndicator(progress = { fraction }, modifier = Modifier.weight(1f).height(3.dp), color = Coral)
-                        } ?: LinearProgressIndicator(modifier = Modifier.weight(1f).height(3.dp), color = Coral)
-                        Text(
-                            downloadProgress?.let { progress ->
-                                if (progress.totalBytes > 0L) "${((progress.fraction ?: 0f) * 100).toInt()}%" else formatBytes(progress.completedBytes)
-                            } ?: "下载中…",
-                            fontSize = 10.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(start = 7.dp),
+            }
+        },
+        trailingContent = {
+            IconButton(onClick = onFavorite, enabled = !favoriteBusy) { Icon(if (favorited) Icons.Default.Favorite else Icons.Default.FavoriteBorder, if (favorited) "取消收藏" else "收藏", tint = if (favorited) Coral else MaterialTheme.colorScheme.onSurfaceVariant) }
+            Box {
+                IconButton(onClick = { menu = true }) { Icon(Icons.Default.List, "更多操作") }
+                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    DropdownMenuItem(text = { Text("下一首播放") }, leadingIcon = { Icon(Icons.Default.QueuePlayNext, null) }, onClick = { menu = false; onNext() })
+                    if (!downloaded && onDownload != null) {
+                        DropdownMenuItem(
+                            text = { Text(if (downloadBusy) "正在下载…" else "下载到本地") },
+                            leadingIcon = { Icon(Icons.Default.Download, null) },
+                            enabled = !downloadBusy,
+                            onClick = { menu = false; onDownload() },
                         )
                     }
                 }
             }
-            Text(song.duration, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 10.dp))
-            IconButton(onClick = onFavorite, enabled = !favoriteBusy) { Icon(if (favorited) Icons.Default.Favorite else Icons.Default.FavoriteBorder, if (favorited) "取消收藏" else "收藏", tint = if (favorited) Coral else MaterialTheme.colorScheme.onSurfaceVariant) }
-            IconButton(onClick = { menu = true }) { Icon(Icons.Default.List, "更多操作") }
-            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                DropdownMenuItem(text = { Text("下一首播放") }, leadingIcon = { Icon(Icons.Default.QueuePlayNext, null) }, onClick = { menu = false; onNext() })
-                if (!downloaded) DropdownMenuItem(text = { Text(if (downloadBusy) "正在下载…" else "下载到本地") }, leadingIcon = { Icon(Icons.Default.Download, null) }, enabled = !downloadBusy, onClick = { menu = false; onDownload() })
-            }
-        }
-    }
+        },
+    )
 }
 
 @Composable
@@ -736,7 +780,7 @@ private fun LibraryPage(
                         downloadProgress = downloadProgress[DesktopStorage.songKey(song)],
                         onClick = { onPlay(song, songs, index) },
                         onFavorite = { onFavorite(song) },
-                        onDownload = { onDownload?.invoke(song) },
+                        onDownload = onDownload?.let { callback -> { callback(song) } },
                         onNext = { onNext(song) },
                     )
                     if (onDelete != null) TextButton(onClick = { onDelete(song) }, modifier = Modifier.align(Alignment.End)) { Icon(Icons.Default.DeleteOutline, null, modifier = Modifier.size(15.dp)); Spacer(Modifier.width(4.dp)); Text("删除本地文件") }
@@ -784,7 +828,7 @@ private fun HistoryPage(
                     downloadProgress = downloadProgress[DesktopStorage.songKey(entry.song)],
                     onClick = { onPlay(entry.song, entries.map { it.song }, index) },
                     onFavorite = { onFavorite(entry.song) },
-                    onDownload = { onDownload?.invoke(entry.song) },
+                    onDownload = onDownload?.let { callback -> { callback(entry.song) } },
                     onNext = { onNext(entry.song) },
                 )
                 Text("${formatDate(entry.playedAt)} · 播放 ${entry.playCount} 次 · 听过 ${formatListenMs(entry.totalListenedMs)}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, modifier = Modifier.padding(start = 84.dp, bottom = 5.dp))
@@ -812,11 +856,12 @@ private fun PageHeading(title: String, subtitle: String) {
 
 @Composable
 private fun EmptyState(title: String, description: String, modifier: Modifier = Modifier) {
-    Column(modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-        Icon(Icons.Default.MusicNote, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(46.dp))
-        Text(title, fontWeight = FontWeight.Bold, fontSize = 19.sp, modifier = Modifier.padding(top = 12.dp))
-        Text(description, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp))
-    }
+    SharedContentState(
+        type = SharedContentStateType.EMPTY,
+        title = title,
+        description = description,
+        modifier = modifier,
+    )
 }
 
 @Composable
@@ -870,7 +915,7 @@ private fun PlayerDetail(
             Column(Modifier.widthIn(min = 330.dp, max = 430.dp).fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally) {
                 Spacer(Modifier.height(24.dp))
                 AlbumCover(song, size = 300)
-                PlayerPlaybackDetails(
+                PlayerWideLayout(
                     state = PlayerUiState(
                         song = song,
                         isPlaying = playing,
@@ -1076,44 +1121,6 @@ private fun desktopLyricBrush(fraction: Float, sung: Color, unsung: Color): Brus
 }
 
 private const val DesktopLyricEdgeEpsilon = 0.002f
-
-@Composable
-private fun DesktopMiniPlayer(
-    song: Song,
-    playing: Boolean,
-    positionMs: Int,
-    durationMs: Int,
-    volume: Float,
-    sleepTimerRemainingMs: Long,
-    onOpen: () -> Unit,
-    onPrevious: () -> Unit,
-    onNext: () -> Unit,
-    onToggle: () -> Unit,
-    onQueue: () -> Unit,
-    onVolumeChange: (Float) -> Unit,
-) {
-    Surface(Modifier.fillMaxWidth().clickable(onClick = onOpen), color = MaterialTheme.colorScheme.surface, tonalElevation = 4.dp) {
-        Column {
-            if (durationMs > 0) LinearProgressIndicator(progress = { (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) }, Modifier.fillMaxWidth().height(2.dp), color = Coral, trackColor = Color.Transparent)
-            Row(Modifier.padding(horizontal = 22.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                AlbumCover(song, size = 42)
-                Column(Modifier.weight(1f).padding(start = 12.dp)) {
-                    Text(song.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Bold)
-                    Text(song.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    if (sleepTimerRemainingMs > 0L) {
-                        Text("定时停止 · ${formatSleepTimerRemaining(sleepTimerRemainingMs)}${if (playing) "" else " · 暂停计时"}", fontSize = 11.sp, color = Coral)
-                    }
-                }
-                IconButton(onClick = onPrevious) { Icon(Icons.Default.SkipPrevious, "上一首") }
-                IconButton(onClick = onToggle) { Icon(if (playing) Icons.Default.Pause else Icons.Default.PlayArrow, if (playing) "暂停" else "播放") }
-                IconButton(onClick = onNext) { Icon(Icons.Default.SkipNext, "下一首") }
-                IconButton(onClick = { onVolumeChange(if (volume > 0f) 0f else 1f) }) { Icon(if (volume <= 0f) Icons.Default.VolumeOff else Icons.Default.VolumeUp, if (volume <= 0f) "取消静音" else "静音") }
-                Slider(value = volume.coerceIn(0f, 1f), onValueChange = onVolumeChange, modifier = Modifier.width(104.dp))
-                IconButton(onClick = onQueue) { Icon(Icons.AutoMirrored.Filled.QueueMusic, "播放队列") }
-            }
-        }
-    }
-}
 
 @Composable
 private fun QueuePanel(

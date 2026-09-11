@@ -63,8 +63,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -95,6 +93,8 @@ import com.taotao.music.model.Lyric
 import com.taotao.music.model.LyricParser
 import com.taotao.music.model.Song
 import com.taotao.music.model.labelOfQuality
+import com.taotao.music.playerui.PlayerCoral
+import com.taotao.music.playerui.TaotaoPlayerTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
@@ -113,11 +113,7 @@ import java.util.UUID
 import java.util.Locale
 import javax.imageio.ImageIO
 
-internal val Coral = Color(0xFFFA5E5B)
-private val WarmBackground = Color(0xFFFFF9F7)
-private val WarmSurface = Color(0xFFFFFFFF)
-private val DarkBackground = Color(0xFF191515)
-private val DarkSurface = Color(0xFF282020)
+internal val Coral = PlayerCoral
 private const val HISTORY_ADMISSION_MS = 3_000L
 private const val PLAYBACK_SYNC_INTERVAL_MS = 15_000L
 private const val MAX_PLAYBACK_REVISION_RETRIES = 3
@@ -2017,11 +2013,7 @@ private fun DesktopMusicApp(
 
 @Composable
 private fun DesktopTheme(darkTheme: Boolean, content: @Composable () -> Unit) {
-    MaterialTheme(
-        colorScheme = if (darkTheme) darkColorScheme(primary = Coral, background = DarkBackground, surface = DarkSurface) else lightColorScheme(primary = Coral, background = WarmBackground, surface = WarmSurface),
-        typography = MaterialTheme.typography,
-        content = content,
-    )
+    TaotaoPlayerTheme(darkTheme = darkTheme, content = content)
 }
 
 private fun readUri(uri: String): String? = runCatching {

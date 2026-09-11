@@ -136,7 +136,7 @@ export class AppConfigService {
       /\/+$/,
       "",
     );
-    this.imExternalGatewayUrl = String(config.get("IM_EXTERNAL_GATEWAY_URL") ?? "tcp://114.66.23.232:5100");
+    this.imExternalGatewayUrl = String(config.get("IM_EXTERNAL_GATEWAY_URL") ?? "tcp://im.xydaigua.cn:5100");
     this.imApiToken = String(config.get("IM_API_TOKEN") ?? "");
     this.imSessionLifetimeSeconds = Number(config.get("IM_SESSION_LIFETIME_SECONDS") ?? 900);
     this.emailVerificationTestCode = String(config.get("EMAIL_VERIFICATION_TEST_CODE") ?? "") || null;

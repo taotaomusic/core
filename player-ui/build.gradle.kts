@@ -21,6 +21,9 @@ kotlin {
             implementation(compose.material3)
             implementation(compose.materialIconsExtended)
         }
+        commonTest.dependencies {
+            implementation(kotlin("test"))
+        }
     }
 }
 
