@@ -95,6 +95,7 @@ import com.taotao.music.data.PendingPlaybackSnapshot
 import com.taotao.music.data.PlaybackSnapshotPolicy
 import com.taotao.music.data.DeviceIdStore
 import com.taotao.music.data.im.ImSessionStore
+import com.taotao.music.data.im.ImConnectionInfo
 import com.taotao.music.data.ImPeerStore
 import com.taotao.music.data.SavedPlaybackState
 import com.taotao.music.data.im.WukongImClient
@@ -150,10 +151,7 @@ fun TaotaoMusicApp() {
     }
     val imConnection by wukongImClient.connection.collectAsState()
     val imPeerStore = remember { ImPeerStore(context) }
-    val imMessages by wukongImClient.messages.collectAsState()
     val syncedImPeers by wukongImClient.syncedPeers.collectAsState()
-    val imPeerNames by wukongImClient.peerNames.collectAsState()
-    val imSyncDetail by wukongImClient.syncDetail.collectAsState()
     val playbackSync = remember {
         PlaybackSyncCoordinator(
             store = playbackSyncStore,
@@ -1459,6 +1457,8 @@ fun TaotaoMusicApp() {
                     )
                 },
                 onNavigationSelected = { target ->
+                    // 离开聊天页立即取消活动会话，避免切页期间仍把新消息标成已读并发送回执。
+                    if (target != 2) wukongImClient.setActivePeer(null)
                     bottomTab = target
                     showPlayerDetail = false
                     showSearchPage = false
@@ -1516,9 +1516,7 @@ fun TaotaoMusicApp() {
                         )
                     }
 
-            val pageReduceMotion = LocalReduceMotion.current
-            AnimatedContent(
-                targetState = when {
+            val currentPage = when {
                     showPlayerDetail -> "detail"
                     showProfilePage -> "profile"
                     showSettingsPage -> "settings"
@@ -1534,35 +1532,29 @@ fun TaotaoMusicApp() {
                     bottomTab == 2 -> "chat"
                     bottomTab == 3 -> "mine"
                     else -> "home"
-                },
+                }
+            val pageReduceMotion = LocalReduceMotion.current
+            if (currentPage == "chat") {
+                // 聊天页直接挂载，切出时立即释放抽屉和消息列表，不与目标页并行布局。
+                Box(Modifier.fillMaxSize().padding(innerPadding)) {
+                    ChatPageHost(
+                        connection = imConnection,
+                        savedPeers = imPeers,
+                        peerStore = imPeerStore,
+                        accountId = authSession.accountId,
+                        client = wukongImClient,
+                        onPeersChanged = { imPeers = it },
+                        onMessage = { message = it },
+                    )
+                }
+            } else {
+            AnimatedContent(
+                targetState = currentPage,
                 transitionSpec = { pageTransition(pageReduceMotion) },
                 label = "页面切换",
             ) { page ->
             Box(Modifier.fillMaxSize().padding(innerPadding)) {
-            if (page == "chat") {
-                val haptic = LocalHapticFeedback.current
-                ChatPage(
-                    connection = imConnection,
-                    messages = imMessages,
-                    savedPeers = imPeers,
-                    peerNames = imPeerNames,
-                    onSend = { peerUid, content ->
-                        imPeers = imPeerStore.remember(authSession.accountId, peerUid)
-                        wukongImClient.sendText(peerUid, content)
-                    },
-                    onPeerSelected = wukongImClient::loadRecentMessages,
-                    onPeerActiveChanged = wukongImClient::setActivePeer,
-                    onPeersVisible = wukongImClient::loadPeerNames,
-                    onRevoke = { chatMessage ->
-                        runCatching { wukongImClient.revokeMessage(chatMessage) }
-                            .onFailure { error -> message = "撤回失败: ${error.message}" }
-                    },
-                    onMessage = { message = it },
-                    onNewMessage = {
-                        runCatching { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove) }
-                    },
-                )
-            } else if (page == "ai") {
+            if (page == "ai") {
                 AiStudioPage(
                     signedIn = signedIn,
                     submitting = imageGenerating,
@@ -1867,6 +1859,7 @@ fun TaotaoMusicApp() {
             }
             }
             }
+            }
         }
     }
     }
@@ -2033,6 +2026,47 @@ fun TaotaoMusicApp() {
             null -> Unit
         }
     }
+}
+
+/**
+ * 聊天页宿主：只在聊天标签存在时订阅高频消息状态，IM 客户端本身始终独立接收消息。
+ * 这样切换标签不会让主页面跟着每条消息重组，返回聊天页也能从状态流恢复最新内容。
+ */
+@Composable
+private fun ChatPageHost(
+    connection: ImConnectionInfo,
+    savedPeers: List<String>,
+    peerStore: ImPeerStore,
+    accountId: Long?,
+    client: WukongImClient,
+    onPeersChanged: (List<String>) -> Unit,
+    onMessage: (String) -> Unit,
+) {
+    val messages by client.messages.collectAsState()
+    val peerNames by client.peerNames.collectAsState()
+    val haptic = LocalHapticFeedback.current
+
+    ChatPage(
+        connection = connection,
+        messages = messages,
+        savedPeers = savedPeers,
+        peerNames = peerNames,
+        onSend = { peerUid, content ->
+            onPeersChanged(peerStore.remember(accountId, peerUid))
+            client.sendText(peerUid, content)
+        },
+        onPeerSelected = client::loadRecentMessages,
+        onPeerActiveChanged = client::setActivePeer,
+        onPeersVisible = client::loadPeerNames,
+        onRevoke = { chatMessage ->
+            runCatching { client.revokeMessage(chatMessage) }
+                .onFailure { error -> onMessage("撤回失败: ${error.message}") }
+        },
+        onMessage = onMessage,
+        onNewMessage = {
+            runCatching { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove) }
+        },
+    )
 }
 
 /** 音质面板的三种用途。 */

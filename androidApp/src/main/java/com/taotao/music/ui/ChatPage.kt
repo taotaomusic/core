@@ -33,6 +33,7 @@ import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -72,7 +73,9 @@ fun ChatPage(
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     val messageListState = rememberLazyListState()
-    val peerMessages = remember(messages, peerUid) { messages.filter { it.peerUid == peerUid.trim().lowercase() } }
+    val peerMessages by remember(messages, peerUid) {
+        derivedStateOf { messages.filter { it.peerUid == peerUid.trim().lowercase() } }
+    }
     val previousMessageCount = remember { mutableStateOf(peerMessages.size) }
 
     LaunchedEffect(peerMessages.size) {
@@ -105,9 +108,14 @@ fun ChatPage(
             if (savedPeers.isEmpty()) {
                 Text("还没有聊天。发送第一条消息后，好友会显示在这里。", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 24.dp))
             } else {
-                savedPeers.forEach { savedUid ->
+                val peerItems = remember(savedPeers, peerNames, peerUid) {
+                    savedPeers.map { savedUid ->
+                        savedUid to (peerNames[savedUid] ?: "加载昵称…")
+                    }
+                }
+                peerItems.forEach { (savedUid, displayName) ->
                     Text(
-                        text = peerNames[savedUid] ?: "加载昵称…",
+                        text = displayName,
                         color = if (savedUid == peerUid) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                         fontWeight = if (savedUid == peerUid) FontWeight.Bold else FontWeight.Normal,
                         maxLines = 1,
@@ -189,7 +197,9 @@ private fun ChatBubble(message: ImChatMessage, onRevoke: (ImChatMessage) -> Unit
                     modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
                 )
                 if (message.isMine) {
-                    val canRevoke = System.currentTimeMillis() - message.sentAtMillis <= 120_000
+                    val canRevoke = remember(message.id, message.sentAtMillis) {
+                        System.currentTimeMillis() - message.sentAtMillis <= 120_000
+                    }
                     if (canRevoke) {
                         Text(
                             if (message.isRead) "已读 · 撤回" else "未读 · 撤回",
