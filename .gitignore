@@ -23,6 +23,9 @@ taotao-release.jks
 /ui_demo.html
 /新建文本文档.txt
 
+# CodeGraph 本机索引数据库，不进入版本库
+.codegraph/
+
 # 临时验收产物默认不入库；已经归档的历史交付物显式保留。
 artifacts/*
 !artifacts/dark-theme-polish/
