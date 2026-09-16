@@ -31,7 +31,8 @@ export default defineConfig({
     port: 5173,
     proxy: {
       "/api": {
-        target: "http://localhost:3000",
+        // 与 Nest 默认 PORT=4500 对齐；本地需要其它端口时通过 VITE_API_PROXY_TARGET 覆盖。
+        target: process.env.VITE_API_PROXY_TARGET ?? "http://localhost:4500",
         changeOrigin: true,
       },
     },

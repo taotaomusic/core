@@ -36,7 +36,7 @@ export class AppConfigService {
   readonly courgettePath: string;
   readonly defaultChannel: string;
 
-  /** 桌面差分生成程序；默认从 PATH 查找 bsdiff，缺失时仍可发布完整 JAR。 */
+  /** 兼容旧部署的 bsdiff 路径字段；当前桌面差分实现使用 bsdiff-wasm。 */
   readonly bsdiffExecutable: string;
 
   /**
@@ -46,10 +46,7 @@ export class AppConfigService {
    */
   readonly publicBaseUrl: string;
 
-  /**
-   * 搜索时解析播放地址的并发上限。
-   * 串行解析 20 首要十几秒，并发后总耗时取决于最慢的一批而不是累加。
-   */
+  /** 兼容旧部署的搜索并发字段；当前搜索只返回元信息，不解析播放地址。 */
   readonly searchConcurrency: number;
 
   /** ApiSweet 图片生成服务地址。API Key 存在数据库的 api_key 表中。 */

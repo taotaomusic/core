@@ -25,6 +25,12 @@ const RAW_BODY_PATHS = new Set([
 ]);
 
 /**
+ * 桌面发布清单是 JSON，但最多包含 512 个模块，不能沿用普通业务的 16KB 上限。
+ * 这里给清单单独留出空间，仍然不影响其它 JSON 路由的请求体边界。
+ */
+const DESKTOP_MANIFEST_PATH = "/api/v1/desktop/admin/releases";
+
+/**
  * 管理后台的构建产物目录。
  *
  * 固定产在 `dist/public`（见 vite.config.ts 的 outDir），但 `__dirname` 随运行方式变：
@@ -55,7 +61,11 @@ async function bootstrap(): Promise<void> {
   const config = app.get(AppConfigService);
 
   const parseJson = json({ limit: "16kb" });
+  const parseDesktopManifest = json({ limit: "1mb" });
   app.use((request: Request, response: Response, next: NextFunction) => {
+    if (request.method === "POST" && request.path === DESKTOP_MANIFEST_PATH) {
+      return parseDesktopManifest(request, response, next);
+    }
     if (request.method === "POST" && RAW_BODY_PATHS.has(request.path)) return next();
     return parseJson(request, response, next);
   });
