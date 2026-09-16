@@ -37,9 +37,25 @@ DATABASE_URL=postgres://postgres:密码@localhost:5432/music
 AUTH_SECRET=change-me-to-a-random-string-at-least-32-chars
 ADMIN_TOKEN=
 APK_DIR=./data/apk
+DESKTOP_RELEASE_DIR=./data/desktop
+SHARE_PREVIEW_DIR=./data/share-preview
+FFMPEG_BIN=ffmpeg
+COURGETTE_PATH=
 DEFAULT_CHANNEL=release
 PUBLIC_BASE_URL=http://127.0.0.1:4500
 APISWEET_BASE_URL=https://apisweet.com
+LSKY_UPLOAD_URL=https://img.kiwiyyds.cn/api/index.php
+LSKY_API_KEY=
+SMTP_HOST=
+SMTP_PORT=587
+SMTP_USER=
+SMTP_PASSWORD=
+SMTP_FROM=
+IM_ENABLED=false
+IM_INTERNAL_API_BASE_URL=http://127.0.0.1:5001
+IM_EXTERNAL_GATEWAY_URL=tcp://im.xydaigua.cn:5100
+IM_API_TOKEN=
+IM_SESSION_LIFETIME_SECONDS=900
 ```
 
 `.env` 不提交。环境中已有的变量优先于 `.env`。
@@ -52,14 +68,29 @@ APISWEET_BASE_URL=https://apisweet.com
 | `DATABASE_URL` | 无 | 是 | PostgreSQL 连接串 |
 | `AUTH_SECRET` | 开发兜底值 | 生产必需 | 生产环境至少 32 字符 |
 | `ADMIN_TOKEN` | 空 | 管理接口必需 | `X-Admin-Token` 的校验值 |
-| `APK_DIR` | `./data/apk` | 否 | APK 文件目录 |
+| `APK_DIR` | `./data/apk` | 否 | Android APK 和补丁文件目录 |
+| `DESKTOP_RELEASE_DIR` | `./data/desktop` | 否 | Windows 内容寻址模块和差分目录 |
+| `SHARE_PREVIEW_DIR` | `./data/share-preview` | 否 | 分享试听缓存目录 |
+| `FFMPEG_BIN` | `ffmpeg` | 否 | 分享试听裁剪程序 |
+| `COURGETTE_PATH` | 空 | 否 | PE 文件差分工具；未配置时使用 bsdiff-wasm |
 | `DEFAULT_CHANNEL` | `release` | 否 | 默认发布渠道 |
 | `PUBLIC_BASE_URL` | 按请求推导 | 生产建议 | APK 和播放占位地址的外部基地址 |
-| `SEARCH_CONCURRENCY` | `8` | 否 | 搜索相关并发上限 |
+| `SEARCH_CONCURRENCY` | `8` | 否 | 类型化配置仍保留；当前搜索实现不读取该字段 |
 | `APISWEET_BASE_URL` | `https://apisweet.com` | 否 | 图片生成上游地址 |
+| `LSKY_UPLOAD_URL` | `https://img.kiwiyyds.cn/api/index.php` | 否 | 头像图床地址 |
+| `LSKY_API_KEY` | 空 | 头像上传必需 | 只在服务端使用 |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASSWORD` / `SMTP_FROM` | 空/587 | 发码时必需 | 注册、绑定和换绑邮箱验证码 |
+| `IM_ENABLED` | `false` | 否 | 是否启用悟空 IM |
+| `IM_INTERNAL_API_BASE_URL` | `http://127.0.0.1:5001` | IM 启用时必需 | 悟空 IM 产品 HTTP API |
+| `IM_EXTERNAL_GATEWAY_URL` | `tcp://im.xydaigua.cn:5100` | IM 启用时必需 | 下发给客户端的原生 TCP 地址 |
+| `IM_API_TOKEN` | 空 | 否 | 悟空 IM 服务端 API Token |
+| `IM_SESSION_LIFETIME_SECONDS` | `900` | IM 启用时 60–86400 | 会话凭据续签周期 |
+| `EMAIL_VERIFICATION_TEST_CODE` | 空 | 仅 `NODE_ENV=test` | 契约验证固定验证码 |
 | `ENV_FILE` | `.env` | 否 | 指定其它配置文件 |
 
 ApiSweet API Key 存在 PostgreSQL `api_key` 表，不使用环境变量。
+
+`BSDIFF_BIN` 虽然仍由 `AppConfigService` 读取以兼容旧配置，但当前桌面差分代码使用内置 `bsdiff-wasm`，不需要在开发机安装外部 bsdiff。
 
 ## 4. 常用命令
 
@@ -75,6 +106,10 @@ npm start
 
 # 对已启动的验证实例执行契约测试
 npm run verify -- http://127.0.0.1:4720 verify-token
+
+# 单独构建管理后台和分享播放器
+npm run build:frontend
+npm run build:web-player
 ```
 
 不能使用：
@@ -93,7 +128,7 @@ esbuild src/main.ts
 1. 连接 PostgreSQL。
 2. 开启事务。
 3. 获取事务级顾问锁。
-4. 执行 `CREATE TABLE/INDEX IF NOT EXISTS`。
+4. 执行建表、加列、约束和索引等幂等 DDL。
 5. 提交事务。
 
 开发时新增表或索引，只修改 `migrations.ts`，不要手工维护另一套 SQL 文件。正式环境在服务重启后自动应用新增的幂等 DDL。
@@ -122,6 +157,8 @@ src/example/
 6. 普通 JSON 返回领域数据，由 `EnvelopeInterceptor` 包装。
 7. 流式或二进制响应添加 `@RawResponse()` 并自行结束响应。
 8. 更新接口和架构文档。
+
+新增桌面发布或 IM 路由时，还要更新 [00-code-index.md](00-code-index.md) 的路由计数和配置索引。
 
 ## 7. DTO 与参数校验
 
@@ -296,3 +333,9 @@ npx tsc -p tsconfig.json --noEmit
 - 记录 HTTP 状态码、业务码、路径和不含敏感信息的请求参数。
 - 不复制访问令牌、刷新令牌或 Key 到日志。
 - 数据问题在验证库构造最小数据，不直接修改正式库复现。
+
+### 管理后台开发代理
+
+`npm run dev:frontend` 使用 Vite `5173`，`vite.config.ts` 将 `/api` 默认代理到后端
+`http://localhost:4500`。如果后端使用其它端口，先设置 `VITE_API_PROXY_TARGET=http://localhost:<端口>`；
+生产构建后由 NestJS 在 `/admin/` 提供静态文件，不经过 Vite 代理。

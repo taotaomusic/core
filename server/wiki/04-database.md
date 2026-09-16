@@ -22,8 +22,8 @@
 DatabaseService.onModuleInit
   → 等待 PostgreSQL
   → BEGIN
-  → pg_advisory_xact_lock
-  → CREATE TABLE/INDEX IF NOT EXISTS
+  → pg_advisory_xact_lock(913720001)
+  → CREATE/ALTER/INDEX/约束等幂等 DDL
   → COMMIT
 ```
 
@@ -42,6 +42,10 @@ DatabaseService.onModuleInit
 
 这类变化不能只写 `CREATE TABLE IF NOT EXISTS`，应先制定兼容和回滚方案。
 
+当前迁移没有版本表，也没有“向下迁移”命令；`ALTER TABLE ... ADD COLUMN IF NOT EXISTS`、回填和
+约束补齐都集中在 `src/database/migrations.ts` 的同一事务中。迁移失败会回滚整组 DDL，服务不会
+在数据库未完成初始化时开始监听端口。
+
 ## 3. 表清单
 
 ### `users`
@@ -53,6 +57,11 @@ DatabaseService.onModuleInit
 | `password_hash` | scrypt 哈希 |
 | `password_salt` | 随机盐 |
 | `created_at` | timestamptz |
+| `email` | 可空邮箱；部分唯一索引 |
+| `nickname` | 可空昵称 |
+| `avatar_url` | 可空 HTTPS 头像地址 |
+| `disabled_at` | 可空 bigint；禁用时撤销刷新令牌 |
+| `im_uid` | 可空 UUID 字符串；部分唯一索引 |
 
 ### `refresh_tokens`
 
@@ -96,6 +105,12 @@ DatabaseService.onModuleInit
 保存用户清空最近播放时推进的 `cleared_before` 边界。清空操作不删除 `user_song_stats`，
 因此听歌次数和累计时长仍然保留，离线设备补传边界之前的旧会话也不会恢复已清空列表。
 
+### `playback_history_clear_operation`
+
+按 `(user_id, marker)` 保存每次清空操作的 `revision`、`cleared_before` 和 `cleared_at`。
+它不是冗余日志：客户端清空响应丢失后重试必须返回第一次结果，即使另一台设备已经再次清空，
+否则重试会错误地推进第三个代际。
+
 ### `app_release`
 
 保存 APK 文件名、大小、sha256、灰度比例、最低 SDK 和发布状态。
@@ -104,7 +119,8 @@ DatabaseService.onModuleInit
 
 ### `app_channel`
 
-保存每个发布渠道的最低支持版本号。
+保存每个发布渠道的 Android `min_supported_version_code`、桌面
+`desktop_min_supported_version_code` 和更新时间；两端最低版本独立判断。
 
 ### `app_config`
 
@@ -141,6 +157,38 @@ CREATE TABLE image_generation_task (
 
 任务引用 Key 使用 `ON DELETE RESTRICT`，避免删除仍需轮询的 Key。
 
+### `song_share`
+
+保存分享 token、用户、来源、稳定歌曲身份和元数据快照。`token` 为 8–24 位短码，
+`(user_id, source, song_id)` 唯一；`preview_file` 只指向服务端裁剪出的试听文件，不能保存上游限时直链。
+`access_count`、`enabled` 和时间字段用于公开分享统计与失效控制。
+
+### `app_announcement`
+
+保存公告标题、正文、启用状态、置顶状态和发布时间。`enabled`/`pinned` 是 `smallint` 0/1，
+`idx_app_announcement_visible` 支持公开接口按置顶和发布时间读取。置顶切换由 Repository 的
+顾问锁保证同一时间只有一条置顶公告。
+
+### `im_device_session`
+
+保存用户、悟空设备类型、设备 ID 哈希、Token 哈希、过期/撤销和更新时间；主键是
+`(user_id, device_flag)`，同类设备新登录覆盖旧凭据。消息正文和同步游标不在本库。
+
+### `app_patch`
+
+Android 补丁按 `(channel, target_version_code, patch_version)` 唯一，保存文件大小、sha256、
+灰度比例、启用状态和说明。补丁只对指定宿主 `target_version_code` 有效，不能当成“高版本 APK”处理。
+
+### `desktop_release`、`desktop_jar`、`desktop_patch`
+
+- `desktop_release` 以 `(channel, architecture, version_code)` 唯一，保存入口、灰度、启用和说明。
+- `desktop_jar` 保存安装目录相对路径、分类、内容寻址对象名、大小和 sha256；同一发布内路径唯一。
+- `desktop_patch` 保存来源版本、路径、源/目标 sha256、算法（`courgette`/`bsdiff`）、对象、大小和启用状态；
+  `(release_id, from_version_code, path, algorithm)` 唯一。
+
+桌面最低版本使用 `app_channel.desktop_min_supported_version_code`，Android 继续使用同表中的
+`min_supported_version_code`，两者不能混用。
+
 ## 4. 类型规则
 
 ### 时间
@@ -176,6 +224,7 @@ SELECT song_id AS "songId" FROM favorites;
 - 多行读取使用 `DatabaseService.all`。
 - 单行或 `RETURNING` 使用 `first`。
 - 写操作只关心影响行数时使用 `run`。
+- 需要多条 SQL 原子提交时使用 `DatabaseService.transaction`，回调内不要再自行获取连接。
 - 构造函数不能查询数据库。
 - 不直接暴露 Pool，避免调用方跨网络请求持有连接。
 
@@ -325,16 +374,27 @@ ORDER BY api_key_id;
 
 ## 12. 索引检查
 
-当前关键索引：
+当前迁移声明的显式索引（主键和 UNIQUE 约束产生的隐式索引未重复列出）：
 
 | 索引 | 服务查询 |
 | --- | --- |
-| `users(username)` 唯一 | 登录、注册查重 |
-| `refresh_tokens(token_hash)` 唯一 | 刷新令牌消费 |
-| `favorites(user_id, source, song_id)` 唯一 | 收藏写入和批量判断 |
+| `idx_users_email_unique`（部分唯一） | 邮箱查重和绑定 |
+| `idx_users_im_uid_unique`（部分唯一） | 悟空 IM UID 查重 |
+| `idx_favorites_user` | 收藏按创建时间读取 |
+| `idx_favorites_active_user`（部分） | 当前有效收藏列表和搜索批量判断 |
+| `idx_playlists_user_updated` | 歌单按更新时间读取 |
+| `idx_playlist_songs_order` | 歌单按 position 读取 |
+| `idx_song_share_lookup` | 分享 token/用户歌曲查找 |
+| `idx_user_song_stats_recent`（部分） | 最近播放按 last_history_at 排序 |
 | `idx_app_release_lookup` | 更新候选版本 |
+| `idx_app_announcement_visible` | 公开公告按置顶/发布时间读取 |
 | `idx_api_key_available` | 图片 Key 按渠道和额度选择 |
-| `image_generation_task(task_id)` 主键 | 轮询任务 |
 | `idx_image_generation_task_key` | 按 Key 汇总和外键相关操作 |
+| `idx_im_device_session_active`（部分） | 查找未撤销且未过期 IM 凭据 |
+| `idx_app_patch_lookup` | Android 补丁候选版本 |
+| `idx_desktop_release_lookup` | 桌面更新候选版本 |
+| `idx_desktop_jar_sha256` | 内容寻址模块引用检查 |
+| `idx_desktop_patch_manifest` | 桌面差分按版本/路径查找 |
+| `idx_desktop_patch_sha256` | 内容寻址差分引用检查 |
 
 新增查询先确认过滤列和排序列是否匹配现有索引；不要为低频管理查询盲目增加索引。

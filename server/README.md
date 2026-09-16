@@ -1,8 +1,8 @@
 # 桃桃音乐后端服务
 
-> 后端架构、接口、数据库与运维文档统一整理在 [wiki/](wiki/README.md)。
+> 后端架构、接口、数据库与运维文档统一整理在 [wiki/](wiki/README.md)。先看 [CodeGraph 代码索引](wiki/00-code-index.md) 了解当前路由和模块快照。
 
-NestJS + TypeScript 实现的音乐接口适配服务。媒体、图片和歌词只做实时转发；PostgreSQL 保存用户账号、刷新令牌哈希、收藏、热更新发布记录、第三方 API Key 和图片任务元数据，不保存媒体内容。
+NestJS + TypeScript 实现的音乐接口适配服务。音乐媒体、图片和歌词只做实时转发；分享试听和 Android/Windows 发布文件是受控的本地缓存/对象例外。PostgreSQL 保存用户账号、刷新令牌哈希、收藏、歌单、播放统计、热更新发布记录、第三方 API Key、图片任务和 IM 凭据元数据，不保存聊天正文或上游限时播放直链。
 
 ## 启动
 
@@ -60,12 +60,14 @@ src/
     interceptors/           统一成功信封、安全响应头
     decorators/             @Public @RawResponse @RateLimit @CurrentUser
     guards/                 管理令牌校验
-    rate-limit/             三桶滑动窗口限流
+    rate-limit/             按用途划分的进程内滑动窗口限流桶
     semaphore.ts            并发上限
 
   config/                 环境变量读取与校验
   database/               PostgreSQL 连接池与建表迁移
   auth/                   注册、登录、令牌轮换、访问令牌守卫
+  mail/                   验证码邮件和模板
+  announcement/           公告读取、置顶和后台管理
   favorites/              收藏
   playlists/              云端歌单与歌曲顺序
   playback/               最近播放、播放会话与听歌统计
@@ -74,6 +76,9 @@ src/
   music/                  搜索、播放转发、歌词
   image-generation/       gpt-image-2 图片生成任务适配
   release/                热更新：客户端引导、安装包分发、发布管理
+  desktop-release/        Windows 模块清单、内容寻址对象和差分发布
+  im/                     悟空 IM 会话、同步、撤回和已读代理
+  user-admin/              后台用户、禁用和播放统计
   health/                 健康检查
 
   frontend/               管理后台（Vue 3 + Element Plus，浏览器入口）
@@ -89,7 +94,7 @@ src/
 
 ### 管理后台
 
-浏览器打开 `http://localhost:4500/admin/`。首次进入填 `ADMIN_TOKEN`，只存在浏览器的 localStorage。后台入口固定在 `/admin/`，服务根路径留给未来网页版；发布、补丁、公告、用户统计、AI 密钥和系统设置均通过同一批 `/api/v1/app/admin/*` 接口访问。
+浏览器打开 `http://localhost:4500/admin/`。首次进入填 `ADMIN_TOKEN`，只存在浏览器的 localStorage。后台入口固定在 `/admin/`，服务根路径留给未来网页版；Android 发布、补丁、公告、用户统计、AI 密钥和系统设置通过 `/api/v1/app/admin/*`，Windows 桌面发布通过独立的 `/api/v1/desktop/admin/*`。
 
 管理后台使用 Vite 生产压缩；Element Plus 通过 `unplugin-vue-components` 与
 `unplugin-auto-import` 按实际使用的组件、服务和样式自动导入，入口禁止重新使用
@@ -128,6 +133,9 @@ npm run dev:frontend      # 独立开发服务器（5173），API 代理到本�
 
 **④ `bucketOf` 必须保持同步。** 它在 `Array.prototype.find` 的回调里被调用，一旦变成 async，回调返回的 Promise 恒为真值，`find` 会命中第一个候选版本 —— 灰度静默失效成全量下发。
 
+普通 JSON 请求体限制为 16KB；桌面发布清单 `POST /api/v1/desktop/admin/releases` 单独允许 1MB，
+以容纳多模块清单。桌面模块文件上传仍使用原始字节流，不应发送 JSON 或 multipart。
+
 另外两处竞态是这次迁移顺带修掉的，别改回两步写法：刷新令牌的 `consume` 是**单条** `UPDATE … RETURNING`（拆成 SELECT + UPDATE 会让并发刷新双双成功，一次性令牌就不再一次性）；注册的唯一约束冲突在 `users.create` 里翻译成 409/4090（查重和插入之间夹着约 100ms 的 scrypt，连接池下挡不住并发，不翻译会漏成 502）。
 
 ## 配置
@@ -141,14 +149,18 @@ npm run dev:frontend      # 独立开发服务器（5173），API 代理到本�
 | `AUTH_SECRET` | 访问令牌签名密钥，生产环境必须为至少 32 位随机值（启动时校验） |
 | `ADMIN_TOKEN` | 发布管理令牌，留空则管理接口全部拒绝 |
 | `APK_DIR` | APK 存放目录，默认 `./data/apk` |
+| `DESKTOP_RELEASE_DIR` | Windows 模块和差分对象目录，默认 `./data/desktop` |
 | `SHARE_PREVIEW_DIR` | 分享试听缓存目录，默认 `./data/share-preview` |
 | `FFMPEG_BIN` | ffmpeg 可执行文件，默认从 `PATH` 查找；用于裁剪最多 60 秒、64 kbps MP3 |
+| `COURGETTE_PATH` | 可选的 PE 差分工具；未配置时使用 bsdiff-wasm |
 | `DEFAULT_CHANNEL` | 默认渠道，默认 `release` |
 | `PUBLIC_BASE_URL` | 对外基地址，用于拼装 APK 下载地址 |
-| `SEARCH_CONCURRENCY` | 搜索时解析播放地址的并发上限，默认 `8` |
+| `SEARCH_CONCURRENCY` | 历史兼容配置，当前搜索不解析播放地址，不读取该字段 |
 | `ENV_FILE` | 指定 `.env` 的其它路径 |
 | `APISWEET_BASE_URL` | 图片生成服务地址，默认 `https://apisweet.com` |
+| `LSKY_UPLOAD_URL` / `LSKY_API_KEY` | 头像图床地址和服务端 Key |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASSWORD` / `SMTP_FROM` | 注册验证码邮件 SMTP 配置；五项均需设置 |
+| `IM_ENABLED` / `IM_INTERNAL_API_BASE_URL` / `IM_EXTERNAL_GATEWAY_URL` / `IM_API_TOKEN` / `IM_SESSION_LIFETIME_SECONDS` | 悟空 IM 开关、内网 HTTP API、TCP Gateway、服务端 Token 和会话周期 |
 
 ## 响应约定
 
@@ -160,7 +172,9 @@ npm run dev:frontend      # 独立开发服务器（5173），API 代理到本�
 - `GET /api/v1/songs/{id}/play` —— 音频流
 - `GET /api/v1/songs/{id}/lyrics` —— 默认纯文本（带 `format=json` 时才是信封）
 - `GET /api/v1/app/apk/{versionCode}` —— 二进制
+- `GET /api/v1/app/patch/{targetVersionCode}/{patchVersion}` —— Android 补丁二进制
 - `GET /api/v1/public/shares/{token}/preview` —— 最多 60 秒的低码率 MP3，支持 Range
+- `GET /api/v1/desktop/artifacts/{sha256}`、`GET /api/v1/desktop/patches/{sha256}` —— 桌面对象/差分二进制，支持 Range
 
 ## 接口
 
@@ -460,3 +474,28 @@ node tools/verify-contract.mjs http://127.0.0.1:4720 verify-token
 `reset-db.mjs` 会 `DROP SCHEMA public CASCADE`，所以它拒绝库名里不含 `verify` / `test` 的连接串 —— SQLite 时代「删掉那个文件」就够了，现在需要一个显式且带护栏的动作。
 
 类型检查能抓住绝大部分同步改异步的漏改（漏 `await` 会得到 `Promise<T>` 与 `T` 不匹配），但**抓不住 `.find()` / `.map()` 回调里的漏改**，改动数据层后除了 `npx tsc --noEmit` 还要人工看一遍这些回调。
+
+### Windows 桌面更新
+
+桌面端使用独立的 `/api/v1/desktop/*` 路由和 `DESKTOP_RELEASE_DIR` 内容寻址目录：
+
+- `GET /api/v1/desktop/bootstrap` 公开返回渠道、架构、版本、模块清单和可用差分；无效访问令牌不能让它变成 401。
+- `GET/HEAD /api/v1/desktop/artifacts/{sha256}` 与 `/desktop/patches/{sha256}` 是裸字节 Range 下载，使用 ETag 和不可变缓存。
+- `POST /api/v1/desktop/admin/artifacts` 接收原始模块（最多 500 MiB），`POST /desktop/admin/releases` 接收 1–512 项清单并生成差分。
+- `POST /desktop/admin/rollout` 分阶段放量，只有存在完整模块且 100% 放量的版本才能抬高 `min-version`。
+
+完整清单校验、发布命令、差分选择和错误码见 [wiki/10-desktop-release.md](wiki/10-desktop-release.md)。桌面后台不属于
+`/app/admin/*`，但仍使用同一个 `X-Admin-Token`。
+
+### 悟空 IM
+
+`/api/v1/im/*` 只负责会话凭据、联系人、会话/频道同步、撤回和已读；聊天正文不进入 PostgreSQL。
+`IM_ENABLED=false` 时返回 503/5031。会话 Token 只保存 SHA-256，Gateway 地址必须是 `tcp://`，悟空产品 API
+默认只在 `127.0.0.1:5001` 提供。端口、防火墙、同步参数和上线验收见 [wiki/09-wukongim.md](wiki/09-wukongim.md)。
+
+### 当前实现审计提示
+
+- `SEARCH_CONCURRENCY` 仍是类型化配置字段，但当前搜索已经不解析播放地址，因此不会读取它。
+- `BSDIFF_BIN` 仍被读取以兼容旧配置，桌面差分实际使用 `bsdiff-wasm`，外部 bsdiff 不是运行前置条件。
+- `vite.config.ts` 的开发代理默认目标是 `http://localhost:4500`，可用 `VITE_API_PROXY_TARGET` 覆盖；使用其它后端端口时先设置该变量再运行 `npm run dev:frontend`。
+- `main.ts` 为历史兼容保留 `/desktop/admin/jars`、`/desktop/admin/patches` 原始体白名单，但当前没有对应 Controller；可调用的上传接口只有 `/desktop/admin/artifacts`。

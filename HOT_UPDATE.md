@@ -5,6 +5,13 @@
 本文保留原始设计依据，并记录当前已落地的能力。整包更新、远程配置和 DEX 逻辑热修都已实现；
 实际发布步骤以 [RELEASE.md](RELEASE.md) 为准。
 
+> **实现状态说明**：本文第 2、3 节保留迁移前的路由和 SQLite 设计，用于解释约束，文中的
+> `server/src/routes/api.ts`、旧脚本路径和 SQLite DDL **不是当前文件布局或可直接执行的实现**。
+> 现行 NestJS 模块、89 条路由、PostgreSQL 表结构和契约边界以
+> [server/wiki/00-code-index.md](server/wiki/00-code-index.md)、
+> [server/wiki/03-api-contracts.md](server/wiki/03-api-contracts.md) 与
+> [server/wiki/04-database.md](server/wiki/04-database.md) 为准。
+
 | 能力 | 说明 |
 | --- | --- |
 | 整包 APK 应用内更新 | 服务端维护版本清单与 APK 文件，客户端检查、断点续传下载、校验完整性、唤起系统安装 |

@@ -2,6 +2,8 @@
 
 本文说明 Android 与 Windows 客户端共同支持的音乐功能、Web 分享播放器、云端数据边界和开发验收方式。AI 图片与 IM 属于 Android 现有能力，Windows 与 Web 当前不接入；本轮只对齐音乐主链路。
 
+源码模块边界、关键符号、跨端调用关系和 CodeGraph 刷新命令见 [client-code-index.md](client-code-index.md)。
+
 ## 功能范围
 
 两端都支持：

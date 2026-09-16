@@ -2,11 +2,16 @@
 
 ## 项目结构
 
-桃桃音乐是一个 Kotlin Multiplatform 音乐播放器，目前优先支持 Android。
+桃桃音乐是一个 Kotlin Multiplatform 音乐播放器，当前提供 Android、Windows 和 Web 分享播放器。
 
 - `androidApp/`：Android 应用入口、Jetpack Compose 页面、Android 资源和平台能力。
-- `shared/`：跨平台共享的数据模型、业务状态和未来的播放领域逻辑，代码放在 `src/commonMain/`。
-- 根目录 Gradle 文件：定义 `:androidApp` 和 `:shared` 模块。
+- `desktopApp/`：Windows Compose Desktop 应用、JVM 播放、桌面持久化和系统媒体能力。
+- `desktopLauncher/`、`desktopUpdater/`：Windows 发布包的启动器和模块更新器。
+- `webApp/`：Kotlin/Wasm 分享播放器和浏览器音频适配。
+- `player-ui/`：Android、Windows、Web 共用的播放主题、歌曲行、迷你播放器和布局组件。
+- `shared/`：跨平台共享的数据模型、歌词解析和音质规则，代码放在 `src/commonMain/`。
+- `patch/`、`build-logic/`：热修复补丁模块与 Gradle/字节码插桩构建逻辑。
+- 根目录 Gradle 文件：定义上述客户端模块和 `:shared` 的构建关系。
 - `build/` 目录：构建生成物，只读，不手工修改。
 - `server/`：NestJS + TypeScript + PostgreSQL 的接口适配服务；服务源码必须保持可读，不得提交压缩后的源码。
 - 外部参考仓库不得放在项目根目录；临时参考代码使用项目外目录，交付前清理无关仓库。
@@ -15,6 +20,7 @@
 ## 文档索引
 
 - [README.md](README.md)：项目总览、播放链路、开发入口。
+- [client-code-index.md](client-code-index.md)：客户端 CodeGraph 索引、模块边界、关键符号和刷新命令。
 - **[RELEASE.md](RELEASE.md)：发布与热更新流程、版本号铁律、不能破的客户端契约。改后端或推版本前必读。**
 - [server/README.md](server/README.md)：后端接口、数据层规矩、契约验证。
 - [HOT_UPDATE.md](HOT_UPDATE.md)：热更新的设计动机（部分内容已被实现取代，文内有标注）。
@@ -64,7 +70,7 @@
 ## 后端开发
 
 - 构建必须用 `tsc`，开发用 `ts-node`。**不能用 esbuild 或 tsx** —— 它们不支持 `emitDecoratorMetadata`，NestJS 的构造器注入会拿不到 `design:paramtypes`。
-- 数据层改动后必须跑 `server/tools/verify-contract.mjs`（当前 88 项，须全绿），用独立的验证库而不是正式库。
+- 数据层改动后必须跑 `server/tools/verify-contract.mjs`（检查项数量随脚本版本变化，以实际输出为准；本次索引时为 120 项，须全绿），用独立的验证库而不是正式库。
 - 新增路由默认就受全局访问令牌守卫保护；公开路由必须显式标 `@Public()`。漏标只会让接口意外要求登录（能立刻发现），不会意外裸奔。
 - 数据层与客户端之间有一组不能破的契约（401 不能变 403、`/search` 必须是裸 NDJSON、SQL 别名必须加双引号等），逐条列在 [RELEASE.md](RELEASE.md) 里。
 

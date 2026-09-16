@@ -46,8 +46,17 @@ node dist/main.js
 | `AUTH_SECRET` | 至少 32 字符随机值 |
 | `ADMIN_TOKEN` | 非空且妥善保管 |
 | `APK_DIR` | 服务进程可写、磁盘空间充足 |
+| `DESKTOP_RELEASE_DIR` | 桌面模块和差分对象目录可写、磁盘空间充足 |
+| `SHARE_PREVIEW_DIR` | 分享试听缓存目录可写；未安装 ffmpeg 时试听会返回 5034 |
+| `FFMPEG_BIN` | 指向可执行的 ffmpeg |
+| `COURGETTE_PATH` | 可选；PE 模块差分工具 |
 | `PUBLIC_BASE_URL` | 外部 HTTPS 地址 |
 | `APISWEET_BASE_URL` | 默认 `https://apisweet.com` |
+| `LSKY_API_KEY` | 开启头像上传时必填，不能写进前端 |
+| `SMTP_HOST/PORT/USER/PASSWORD/FROM` | 注册、绑定、换绑验证码发信配置必须完整 |
+| `IM_ENABLED` | 不启用 IM 时保持 `false` |
+| `IM_INTERNAL_API_BASE_URL` | IM 启用时指向悟空 IM HTTP API（默认 5001，仅内网） |
+| `IM_EXTERNAL_GATEWAY_URL` | IM 启用时必须是 `tcp://` Gateway 地址 |
 
 ApiSweet Key 在数据库，不在生产 `.env`。
 
@@ -264,3 +273,45 @@ curl.exe -i "$origin/api/v1/app/bootstrap?versionCode=1&sdk=36&deviceId=deploy-c
 - 新增表和索引通常可直接上线；破坏性结构变化必须分阶段。
 - 回滚旧代码前确认旧代码能忽略新表和新列。
 - 不要在部署脚本里调用 `reset-db.mjs`。
+
+## 17. Windows 桌面发布
+
+桌面发布与 APK 发布使用不同表和文件目录，但共享管理令牌和灰度哈希。完整清单约束、差分算法和
+验收命令见 [10-desktop-release.md](10-desktop-release.md)。生产发布的最短顺序是：
+
+1. 计算每个模块的 `size` 和小写 sha256，确认 `entrypoint` 在清单中。
+2. 对每个模块调用 `POST /api/v1/desktop/admin/artifacts?sha256=...`，请求体为原始字节；不要走 JSON 或 multipart。
+3. 调用 `POST /api/v1/desktop/admin/releases` 提交清单，检查返回的 `fileCount`、`totalSize` 和版本号。
+4. 用 `POST /api/v1/desktop/admin/rollout` 从 0/10% 逐步升到 100%。
+5. 确认每个模块的完整下载和 Range 行为，再调用 `POST /api/v1/desktop/admin/min-version`。
+
+桌面对象按 sha256 内容寻址，发布记录删除不会自动删除磁盘对象；清理前必须扫描数据库引用。桌面后台
+路径是 `/desktop/admin/*`，不能误写成 Android 的 `/app/admin/*`。
+
+## 18. IM 上线检查
+
+IM 启用前验证：
+
+- `IM_INTERNAL_API_BASE_URL` 能从 NestJS 主机访问悟空 IM `/health`，且不是公网暴露的 5001。
+- `IM_EXTERNAL_GATEWAY_URL` 是 `tcp://`，客户端能连 5100/TCP；不能用 HTTP 客户端探测 5100。
+- 用失效 Token CONNECT 必须被 Gateway 拒绝；仅 `/user/token` 返回成功不足以证明 Gateway 开启鉴权。
+- `POST /api/v1/im/session`、会话同步、撤回、已读和退出登录均通过验证账号实测。
+
+IM 消息正文不进入 PostgreSQL；日志不得记录 IM API Token、设备 Token 或消息体。故障码与端口说明见
+[09-wukongim.md](09-wukongim.md)。
+
+## 19. 发布后扩展冒烟
+
+```powershell
+$origin = "https://你的域名"
+
+# 公开公告和桌面更新均不能要求登录
+curl.exe -i "$origin/api/v1/announcements"
+curl.exe -i "$origin/api/v1/desktop/bootstrap?channel=release&architecture=windows-x64&versionCode=1&deviceId=release-check"
+
+# 分享试听必须是音频流，不是 JSON 信封
+curl.exe -i -H "Range: bytes=0-99" "$origin/api/v1/public/shares/替换为真实token/preview"
+```
+
+若只发布了 Android，仍应检查桌面 bootstrap 返回结构不会 5xx；若启用了 IM，再追加真实账号的会话和
+同步验证。所有后台接口失败时先确认 401/4013 管理令牌，再排查业务码。

@@ -9,6 +9,8 @@ Kotlin Multiplatform 音乐播放器 + 自建后端。当前提供 Android、Win
 | [AGENTS.md](AGENTS.md) | 开发规范：代码风格、模块划分、测试、签名 | 日常开发、代码审查 |
 | **[RELEASE.md](RELEASE.md)** | 发布与热更新流程、版本号铁律、不能破的契约 | **推版本前必读** |
 | [server/README.md](server/README.md) | 后端架构、接口文档、数据层规则、契约验证 | 后端开发、接口对接 |
+| [server/wiki/00-code-index.md](server/wiki/00-code-index.md) | CodeGraph 后端代码索引、89 条路由、21 张表与配置快照 | 核对源码、路由和文档是否漂移 |
+| [client-code-index.md](client-code-index.md) | CodeGraph 客户端索引、模块边界、关键符号与刷新状态 | 客户端架构定位、跨模块调用和文档同步 |
 | [MUSIC_CROSS_PLATFORM.md](MUSIC_CROSS_PLATFORM.md) | Android/Windows 音乐功能、定时播放、云端歌单契约 | 双端开发、联调和验收 |
 | [HOT_UPDATE.md](HOT_UPDATE.md) | 热更新设计动机与边界 | 理解热更新能力范围 |
 
@@ -53,7 +55,10 @@ server/       NestJS 后端服务（TypeScript + PostgreSQL）
               ├─ 收藏、播放历史、听歌统计
               ├─ QQ 音乐 / 网易云音乐上游适配
               ├─ 热更新版本管理与灰度分发
-              ├─ 公告系统
+              ├─ 分享短链、试听缓存与公告
+              ├─ Windows 模块清单、内容寻址对象与差分发布
+              ├─ 悟空 IM 会话与同步代理
+              ├─ 邮箱验证码、头像上传与后台用户管理
               ├─ AI 图片生成任务代理
               └─ 管理后台（Vue 3 + Element Plus）
 
@@ -407,7 +412,7 @@ GET /api/v1/songs/{id}/lyrics?format=json
 
 ### Windows 客户端开发
 
-Windows 版本当前优先覆盖音乐功能：账号、双源搜索、播放队列、逐行/逐字歌词、收藏、最近播放、离线下载、主题和音质设置。两端均支持云端歌单（创建、改名、删除、歌曲增删与排序）和按实际播放时间倒计时的定时停止；AI 图片与 IM 暂不接入。完整的接口字段、同步边界和定时器行为见 [MUSIC_CROSS_PLATFORM.md](MUSIC_CROSS_PLATFORM.md)。
+Windows 版本当前优先覆盖音乐功能：账号、双源搜索、播放队列、逐行/逐字歌词、收藏、最近播放、离线下载、主题和音质设置。两端均支持云端歌单（创建、改名、删除、歌曲增删与排序）和按实际播放时间倒计时的定时停止；后端虽已提供 AI 图片与 IM 接口，Android/Windows 客户端当前暂不接入。完整的接口字段、同步边界和定时器行为见 [MUSIC_CROSS_PLATFORM.md](MUSIC_CROSS_PLATFORM.md)。
 
 ```powershell
 # 运行桌面客户端
@@ -434,7 +439,7 @@ MSI/EXE 打包需要 WiX Toolset 3.11；若 Gradle 下载的 `wix311.zip` 损坏
 ### 后端开发
 
 **环境要求**：
-- Node.js 18+
+- Node.js 20+
 - PostgreSQL 14+
 
 **首次启动**：
@@ -474,7 +479,7 @@ npm run dev
 # 独立开发服务器（Vite，端口 5173）
 npm run dev:frontend
 
-# API 请求会自动代理到本机后端（4500 端口）
+# API 请求默认代理到本机后端（4500 端口）；其它端口先设置 VITE_API_PROXY_TARGET
 
 # 构建前端（产出到 dist/public/）
 npm run build:frontend

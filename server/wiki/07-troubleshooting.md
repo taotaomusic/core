@@ -233,15 +233,23 @@ ORDER BY quota DESC, id;
 | 401/4012 | 刷新令牌是否已轮换、撤销或过期 |
 | 401/4013 | `X-Admin-Token` |
 | 404/4040 | 路径和全局 `/api/v1` 前缀 |
-| 404/4042 | 本地图片任务表 |
+| 404/4041 | Android/桌面版本、补丁或发布对象不存在 |
+| 404/4042 | 图片任务、图片 Key 或本地桌面对象不存在 |
+| 404/4043 | 公告不存在 |
+| 404/4044 | 后台用户不存在 |
+| 404/4045 | 歌单或分享短链不存在 |
 | 409/4090 | 用户名唯一约束 |
 | 409/4091 | 最低版本守卫和全量发布 |
+| 409/4092–4094 | 邮箱已注册、绑定状态或换绑状态 |
+| 409/4095 | 播放会话身份冲突 |
+| 409/4096 | 播放会话 historyRevision 领先服务端 |
 | 429/4290 | 本地通用限流桶 |
 | 429/4291 | ApiSweet 上游限流 |
-| 502/5020 | 腾讯音乐、流式代理或未知内部错误 |
+| 502/5020 | 腾讯/网易音乐、IM、流式代理或未知内部错误 |
 | 502/5021 | ApiSweet Key、余额或上游错误 |
-| 503/5031 | 图片任务关联 Key 不可用 |
-| 503/5032 | GPTIMAGE2 无 Key 或额度不足 |
+| 503/5031 | IM 未启用 |
+| 503/5032 | 发布记录读写失败或 GPTIMAGE2 无 Key/额度不足 |
+| 503/5034 | 分享试听 ffmpeg 不可用 |
 
 ## 11. 只读诊断命令
 
@@ -297,3 +305,87 @@ ORDER BY channel, state;
 - 同一个 taskId 对应多个外部账单或疑似重复扣费。
 - 热更新最低版本已抬高但没有可下载的全量 APK。
 - 回滚需要恢复数据库结构而不仅是替换 `dist/`。
+
+## 13. 桌面更新与内容寻址文件
+
+### `desktop/bootstrap` 返回无更新
+
+按顺序确认：
+
+1. `channel`、`architecture` 和客户端 `versionCode` 与后台发布记录一致。
+2. 目标 `desktop_release.enabled = 1`，灰度比例命中当前用户/设备哈希。
+3. 每个 `desktop_jar` 的对象确实存在于 `DESKTOP_RELEASE_DIR`，sha256 和文件大小一致。
+4. 客户端是否低于桌面最低版本；强制更新只能使用同架构 100% 放量版本。
+
+无效或过期 Authorization 不应导致 bootstrap 401；若出现 401，先检查 `AccessTokenGuard` 的
+`@Public()` 元数据和反向代理是否篡改了路径。
+
+### 桌面上传 400/4006 或下载 404/4042
+
+上传接口接收原始字节和 query `sha256`，不能发送 JSON/base64/multipart。代理层检查：
+
+- `client_max_body_size` 是否超过模块大小（单模块最多 500 MiB）；
+- 是否启用了压缩/转码导致字节改变；
+- `DESKTOP_RELEASE_DIR` 运行用户是否可写；
+- 发布清单里的相对路径是否包含 `..`、反斜杠或重复项。
+
+数据库有记录但对象不存在时不要手工改 sha256；重新上传同一对象或重新发布清单，并保留旧对象供
+正在下载的客户端完成请求。
+
+### 差分没有出现
+
+只有上一版本同路径文件存在、源 sha256 匹配且生成结果小于目标完整模块 90% 时才会下发差分。
+Courgette 失败会回退 bsdiff-wasm；两者都失败或差分过大时返回完整模块是预期行为。
+
+## 14. IM、头像和邮件
+
+### IM 返回 503/5031
+
+检查 `IM_ENABLED=true` 是否通过环境校验，重启后确认 `IM_INTERNAL_API_BASE_URL` 可访问。启用时：
+
+- 内部 API 必须是 `http://`/`https://`；外部 Gateway 必须是 `tcp://`；
+- `IM_SESSION_LIFETIME_SECONDS` 必须在 60–86400；
+- 5001 只允许本机/私网访问，5100 才是客户端 TCP 端口。
+
+### IM 返回 502/5020 或同步格式错误
+
+从 NestJS 主机执行悟空 IM `/health`，检查 HTTP 超时和服务端 Token。不要把悟空原始响应完整写日志，
+只记录 HTTP 状态、用户 ID 和无敏感字段的错误摘要。聊天消息正文不在 PostgreSQL，不能用 SQL 查“消息是否丢失”。
+
+### 头像上传失败
+
+`POST /auth/avatar` 必须是 multipart 字段 `file`，MIME 以 `image/` 开头且不超过 5 MiB；服务端必须
+配置 `LSKY_API_KEY`。Lsky 非 2xx 或返回结构不完整会映射为 400/4000，不能把图床令牌错误当成用户 401。
+
+### 注册验证码发送失败
+
+确认 `SMTP_HOST`、`SMTP_USER`、`SMTP_PASSWORD`、`SMTP_FROM` 四项完整，`SMTP_PORT` 在 1–65535；
+同邮箱 60 秒内不能重复发码。契约测试可在 `NODE_ENV=test` 使用六位
+`EMAIL_VERIFICATION_TEST_CODE`，普通开发/生产进程填写该变量会在启动时拒绝。
+
+## 15. 分享试听和公共链接
+
+### 分享元数据 404/4045
+
+检查 token 是否符合 8–24 位规则、记录 `enabled` 是否为 1，以及 `PUBLIC_BASE_URL` 是否拼出正确
+域名。公开元数据不需要登录；若反向代理把 `/api/v1/public/shares` 重写到需要 Authorization 的
+位置，会表现为 401 而不是 404。
+
+### 试听 503/5034 或 Range 异常
+
+确认 `FFMPEG_BIN` 可执行、`SHARE_PREVIEW_DIR` 可写且磁盘有空间；首次请求会下载上游低音质并裁剪
+最多 60 秒 64 kbps MP3。试听接口支持 200/206/416，必须保留 `Range`、`Content-Range` 和
+`Accept-Ranges`，不要由代理层缓存成 JSON 错误页。
+
+## 16. 代码索引与文档漂移
+
+发现文档写了不存在的路由或漏掉新模块时，先运行：
+
+```powershell
+codegraph index server
+codegraph status server --json
+codegraph query --path server --kind route --limit 200 --json ""
+```
+
+再对照 [00-code-index.md](00-code-index.md) 的 89 条路由和 21 张表。不要通过 `grep` 猜测 Controller
+是否已注册，也不要在未确认索引状态时直接修改契约文档。

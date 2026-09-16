@@ -54,6 +54,12 @@ GPTIMAGE2
 
 渠道大小写必须完全一致。
 
+图片 Key 后台接口由 `ImageKeyAdminController` 提供，均需要 `X-Admin-Token`：
+
+- `GET /api/v1/app/admin/image-keys`：只返回 Key ID、渠道和额度，不返回 Key 明文。
+- `POST /api/v1/app/admin/image-keys`：新增或更新额度，Key 长度 8–512，额度 0–1,000,000。
+- `DELETE /api/v1/app/admin/image-keys/{id}`：仍被任务引用时受数据库外键限制，返回 404/4042。
+
 ## 4. Key 池
 
 ### 字段
@@ -136,6 +142,10 @@ api_key_id      本次使用的 Key 主键
 | `FAILED` | `FAILED` | 1 | NULL |
 
 `completed` 表示进入终态，不等同于生成成功；成功与失败必须看 `state`。
+
+当前 `image_generation_task` 没有 `user_id` 字段。创建和轮询接口仍要求桃桃访问令牌，但只要知道
+合法 `taskId`，任意已登录用户都可能查询该任务；这不是任务归属隔离。若产品需要隔离，必须先在
+迁移中新增用户外键，并在创建和查询两条路径同时校验。
 
 ## 7. 轮询策略
 

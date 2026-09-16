@@ -4,20 +4,24 @@
 
 ## 1. 服务边界
 
-桃桃音乐后端是 NestJS + TypeScript 接口适配服务，负责业务鉴权、上游协议收敛、少量状态持久化和 Android 热更新。
+桃桃音乐后端是 NestJS + TypeScript 接口适配服务，负责业务鉴权、上游协议收敛、状态持久化、Android 热更新、Windows 桌面模块更新和悟空 IM 业务代理。
 
 服务负责：
 
 - 用户注册、登录、访问令牌和刷新令牌轮换。
 - 收藏数据持久化。
 - 用户云端歌单、歌曲快照与顺序持久化。
-- 腾讯音乐搜索、歌曲信息、播放链接和歌词适配。
+- 收藏、最近播放、听歌统计和歌曲分享短链。
+- 腾讯/网易音乐搜索、歌曲信息、播放链接和歌词适配。
 - APK 登记、灰度、下载、最低版本和远程配置。
+- Windows 模块清单、内容寻址文件、差分和灰度发布。
 - ApiSweet `gpt-image-2` 任务创建、Key 配额与状态轮询。
+- 悟空 IM 会话凭据、联系人、会话/频道同步、撤回和已读代理。
+- 公告、后台用户管理、邮箱验证码和头像上传。
 
 服务不负责：
 
-- 长期保存音频、歌词、封面或生成图片文件。
+- 长期保存音频、歌词、封面或生成图片文件（分享试听缓存和发布对象目录是受控例外）。
 - 把第三方 API Key 下发给客户端。
 - 在数据库中保存访问令牌明文或刷新令牌明文。
 - 在服务端长期缓存上游限时播放链接。
@@ -29,20 +33,37 @@ flowchart TD
     App["AppModule"] --> Config["AppConfigModule"]
     App --> Database["DatabaseModule"]
     App --> Auth["AuthModule"]
+    App --> Mail["MailModule"]
+    App --> Announcements["AnnouncementModule"]
     App --> Favorites["FavoritesModule"]
+    App --> Playback["PlaybackModule"]
     App --> Playlists["PlaylistsModule"]
     App --> Music["MusicModule"]
+    App --> Shares["SongShareModule"]
     App --> Image["ImageGenerationModule"]
     App --> Release["ReleaseModule"]
+    App --> Desktop["DesktopReleaseModule"]
+    App --> Im["ImModule"]
+    App --> UserAdmin["UserAdminModule"]
     Music --> Upstream["UpstreamModule"]
+    Shares --> Upstream
+    Shares --> Release
+    Desktop --> Database
+    Im --> Database
+    Im --> Auth
     Auth --> Database
+    Auth --> Mail
+    Announcements --> Database
     Favorites --> Database
+    Playback --> Database
     Playlists --> Database
+    UserAdmin --> Database
     Image --> Database
     Release --> Database
 ```
 
-`AppConfigModule` 和 `DatabaseModule` 是全局模块。业务模块可以直接注入 `AppConfigService` 和 `DatabaseService`，不需要重复导入。
+`AppConfigModule`、`DatabaseModule` 和 `MailModule` 是全局模块。业务模块可以直接注入
+`AppConfigService`、`DatabaseService` 和 `MailService`，不需要重复导入。
 
 ## 3. 源码职责
 
@@ -59,20 +80,27 @@ src/
 │  └─ rate-limit/
 ├─ config/
 ├─ database/
+├─ announcement/
 ├─ favorites/
+├─ playback/
 ├─ playlists/
 ├─ health/
 ├─ image-generation/
 ├─ music/
 ├─ release/
+├─ desktop-release/
+├─ im/
+├─ mail/
+├─ shares/
+├─ user-admin/
 └─ upstream/
 ```
 
 ### `main.ts`
 
 - 关闭 NestJS 默认 body parser。
-- 对 APK 原始字节上传路由跳过 JSON 解析。
-- 对其它路由挂载 16KB JSON parser。
+- 对 APK、Android 补丁和桌面 artifact 原始字节上传路由跳过 JSON 解析。
+- 普通路由挂载 16KB JSON parser，桌面发布清单单独使用 1MB parser。
 - 注册全局 `ValidationPipe`。
 - 设置 `/api/v1` 前缀，并排除 `/health`。
 
@@ -98,7 +126,7 @@ src/
 
 ### `upstream/`
 
-第三方接口的不一致统一在这里收敛。腾讯音乐的成功码、字段名、音质阶梯和歌词格式不能散落到 Controller。
+第三方接口的不一致统一在这里收敛。腾讯音乐和网易云音乐的成功码、字段名、音质阶梯和歌词格式不能散落到 Controller。
 
 ### `image-generation/`
 
@@ -107,6 +135,16 @@ src/
 - `api-key.repository.ts`：Key 池选择、原子扣额和退款。
 - `image-task.repository.ts`：任务、提示词、状态和图片地址持久化。
 - `dto/`：创建任务的输入校验。
+
+### 其它业务模块的边界
+
+- `auth/` 只负责身份和资料；邮箱发信由 `mail/` 承担，头像文件由 Lsky 处理，不能把 SMTP 或图床调用散到页面 Controller。
+- `favorites/` 保存收藏状态机；搜索只通过 Repository 批量查询，不为每首歌单独请求收藏接口。
+- `playback/` 把会话快照、最近播放可见代际和累计统计分开，清空操作不删除统计。
+- `playlists/` 的所有顺序/完整替换操作在事务内锁定歌单，`source + songId` 是歌曲身份，展示字段只是快照。
+- `release/` 与 `desktop-release/` 各自拥有版本、文件和最低版本语义；桌面端使用内容寻址对象，不能复用 APK 文件名逻辑。
+- `im/` 只代理悟空 IM 的凭据和同步命令；聊天正文、频道游标不进入 PostgreSQL。
+- `announcement/`、`user-admin/` 和 `image-key-admin.controller.ts` 都使用管理令牌，不要误加普通访问令牌依赖。
 
 ## 4. 普通请求链路
 
@@ -154,6 +192,7 @@ sequenceDiagram
 - `first`：取第一行。
 - `all`：取多行。
 - `run`：执行写操作并返回影响行数。
+- `transaction`：在同一连接上执行带提交/回滚的事务回调；歌单排序、发布清单替换和需要行锁的多步写入必须使用它。
 - `ping`：健康探测。
 
 ### 进程内状态
@@ -170,6 +209,8 @@ sequenceDiagram
 - 图片 Key 配额：锁定候选 Key 后单条 `UPDATE ... RETURNING`。
 - 并发注册：依赖数据库唯一约束兜底。
 - 发布版本登记：依赖 `ON CONFLICT DO UPDATE`。
+- 播放清空 marker：在 `playback_history_clear_operation` 的主键冲突上保持幂等。
+- 公告置顶：使用独立顾问锁串行化“取消旧置顶 + 设置新置顶”。
 
 这些路径不能拆成“先 SELECT、再 UPDATE”。
 
@@ -221,10 +262,12 @@ sequenceDiagram
 
 | 外部系统 | 本服务保存什么 | 本服务不保存什么 |
 | --- | --- | --- |
-| 腾讯音乐接口 | 不持久化，仅做实时映射 | 音频文件、歌词文件、限时直链 |
+| 腾讯/网易音乐接口 | 不持久化，仅做实时映射 | 音频文件、歌词文件、限时直链 |
 | ApiSweet | Key、任务元数据、结果 URL | 生成图片文件 |
 | PostgreSQL | 用户、令牌哈希、收藏、发布、配置、图片任务 | 用户密码明文、令牌明文 |
-| APK 文件目录 | 已登记的 APK 文件 | Android 构建工程状态 |
+| APK 文件目录 | 已登记的 APK/补丁文件 | Android 构建工程状态 |
+| `DESKTOP_RELEASE_DIR` | 按 sha256 命名的桌面模块和差分对象 | 桌面构建机临时目录 |
+| SMTP/Lsky/悟空 IM | 仅实时调用或签发凭据 | 邮件正文、头像原图、聊天消息正文 |
 
 外部 URL 返回客户端前要确认：
 

@@ -6,7 +6,7 @@
 
 - 普通 API 前缀：`/api/v1`。
 - 健康检查：`/health`，不带前缀。
-- JSON 请求体上限：16KB。
+- 普通 JSON 请求体上限：16KB；桌面发布清单 `POST /desktop/admin/releases` 单独上限 1MB。
 - 普通接口默认需要 `Authorization: Bearer <accessToken>`。
 - 管理接口使用 `X-Admin-Token`。
 - 客户端判断成功的唯一依据是响应体 `code === 0`。
@@ -42,6 +42,10 @@
 | `GET /api/v1/songs/{id}/play` | 音频流 | 支持 Range 和播放器直读 |
 | `GET /api/v1/songs/{id}/lyrics` | 默认 `text/plain` | 旧客户端直接展示响应体 |
 | `GET /api/v1/app/apk/{versionCode}` | APK 字节 | 下载器要求 Range/ETag |
+| `GET /api/v1/app/patch/{targetVersionCode}/{patchVersion}` | 补丁字节 | 补丁应用器要求 Range/ETag |
+| `GET /api/v1/public/shares/{token}/preview` | MP3 音频流 | 公开试听需要 Range，不能套 JSON |
+| `GET /api/v1/desktop/artifacts/{sha256}` | 桌面模块字节 | 内容寻址下载和 Range |
+| `GET /api/v1/desktop/patches/{sha256}` | 桌面差分字节 | 内容寻址差分下载和 Range |
 
 `lyrics?format=json` 仍由 Controller 自行返回带信封的 JSON。
 
@@ -49,13 +53,13 @@
 
 | HTTP | 业务码示例 | 含义 |
 | --- | --- | --- |
-| 400 | 4001、4003、4005、4007 | 输入不合法 |
+| 400 | 4000、4001、4002、4003、4004、4005、4006、4007、4008、4009 | 输入、来源、文件校验、邮箱或歌单集合不合法 |
 | 401 | 4010、4011、4012、4013 | 用户、刷新令牌或管理令牌无效 |
-| 404 | 4040、4041、4042 | 路由、版本或图片任务不存在 |
-| 409 | 4090、4091 | 唯一约束或发布守卫冲突 |
+| 404 | 4040、4041、4042、4043、4044、4045 | 路由、版本、文件、公告、用户、歌单或分享不存在 |
+| 409 | 4090、4091、4092、4093、4094、4095、4096 | 唯一约束、发布守卫、邮箱状态或播放因果冲突 |
 | 429 | 4290、4291 | 本地或图片上游限流 |
-| 502 | 5020、5021 | 音乐或图片上游失败 |
-| 503 | 5031、5032 | 图片服务未配置或额度不足 |
+| 502 | 5020、5021 | 音乐、图片、IM 或未知上游失败 |
+| 503 | 5031、5032、5034 | IM 未启用、发布读写失败或试听 ffmpeg 不可用 |
 
 新增业务码前先搜索现有使用点，不能复用语义不同的旧码。
 
@@ -287,8 +291,14 @@ APK 下载必须支持：
 | `/favorites/**` | 必须 | 不使用 | 标准用户接口 |
 | `/search`、`/songs/**` | 必须 | 不使用 | 音乐业务接口 |
 | `/draw/**` | 必须 | 不使用 | 图片任务属于当前登录用户调用会话，但任务表当前不存 user_id |
-| `/app/bootstrap`、`/app/apk/**` | 不要求 | 不要求 | 热更新通道必须公开 |
+| `/app/bootstrap`、`/app/apk/**`、`/app/patch/**` | 不要求 | 不要求 | Android 热更新通道必须公开 |
 | `/app/admin/**` | 不使用 | `X-Admin-Token` | 由 AdminTokenGuard 校验 |
+| `/desktop/bootstrap`、`/desktop/artifacts/**`、`/desktop/patches/**` | 不要求 | 不要求 | 桌面更新通道必须公开 |
+| `/desktop/admin/**` | 不使用 | `X-Admin-Token` | 与 Android 共用管理令牌但版本表分开 |
+| `/announcements`、`/public/shares/**` | 不要求 | 不使用 | 公开公告、分享元数据和试听 |
+| `/shares/songs` | 必须 | 不使用 | 创建短链 |
+| `/playback/**`、`/favorites/**`、`/playlists/**` | 必须 | 不使用 | 用户云端数据 |
+| `/im/**` | 必须 | 不使用 | IM 会话和同步代理；未启用时返回 503/5031 |
 
 当前图片任务表没有 `user_id` 字段，因此知道合法 taskId 的任意已登录用户都能查询该任务。若产品需要任务归属隔离，必须先给任务表增加 `user_id` 外键，并在创建和查询路径同时校验，不能只在客户端隐藏 taskId。
 
@@ -301,6 +311,8 @@ APK 下载必须支持：
 | `Content-Range` | 音频和 APK Range | 断点续传范围 |
 | `Accept-Ranges: bytes` | 支持 Range 的资源 | 告知客户端下载能力 |
 | `ETag` | APK 下载 | 使用 APK sha256 标识内容 |
+| `ETag` | Android 补丁、桌面模块/差分 | 使用对象 sha256 标识内容 |
+| `Cache-Control: public, ... immutable` | 内容寻址桌面对象 | sha256 地址内容不可变，可长缓存 |
 | `Content-Type` | 所有响应 | 区分 JSON、NDJSON、文本和二进制 |
 
 新增拦截器或自行 `writeHead` 时，要确认不会覆盖已经由全局拦截器设置的响应头。
@@ -348,3 +360,104 @@ Controller 不应返回 HTTP 200 加错误业务码；失败应同时使用正�
 - 改变令牌格式。
 - 改变 `accessToken/refreshToken/user` 的平铺结构。
 - 让 `/app/bootstrap` 要求登录。
+
+## 16. 现行扩展路由
+
+下面是旧专题遗漏但当前 Controller 已实现的契约。详细路由数量和源码位置见
+[00-code-index.md](00-code-index.md)；新增路由后先更新索引，再修改本节。
+
+### 公告
+
+- `GET /api/v1/announcements` 公开返回最多 20 条启用公告，置顶公告优先。
+- 后台 `GET/POST /api/v1/app/admin/announcements`、`POST /:id`、`POST /:id/enabled`、
+  `POST /:id/pinned`、`DELETE /:id` 只接受 `X-Admin-Token`。标题最多 80 个字符，正文最多
+  5,000 个字符；`enabled` 和 `pinned` 必须是 JSON boolean。
+- 同时只能有一条置顶公告，服务端用顾问锁串行化更新；不存在的公告返回 404/4043。
+
+### 收藏
+
+`GET /favorites` 返回当前有效收藏数组（不是分页对象）。`POST` 和 `DELETE`
+`/favorites/{source}/{songId}` 不需要请求体；来源只允许 `tencent`/`netease`，歌曲 ID 按字符串
+校验。删除是软删除并返回 `{removed}`，重新收藏保留 `createdAt`，只更新当前轮次的
+`favoritedAt`。搜索通过一次批量查询填充 `favorited`，不能在循环里逐首读取收藏。
+
+### 最近播放与统计
+
+`POST /playback/sessions` 的最小身份字段是 `sessionId`、`deviceId`、`source`、`songId`、
+`startedAt`、`lastPlayedAt`、`listenedMs`；可选 `historyRevision`、`completed`、
+`durationSeconds`。同一会话重复上报只计算累计增长量。3 秒后才进入最近播放，单次有效播放阈值为
+`min(30 秒, durationSeconds * 50%)`。
+
+- `GET /playback/recent?limit=` 默认 50，最大 500，返回数组。
+- `GET /playback/recent/state` 返回 `clearedBefore`、`clearedAt`、`revision`、`marker`。
+- `GET /playback/stats` 返回累计歌曲数、播放次数和听歌毫秒数。
+- `DELETE /playback/recent?marker=<uuid>` 推进清空代际；相同 marker 重试始终返回第一次结果，
+  不会重复清空。清空只影响最近列表，不删除累计统计。
+
+`historyRevision` 领先服务端状态返回 409/4096；会话身份字段冲突返回 409/4095。客户端不能用
+设备墙钟代替 revision 判断离线清空因果。
+
+### 歌曲分享与试听
+
+- `POST /shares/songs` 需要访问令牌，提交 `source` 以及 `remoteId`/`songId` 或 `mid`，可选
+  `type`；同一账号、来源和稳定歌曲身份会复用短码，成功 HTTP 201。
+- `GET /public/shares/{token}` 返回元数据、最多 60 秒试听地址和最新 100% Android APK 地址。
+  这是普通 JSON 信封，分享 token 只允许 8–24 位 `[A-Za-z0-9_-]`。
+- `GET /public/shares/{token}/preview` 返回服务端用 ffmpeg 裁出的 64 kbps MP3，支持 200/206/416，
+  不暴露上游完整音频直链。ffmpeg 缺失返回 503/5034。
+
+试听缓存只存文件路径和元数据，不把上游限时链接持久化；生产必须设置 `PUBLIC_BASE_URL`，否则
+短链会根据代理头推导出错误协议。
+
+### IM 会话与同步
+
+所有 `/im/**` 都需要桃桃访问令牌，并受独立限流。`IM_ENABLED=false` 时返回 503/5031；聊天正文
+和游标由悟空 IM 保存，PostgreSQL 只保存设备 Token 的哈希映射。
+
+| 路径 | 关键输入 | 行为 |
+| --- | --- | --- |
+| `POST /im/session` | `deviceId`：16–128 位字母/数字/`.`/`_`/`-` | 签发 UID、Token、过期时间和 Gateway 地址；同用户同 `device_flag` 新会话覆盖旧会话 |
+| `DELETE /im/session` | 无 | 撤销当前 Android 设备会话 |
+| `POST /im/sync/conversations` | `lastMessageSeqs` 最多 20,000 项，`messageCount` 1–20 | 代理悟空会话同步 |
+| `POST /im/sync/channel-messages` | UUID `channelId`、序列范围、`limit` 1–50 | 拉取频道消息 |
+| `POST /im/messages/revoke` | UUID `channelId`、`messageId`、`clientMsgNo` | 发送悟空内部撤回命令（type 99） |
+| `GET /im/contacts?uids=` | 最多 50 个合法 UUID | 返回除自己的用户资料 |
+| `POST /im/conversations/read` | UUID `channelId` | 清除会话未读数 |
+
+悟空 HTTP API 超时 5 秒且只接受 2xx；任何内部 API Token、消息正文和完整请求体都不能写日志。
+
+### Windows 桌面更新
+
+`GET /desktop/bootstrap` 至少需要 `versionCode`（正整数），可选 `channel`、`architecture`（默认
+`windows-x64`）和 `deviceId`。响应 `update` 描述完整模块和按 `fromSha256` 匹配的差分；只有
+100% 放量版本可作为 forced rescue。模块和差分下载是裸字节，使用 sha256 内容寻址、Range、ETag
+和不可变缓存。
+
+后台桌面发布路径是 `/desktop/admin/*`，**不是** `/app/admin/*`：先 `POST /desktop/admin/artifacts`
+上传原始模块，再 `POST /desktop/admin/releases` 提交清单，最后用 `rollout` 分阶段放量，确认已有
+清单和 100% 全量包后才能调用 `min-version`。清单路径不能穿越，单模块最大 500 MiB，最多 512 项。
+完整操作手册见 [10-desktop-release.md](10-desktop-release.md)。
+
+### 管理用户、图片 Key 与头像
+
+- `/app/admin/users`、`/:id/playback`、`/:id/disabled`、`DELETE /:id` 只使用管理令牌；禁用用户会
+  撤销刷新令牌，已有访问令牌在下一次用户查询时失效；删除通过外键级联清理业务数据。
+- `/app/admin/image-keys` 的 Key 值只写入数据库，列表接口不得回传明文；删除仍被任务引用的 Key
+  返回 404/4042（数据库 `ON DELETE RESTRICT`）。
+- `POST /auth/avatar` 使用 multipart 字段 `file`，仅接受图片 MIME，最大 5 MiB；服务端把文件转发
+  到 Lsky，客户端只能拿到 HTTPS 图片地址。`PATCH /auth/profile` 的 `avatarUrl` 也只接受 HTTPS。
+
+### 当前限流桶
+
+| 桶 | 限制（15 分钟） |
+| --- | --- |
+| `auth:*` | 每 IP 10 次 |
+| `email-verification` | 每 IP 5 次 |
+| `app` | 每 IP 900 次 + 每设备/来源 60 次 |
+| `admin` | 每 IP 60 次 |
+| `image` | 每用户 10 次 + 每 IP 60 次 |
+| `image-status` | 每用户 300 次 + 每 IP 1,800 次 |
+| `im-session` | 每用户 30 次 + 每 IP 180 次 |
+| `im-sync` | 每用户 300 次 + 每 IP 1,800 次 |
+
+限流是进程内状态，重启清空且多实例不共享。客户端收到 429/4290 时应退避，不能把它当成登录失效。
