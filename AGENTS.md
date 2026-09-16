@@ -74,6 +74,32 @@
 - 新增路由默认就受全局访问令牌守卫保护；公开路由必须显式标 `@Public()`。漏标只会让接口意外要求登录（能立刻发现），不会意外裸奔。
 - 数据层与客户端之间有一组不能破的契约（401 不能变 403、`/search` 必须是裸 NDJSON、SQL 别名必须加双引号等），逐条列在 [RELEASE.md](RELEASE.md) 里。
 
+### 管理员认证体系
+
+后端管理后台使用企业级认证系统，代码位于 `server/src/admin-auth/` 和 `server/src/ldap/`：
+
+- **管理员账号**：独立于普通 users 表的 `admin_users` 表，支持三种角色（super_admin / admin / viewer）
+- **会话管理**：基于数据库会话的 Bearer token 认证，替代旧的静态 `ADMIN_TOKEN`
+- **双因素认证 (2FA)**：基于 TOTP 的动态码验证，使用 speakeasy 库
+- **操作审计日志**：`admin_audit_log` 表记录所有管理员操作
+- **IP 白名单**：可选的网络层访问控制
+- **LDAP/SSO 集成**：可选的企业目录对接，使用原生 `net` 模块（非 ldapjs 库）
+
+新模块注册在 `app.module.ts`，守卫替换在 `release/`、`user-admin/`、`desktop-release/`、`announcement/` 等模块中。启动时 bootstrap 自动创建默认超级管理员 `admin / admin123`。
+
+**新增管理员 API 端点**：
+- `POST /admin/auth/login` — 登录（用户名密码）
+- `POST /admin/auth/totp-verify` — TOTP 二次验证
+- `POST /admin/auth/logout` — 退出登录
+- `GET /admin/auth/me` — 获取当前用户信息
+- `POST /admin/auth/change-password` — 修改密码
+- `GET /admin/users` — 管理员列表
+- `POST /admin/users` — 创建管理员
+- `POST /admin/users/:id` — 编辑管理员
+- `DELETE /admin/users/:id` — 删除管理员
+- `GET /admin/audit-log` — 审计日志
+- `GET/POST /admin/ip-whitelist/:adminId` — IP 白名单管理
+
 ## 测试规范
 
 新增共享逻辑时，在 `shared/src/commonTest/` 添加 `*Test.kt`；Android 单元测试放在 `androidApp/src/test/`，设备测试放在 `androidApp/src/androidTest/`。

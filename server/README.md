@@ -94,7 +94,20 @@ src/
 
 ### 管理后台
 
-浏览器打开 `http://localhost:4500/admin/`。首次进入填 `ADMIN_TOKEN`，只存在浏览器的 localStorage。后台入口固定在 `/admin/`，服务根路径留给未来网页版；Android 发布、补丁、公告、用户统计、AI 密钥和系统设置通过 `/api/v1/app/admin/*`，Windows 桌面发布通过独立的 `/api/v1/desktop/admin/*`。
+浏览器打开 `http://localhost:4500/admin/`。首次进入会跳转到登录页，使用管理员用户名密码登录。服务启动时会自动创建默认超级管理员账号 `admin / admin123`（请尽快修改密码）。
+
+管理后台支持企业级认证体系：
+- **多管理员账号**：独立于普通 users 表，支持 super_admin / admin / viewer 三种角色
+- **双因素认证 (2FA)**：基于 TOTP 的动态码验证，可选启用
+- **操作审计日志**：全量记录管理员操作，支持按操作类型筛选
+- **IP 白名单**：可选的网络层访问控制
+- **LDAP/SSO 集成**：可选的企业目录对接，支持组到角色的映射
+
+后台入口固定在 `/admin/`，服务根路径留给未来网页版；Android 发布、补丁、公告、用户统计、AI 密钥和系统设置通过 `/api/v1/app/admin/*`，Windows 桌面发布通过独立的 `/api/v1/desktop/admin/*`，管理员管理通过 `/api/v1/admin/auth/*`。
+
+认证方式支持两种（向后兼容）：
+- 新会话：`Authorization: Bearer <token>`（通过 `/admin/auth/login` 获取）
+- 旧版令牌：`X-Admin-Token: <token>`（.env 中的 ADMIN_TOKEN，仍可使用）
 
 管理后台使用 Vite 生产压缩；Element Plus 通过 `unplugin-vue-components` 与
 `unplugin-auto-import` 按实际使用的组件、服务和样式自动导入，入口禁止重新使用
@@ -161,6 +174,11 @@ npm run dev:frontend      # 独立开发服务器（5173），API 代理到本�
 | `LSKY_UPLOAD_URL` / `LSKY_API_KEY` | 头像图床地址和服务端 Key |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASSWORD` / `SMTP_FROM` | 注册验证码邮件 SMTP 配置；五项均需设置 |
 | `IM_ENABLED` / `IM_INTERNAL_API_BASE_URL` / `IM_EXTERNAL_GATEWAY_URL` / `IM_API_TOKEN` / `IM_SESSION_LIFETIME_SECONDS` | 悟空 IM 开关、内网 HTTP API、TCP Gateway、服务端 Token 和会话周期 |
+| `TOTP_ISSUER` | 2FA TOTP 发行者名称，默认 `桃桃音乐管理后台` |
+| `LDAP_URL` / `LDAP_BIND_DN` / `LDAP_BIND_PASSWORD` | LDAP/SSO 连接配置（可选，不配置则使用本地管理员账号） |
+| `LDAP_USER_SEARCH_BASE` / `LDAP_USER_SEARCH_FILTER` | LDAP 用户搜索配置 |
+| `LDAP_GROUP_SEARCH_BASE` / `LDAP_GROUP_SEARCH_FILTER` | LDAP 组搜索配置 |
+| `LDAP_ROLE_MAPPING` | LDAP 组到管理员角色的映射（JSON 格式） |
 
 ## 响应约定
 
