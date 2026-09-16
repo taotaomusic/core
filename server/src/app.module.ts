@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from "@nestjs/core";
 import { AuthModule } from "./auth/auth.module";
+import { AdminAuthModule } from "./admin-auth/admin-auth.module";
 import { AnnouncementModule } from "./announcement/announcement.module";
 import { AccessTokenGuard } from "./auth/guards/access-token.guard";
 import { AllExceptionsFilter } from "./common/filters/all-exceptions.filter";
@@ -16,6 +17,7 @@ import { FavoritesModule } from "./favorites/favorites.module";
 import { HealthController } from "./health/health.controller";
 import { ImageGenerationModule } from "./image-generation/image-generation.module";
 import { ImModule } from "./im/im.module";
+import { LdapModule } from "./ldap/ldap.module";
 import { MusicModule } from "./music/music.module";
 import { MailModule } from "./mail/mail.module";
 import { PlaybackModule } from "./playback/playback.module";
@@ -40,6 +42,7 @@ import { UserAdminModule } from "./user-admin/user-admin.module";
     MailModule,
     LatestVersionModule,
     AuthModule,
+    AdminAuthModule,
     AnnouncementModule,
     FavoritesModule,
     PlaybackModule,
@@ -47,6 +50,7 @@ import { UserAdminModule } from "./user-admin/user-admin.module";
     MusicModule,
     ImageGenerationModule,
     ImModule,
+    LdapModule,
     ReleaseModule,
     SongShareModule,
     UserAdminModule,

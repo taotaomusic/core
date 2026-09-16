@@ -37,5 +37,6 @@ export const ApiErrors = {
    *
    * 与 upstream 的 502 区分：前者表示本服务尚未完成配置，客户端不应把它误判成登录失效。
    */
+  forbidden: (code: number, message: string) => new ApiException(HttpStatus.FORBIDDEN, code, message),
   serviceUnavailable: (code: number, message: string) => new ApiException(HttpStatus.SERVICE_UNAVAILABLE, code, message),
 };

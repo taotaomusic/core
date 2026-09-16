@@ -3,7 +3,7 @@ import type { Request } from "express";
 import { ApiErrors } from "../common/api.exception";
 import { Public } from "../common/decorators/public.decorator";
 import { RateLimit } from "../common/decorators/rate-limit.decorator";
-import { AdminTokenGuard } from "../common/guards/admin-token.guard";
+import { AdminAuthGuard } from "../admin-auth/admin-auth.guard";
 import { AppConfigService } from "../config/app-config.service";
 import { ApkService } from "./apk.service";
 import { MinVersionDto, PatchRolloutDto, RemoteConfigDto, RolloutDto } from "./dto/admin.dto";
@@ -24,11 +24,11 @@ const ALL_VERSIONS = 2_147_483_647;
 /**
  * 发布管理。
  *
- * 用 [Public] 跳过访问令牌，改由 [AdminTokenGuard] 校验请求头 `X-Admin-Token`：
+ * 用 [Public] 跳过访问令牌，改由 [AdminAuthGuard] 校验管理员认证：
  * 发布是运维动作，不属于任何用户会话。
  */
 @Public()
-@UseGuards(AdminTokenGuard)
+@UseGuards(AdminAuthGuard)
 @RateLimit("admin")
 @Controller("app/admin")
 export class ReleaseAdminController {

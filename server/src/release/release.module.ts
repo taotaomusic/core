@@ -1,5 +1,5 @@
 import { Module } from "@nestjs/common";
-import { AdminTokenGuard } from "../common/guards/admin-token.guard";
+import { AdminAuthModule } from "../admin-auth/admin-auth.module";
 import { ApkService } from "./apk.service";
 import { ReleaseAdminController } from "./release-admin.controller";
 import { ReleaseController } from "./release.controller";
@@ -12,8 +12,9 @@ import { ReleaseService } from "./release.service";
  * 导出 [ReleaseRepository]：全局的版本号响应头拦截器要用它取「当前全量可用的最高版本」。
  */
 @Module({
+  imports: [AdminAuthModule],
   controllers: [ReleaseController, ReleaseAdminController],
-  providers: [ReleaseService, ReleaseRepository, ApkService, AdminTokenGuard],
+  providers: [ReleaseService, ReleaseRepository, ApkService],
   exports: [ReleaseRepository],
 })
 export class ReleaseModule {}

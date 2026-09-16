@@ -77,6 +77,19 @@ export class AppConfigService {
   /** IM 设备 Token 的客户端续签周期；实际连接校验仍必须由悟空 IM Gateway 完成。 */
   readonly imSessionLifetimeSeconds: number;
 
+  /** 管理员 2FA TOTP 的发行者名称 */
+  readonly totpIssuer: string;
+
+  /** LDAP/SSO 配置（可选） */
+  readonly ldapUrl: string;
+  readonly ldapBindDn: string;
+  readonly ldapBindPassword: string;
+  readonly ldapUserSearchBase: string;
+  readonly ldapUserSearchFilter: string;
+  readonly ldapGroupSearchBase: string;
+  readonly ldapGroupSearchFilter: string;
+  readonly ldapRoleMapping: Record<string, string>; // LDAP group -> role mapping
+
   /**
    * 仅供独立契约验证使用的固定验证码。环境校验已限制它只能出现在
    * `NODE_ENV=test`，生产和普通开发进程绝不会启用此分支。
@@ -137,6 +150,22 @@ export class AppConfigService {
     this.imApiToken = String(config.get("IM_API_TOKEN") ?? "");
     this.imSessionLifetimeSeconds = Number(config.get("IM_SESSION_LIFETIME_SECONDS") ?? 900);
     this.emailVerificationTestCode = String(config.get("EMAIL_VERIFICATION_TEST_CODE") ?? "") || null;
+    this.totpIssuer = String(config.get("TOTP_ISSUER") ?? "桃桃音乐管理后台");
+    this.ldapUrl = String(config.get("LDAP_URL") ?? "");
+    this.ldapBindDn = String(config.get("LDAP_BIND_DN") ?? "");
+    this.ldapBindPassword = String(config.get("LDAP_BIND_PASSWORD") ?? "");
+    this.ldapUserSearchBase = String(config.get("LDAP_USER_SEARCH_BASE") ?? "");
+    this.ldapUserSearchFilter = String(config.get("LDAP_USER_SEARCH_FILTER") ?? "(uid={{username}})");
+    this.ldapGroupSearchBase = String(config.get("LDAP_GROUP_SEARCH_BASE") ?? "");
+    this.ldapGroupSearchFilter = String(config.get("LDAP_GROUP_SEARCH_FILTER") ?? "");
+    // LDAP 角色映射：LDAP group DN -> admin role
+    const mappingStr = String(config.get("LDAP_ROLE_MAPPING") ?? "");
+    this.ldapRoleMapping = mappingStr ? JSON.parse(mappingStr) : {};
+  }
+
+  /** LDAP 是否配置了最小必填字段（地址、绑定 DN、用户搜索基）。 */
+  get isLdapConfigured(): boolean {
+    return !!this.ldapUrl && !!this.ldapBindDn && !!this.ldapUserSearchBase;
   }
 
   /** 发信配置必须完整，避免错误部署时静默跳过邮箱验证。 */

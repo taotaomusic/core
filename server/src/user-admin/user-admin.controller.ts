@@ -2,7 +2,7 @@ import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Post, Query
 import { ApiErrors } from "../common/api.exception";
 import { Public } from "../common/decorators/public.decorator";
 import { RateLimit } from "../common/decorators/rate-limit.decorator";
-import { AdminTokenGuard } from "../common/guards/admin-token.guard";
+import { AdminAuthGuard } from "../admin-auth/admin-auth.guard";
 import { UserAdminRepository } from "./user-admin.repository";
 
 const DEFAULT_PAGE_SIZE = 30;
@@ -12,7 +12,7 @@ const MAX_HISTORY_LIMIT = 200;
 
 /** 管理端用户与听歌统计，只读且必须持有管理员令牌。 */
 @Public()
-@UseGuards(AdminTokenGuard)
+@UseGuards(AdminAuthGuard)
 @RateLimit("admin")
 @Controller("app/admin/users")
 export class UserAdminController {

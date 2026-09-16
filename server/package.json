@@ -27,6 +27,7 @@
     "class-validator": "^0.14.1",
     "multer": "^2.2.0",
     "nodemailer": "^9.0.5",
+    "speakeasy": "^2.0.0",
     "pg": "^8.13.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1"
@@ -35,6 +36,7 @@
     "@types/express": "^5.0.0",
     "@types/multer": "^2.2.0",
     "@types/node": "^22.10.2",
+    "@types/speakeasy": "^2.0.10",
     "@types/pg": "^8.11.10",
     "@vitejs/plugin-vue": "^5.2.1",
     "element-plus": "^2.14.5",

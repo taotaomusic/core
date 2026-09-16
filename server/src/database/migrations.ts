@@ -419,6 +419,59 @@ export async function runMigrations(pool: Pool): Promise<void> {
       -- 若共用 min_supported_version_code，单独抬高任一平台都会让另一端无包可救。
       ALTER TABLE app_channel
         ADD COLUMN IF NOT EXISTS desktop_min_supported_version_code integer NOT NULL DEFAULT 0;
+
+      -- ========== 管理后台企业级认证 ==========
+
+      -- 管理员账号（独立于普通 users 表）
+      CREATE TABLE IF NOT EXISTS admin_users (
+        id            integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        username      text NOT NULL UNIQUE,
+        password_hash text NOT NULL,
+        password_salt text NOT NULL,
+        display_name  text NOT NULL DEFAULT '',
+        email         text,
+        role          text NOT NULL DEFAULT 'viewer'
+                      CHECK (role IN ('super_admin', 'admin', 'viewer')),
+        totp_secret   text,
+        totp_enabled  smallint NOT NULL DEFAULT 0 CHECK (totp_enabled IN (0, 1)),
+        ip_whitelist  text,
+        last_login_at bigint,
+        last_login_ip text,
+        disabled_at   bigint,
+        created_at    timestamptz NOT NULL DEFAULT now(),
+        created_by    integer REFERENCES admin_users(id)
+      );
+
+      -- 管理员会话
+      CREATE TABLE IF NOT EXISTS admin_sessions (
+        id            integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        admin_id      integer NOT NULL REFERENCES admin_users(id) ON DELETE CASCADE,
+        token_hash    text NOT NULL UNIQUE,
+        expires_at    bigint NOT NULL,
+        created_at    bigint NOT NULL,
+        revoked_at    bigint,
+        login_ip      text,
+        user_agent    text
+      );
+      CREATE INDEX IF NOT EXISTS idx_admin_sessions_active
+        ON admin_sessions (admin_id, expires_at) WHERE revoked_at IS NULL;
+
+      -- 操作审计日志
+      CREATE TABLE IF NOT EXISTS admin_audit_log (
+        id            integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        admin_id      integer NOT NULL REFERENCES admin_users(id),
+        action        text NOT NULL,
+        target_type   text,
+        target_id     text,
+        detail        text,
+        ip_address    text,
+        user_agent    text,
+        created_at    bigint NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_admin_audit_admin
+        ON admin_audit_log (admin_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_admin_audit_action
+        ON admin_audit_log (action, created_at DESC);
     `);
     await client.query("COMMIT");
   } catch (error) {

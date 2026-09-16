@@ -2,14 +2,14 @@ import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Post, UseGu
 import { ApiErrors } from "../common/api.exception";
 import { Public } from "../common/decorators/public.decorator";
 import { RateLimit } from "../common/decorators/rate-limit.decorator";
-import { AdminTokenGuard } from "../common/guards/admin-token.guard";
+import { AdminAuthGuard } from "../admin-auth/admin-auth.guard";
 import { ApiKeyRepository } from "./api-key.repository";
 
 const IMAGE_API_CHANNEL = "GPTIMAGE2";
 
 /** AI 密钥管理独立于 /draw，确保管理路径不会被图片接口前缀拼接。 */
 @Public()
-@UseGuards(AdminTokenGuard)
+@UseGuards(AdminAuthGuard)
 @RateLimit("admin")
 @Controller("app/admin/image-keys")
 export class ImageKeyAdminController {

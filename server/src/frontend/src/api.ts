@@ -4,6 +4,10 @@
  * 服务端所有 JSON 响应都套一层信封 `{ code, message, data }`，
  * 业务失败时 code 非 0 且 HTTP 也是 4xx/5xx。错误文案统一从顶层 `message` 取 ——
  * 那是服务端刻意压平成字符串的（校验失败时 NestJS 原本给的是数组）。
+ *
+ * 认证方式：
+ * - 新会话 token（>60字符的 base64url）→ Authorization: Bearer
+ * - 旧版 ADMIN_TOKEN（<60字符）→ X-Admin-Token（向后兼容）
  */
 
 const BASE = "/api/v1";
@@ -28,21 +32,29 @@ async function unwrap<T>(response: Response): Promise<T> {
   return body.data;
 }
 
+/** 根据 token 类型自动选择认证方式 */
+function authHeaders(adminToken: string): Record<string, string> {
+  if (adminToken.length > 60) {
+    return { "authorization": `Bearer ${adminToken}` };
+  }
+  return { "X-Admin-Token": adminToken };
+}
+
 export function apiGet<T>(path: string, adminToken: string): Promise<T> {
-  return fetch(`${BASE}${path}`, { headers: { "X-Admin-Token": adminToken } }).then(unwrap<T>);
+  return fetch(`${BASE}${path}`, { headers: authHeaders(adminToken) }).then(unwrap<T>);
 }
 
 export function apiPostJson<T>(path: string, adminToken: string, payload: unknown): Promise<T> {
   return fetch(`${BASE}${path}`, {
     method: "POST",
-    headers: { "content-type": "application/json", "X-Admin-Token": adminToken },
+    headers: { "content-type": "application/json", ...authHeaders(adminToken) },
     body: JSON.stringify(payload),
   }).then(unwrap<T>);
 }
 
 /** 管理端删除资源。204 无响应体，因此不能走 JSON 信封解包。 */
 export async function apiDelete(path: string, adminToken: string): Promise<void> {
-  const response = await fetch(`${BASE}${path}`, { method: "DELETE", headers: { "X-Admin-Token": adminToken } });
+  const response = await fetch(`${BASE}${path}`, { method: "DELETE", headers: authHeaders(adminToken) });
   if (response.status === 204) return;
   await unwrap<unknown>(response);
 }
@@ -56,7 +68,7 @@ export async function apiDelete(path: string, adminToken: string): Promise<void>
 export function apiPostBytes<T>(path: string, adminToken: string, bytes: ArrayBuffer): Promise<T> {
   return fetch(`${BASE}${path}`, {
     method: "POST",
-    headers: { "content-type": "application/octet-stream", "X-Admin-Token": adminToken },
+    headers: { "content-type": "application/octet-stream", ...authHeaders(adminToken) },
     body: bytes,
   }).then(unwrap<T>);
 }
@@ -84,4 +96,49 @@ export function formatSize(bytes: number): string {
 export function formatTime(milliseconds: number): string {
   if (!milliseconds) return "—";
   return new Date(milliseconds).toLocaleString("zh-CN", { hour12: false });
+}
+
+/** PATCH 请求（不走 JSON 信封解包，返回原始响应） */
+export function apiPatch<T>(path: string, adminToken: string, payload: unknown): Promise<T> {
+  return fetch(`${BASE}${path}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json", ...authHeaders(adminToken) },
+    body: JSON.stringify(payload),
+  }).then(unwrap<T>);
+}
+
+/** 管理员认证 —— 登录（用户名密码） */
+export async function adminLogin(username: string, password: string) {
+  const response = await fetch(`${BASE}/admin/auth/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ username, password }),
+  });
+  return unwrap<{ token?: string; admin?: { id: number; username: string; role: string; display_name: string }; requires_totp?: boolean; temp_token?: string; admin_id?: number }>(response);
+}
+
+/** 管理员认证 —— TOTP 二次验证 */
+export async function adminTotpVerify(adminId: number, token: string) {
+  const response = await fetch(`${BASE}/admin/auth/totp-verify`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ admin_id: adminId, token }),
+  });
+  return unwrap<{ token: string; admin: { id: number; username: string; role: string; display_name: string } }>(response);
+}
+
+/** 管理员认证 —— 退出登录 */
+export async function adminLogout(token: string) {
+  await fetch(`${BASE}/admin/auth/logout`, {
+    method: "POST",
+    headers: { "authorization": `Bearer ${token}` },
+  });
+}
+
+/** 管理员认证 —— 获取当前登录用户信息 */
+export async function adminMe(token: string) {
+  const response = await fetch(`${BASE}/admin/auth/me`, {
+    headers: { "authorization": `Bearer ${token}` },
+  });
+  return unwrap<{ id: number; username: string; role: string; display_name: string }>(response);
 }

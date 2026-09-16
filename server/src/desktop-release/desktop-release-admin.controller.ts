@@ -3,7 +3,7 @@ import type { Request } from "express";
 import { ApiErrors } from "../common/api.exception";
 import { Public } from "../common/decorators/public.decorator";
 import { RateLimit } from "../common/decorators/rate-limit.decorator";
-import { AdminTokenGuard } from "../common/guards/admin-token.guard";
+import { AdminAuthGuard } from "../admin-auth/admin-auth.guard";
 import { AppConfigService } from "../config/app-config.service";
 import { DesktopArtifactService } from "./desktop-artifact.service";
 import { DesktopReleaseRepository } from "./desktop-release.repository";
@@ -12,7 +12,7 @@ import { DesktopMinVersionDto, DesktopRolloutDto } from "./dto/desktop-admin.dto
 
 /** Windows 发布管理；与 Android 共享管理令牌和灰度策略。 */
 @Public()
-@UseGuards(AdminTokenGuard)
+@UseGuards(AdminAuthGuard)
 @RateLimit("admin")
 @Controller("desktop/admin")
 export class DesktopReleaseAdminController {

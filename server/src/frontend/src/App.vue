@@ -1,6 +1,10 @@
 <template>
   <el-config-provider :locale="zhCn">
-    <div class="shell">
+    <!-- 未登录：显示登录页 -->
+    <AdminLogin v-if="askToken" @login="onLogin" />
+
+    <!-- 已登录：显示管理界面 -->
+    <div v-else class="shell">
       <header class="topbar">
         <div class="brand">
           <img src="/favicon.png" class="logo-icon" alt="logo" />
@@ -15,10 +19,10 @@
           >
             <el-icon><component :is="isDark ? Moon : Sunny" /></el-icon>
           </el-button>
-          <el-tag v-if="token && !isMobile" size="default" type="success" effect="light" round class="status-tag">
-            <el-icon><Check /></el-icon> 已授权连接
+          <el-tag v-if="!isMobile" size="default" type="success" effect="light" round class="status-tag">
+            <el-icon><Check /></el-icon> {{ adminInfo?.display_name || adminInfo?.username }}
           </el-tag>
-          <el-button v-if="token" type="danger" :link="!isMobile" :circle="isMobile" @click="forgetToken" class="logout-btn">
+          <el-button type="danger" :link="!isMobile" :circle="isMobile" @click="forgetToken" class="logout-btn">
             <el-icon v-if="isMobile"><SwitchButton /></el-icon>
             <span v-else>退出登录</span>
           </el-button>
@@ -27,7 +31,7 @@
 
       <main class="body">
         <div class="main-container">
-          <el-tabs v-if="token" v-model="tab" class="custom-tabs" type="border-card" :tab-position="isMobile ? 'top' : 'top'">
+          <el-tabs v-model="tab" class="custom-tabs" type="border-card" :tab-position="isMobile ? 'top' : 'top'">
             <el-tab-pane name="releases" lazy>
               <template #label>
                 <div class="tab-label"><el-icon><Upload /></el-icon> <span v-show="!isMobile || tab === 'releases'">发布管理</span></div>
@@ -64,6 +68,18 @@
               </template>
               <SupporterKeyManager :admin-token="token" />
             </el-tab-pane>
+            <el-tab-pane v-if="adminInfo?.role === 'super_admin'" name="admin-users" lazy>
+              <template #label>
+                <div class="tab-label"><el-icon><User /></el-icon> <span v-show="!isMobile || tab === 'admin-users'">管理员</span></div>
+              </template>
+              <AdminUserManager :token="token" />
+            </el-tab-pane>
+            <el-tab-pane v-if="adminInfo?.role !== 'viewer'" name="audit-log" lazy>
+              <template #label>
+                <div class="tab-label"><el-icon><Connection /></el-icon> <span v-show="!isMobile || tab === 'audit-log'">审计日志</span></div>
+              </template>
+              <AuditLogViewer :token="token" />
+            </el-tab-pane>
             <el-tab-pane name="settings" lazy>
               <template #label>
                 <div class="tab-label"><el-icon><Setting /></el-icon> <span v-show="!isMobile || tab === 'settings'">系统设置</span></div>
@@ -73,41 +89,6 @@
           </el-tabs>
         </div>
       </main>
-
-      <el-dialog
-        v-model="askToken"
-        title="身份验证"
-        :width="isMobile ? '90%' : '420px'"
-        :close-on-click-modal="false"
-        :close-on-press-escape="false"
-        :show-close="false"
-        class="login-dialog"
-        align-center
-      >
-        <div class="login-header">
-          <img src="/favicon.png" class="login-logo" alt="logo" />
-          <h2>桃桃音乐管理中心</h2>
-        </div>
-        <p class="dialog-hint">
-          请输入系统管理令牌（服务端 <code>.env</code> 里的 <code>ADMIN_TOKEN</code>）。
-          该令牌仅保存在当前浏览器的本地存储中。
-        </p>
-        <el-input
-          v-model="draft"
-          type="password"
-          show-password
-          placeholder="请输入 ADMIN_TOKEN"
-          size="large"
-          prefix-icon="Lock"
-          @keyup.enter="acceptToken"
-          class="token-input"
-        />
-        <template #footer>
-          <el-button type="primary" size="large" class="login-submit" :disabled="!draft.trim()" @click="acceptToken">
-            验证并登录
-          </el-button>
-        </template>
-      </el-dialog>
     </div>
   </el-config-provider>
 </template>
@@ -117,6 +98,8 @@ import { defineAsyncComponent, ref, onMounted, onUnmounted, watch } from "vue";
 import zhCn from "element-plus/es/locale/lang/zh-cn";
 import { Check, Upload, Connection, Bell, User, Key, Setting, Lock, Moon, Sunny, SwitchButton, Monitor } from '@element-plus/icons-vue'
 import { useDark, useToggle } from '@vueuse/core'
+import AdminLogin from "./components/AdminLogin.vue";
+import { adminLogout } from "./api";
 
 // 标签页使用异步组件：用户未打开的管理模块不进入首屏主包。
 const ReleaseManager = defineAsyncComponent(() => import("./components/ReleaseManager.vue"));
@@ -126,13 +109,15 @@ const AnnouncementManager = defineAsyncComponent(() => import("./components/Anno
 const UserManager = defineAsyncComponent(() => import("./components/UserManager.vue"));
 const SupporterKeyManager = defineAsyncComponent(() => import("./components/SupporterKeyManager.vue"));
 const SystemSettings = defineAsyncComponent(() => import("./components/SystemSettings.vue"));
+const AdminUserManager = defineAsyncComponent(() => import("./components/AdminUserManager.vue"));
+const AuditLogViewer = defineAsyncComponent(() => import("./components/AuditLogViewer.vue"));
 
 const STORAGE_KEY = "taotao_admin_token";
 
 const tab = ref("releases");
 const token = ref("");
-const draft = ref("");
 const askToken = ref(false);
+const adminInfo = ref<{ id: number; username: string; role: string; display_name: string } | null>(null);
 
 // 响应式状态
 const isMobile = ref(false);
@@ -152,8 +137,22 @@ function checkMobile() {
 
 onMounted(() => {
   const stored = localStorage.getItem(STORAGE_KEY);
-  if (stored) token.value = stored;
-  else askToken.value = true;
+  if (stored) {
+    token.value = stored;
+    // 尝试验证 token 有效性
+    import("./api").then(({ adminMe }) => {
+      adminMe(stored).then(info => {
+        adminInfo.value = info;
+      }).catch(() => {
+        // token 无效，清除并显示登录页
+        localStorage.removeItem(STORAGE_KEY);
+        token.value = "";
+        askToken.value = true;
+      });
+    });
+  } else {
+    askToken.value = true;
+  }
 
   checkMobile();
   window.addEventListener('resize', checkMobile);
@@ -163,18 +162,18 @@ onUnmounted(() => {
   window.removeEventListener('resize', checkMobile);
 });
 
-function acceptToken() {
-  const value = draft.value.trim();
-  if (!value) return;
-  token.value = value;
-  localStorage.setItem(STORAGE_KEY, value);
-  draft.value = "";
+function onLogin(data: { token: string; admin: { id: number; username: string; role: string; display_name: string } }) {
+  token.value = data.token;
+  adminInfo.value = data.admin;
+  localStorage.setItem(STORAGE_KEY, data.token);
   askToken.value = false;
 }
 
-function forgetToken() {
+async function forgetToken() {
+  try { await adminLogout(token.value); } catch { /* 忽略 */ }
   localStorage.removeItem(STORAGE_KEY);
   token.value = "";
+  adminInfo.value = null;
   askToken.value = true;
 }
 </script>
@@ -341,71 +340,6 @@ body {
   font-weight: 500;
 }
 
-/* 登录弹窗样式优化 */
-.login-dialog :deep(.el-dialog__header) {
-  display: none;
-}
-
-.login-dialog :deep(.el-dialog__body) {
-  padding: 40px 32px 20px;
-}
-
-.login-header {
-  text-align: center;
-  margin-bottom: 24px;
-}
-
-.login-logo {
-  width: 56px;
-  height: 56px;
-  border-radius: 12px;
-  margin-bottom: 16px;
-  box-shadow: 0 4px 12px rgba(255, 107, 129, 0.2);
-}
-
-.login-header h2 {
-  margin: 0;
-  font-size: 22px;
-  color: var(--el-text-color-primary);
-  font-weight: 600;
-}
-
-.dialog-hint {
-  margin: 0 0 24px;
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--el-text-color-regular);
-  text-align: center;
-  background: var(--hint-bg);
-  padding: 12px;
-  border-radius: 6px;
-  transition: background-color 0.3s ease;
-}
-
-.dialog-hint code {
-  background: var(--code-bg);
-  padding: 2px 6px;
-  border-radius: 4px;
-  color: #e83e8c;
-  font-family: Monaco, Consolas, monospace;
-  transition: background-color 0.3s ease;
-}
-
-.token-input {
-  margin-bottom: 8px;
-}
-
-.login-submit {
-  width: 100%;
-  font-size: 16px;
-  border-radius: 6px;
-}
-
-.login-dialog :deep(.el-dialog__footer) {
-  padding: 0 32px 40px;
-  border-top: none;
-}
-
 /* 响应式移动端适配 */
 @media screen and (max-width: 768px) {
   .topbar {
@@ -496,14 +430,6 @@ body {
   
   :deep(.el-button--small) {
     padding: 5px 8px;
-  }
-
-  .login-dialog :deep(.el-dialog__body) {
-    padding: 30px 20px 16px;
-  }
-
-  .login-dialog :deep(.el-dialog__footer) {
-    padding: 0 20px 30px;
   }
 }
 </style>

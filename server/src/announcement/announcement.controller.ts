@@ -2,7 +2,7 @@ import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Post, UseGu
 import { ApiErrors } from "../common/api.exception";
 import { Public } from "../common/decorators/public.decorator";
 import { RateLimit } from "../common/decorators/rate-limit.decorator";
-import { AdminTokenGuard } from "../common/guards/admin-token.guard";
+import { AdminAuthGuard } from "../admin-auth/admin-auth.guard";
 import { AnnouncementRepository } from "./announcement.repository";
 
 const MAX_TITLE_LENGTH = 80;
@@ -21,7 +21,7 @@ export class AnnouncementController {
   }
 
   @Public()
-  @UseGuards(AdminTokenGuard)
+  @UseGuards(AdminAuthGuard)
   @RateLimit("admin")
   @Get("app/admin/announcements")
   listAdmin() {
@@ -29,7 +29,7 @@ export class AnnouncementController {
   }
 
   @Public()
-  @UseGuards(AdminTokenGuard)
+  @UseGuards(AdminAuthGuard)
   @RateLimit("admin")
   @Post("app/admin/announcements")
   @HttpCode(HttpStatus.CREATED)
@@ -38,7 +38,7 @@ export class AnnouncementController {
   }
 
   @Public()
-  @UseGuards(AdminTokenGuard)
+  @UseGuards(AdminAuthGuard)
   @RateLimit("admin")
   @Post("app/admin/announcements/:id")
   async update(@Param("id") idParam: string, @Body() body: Record<string, unknown>) {
@@ -52,7 +52,7 @@ export class AnnouncementController {
   }
 
   @Public()
-  @UseGuards(AdminTokenGuard)
+  @UseGuards(AdminAuthGuard)
   @RateLimit("admin")
   @Post("app/admin/announcements/:id/enabled")
   async setEnabled(@Param("id") idParam: string, @Body() body: Record<string, unknown>) {
@@ -63,7 +63,7 @@ export class AnnouncementController {
   }
 
   @Public()
-  @UseGuards(AdminTokenGuard)
+  @UseGuards(AdminAuthGuard)
   @RateLimit("admin")
   @Post("app/admin/announcements/:id/pinned")
   async setPinned(@Param("id") idParam: string, @Body() body: Record<string, unknown>) {
@@ -74,7 +74,7 @@ export class AnnouncementController {
   }
 
   @Public()
-  @UseGuards(AdminTokenGuard)
+  @UseGuards(AdminAuthGuard)
   @RateLimit("admin")
   @Delete("app/admin/announcements/:id")
   @HttpCode(HttpStatus.NO_CONTENT)
