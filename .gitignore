@@ -26,6 +26,9 @@ taotao-release.jks
 # CodeGraph 本机索引数据库，不进入版本库
 .codegraph/
 
+# AI 协作的本机工作状态（会话记忆、本地技能），不进入版本库
+.workbuddy-ai/
+
 # 临时验收产物默认不入库；已经归档的历史交付物显式保留。
 artifacts/*
 !artifacts/dark-theme-polish/

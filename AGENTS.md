@@ -85,20 +85,33 @@
 - **IP 白名单**：可选的网络层访问控制
 - **LDAP/SSO 集成**：可选的企业目录对接，使用原生 `net` 模块（非 ldapjs 库）
 
-新模块注册在 `app.module.ts`，守卫替换在 `release/`、`user-admin/`、`desktop-release/`、`announcement/` 等模块中。启动时 bootstrap 自动创建默认超级管理员 `admin / admin123`。
+新模块注册在 `app.module.ts`。启动时由 `AdminBootstrapService`（`onApplicationBootstrap`）自动创建默认超级管理员 `admin / admin123`。
 
-**新增管理员 API 端点**：
-- `POST /admin/auth/login` — 登录（用户名密码）
-- `POST /admin/auth/totp-verify` — TOTP 二次验证
-- `POST /admin/auth/logout` — 退出登录
-- `GET /admin/auth/me` — 获取当前用户信息
-- `POST /admin/auth/change-password` — 修改密码
-- `GET /admin/users` — 管理员列表
-- `POST /admin/users` — 创建管理员
-- `POST /admin/users/:id` — 编辑管理员
-- `DELETE /admin/users/:id` — 删除管理员
-- `GET /admin/audit-log` — 审计日志
-- `GET/POST /admin/ip-whitelist/:adminId` — IP 白名单管理
+### 管理员 API 端点（前缀 `/api/v1/admin/auth`）
+
+| 方法 | 路径 | 最低角色 |
+| --- | --- | --- |
+| POST | `/admin/auth/login` | 公开 |
+| POST | `/admin/auth/totp-verify` | 公开（需携带 `temp_token`） |
+| POST | `/admin/auth/logout` | 公开（幂等） |
+| GET | `/admin/auth/me` | 任意已认证管理员 |
+| POST | `/admin/auth/change-password` | 本人 |
+| POST | `/admin/auth/totp-enable` / `totp-confirm` / `totp-disable` | 本人 |
+| GET | `/admin/auth/users` | admin |
+| POST | `/admin/auth/users` | super_admin |
+| PATCH | `/admin/auth/users/:id` | super_admin |
+| DELETE | `/admin/auth/users/:id` | super_admin |
+| GET | `/admin/auth/audit-log` | admin |
+| GET/POST | `/admin/auth/ip-whitelist/:adminId` | super_admin |
+
+### 管理员认证的几条硬约束
+
+- **`@UseGuards(AdminAuthGuard, RolesGuard)` 不能挂在控制器类上**。类级守卫对 `login` 同样生效，而登录时用户还没有凭据，结果所有登录请求先被自己的守卫 401 掉。公开路由必须逐个方法标注，受保护方法统一用 `@AdminGuarded()`。
+- **2FA 第二步必须校验 `temp_token`**。它是登录第一步签发的一次性挑战票据（内存存储、5 分钟、用后即焚），把「密码已验证」这个事实带到第二步。缺了它，任何知道 `admin_id` 的人都能跳过密码直接猜 6 位动态码。
+- **`X-Admin-Token` 兼容身份在 `admin_users` 里没有对应行**（`id = 0`）。任何落库引用它的地方都要先过 `auditActorId()` 转成 `null`，否则撞外键。`admin_audit_log.admin_id` 与 `admin_users.created_by` 都是 `ON DELETE SET NULL`，管理员被删除后审计记录保留为「无归属」。
+- **默认管理员的创建必须挂在 `onApplicationBootstrap`**。建表在 `DatabaseService.onModuleInit`，早于 main.ts 里手动 `app.get()` 的代码执行。
+- **不要用类级 `@Public()` 之外的隐式约定**：管理端控制器统一 `@Public()` + 显式 `@AdminGuarded()`，绕开全局访问令牌守卫。
+
 
 ## 测试规范
 

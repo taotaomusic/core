@@ -106,8 +106,12 @@ src/
 后台入口固定在 `/admin/`，服务根路径留给未来网页版；Android 发布、补丁、公告、用户统计、AI 密钥和系统设置通过 `/api/v1/app/admin/*`，Windows 桌面发布通过独立的 `/api/v1/desktop/admin/*`，管理员管理通过 `/api/v1/admin/auth/*`。
 
 认证方式支持两种（向后兼容）：
-- 新会话：`Authorization: Bearer <token>`（通过 `/admin/auth/login` 获取）
+- 新会话：`Authorization: Bearer <token>`（通过 `/api/v1/admin/auth/login` 获取）
 - 旧版令牌：`X-Admin-Token: <token>`（.env 中的 ADMIN_TOKEN，仍可使用）
+
+角色与端点权限的对应关系、以及几条不能破的硬约束（类级守卫会连登录一起挡掉、
+2FA 第二步必须带 `temp_token`、兼容身份的 `id = 0` 不能直接落库）逐条列在
+[../AGENTS.md](../AGENTS.md) 的「管理员认证体系」一节。
 
 管理后台使用 Vite 生产压缩；Element Plus 通过 `unplugin-vue-components` 与
 `unplugin-auto-import` 按实际使用的组件、服务和样式自动导入，入口禁止重新使用
@@ -176,9 +180,20 @@ npm run dev:frontend      # 独立开发服务器（5173），API 代理到本�
 | `IM_ENABLED` / `IM_INTERNAL_API_BASE_URL` / `IM_EXTERNAL_GATEWAY_URL` / `IM_API_TOKEN` / `IM_SESSION_LIFETIME_SECONDS` | 悟空 IM 开关、内网 HTTP API、TCP Gateway、服务端 Token 和会话周期 |
 | `TOTP_ISSUER` | 2FA TOTP 发行者名称，默认 `桃桃音乐管理后台` |
 | `LDAP_URL` / `LDAP_BIND_DN` / `LDAP_BIND_PASSWORD` | LDAP/SSO 连接配置（可选，不配置则使用本地管理员账号） |
-| `LDAP_USER_SEARCH_BASE` / `LDAP_USER_SEARCH_FILTER` | LDAP 用户搜索配置 |
-| `LDAP_GROUP_SEARCH_BASE` / `LDAP_GROUP_SEARCH_FILTER` | LDAP 组搜索配置 |
-| `LDAP_ROLE_MAPPING` | LDAP 组到管理员角色的映射（JSON 格式） |
+| `LDAP_USER_SEARCH_BASE` / `LDAP_USER_SEARCH_FILTER` | LDAP 用户搜索配置，过滤器支持 `{{username}}` 占位符 |
+| `LDAP_GROUP_SEARCH_BASE` / `LDAP_GROUP_SEARCH_FILTER` | LDAP 组搜索配置，过滤器支持 `{{userDn}}` 占位符 |
+| `LDAP_ROLE_MAPPING` | LDAP 组到管理员角色的映射（JSON 对象：组 DN → 角色）；写坏了只退化成空映射并告警，不会拦住服务启动 |
+| `LDAP_TLS_REJECT_UNAUTHORIZED` | LDAPS 是否校验证书，默认 `true`。内网自签证书才显式设 `false` |
+| `LDAP_TIMEOUT_MS` | LDAP 连接与单次操作的超时，默认 `10000` |
+| `TRUST_PROXY` | 是否采信 `X-Forwarded-For` 作为客户端地址，默认**关闭**。只有确实部署在可信反向代理之后才设 `1` |
+
+> **LDAP 登录的回落规则**：目录明确拒绝（口令错、本地已禁用）时不回落，直接 401；
+> 未配置、目录不可达、或目录里查不到该用户时回落到本地密码校验 —— 这条路径是
+> 配置写错或目录挂掉时的 break-glass 通道，默认超管 `admin` 因此始终可用。
+
+> **IP 白名单与 `TRUST_PROXY`**：白名单按 TCP 对端地址判断。`X-Forwarded-For` 是
+> 客户端可随手伪造的头，未开启 `TRUST_PROXY` 时一律忽略 —— 否则任何人加一个请求头
+> 就能伪装成白名单里的地址绕过访问控制。
 
 ## 响应约定
 
