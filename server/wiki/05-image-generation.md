@@ -54,7 +54,8 @@ GPTIMAGE2
 
 渠道大小写必须完全一致。
 
-图片 Key 后台接口由 `ImageKeyAdminController` 提供，均需要 `X-Admin-Token`：
+图片 Key 后台接口由 `ImageKeyAdminController` 提供，挂 `AdminAuthGuard`（管理员会话
+`Authorization: Bearer` 或兼容的 `X-Admin-Token`，见 [11-admin-auth.md](11-admin-auth.md)）：
 
 - `GET /api/v1/app/admin/image-keys`：只返回 Key ID、渠道和额度，不返回 Key 明文。
 - `POST /api/v1/app/admin/image-keys`：新增或更新额度，Key 长度 8–512，额度 0–1,000,000。

@@ -105,13 +105,23 @@ src/
 
 后台入口固定在 `/admin/`，服务根路径留给未来网页版；Android 发布、补丁、公告、用户统计、AI 密钥和系统设置通过 `/api/v1/app/admin/*`，Windows 桌面发布通过独立的 `/api/v1/desktop/admin/*`，管理员管理通过 `/api/v1/admin/auth/*`。
 
-认证方式支持两种（向后兼容）：
-- 新会话：`Authorization: Bearer <token>`（通过 `/api/v1/admin/auth/login` 获取）
+认证方式支持两种（向后兼容），**两种对以上所有管理接口都有效**：
+- 新会话：`Authorization: Bearer <token>`（通过 `/api/v1/admin/auth/login` 获取，24 小时有效）
 - 旧版令牌：`X-Admin-Token: <token>`（.env 中的 ADMIN_TOKEN，仍可使用）
 
+它们由同一个 `AdminAuthGuard` 处理：先试 Bearer，失败再退回 `X-Admin-Token`。所以登录后台后
+直接就能操作发布、公告和用户页面，不需要另外填 `ADMIN_TOKEN`。
+
+`/app/admin/*` 与 `/desktop/admin/*` 目前**只有认证、没有角色校验，也不写审计** —— 任何能登录
+后台的角色（含 `viewer`）都能调用它们。需要收紧时得显式补 `RolesGuard` 与 `@RequireRole`。
+
 角色与端点权限的对应关系、以及几条不能破的硬约束（类级守卫会连登录一起挡掉、
-2FA 第二步必须带 `temp_token`、兼容身份的 `id = 0` 不能直接落库）逐条列在
+2FA 第二步必须带 `temp_token`、用到管理守卫的模块必须自己导入 `AdminAuthModule`、
+兼容身份的 `id = 0` 不能直接落库）逐条列在
 [../AGENTS.md](../AGENTS.md) 的「管理员认证体系」一节。
+
+后两条是启动级缺陷：漏了 `AdminAuthModule` 会抛 `UnknownDependenciesException`，兼容身份直接
+落库会撞外键，两者都不报类型错误，`tsc` 查不出来，只有真把服务跑起来才会暴露。
 
 管理后台使用 Vite 生产压缩；Element Plus 通过 `unplugin-vue-components` 与
 `unplugin-auto-import` 按实际使用的组件、服务和样式自动导入，入口禁止重新使用
@@ -164,7 +174,7 @@ npm run dev:frontend      # 独立开发服务器（5173），API 代理到本�
 | `PORT` | 监听端口，默认 `4500` |
 | `DATABASE_URL` | PostgreSQL 连接串，如 `postgres://postgres:密码@localhost:5432/music`。**没有默认值**，缺失或不是 `postgres://` 开头会启动即失败 |
 | `AUTH_SECRET` | 访问令牌签名密钥，生产环境必须为至少 32 位随机值（启动时校验） |
-| `ADMIN_TOKEN` | 发布管理令牌，留空则管理接口全部拒绝 |
+| `ADMIN_TOKEN` | 静态管理令牌（`X-Admin-Token` 的校验值）。留空只关闭这条兼容路径，管理员账号密码登录不受影响 |
 | `APK_DIR` | APK 存放目录，默认 `./data/apk` |
 | `DESKTOP_RELEASE_DIR` | Windows 模块和差分对象目录，默认 `./data/desktop` |
 | `SHARE_PREVIEW_DIR` | 分享试听缓存目录，默认 `./data/share-preview` |
@@ -214,9 +224,9 @@ npm run dev:frontend      # 独立开发服务器（5173），API 代理到本�
 ### 公告
 
 - `GET /api/v1/announcements`：公开读取最新 20 条已发布公告，置顶公告始终排在最前。
-- 管理端使用 `GET/POST /api/v1/app/admin/announcements` 读取、发布公告；`POST /api/v1/app/admin/announcements/{id}` 编辑，`POST /api/v1/app/admin/announcements/{id}/enabled` 上下线，`POST /api/v1/app/admin/announcements/{id}/pinned` 置顶/取消置顶，`DELETE /api/v1/app/admin/announcements/{id}` 删除。均需 `X-Admin-Token`。
+- 管理端使用 `GET/POST /api/v1/app/admin/announcements` 读取、发布公告；`POST /api/v1/app/admin/announcements/{id}` 编辑，`POST /api/v1/app/admin/announcements/{id}/enabled` 上下线，`POST /api/v1/app/admin/announcements/{id}/pinned` 置顶/取消置顶，`DELETE /api/v1/app/admin/announcements/{id}` 删除。均需管理员会话或 `X-Admin-Token`。
 
-### 管理端用户（需要 `X-Admin-Token`）
+### 管理端用户（需要管理员会话或 `X-Admin-Token`）
 
 - `GET /api/v1/app/admin/users`：按用户名、昵称或邮箱搜索用户，并返回听歌汇总。
 - `GET /api/v1/app/admin/users/{id}/playback`：读取该用户的统计与最近播放明细。
@@ -440,7 +450,7 @@ ON CONFLICT (channel, key) DO UPDATE SET quota = excluded.quota;
 
 - `GET /api/v1/app/apk/{versionCode}`：下载安装包，支持 Range（206 / `Content-Range`），越界返回 416，`ETag` 为 APK 的 sha256。
 
-发布管理（需要请求头 `X-Admin-Token`）：
+发布管理（需要管理员会话 `Authorization: Bearer`，或兼容的请求头 `X-Admin-Token`）：
 
 - `GET /api/v1/app/admin/releases?channel=release`
 - `POST /api/v1/app/admin/releases?versionCode=&versionName=&note=&rollout=&minSdk=&sha256=`
@@ -518,7 +528,7 @@ node tools/verify-contract.mjs http://127.0.0.1:4720 verify-token
 - `POST /desktop/admin/rollout` 分阶段放量，只有存在完整模块且 100% 放量的版本才能抬高 `min-version`。
 
 完整清单校验、发布命令、差分选择和错误码见 [wiki/10-desktop-release.md](wiki/10-desktop-release.md)。桌面后台不属于
-`/app/admin/*`，但仍使用同一个 `X-Admin-Token`。
+`/app/admin/*`，但用的是同一个 `AdminAuthGuard`（管理员会话或 `X-Admin-Token`）。
 
 ### 悟空 IM
 

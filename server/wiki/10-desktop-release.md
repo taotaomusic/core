@@ -2,7 +2,7 @@
 
 [返回文档中心](README.md)
 
-桌面发布由 `src/desktop-release/` 实现，与 Android `src/release/` 分开保存版本记录和最低支持版本。两者共享 `X-Admin-Token`、灰度哈希和 `app_config`，但 **不能共用 versionCode 表或最低版本字段**。当前默认架构是 `windows-x64`。
+桌面发布由 `src/desktop-release/` 实现，与 Android `src/release/` 分开保存版本记录和最低支持版本。两者共享 `AdminAuthGuard`（管理员会话或 `X-Admin-Token`）、灰度哈希和 `app_config`，但 **不能共用 versionCode 表或最低版本字段**。当前默认架构是 `windows-x64`。
 
 ## 1. 发布对象
 
@@ -40,7 +40,8 @@
 
 ## 2. 接口与鉴权
 
-路径均需加 `/api/v1`，后台接口同时需要 `X-Admin-Token`，并受管理 IP 限流（60 次/15 分钟）。
+路径均需加 `/api/v1`，后台接口挂 `AdminAuthGuard`（管理员会话 Bearer 或兼容的 `X-Admin-Token`），
+并受管理 IP 限流（60 次/15 分钟）。
 
 | 方法 | 路径 | 请求体/参数 | 说明 |
 | --- | --- | --- | --- |

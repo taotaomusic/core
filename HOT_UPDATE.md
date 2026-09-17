@@ -7,7 +7,7 @@
 
 > **实现状态说明**：本文第 2、3 节保留迁移前的路由和 SQLite 设计，用于解释约束，文中的
 > `server/src/routes/api.ts`、旧脚本路径和 SQLite DDL **不是当前文件布局或可直接执行的实现**。
-> 现行 NestJS 模块、89 条路由、PostgreSQL 表结构和契约边界以
+> 现行 NestJS 模块、104 条路由、PostgreSQL 表结构和契约边界以
 > [server/wiki/00-code-index.md](server/wiki/00-code-index.md)、
 > [server/wiki/03-api-contracts.md](server/wiki/03-api-contracts.md) 与
 > [server/wiki/04-database.md](server/wiki/04-database.md) 为准。

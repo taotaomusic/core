@@ -301,11 +301,11 @@ APK 下载必须支持：
 | `/search`、`/songs/**` | 必须 | 不使用 | 音乐业务接口 |
 | `/draw/**` | 必须 | 不使用 | 图片任务属于当前登录用户调用会话，但任务表当前不存 user_id |
 | `/app/bootstrap`、`/app/apk/**`、`/app/patch/**` | 不要求 | 不要求 | Android 热更新通道必须公开 |
-| `/app/admin/**` | 不使用 | `X-Admin-Token` | 由 AdminTokenGuard 校验 |
+| `/app/admin/**` | 不使用 | 管理员会话或 `X-Admin-Token` | 由 AdminAuthGuard 校验；**无角色校验**，任何能登录后台的角色都可用 |
 | `/admin/auth/login`、`/totp-verify`、`/logout` | 不要求 | 不要求 | 显式公开；2FA 第二步额外要求 `temp_token` |
 | `/admin/auth/**`（其余） | 不使用 | 管理员会话或 `X-Admin-Token` | 由 AdminAuthGuard + RolesGuard 校验；角色不足为 403/4030 |
 | `/desktop/bootstrap`、`/desktop/artifacts/**`、`/desktop/patches/**` | 不要求 | 不要求 | 桌面更新通道必须公开 |
-| `/desktop/admin/**` | 不使用 | `X-Admin-Token` | 与 Android 共用管理令牌但版本表分开 |
+| `/desktop/admin/**` | 不使用 | 管理员会话或 `X-Admin-Token` | 与 Android 共用守卫但版本表分开 |
 | `/announcements`、`/public/shares/**` | 不要求 | 不使用 | 公开公告、分享元数据和试听 |
 | `/shares/songs` | 必须 | 不使用 | 创建短链 |
 | `/playback/**`、`/favorites/**`、`/playlists/**` | 必须 | 不使用 | 用户云端数据 |

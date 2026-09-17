@@ -18,15 +18,25 @@ IP 白名单、操作审计和 LDAP/SSO 对接。代码位于 `src/admin-auth/` 
 
 `AdminAuthGuard` 先尝试 Bearer 会话，失败再退回 `X-Admin-Token`。两条路都失败才抛 401/4013。
 
+**这两种凭据对所有管理接口都有效**，包括 `/api/v1/app/admin/**`（发布、补丁、公告、用户、图片 Key）
+和 `/api/v1/desktop/admin/**`。它们用的是同一个 `AdminAuthGuard`，所以管理后台登录后直接就能操作
+这些页面，不需要另外填 `ADMIN_TOKEN`。
+
 `X-Admin-Token` 兼容路径合成出来的身份是 `id = 0` 的 `legacy_admin`，它在 `admin_users` 表里
 **没有对应行**。任何写外键的落库都必须先过 `auditActorId()`，把 `id = 0` 折成 `null`，否则直接撞
 外键报 23503。`admin_audit_log.admin_id` 因此是可空列（见 [04-database.md](04-database.md)）。
 
-`ADMIN_TOKEN` 留空时兼容路径整条关闭，但 Bearer 会话不受影响 —— 也就是说，管理后台不依赖
-`ADMIN_TOKEN` 是否配置。
+`ADMIN_TOKEN` 留空时兼容路径整条关闭，但 Bearer 会话不受影响 —— 也就是说，管理后台和上述所有
+管理接口都不依赖 `ADMIN_TOKEN` 是否配置。
 
-`/api/v1/app/admin/**` 和 `/api/v1/desktop/admin/**` 这些老管理接口**仍然只认** `X-Admin-Token`，
-本次没有把它们切到会话体系。见 [00-code-index.md](00-code-index.md) 的鉴权矩阵。
+> **`common/guards/admin-token.guard.ts` 的 `AdminTokenGuard` 是死代码。** 它只认 `X-Admin-Token`
+> 且 `ADMIN_TOKEN` 为空时一律拒绝，但全项目没有任何 `@UseGuards` 或模块引用它。历史文档把它写成
+> “发布接口的守卫”是过时的；实际生效的一律是 `AdminAuthGuard`。新增管理接口时不要再用它。
+
+前端 `api.ts` 的 `authHeaders()` 用**令牌长度**决定头部：长度大于 60 走 `Authorization: Bearer`，
+否则走 `X-Admin-Token`。会话令牌是 48 字节 base64url（约 64 字符），因此走 Bearer；短的手工
+`ADMIN_TOKEN` 走兼容头。这个判断很脆（换个长度就会走错分支），但当前两套凭据都能用，所以不会
+暴露成故障。
 
 ## 2. 登录链路
 
@@ -290,5 +300,10 @@ viewer 读列表 403/4030、viewer 提权 403/4030、`PATCH` 局部更新、兼�
 - `temp_token` 存进程内存，多实例部署时第二步可能落到没有票据的那个实例上。
 - IP 白名单只支持精确匹配，不支持 CIDR，也不归一化 IPv4-mapped 地址。
 - `admin_users.email` 列在界面上没有编辑入口（后端已支持）。
-- `/app/admin/**` 与 `/desktop/admin/**` 尚未接入会话体系，仍只认静态令牌，因此它们的操作
-  无法审计到具体管理员。
+- `common/guards/admin-token.guard.ts` 的 `AdminTokenGuard` 已无任何引用，是死代码。
+- `/app/admin/**` 与 `/desktop/admin/**` 虽然接受会话令牌，但**既不做角色校验、也不写审计**：
+  它们只有 `@UseGuards(AdminAuthGuard)`，没有 `RolesGuard` / `@RequireRole`，Controller 里也不调
+  `AuditLogRepository`。后果是任何能登录后台的角色（含 `viewer`）都能调发布、补丁、公告、用户管理
+  和图片 Key 接口，而且操作记录里查不到是谁做的。`@RequireRole` 目前只出现在
+  `admin-auth.controller.ts` 内部。
+- 前端 `api.ts` 用令牌长度（> 60）判断走 Bearer 还是 `X-Admin-Token`，是脆弱的隐式约定。

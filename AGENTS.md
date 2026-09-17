@@ -70,7 +70,7 @@
 ## 后端开发
 
 - 构建必须用 `tsc`，开发用 `ts-node`。**不能用 esbuild 或 tsx** —— 它们不支持 `emitDecoratorMetadata`，NestJS 的构造器注入会拿不到 `design:paramtypes`。
-- 数据层改动后必须跑 `server/tools/verify-contract.mjs`（检查项数量随脚本版本变化，以实际输出为准；本次索引时为 120 项，须全绿），用独立的验证库而不是正式库。
+- 数据层改动后必须跑 `server/tools/verify-contract.mjs`（检查项数量随脚本版本变化，以实际输出为准；本次索引时为 138 项，须全绿），用独立的验证库而不是正式库。
 - 新增路由默认就受全局访问令牌守卫保护；公开路由必须显式标 `@Public()`。漏标只会让接口意外要求登录（能立刻发现），不会意外裸奔。
 - 数据层与客户端之间有一组不能破的契约（401 不能变 403、`/search` 必须是裸 NDJSON、SQL 别名必须加双引号等），逐条列在 [RELEASE.md](RELEASE.md) 里。
 
@@ -107,10 +107,17 @@
 ### 管理员认证的几条硬约束
 
 - **`@UseGuards(AdminAuthGuard, RolesGuard)` 不能挂在控制器类上**。类级守卫对 `login` 同样生效，而登录时用户还没有凭据，结果所有登录请求先被自己的守卫 401 掉。公开路由必须逐个方法标注，受保护方法统一用 `@AdminGuarded()`。
+- **用到 `AdminAuthGuard` 或 `RolesGuard` 的模块必须自己 `imports: [AdminAuthModule]`**。Nest 在**声明 Controller 的模块**里解析守卫的依赖，不是在提供守卫的模块里。漏导入会在启动时抛 `UnknownDependenciesException`，进程完全起不来（`ImageGenerationModule` 踩过）。这条既不是类型错误，静态审计也看不出来。
 - **2FA 第二步必须校验 `temp_token`**。它是登录第一步签发的一次性挑战票据（内存存储、5 分钟、用后即焚），把「密码已验证」这个事实带到第二步。缺了它，任何知道 `admin_id` 的人都能跳过密码直接猜 6 位动态码。
 - **`X-Admin-Token` 兼容身份在 `admin_users` 里没有对应行**（`id = 0`）。任何落库引用它的地方都要先过 `auditActorId()` 转成 `null`，否则撞外键。`admin_audit_log.admin_id` 与 `admin_users.created_by` 都是 `ON DELETE SET NULL`，管理员被删除后审计记录保留为「无归属」。
 - **默认管理员的创建必须挂在 `onApplicationBootstrap`**。建表在 `DatabaseService.onModuleInit`，早于 main.ts 里手动 `app.get()` 的代码执行。
 - **不要用类级 `@Public()` 之外的隐式约定**：管理端控制器统一 `@Public()` + 显式 `@AdminGuarded()`，绕开全局访问令牌守卫。
+
+### 管理端鉴权的两个已知缺口
+
+- **`/app/admin/*` 与 `/desktop/admin/*` 只有认证、没有授权**。它们只挂 `AdminAuthGuard`，没有 `RolesGuard` / `@RequireRole`，所以任何能登录后台的角色（含 `viewer`）都能调发布、补丁、公告、用户管理和图片 Key 接口。`@RequireRole` 目前只用在 `admin-auth.controller.ts` 内部。收紧权限时要给这些控制器补 `RolesGuard`。
+- **这些接口不写审计**。Controller 里没有调 `AuditLogRepository`，所以「谁放量的、谁删的用户」在 `admin_audit_log` 里查不到。要审计就得在写操作里显式落一条。
+- **`common/guards/admin-token.guard.ts` 的 `AdminTokenGuard` 是死代码**，全项目零引用。所有管理控制器用的都是 `AdminAuthGuard`（同时接受会话 Bearer 和 `X-Admin-Token`）。新增管理接口时不要再用它，也不要照着文件名推断鉴权行为。
 
 
 ## 测试规范

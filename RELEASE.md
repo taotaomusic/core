@@ -21,7 +21,9 @@
 
 ### 两种操作方式:管理后台 或 curl
 
-下面所有发布动作都有两条路。**日常用管理后台**(浏览器打开服务根地址,如 `https://music.xydaigua.cn/`),它把三件事做成了界面:发布列表与放量、补丁列表与放量、强制更新下限。首次进入要填 `ADMIN_TOKEN`,只存在浏览器 localStorage。
+下面所有发布动作都有两条路。**日常用管理后台**(浏览器打开 `https://music.xydaigua.cn/admin/`,注意入口固定在 `/admin/`,服务根路径留给未来的网页版),它把三件事做成了界面:发布列表与放量、补丁列表与放量、强制更新下限。首次进入用**管理员账号密码登录**(默认 `admin` / `admin123`,首次部署后请立刻改掉),登录后拿到的会话令牌存在浏览器 localStorage,有效期 24 小时。
+
+管理后台登录后直接就能操作发布和公告接口 —— 这些接口用的是同一个 `AdminAuthGuard`,会话 Bearer 和旧的 `X-Admin-Token` 都接受,不需要另外填 `ADMIN_TOKEN`。账号、2FA、角色和 LDAP 见 [server/wiki/11-admin-auth.md](server/wiki/11-admin-auth.md)。
 
 本文档保留 curl 版本,因为它们是**唯一能写进脚本、也唯一能在后台挂掉时兜底**的口径。两者打的是同一批接口。
 
@@ -254,7 +256,7 @@ SecurityException: Writable dex file '...' is not allowed
 
 ## 六、服务端发布
 
-产物是 `dist/` 目录树,不是单文件。**`dist/public/` 是管理后台的构建产物,必须一起上传**,否则根路径打开是 404(接口不受影响)。
+产物是 `dist/` 目录树,不是单文件。**`dist/public/` 是管理后台的构建产物,必须一起上传**,否则 `/admin/` 打开是 404(接口不受影响)。
 
 ```powershell
 cd server

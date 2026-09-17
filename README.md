@@ -9,7 +9,7 @@ Kotlin Multiplatform 音乐播放器 + 自建后端。当前提供 Android、Win
 | [AGENTS.md](AGENTS.md) | 开发规范：代码风格、模块划分、测试、签名 | 日常开发、代码审查 |
 | **[RELEASE.md](RELEASE.md)** | 发布与热更新流程、版本号铁律、不能破的契约 | **推版本前必读** |
 | [server/README.md](server/README.md) | 后端架构、接口文档、数据层规则、契约验证 | 后端开发、接口对接 |
-| [server/wiki/00-code-index.md](server/wiki/00-code-index.md) | CodeGraph 后端代码索引、89 条路由、21 张表与配置快照 | 核对源码、路由和文档是否漂移 |
+| [server/wiki/00-code-index.md](server/wiki/00-code-index.md) | CodeGraph 后端代码索引、104 条路由、24 张表与配置快照 | 核对源码、路由和文档是否漂移 |
 | [client-code-index.md](client-code-index.md) | CodeGraph 客户端索引、模块边界、关键符号与刷新状态 | 客户端架构定位、跨模块调用和文档同步 |
 | [MUSIC_CROSS_PLATFORM.md](MUSIC_CROSS_PLATFORM.md) | Android/Windows 音乐功能、定时播放、云端歌单契约 | 双端开发、联调和验收 |
 | [HOT_UPDATE.md](HOT_UPDATE.md) | 热更新设计动机与边界 | 理解热更新能力范围 |
@@ -355,8 +355,8 @@ GET /api/v1/songs/{id}/lyrics?format=json
 **最坏情况**：崩一次就自动回滚，而不是反复崩。
 
 **管理后台**：
-- 浏览器打开服务根地址（如 `https://music.xydaigua.cn/admin/`）
-- 首次进入填 `ADMIN_TOKEN`（存在浏览器 localStorage）
+- 浏览器打开 `/admin/` 路径（如 `https://music.xydaigua.cn/admin/`），服务根路径不是后台入口
+- 首次进入用管理员账号密码登录（默认 `admin` / `admin123`，部署后请立刻改掉），会话令牌存在浏览器 localStorage
 - 功能：发布列表与放量、补丁列表与放量、强制更新下限、公告管理、用户统计
 
 ### 💥 崩溃日志
@@ -755,7 +755,7 @@ node -e "const d=require('./androidApp/build/outputs/apk/release/output-metadata
 ## 🔗 相关链接
 
 - **上游音乐接口**：QQ 音乐 API v3、网易云音乐 API（通过第三方聚合服务）
-- **管理后台**：浏览器访问服务根地址的 `/admin/` 路径
+- **管理后台**：浏览器访问 `/admin/` 路径（如 `https://music.xydaigua.cn/admin/`）
 - **热更新设计**：参见 [HOT_UPDATE.md](HOT_UPDATE.md)
 - **发布流程**：参见 [RELEASE.md](RELEASE.md)
 

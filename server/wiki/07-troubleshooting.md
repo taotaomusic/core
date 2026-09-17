@@ -159,6 +159,23 @@ AS "songId"
 - 请求体里的 `admin_id` 与票据绑定的 `admin_id` 不一致。
 - 该账号在两步之间被禁用、删除，或 `totp_enabled` 被关掉。
 
+### 登录成功但发布/公告/用户页面报 401
+
+先确认**不是**守卫问题：所有管理控制器（`/app/admin/**`、`/desktop/admin/**`、`/admin/auth/**`）
+挂的都是同一个 `AdminAuthGuard`，它同时接受会话 Bearer 和 `X-Admin-Token`，所以登录后的会话令牌
+可以直接操作发布和公告页面，不需要另外填 `ADMIN_TOKEN`。
+
+如果确实报 401，检查：
+
+- 会话是否已过期（24 小时）或已被 `revokeOtherSessions` 撤销（改密码会踢掉其它设备）。
+- 前端 `api.ts` 的 `authHeaders()` 按**令牌长度**选头部：大于 60 走 Bearer，否则走
+  `X-Admin-Token`。会话令牌约 64 字符，正常走 Bearer；如果这里的分支判断被改坏，就会把会话
+  令牌当 `X-Admin-Token` 发出去，从而 401。
+
+> **不要去找 `AdminTokenGuard`。** `common/guards/admin-token.guard.ts` 里确实有这么一个只认
+> `X-Admin-Token` 的守卫，但它**没有任何引用**，是死代码。历史文档把它写成“发布接口的守卫”是
+> 过时的，照着它排查会走偏。
+
 ### 管理员接口返回 403/4030
 
 这是“已认证但角色不够”，不是登录失效：
@@ -339,7 +356,7 @@ ORDER BY quota DESC, id;
 | 401/4010 | Authorization 是否缺失或过期 |
 | 401/4011 | 普通登录密码错；管理员登录失败或 2FA 票据过期 |
 | 401/4012 | 刷新令牌是否已轮换、撤销或过期 |
-| 401/4013 | `X-Admin-Token`，或管理员会话无效 |
+| 401/4013 | 管理员会话与 `X-Admin-Token` 都不被接受（凭据缺失、过期、或 `ADMIN_TOKEN` 未配置） |
 | 403/4030 | 管理员角色不足，或当前 IP 不在白名单中 |
 | 404/4040 | 路径和全局 `/api/v1` 前缀 |
 | 404/4041 | Android/桌面版本、补丁或发布对象不存在 |

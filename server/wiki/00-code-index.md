@@ -52,15 +52,21 @@ codegraph query --path server --kind route --limit 200 --json ""
 | --- | --- |
 | `AccessTokenGuard` | 默认保护所有路由；`@Public()` 只允许“无令牌/无效令牌继续”，不绕过有效令牌解析；受保护路由失败固定为 401/4010 |
 | `RateLimitGuard` | 读取 `@RateLimit()`，在 Controller 前执行用途限流；未登录的受保护限流路由返回 401 |
-| `AdminTokenGuard` | 读取 `X-Admin-Token`，SHA-256 后用定时安全比较；未配置管理令牌也一律拒绝 401/4013 |
 | `EnvelopeInterceptor` | 普通返回包装为 `{code:0,message:"success",data}`；`@RawResponse()` 和 `undefined` 不包装 |
 | `LatestVersionHeaderInterceptor` | 依据已全量发布版本写 `X-Latest-Version-Code`/`X-Latest-Patch-Version`；进程内同步缓存，冷启动异步填充 |
 | `SecurityHeadersInterceptor` | 写 CORS `*`、`nosniff`、`DENY`、`no-referrer` 和默认 `no-store` |
 | `AllExceptionsFilter` | 将异常统一成业务信封；未知异常为 HTTP 502/5020；已发送响应的流只结束连接 |
 
-`AdminAuthGuard` 和 `RolesGuard` **不是全局守卫**，它们由 `AdminAuthModule` 提供，只挂在
-`/api/v1/admin/auth/**` 的受保护方法上。引用它们的模块必须自己 `imports: [AdminAuthModule]`，
-否则启动时 `UnknownDependenciesException`。详见 [11-admin-auth.md](11-admin-auth.md)。
+全局 `APP_GUARD` 只有 `AccessTokenGuard` 和 `RateLimitGuard` 两个。
+
+`AdminAuthGuard` 和 `RolesGuard` **不是全局守卫**，它们由 `AdminAuthModule` 提供。所有管理控制器
+（`/admin/auth/**`、`/app/admin/**`、`/desktop/admin/**`）都挂 `AdminAuthGuard`，它同时接受会话
+`Authorization: Bearer` 和兼容的 `X-Admin-Token`。引用它们的模块必须自己
+`imports: [AdminAuthModule]`，否则启动时 `UnknownDependenciesException`。
+详见 [11-admin-auth.md](11-admin-auth.md)。
+
+> `common/guards/admin-token.guard.ts` 里的 `AdminTokenGuard` **没有任何引用**，是死代码。它只认
+> `X-Admin-Token`，不要因为文件名像“管理后台守卫”就误以为它在生效。
 
 ## 3. 启动与请求链路
 
@@ -191,7 +197,7 @@ POST /api/v1/desktop/admin/artifacts
 | 图片轮询 | 桃桃访问令牌 | 每用户 300 次 + 每 IP 1800 次/15 分钟 |
 | IM 会话 | 桃桃访问令牌 | 每用户 30 次 + 每 IP 180 次/15 分钟 |
 | IM 同步/撤回/已读 | 桃桃访问令牌 | 每用户 300 次 + 每 IP 1800 次/15 分钟 |
-| Android/桌面后台、公告、用户、图片 Key | `X-Admin-Token` | 每 IP 60 次/15 分钟；管理令牌未配置时固定 401/4013 |
+| Android/桌面后台、公告、用户、图片 Key | `AdminAuthGuard`：管理员会话或 `X-Admin-Token` | 每 IP 60 次/15 分钟；两条凭据都不可用时 401/4013；**无角色校验** |
 | 管理后台登录、2FA 第二步 | `@Public()` | 每 IP 10 次/15 分钟；两个用途各一个桶，互不挤占 |
 | 管理后台其它接口 | 管理员会话 `Authorization: Bearer`（兼容 `X-Admin-Token`） | 默认无独立桶；再按角色判 403/4030 |
 
