@@ -8,7 +8,7 @@ import type { AdminAuthenticatedRequest } from "../common/request.types";
 import { AdminAuthGuard } from "../admin-auth/admin-auth.guard";
 import { RolesGuard } from "../admin-auth/roles.guard";
 import { RequireRole } from "../admin-auth/roles.decorator";
-import { READ_ROLES, WRITE_ROLES } from "../admin-auth/admin-roles";
+import { PRIVILEGED_READ_ROLES, WRITE_ROLES } from "../admin-auth/admin-roles";
 import { AdminAuditService } from "../admin-auth/admin-audit.service";
 import { UserAdminRepository } from "./user-admin.repository";
 
@@ -20,9 +20,12 @@ const MAX_HISTORY_LIMIT = 200;
 /**
  * 管理端用户与听歌统计。
  *
- * 查询接口三种角色都能看（观察者进后台就是为了看数据）；禁用和删除用户是写操作，
- * 只读账号被拒，并且都要留审计 —— 这两条以前既没有角色校验也不写日志，
- * 「谁把哪个用户删了」在 admin_audit_log 里查不到。
+ * **读和写都要求 `admin` 及以上，观察者被拒。** 这里返回的是用户隐私数据：
+ * 列表带 `email`，详情带逐首歌的播放次数与时间戳。观察者进后台是为了看发布状态
+ * 这类运营数据，不该看到「某个用户在几点几分听了哪首歌」，所以它用的是
+ * `PRIVILEGED_READ_ROLES` 而不是业务接口的 `READ_ROLES`。
+ *
+ * 前端的「用户与统计」页签同样对观察者隐藏，两边保持一致。
  */
 @Public()
 @UseGuards(AdminAuthGuard, RolesGuard)
@@ -35,13 +38,13 @@ export class UserAdminController {
   ) {}
 
   @Get()
-  @RequireRole(...READ_ROLES)
+  @RequireRole(...PRIVILEGED_READ_ROLES)
   list(@Query("query") query?: string, @Query("limit") limit?: string, @Query("offset") offset?: string) {
     return this.users.list((query ?? "").trim().slice(0, 80), this.pageSize(limit), this.offset(offset));
   }
 
   @Get(":id/playback")
-  @RequireRole(...READ_ROLES)
+  @RequireRole(...PRIVILEGED_READ_ROLES)
   async playback(@Param("id") id: string, @Query("limit") limit?: string) {
     const detail = await this.users.detail(this.userId(id), this.historyLimit(limit));
     if (!detail) throw ApiErrors.notFound(4044, "用户不存在");

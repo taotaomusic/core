@@ -199,7 +199,8 @@ POST /api/v1/desktop/admin/artifacts
 | 图片轮询 | 桃桃访问令牌 | 每用户 300 次 + 每 IP 1800 次/15 分钟 |
 | IM 会话 | 桃桃访问令牌 | 每用户 30 次 + 每 IP 180 次/15 分钟 |
 | IM 同步/撤回/已读 | 桃桃访问令牌 | 每用户 300 次 + 每 IP 1800 次/15 分钟 |
-| Android/桌面后台、公告、用户、图片 Key（读） | `AdminAuthGuard` + `RolesGuard`，`READ_ROLES` | 每 IP 60 次/15 分钟；两条凭据都不可用时 401/4013；角色不足 403/4030 |
+| Android/桌面后台、公告、图片 Key（读） | `AdminAuthGuard` + `RolesGuard`，`READ_ROLES` | 每 IP 60 次/15 分钟；两条凭据都不可用时 401/4013；角色不足 403/4030 |
+| 用户资料与听歌历史（读） | 同上，`PRIVILEGED_READ_ROLES` | 同上；观察者看不到个人数据 |
 | 同上（写：发版、放量、改配置、公告、用户、密钥） | 同上，`WRITE_ROLES` | 同上；观察者被拒，写操作另写 `admin_audit_log` |
 | 管理后台登录、2FA、改密码 | `@Public()` 或已认证 | 每 IP 10 次/15 分钟；`admin-login`/`admin-totp`/`admin-password` 三个独立桶 |
 | 管理后台其它接口 | 管理员会话 `Authorization: Bearer`（兼容 `X-Admin-Token`） | 默认无独立桶；再按角色判 403/4030 |

@@ -11,7 +11,7 @@
  */
 export const ADMIN_ROLES: string[] = ["super_admin", "admin", "viewer"];
 
-/** 业务管理接口的读权限：三种角色都能看（发布、公告、用户、图片 Key 的列表）。 */
+/** 业务管理接口的读权限：三种角色都能看（发布、补丁、Windows 发布、公告、图片 Key 的列表）。 */
 export const READ_ROLES: string[] = [...ADMIN_ROLES];
 
 /**
@@ -24,10 +24,11 @@ export const READ_ROLES: string[] = [...ADMIN_ROLES];
 export const WRITE_ROLES: string[] = ["super_admin", "admin"];
 
 /**
- * 后台**自身**的读权限：管理员账号列表、审计日志。
+ * 涉及个人数据的读权限：管理员账号列表、审计日志、用户资料与听歌历史。
  *
- * 与 [READ_ROLES] 的区别是这里不含观察者。审计日志会暴露「谁在什么时候改了什么」，
- * 管理员列表还会带出 IP 白名单，这两样不该给只读账号看 —— 观察者能进后台是为了
- * 看业务数据，不是来看别的管理员的操作记录的。
+ * 与 [READ_ROLES] 的区别是这里不含观察者。这三处都属于「不该给只读账号看」：
+ * 审计日志会暴露谁在什么时候改了什么，管理员列表会带出 IP 白名单，用户接口会带出
+ * `email` 与逐首歌的播放次数和时间戳。观察者能进后台是为了看发布状态这类运营数据，
+ * 不是来看个人数据的。
  */
 export const PRIVILEGED_READ_ROLES: string[] = ["super_admin", "admin"];

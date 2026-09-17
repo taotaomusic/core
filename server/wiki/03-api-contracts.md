@@ -301,7 +301,7 @@ APK 下载必须支持：
 | `/search`、`/songs/**` | 必须 | 不使用 | 音乐业务接口 |
 | `/draw/**` | 必须 | 不使用 | 图片任务属于当前登录用户调用会话，但任务表当前不存 user_id |
 | `/app/bootstrap`、`/app/apk/**`、`/app/patch/**` | 不要求 | 不要求 | Android 热更新通道必须公开 |
-| `/app/admin/**` | 不使用 | 管理员会话或 `X-Admin-Token` | `AdminAuthGuard` + `RolesGuard`；读 `READ_ROLES`，写 `WRITE_ROLES`（观察者 403/4030），写操作另写审计 |
+| `/app/admin/**` | 不使用 | 管理员会话或 `X-Admin-Token` | `AdminAuthGuard` + `RolesGuard`；读 `READ_ROLES`，写 `WRITE_ROLES`（观察者 403/4030），写操作另写审计。`/app/admin/users/**` 的**读**用 `PRIVILEGED_READ_ROLES`（返回 email 与听歌历史） |
 | `/admin/auth/login`、`/totp-verify`、`/logout` | 不要求 | 不要求 | 显式公开；2FA 第二步额外要求 `temp_token` |
 | `/admin/auth/**`（其余） | 不使用 | 管理员会话或 `X-Admin-Token` | 由 AdminAuthGuard + RolesGuard 校验；角色不足为 403/4030 |
 | `/desktop/bootstrap`、`/desktop/artifacts/**`、`/desktop/patches/**` | 不要求 | 不要求 | 桌面更新通道必须公开 |

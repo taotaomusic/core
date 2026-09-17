@@ -161,7 +161,9 @@ src/
   `announcement.controller.ts`（方法级，只保护 `/app/admin/*` 那几个方法，公开的 `GET /announcements` 不能加）、
   `release/release-admin.controller.ts`、`desktop-release/desktop-release-admin.controller.ts`、
   `user-admin/user-admin.controller.ts`、`image-generation/image-key-admin.controller.ts`（后四个是类级）。
-  写操作标 `@RequireRole(...WRITE_ROLES)` 并调 `AdminAuditService` 留痕，读操作标 `@RequireRole(...READ_ROLES)`。
+  写操作标 `@RequireRole(...WRITE_ROLES)` 并调 `AdminAuditService` 留痕；读操作标 `@RequireRole(...READ_ROLES)`，
+  **但返回个人数据的读接口要用 `PRIVILEGED_READ_ROLES`** —— 目前是 `user-admin` 的两个读接口
+  （`email` 与逐首歌的听歌历史），观察者看不到。改这类接口要同时改 `App.vue` 的页签可见性。
 - `admin-auth/` 拥有管理后台的身份与权限：账号、会话、2FA、角色守卫、IP 白名单和审计。它对外只暴露 `AdminAuthGuard` 与角色常量（`admin-roles.ts`），并提供 `AdminAuditService` 给业务控制器写审计，其它模块不应自己实现管理员鉴权。
 - `ldap/` 只做目录协议（Bind、Search、过滤器编解码）和角色映射，不直接签发会话；`authenticate()` 返回 `success`/`denied`/`skipped` 三态，由 `admin-auth/` 决定是否回落本地口令。
 

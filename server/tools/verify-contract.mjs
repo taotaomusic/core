@@ -19,7 +19,7 @@
 //   * 每次运行前必须重置验证库。版本/rollout 类的断言依赖空库，
 //     上一轮留下的 release 记录会让「rollout=0 不下发」失败。
 //   * EMAIL_VERIFICATION_TEST_CODE 要同时给**脚本自己**的环境，脚本会读它做断言。
-//   全绿应为「通过 152 项，失败 0 项」。
+//   全绿应为「通过 155 项，失败 0 项」。
 import { createHash, randomBytes } from "node:crypto";
 
 const base = (process.argv[2] ?? "http://127.0.0.1:4720").replace(/\/+$/, "");
@@ -964,11 +964,10 @@ async function main() {
     );
   }
 
-  // 读接口不能被顺手关掉：观察者进后台就是为了看数据。
+  // 读接口不能被顺手关掉：观察者进后台就是为了看发布状态这类运营数据。
   const readProbes = [
     { name: "发布列表", path: "/api/v1/app/admin/releases" },
     { name: "Windows 发布列表", path: "/api/v1/desktop/admin/releases" },
-    { name: "用户列表", path: "/api/v1/app/admin/users" },
     { name: "公告列表", path: "/api/v1/app/admin/announcements" },
     { name: "图片 Key 列表", path: "/api/v1/app/admin/image-keys" },
   ];
@@ -978,6 +977,22 @@ async function main() {
       `viewer 可读「${probe.name}」`,
       response.status === 200,
       `${response.status} ${(await response.text()).slice(0, 120)}`,
+    );
+  }
+
+  // 用户数据是例外：列表带 email，详情带逐首歌的播放次数与时间戳。这类个人数据
+  // 用的是 PRIVILEGED_READ_ROLES，观察者即使能进后台也看不到。
+  const userPrivacyProbes = [
+    { name: "用户列表", path: "/api/v1/app/admin/users" },
+    { name: "听歌历史", path: "/api/v1/app/admin/users/1/playback" },
+  ];
+  for (const probe of userPrivacyProbes) {
+    const response = await fetch(`${base}${probe.path}`, { headers: bearer(viewerSession) });
+    const responseBody = await response.json();
+    check(
+      `viewer 读「${probe.name}」被拒 403 且 code 4030`,
+      response.status === 403 && responseBody.code === 4030,
+      `${response.status} ${JSON.stringify(responseBody).slice(0, 120)}`,
     );
   }
 
@@ -992,6 +1007,23 @@ async function main() {
     "admin 角色可发布公告（201）",
     adminRoleWrite.status === 201 && !!adminAnnouncementId,
     `${adminRoleWrite.status} ${JSON.stringify(adminRoleWriteBody).slice(0, 160)}`,
+  );
+
+  // 同一批用户数据对 admin 必须放行，否则就是把隐私收紧成了功能不可用。
+  const adminUserList = await fetch(`${base}/api/v1/app/admin/users`, { headers: bearer(adminRoleSession) });
+  check(
+    "admin 角色可读用户列表",
+    adminUserList.status === 200,
+    `${adminUserList.status} ${(await adminUserList.text()).slice(0, 120)}`,
+  );
+  const adminPlayback = await fetch(`${base}/api/v1/app/admin/users/1/playback`, {
+    headers: bearer(adminRoleSession),
+  });
+  // 验证库里不一定有 id=1 的用户，404 说明守卫已放行、只是数据不存在。
+  check(
+    "admin 角色读听歌历史不被守卫拦下",
+    adminPlayback.status === 200 || adminPlayback.status === 404,
+    `${adminPlayback.status} ${(await adminPlayback.text()).slice(0, 120)}`,
   );
 
   // 审计留痕：写操作必须能在 admin_audit_log 里查到，并且记在正确的操作人头上。

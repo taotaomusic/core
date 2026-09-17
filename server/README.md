@@ -113,8 +113,10 @@ src/
 直接就能操作发布、公告和用户页面，不需要另外填 `ADMIN_TOKEN`。
 
 `/app/admin/*` 与 `/desktop/admin/*` 的**写操作**要求 `admin` 及以上角色，观察者（`viewer`）
-只能读、写会拿到 403/4030；所有写操作都会记一条审计（`admin_audit_log`），
-`admin` 及以上的角色分配见 [wiki/11-admin-auth.md](wiki/11-admin-auth.md)。
+只能读、写会拿到 403/4030；所有写操作都会记一条审计（`admin_audit_log`）。
+**用户资料与听歌历史是例外**：`/app/admin/users` 与 `/app/admin/users/:id/playback` 返回 `email`
+和逐首歌的播放记录，读也要求 `admin` 及以上，观察者被拒（前端「用户与统计」页签对观察者隐藏）。
+角色分配见 [wiki/11-admin-auth.md](wiki/11-admin-auth.md)。
 
 角色与端点权限的对应关系、以及几条不能破的硬约束（类级守卫会连登录一起挡掉、
 2FA 第二步必须带 `temp_token`、用到管理守卫或审计服务的模块必须自己导入 `AdminAuthModule`、

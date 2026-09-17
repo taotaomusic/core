@@ -70,7 +70,7 @@
 ## 后端开发
 
 - 构建必须用 `tsc`，开发用 `ts-node`。**不能用 esbuild 或 tsx** —— 它们不支持 `emitDecoratorMetadata`，NestJS 的构造器注入会拿不到 `design:paramtypes`。
-- 数据层改动后必须跑 `server/tools/verify-contract.mjs`（检查项数量随脚本版本变化，以实际输出为准；本次索引时为 152 项，须全绿），用独立的验证库而不是正式库。
+- 数据层改动后必须跑 `server/tools/verify-contract.mjs`（检查项数量随脚本版本变化，以实际输出为准；本次索引时为 155 项，须全绿），用独立的验证库而不是正式库。
 - 新增路由默认就受全局访问令牌守卫保护；公开路由必须显式标 `@Public()`。漏标只会让接口意外要求登录（能立刻发现），不会意外裸奔。
 - 数据层与客户端之间有一组不能破的契约（401 不能变 403、`/search` 必须是裸 NDJSON、SQL 别名必须加双引号等），逐条列在 [RELEASE.md](RELEASE.md) 里。
 
@@ -116,6 +116,7 @@
 ### 管理端授权与审计
 
 - **业务管理接口的角色矩阵只有一个定义处**：`server/src/admin-auth/admin-roles.ts`。新增管理接口时从那里取 `READ_ROLES` / `WRITE_ROLES` / `PRIVILEGED_READ_ROLES`，不要手写角色数组 —— 手写迟早会把 `viewer` 放进写权限。
+- **返回个人数据的读接口用 `PRIVILEGED_READ_ROLES`，不要用 `READ_ROLES`**。目前是管理员列表、审计日志、用户资料与听歌历史（`/app/admin/users` 带 `email`，`/app/admin/users/:id/playback` 带逐首歌的播放次数与时间戳）。新增接口时先问一句「这个响应里有没有别人的个人信息」，有就用 `PRIVILEGED_READ_ROLES`。改这类接口要同时改前端的页签可见性（`App.vue`），否则观察者会点进一个只会报错的页签。
 - **`/app/admin/*` 与 `/desktop/admin/*` 的写操作必须标 `@RequireRole(...WRITE_ROLES)`**，只读账号（`viewer`）被拒 403/4030。读接口用 `READ_ROLES`。`RolesGuard` 对没标注的路由一律放行，所以**漏标等于没有权限校验**，这一点不会报错、也不会被类型检查发现。
 - **管理端写操作必须写审计**：注入 `AdminAuditService`，在操作成功之后 `await this.audit.record(request, "域.动作", targetType, targetId, detail)`。它统一处理「兼容身份 `id=0` 不能落库」和「`X-Forwarded-For` 只在 `TRUST_PROXY` 下可信」两个坑。漏写不会报错，但 `admin_audit_log` 里就查不到这次操作。
 - **`AdminAuthModule` 必须导出 `AdminAuditService`**（以及 `AdminAuthService`、`AdminUsersRepository`）。业务模块的控制器要用它们，而依赖是在**声明 Controller 的模块**里解析的。

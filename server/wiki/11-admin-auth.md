@@ -118,15 +118,15 @@ flowchart TD
 
 ## 4. 角色与权限
 
-三种角色，定义在 `admin_users.role` 的 CHECK 约束里。权限分成两块，一块是**后台自身**
-（管理员账号、审计日志、IP 白名单），一块是**业务管理接口**（发布、Windows 发布、公告、
-用户、图片 Key）：
+三种角色，定义在 `admin_users.role` 的 CHECK 约束里。权限分成三块：**后台自身**（管理员账号、
+审计日志、IP 白名单）、**个人数据**（用户资料与听歌历史）、**业务管理接口**（发布、Windows
+发布、公告、图片 Key）：
 
-| 角色 | 后台自身 | 业务管理接口 |
-| --- | --- | --- |
-| `super_admin` | 全部（含管理员增删改、IP 白名单） | 读写 |
-| `admin` | 读管理员列表与审计日志 | 读写 |
-| `viewer` | 无 | **只读**，写操作 403/4030 |
+| 角色 | 后台自身 | 个人数据 | 业务管理接口 |
+| --- | --- | --- | --- |
+| `super_admin` | 全部（含管理员增删改、IP 白名单） | 读 | 读写 |
+| `admin` | 读管理员列表与审计日志 | 读 | 读写 |
+| `viewer` | 无 | **无** | 读，写操作 403/4030 |
 
 分组常量集中在 `admin-roles.ts`，不要在控制器里手写角色数组：
 
@@ -135,10 +135,17 @@ flowchart TD
 | `ADMIN_ROLES` | `super_admin` / `admin` / `viewer` | 创建管理员时的合法角色集合 |
 | `READ_ROLES` | 三种角色 | 业务管理接口的读接口 |
 | `WRITE_ROLES` | `super_admin` / `admin` | 业务管理接口的写接口 |
-| `PRIVILEGED_READ_ROLES` | `super_admin` / `admin` | 后台自身：管理员列表、审计日志 |
+| `PRIVILEGED_READ_ROLES` | `super_admin` / `admin` | 后台自身 + 个人数据的读接口 |
 
-`READ_ROLES` 与 `PRIVILEGED_READ_ROLES` 必须分开：观察者能进后台看业务数据，但不该看到
-「谁在什么时候改了什么」，管理员列表还会带出 `ip_whitelist`。
+`READ_ROLES` 与 `PRIVILEGED_READ_ROLES` 必须分开。后者覆盖三处：
+
+- **审计日志**会暴露「谁在什么时候改了什么」。
+- **管理员列表**会带出 `ip_whitelist` 与 `last_login_ip`。
+- **用户接口**返回的是个人数据：`GET /app/admin/users` 带 `email` 与听歌统计，
+  `GET /app/admin/users/:id/playback` 带逐首歌的播放次数和时间戳。
+
+观察者能进后台是为了看发布状态这类运营数据，不是来看别人的个人信息和操作记录。
+`/app/admin/users` 下的**读写**都要求 `admin` 及以上，前端「用户与统计」页签对观察者隐藏。
 
 `RolesGuard` 读 `@RequireRole(...)` 元数据：
 
@@ -285,8 +292,8 @@ await this.audit.record(request, "release.rollout", "release", `${channel}#${bod
 | Android 发布 | `/app/admin`（releases、rollout、min-version、config、patches、patch-rollout） | `READ_ROLES` | `WRITE_ROLES` |
 | Windows 发布 | `/desktop/admin`（releases、artifacts、rollout、min-version） | `READ_ROLES` | `WRITE_ROLES` |
 | 公告 | `/app/admin/announcements` | `READ_ROLES` | `WRITE_ROLES` |
-| 用户 | `/app/admin/users` | `READ_ROLES` | `WRITE_ROLES` |
 | 图片 Key | `/app/admin/image-keys` | `READ_ROLES` | `WRITE_ROLES` |
+| 用户 | `/app/admin/users` | `PRIVILEGED_READ_ROLES` | `WRITE_ROLES` |
 
 守卫的挂法两种都有，取决于控制器里有没有公开方法：
 
@@ -379,9 +386,10 @@ viewer 读列表 403/4030、viewer 提权 403/4030、`PATCH` 局部更新、兼�
 
 紧接着的“业务管理接口：角色校验与审计”一节验证授权与审计的落地：viewer 对
 发布放量、Windows 放量、禁用用户、发布公告、导入图片 Key 五个写接口一律 403/4030；
-同样五个域的读接口对 viewer 返回 200（不能顺手把只读账号锁死）；`admin` 角色能发布公告；
-该公告在 `admin_audit_log` 里查得到且 `admin_id` 记的是发布者本人；`X-Admin-Token`
-兼容身份同样能发布并留痕。
+发布、Windows 发布、公告、图片 Key 四个域的读接口对 viewer 返回 200（不能顺手把只读账号锁死）；
+**用户列表与听歌历史对 viewer 返回 403/4030，对 `admin` 返回 200/404**（个人数据不放给观察者，
+但也不能收紧成管理员不可用）；`admin` 角色能发布公告；该公告在 `admin_audit_log` 里查得到且
+`admin_id` 记的是发布者本人；`X-Admin-Token` 兼容身份同样能发布并留痕。
 
 运行方式和数据库准备见 [00-code-index.md](00-code-index.md) 与 [02-development.md](02-development.md)。
 契约脚本是有状态的，必须“重置验证库 → 重启服务 → 单次运行”。
@@ -392,10 +400,10 @@ viewer 读列表 403/4030、viewer 提权 403/4030、`PATCH` 局部更新、兼�
 - `temp_token` 存进程内存，多实例部署时第二步可能落到没有票据的那个实例上。
 - IP 白名单只支持精确匹配，不支持 CIDR，也不归一化 IPv4-mapped 地址。
 - `admin_users.email` 列在界面上没有编辑入口（后端已支持）。
-- 观察者（`viewer`）能读 `/app/admin/users` 与 `/app/admin/users/:id/playback`，也就是能看
-  用户资料和听歌历史。这是照现有前端页签划分延续下来的（“用户与统计”页签对观察者可见），
-  不是本轮新增的放行；如果认为观察者不该看用户数据，把这两处的 `READ_ROLES` 换成
-  `PRIVILEGED_READ_ROLES` 即可，同时要改前端的页签可见性。
-- 前端的写按钮没有按角色隐藏：观察者打开发布/公告页仍能看到按钮，点了才会收到 403。
-  服务端是权威，但交互上可以再收敛。
+- 前端的写按钮没有按角色隐藏：观察者打开发布、公告、设置页仍能看到按钮，点了才会收到 403。
+  服务端是权威，但交互上可以再收敛。**例外是「用户与统计」**——该页签对观察者隐藏，
+  因为它对应的读接口本身就不放行，留着只会点进一片报错。
+- 审计写入与业务操作不在同一个事务里：先做业务、后写日志。日志表故障时接口会报错，
+  但业务动作已经生效，客户端重试可能造成重复操作。
+- `admin_audit_log` 没有留存或归档策略，19 个写操作持续写入，表只增不减。
 - 前端 `api.ts` 用令牌长度（> 60）判断走 Bearer 还是 `X-Admin-Token`，是脆弱的隐式约定。

@@ -56,7 +56,7 @@
               </template>
               <AnnouncementManager :admin-token="token" />
             </el-tab-pane>
-            <el-tab-pane name="users" lazy>
+            <el-tab-pane v-if="adminInfo?.role !== 'viewer'" name="users" lazy>
               <template #label>
                 <div class="tab-label"><el-icon><User /></el-icon> <span v-show="!isMobile || tab === 'users'">用户与统计</span></div>
               </template>
@@ -167,6 +167,9 @@ function onLogin(data: { token: string; admin: { id: number; username: string; r
   adminInfo.value = data.admin;
   localStorage.setItem(STORAGE_KEY, data.token);
   askToken.value = false;
+  // 页签可见性随角色变化（用户与统计、管理员、审计日志）。上一个会话停在这些页签上时，
+  // 换个低权限账号登录会落在一个不渲染的页签上，看到一片空白 —— 一律回到首个页签。
+  tab.value = "releases";
 }
 
 async function forgetToken() {
@@ -175,6 +178,7 @@ async function forgetToken() {
   token.value = "";
   adminInfo.value = null;
   askToken.value = true;
+  tab.value = "releases";
 }
 </script>
 
