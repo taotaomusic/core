@@ -172,19 +172,37 @@ AS "songId"
   `X-Admin-Token`。会话令牌约 64 字符，正常走 Bearer；如果这里的分支判断被改坏，就会把会话
   令牌当 `X-Admin-Token` 发出去，从而 401。
 
-> **不要去找 `AdminTokenGuard`。** `common/guards/admin-token.guard.ts` 里确实有这么一个只认
-> `X-Admin-Token` 的守卫，但它**没有任何引用**，是死代码。历史文档把它写成“发布接口的守卫”是
-> 过时的，照着它排查会走偏。
+> **`AdminTokenGuard` 已经删掉了。** `common/guards/admin-token.guard.ts` 曾经有一个只认
+> `X-Admin-Token` 的守卫，但它**没有任何引用**，是纯死代码，本轮已删除。历史文档把它写成
+> “发布接口的守卫”是错的，照着它排查会走偏。
 
 ### 管理员接口返回 403/4030
 
 这是“已认证但角色不够”，不是登录失效：
 
-- `viewer` 读管理员列表或审计日志会 403。
-- `admin` 做写操作（创建/编辑/删除管理员、改 IP 白名单）会 403，这些需要 `super_admin`。
+- `viewer` 读管理员列表或审计日志会 403（`PRIVILEGED_READ_ROLES` 不含观察者）。
+- `viewer` 对**业务管理接口的任何写操作**都会 403：发布、补丁、放量、抬高下限、改远端配置、
+  Windows 发布、公告增删改、禁用或删除用户、导入或删除图片 Key。观察者只能读。
+- `admin` 做后台自身的写操作（创建/编辑/删除管理员、改 IP 白名单）会 403，这些需要 `super_admin`。
 - 「当前 IP 不在白名单中」也是 403/4030，来自 `assertIpAllowed`。
 
+角色矩阵的唯一出处是 `admin-roles.ts`，排查时先看那里，不要在控制器里找手写的角色数组。
+
 **不要**把它改成 401：前端收到 401 会清本地会话并跳登录页，等于因为权限不足被登出。
+
+### 写操作成功了但审计日志里查不到
+
+按顺序检查：
+
+- 控制器是否真的注入了 `AdminAuditService` 并 `await this.audit.record(...)`。**漏写不会报错**，
+  接口照常返回 2xx，只是 `admin_audit_log` 里没有记录。
+- `record()` 是否放在 `await` 业务动作**之后**。放在之前的话，操作抛异常时也会留一条“做了”的
+  假记录。
+- `record()` 的调用是否真的被 `await` 了。没 await 的话请求返回后异步写入可能被进程回收掉。
+- 该模块是否 `imports: [AdminAuthModule]`（`AdminAuditService` 由它导出）。
+
+`admin_id` 为 `null` 是正常的：那表示操作来自 `X-Admin-Token` 兼容身份（`id = 0` 折成 `null`），
+或者该管理员后来被删除了（外键 `ON DELETE SET NULL`）。
 
 ### 白名单里明明有我的 IP 却还是 403
 

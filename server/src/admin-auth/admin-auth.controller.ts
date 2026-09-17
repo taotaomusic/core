@@ -12,18 +12,14 @@ import { AdminAuthService } from "./admin-auth.service";
 import { AdminAuthGuard } from "./admin-auth.guard";
 import { RolesGuard } from "./roles.guard";
 import { RequireRole } from "./roles.decorator";
+import { ADMIN_ROLES, PRIVILEGED_READ_ROLES } from "./admin-roles";
 import { AdminUsersRepository, type AdminUserRecord } from "./admin-users.repository";
 import { AdminSessionsRepository } from "./admin-sessions.repository";
 import { AuditLogRepository } from "./audit-log.repository";
 import { LdapService } from "../ldap/ldap.service";
 
-const ADMIN_ROLES = ["super_admin", "admin", "viewer"];
-
 /** 本地创建的管理员用户名。允许点、下划线、连字符，避免出现难排查的怪名字。 */
 const USERNAME_PATTERN = /^[A-Za-z0-9._-]{3,64}$/;
-
-/** 读操作（管理员列表、审计日志）所需的最低角色。 */
-const READ_ROLES = ["super_admin", "admin"];
 
 /**
  * 需要管理员会话的路由。
@@ -282,7 +278,7 @@ export class AdminAuthController {
    */
   @AdminGuarded()
   @Get("users")
-  @RequireRole(...READ_ROLES)
+  @RequireRole(...PRIVILEGED_READ_ROLES)
   async listAdmins(@Req() req: AdminAuthenticatedRequest) {
     const actor = this.requireActor(req);
     const isSuperAdmin = actor.role === "super_admin";
@@ -390,7 +386,7 @@ export class AdminAuthController {
 
   @AdminGuarded()
   @Get("audit-log")
-  @RequireRole(...READ_ROLES)
+  @RequireRole(...PRIVILEGED_READ_ROLES)
   async listAuditLog(@Query("adminId") adminId?: string,
                      @Query("action") action?: string, @Query("limit") limit?: string,
                      @Query("offset") offset?: string) {

@@ -1,9 +1,13 @@
 import { Body, Controller, Get, HttpCode, HttpStatus, Post, Query, Req, UseGuards } from "@nestjs/common";
-import type { Request } from "express";
 import { ApiErrors } from "../common/api.exception";
 import { Public } from "../common/decorators/public.decorator";
 import { RateLimit } from "../common/decorators/rate-limit.decorator";
+import type { AdminAuthenticatedRequest } from "../common/request.types";
 import { AdminAuthGuard } from "../admin-auth/admin-auth.guard";
+import { RolesGuard } from "../admin-auth/roles.guard";
+import { RequireRole } from "../admin-auth/roles.decorator";
+import { READ_ROLES, WRITE_ROLES } from "../admin-auth/admin-roles";
+import { AdminAuditService } from "../admin-auth/admin-audit.service";
 import { AppConfigService } from "../config/app-config.service";
 import { ApkService } from "./apk.service";
 import { MinVersionDto, PatchRolloutDto, RemoteConfigDto, RolloutDto } from "./dto/admin.dto";
@@ -26,9 +30,13 @@ const ALL_VERSIONS = 2_147_483_647;
  *
  * 用 [Public] 跳过访问令牌，改由 [AdminAuthGuard] 校验管理员认证：
  * 发布是运维动作，不属于任何用户会话。
+ *
+ * 再叠一层 [RolesGuard]：放量、抬下限、改远端配置都是会影响线上客户端的写操作，
+ * 只读账号（`viewer`）不能做。读接口保持三种角色都能看。
+ * 本控制器没有公开方法，所以守卫挂在类上不会误伤（见 11-admin-auth.md 的类级守卫陷阱）。
  */
 @Public()
-@UseGuards(AdminAuthGuard)
+@UseGuards(AdminAuthGuard, RolesGuard)
 @RateLimit("admin")
 @Controller("app/admin")
 export class ReleaseAdminController {
@@ -37,9 +45,11 @@ export class ReleaseAdminController {
     private readonly releases: ReleaseRepository,
     private readonly release: ReleaseService,
     private readonly apk: ApkService,
+    private readonly audit: AdminAuditService,
   ) {}
 
   @Get("releases")
+  @RequireRole(...READ_ROLES)
   list(@Query("channel") channel?: string) {
     return this.releases.listReleases(channel ?? this.config.defaultChannel);
   }
@@ -53,9 +63,10 @@ export class ReleaseAdminController {
    * 「提示更新 → 装完还提示」的死循环。
    */
   @Post("releases")
+  @RequireRole(...WRITE_ROLES)
   @HttpCode(HttpStatus.CREATED)
   async publish(
-    @Req() request: Request,
+    @Req() request: AdminAuthenticatedRequest,
     @Query("versionCode") versionCodeParam?: string,
     @Query("versionName") versionNameParam?: string,
     @Query("channel") channelParam?: string,
@@ -87,20 +98,38 @@ export class ReleaseAdminController {
       min_sdk: this.positiveIntOr(minSdk, 24),
       enabled: enabled === "false" ? 0 : 1,
     });
+    await this.audit.record(request, "release.publish", "release", `${channel}#${versionCode}`, {
+      channel,
+      versionCode,
+      versionName,
+      rolloutPercent: this.clampPercent(rollout ?? 0),
+      minSdk: this.positiveIntOr(minSdk, 24),
+      enabled: enabled !== "false",
+      apkSize: stored.size,
+      apkSha256: stored.sha256,
+    });
     return this.releases.findRelease(channel, versionCode);
   }
 
   @Post("rollout")
+  @RequireRole(...WRITE_ROLES)
   @HttpCode(HttpStatus.OK)
-  async changeRollout(@Body() body: RolloutDto) {
+  async changeRollout(@Req() request: AdminAuthenticatedRequest, @Body() body: RolloutDto) {
     const channel = body.channel?.trim() || this.config.defaultChannel;
     if (!(await this.releases.findRelease(channel, body.versionCode))) {
       throw ApiErrors.notFound(4041, "版本不存在");
     }
-    await this.releases.updateRollout(channel, body.versionCode, this.clampPercent(body.percent));
+    const percent = this.clampPercent(body.percent);
+    await this.releases.updateRollout(channel, body.versionCode, percent);
     if (body.enabled !== undefined) {
       await this.releases.setReleaseEnabled(channel, body.versionCode, body.enabled !== false);
     }
+    await this.audit.record(request, "release.rollout", "release", `${channel}#${body.versionCode}`, {
+      channel,
+      versionCode: body.versionCode,
+      percent,
+      enabled: body.enabled,
+    });
     return this.releases.findRelease(channel, body.versionCode);
   }
 
@@ -111,8 +140,9 @@ export class ReleaseAdminController {
    * 会被拦在门外却拿不到升级包。这里从接口层面堵住这条变砖路径。
    */
   @Post("min-version")
+  @RequireRole(...WRITE_ROLES)
   @HttpCode(HttpStatus.OK)
-  async setMinVersion(@Body() body: MinVersionDto) {
+  async setMinVersion(@Req() request: AdminAuthenticatedRequest, @Body() body: MinVersionDto) {
     const channel = body.channel?.trim() || this.config.defaultChannel;
     const rescue = await this.release.findRescueRelease(channel, body.versionCode);
     if (body.versionCode > 0 && !rescue) {
@@ -122,6 +152,11 @@ export class ReleaseAdminController {
       );
     }
     await this.releases.setMinSupportedVersionCode(channel, body.versionCode);
+    await this.audit.record(request, "release.min_version", "release", channel, {
+      channel,
+      minSupportedVersionCode: body.versionCode,
+      rescueVersionCode: rescue?.version_code ?? null,
+    });
     return {
       channel,
       minSupportedVersionCode: body.versionCode,
@@ -130,11 +165,13 @@ export class ReleaseAdminController {
   }
 
   @Get("config")
+  @RequireRole(...READ_ROLES)
   listConfig() {
     return this.releases.listConfig(ALL_VERSIONS);
   }
 
   @Get("patches")
+  @RequireRole(...READ_ROLES)
   listPatches(@Query("channel") channel?: string) {
     return this.releases.listPatches(channel ?? this.config.defaultChannel);
   }
@@ -149,9 +186,10 @@ export class ReleaseAdminController {
    * 与安装包一样默认不放量：先登记，自己验过再逐步放开。
    */
   @Post("patches")
+  @RequireRole(...WRITE_ROLES)
   @HttpCode(HttpStatus.CREATED)
   async publishPatch(
-    @Req() request: Request,
+    @Req() request: AdminAuthenticatedRequest,
     @Query("targetVersionCode") targetVersionCodeParam?: string,
     @Query("patchVersion") patchVersionParam?: string,
     @Query("channel") channelParam?: string,
@@ -192,31 +230,55 @@ export class ReleaseAdminController {
       rollout_percent: this.clampPercent(rollout ?? 0),
       enabled: 1,
     });
+    await this.audit.record(request, "release.patch_publish", "patch",
+      `${channel}#${targetVersionCode}#${patchVersion}`, {
+        channel,
+        targetVersionCode,
+        patchVersion,
+        rolloutPercent: this.clampPercent(rollout ?? 0),
+        patchSize: stored.size,
+        patchSha256: stored.sha256,
+      });
     return this.releases.findPatch(channel, targetVersionCode, patchVersion);
   }
 
   @Post("patch-rollout")
+  @RequireRole(...WRITE_ROLES)
   @HttpCode(HttpStatus.OK)
-  async changePatchRollout(@Body() body: PatchRolloutDto) {
+  async changePatchRollout(@Req() request: AdminAuthenticatedRequest, @Body() body: PatchRolloutDto) {
     const channel = body.channel?.trim() || this.config.defaultChannel;
     if (!(await this.releases.findPatch(channel, body.targetVersionCode, body.patchVersion))) {
       throw ApiErrors.notFound(4041, "补丁不存在");
     }
+    const percent = this.clampPercent(body.percent);
     await this.releases.updatePatchRollout(
       channel,
       body.targetVersionCode,
       body.patchVersion,
-      this.clampPercent(body.percent),
+      percent,
       body.enabled,
     );
+    await this.audit.record(request, "release.patch_rollout", "patch",
+      `${channel}#${body.targetVersionCode}#${body.patchVersion}`, {
+        channel,
+        targetVersionCode: body.targetVersionCode,
+        patchVersion: body.patchVersion,
+        percent,
+        enabled: body.enabled,
+      });
     return this.releases.findPatch(channel, body.targetVersionCode, body.patchVersion);
   }
+
   @Post("config")
+  @RequireRole(...WRITE_ROLES)
   @HttpCode(HttpStatus.OK)
-  async changeConfig(@Body() body: RemoteConfigDto) {
+  async changeConfig(@Req() request: AdminAuthenticatedRequest, @Body() body: RemoteConfigDto) {
     if (!CONFIG_KEY_PATTERN.test(body.key)) throw ApiErrors.badRequest(4005, "配置键不合法");
     if (body.value === null) {
       await this.releases.deleteConfig(body.key);
+      await this.audit.record(request, "release.config_remove", "remote_config", body.key, {
+        key: body.key,
+      });
       return { key: body.key, removed: true };
     }
     await this.releases.upsertConfig(
@@ -225,6 +287,12 @@ export class ReleaseAdminController {
       body.minVersionCode ?? null,
       body.maxVersionCode ?? null,
     );
+    await this.audit.record(request, "release.config_set", "remote_config", body.key, {
+      key: body.key,
+      value: String(body.value ?? ""),
+      minVersionCode: body.minVersionCode ?? null,
+      maxVersionCode: body.maxVersionCode ?? null,
+    });
     return this.releases.listConfig(ALL_VERSIONS);
   }
 

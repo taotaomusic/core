@@ -29,9 +29,14 @@ IP 白名单、操作审计和 LDAP/SSO 对接。代码位于 `src/admin-auth/` 
 `ADMIN_TOKEN` 留空时兼容路径整条关闭，但 Bearer 会话不受影响 —— 也就是说，管理后台和上述所有
 管理接口都不依赖 `ADMIN_TOKEN` 是否配置。
 
-> **`common/guards/admin-token.guard.ts` 的 `AdminTokenGuard` 是死代码。** 它只认 `X-Admin-Token`
-> 且 `ADMIN_TOKEN` 为空时一律拒绝，但全项目没有任何 `@UseGuards` 或模块引用它。历史文档把它写成
-> “发布接口的守卫”是过时的；实际生效的一律是 `AdminAuthGuard`。新增管理接口时不要再用它。
+> **`AdminTokenGuard` 已删除。** `common/guards/admin-token.guard.ts` 曾经只认 `X-Admin-Token`
+> 且在 `ADMIN_TOKEN` 为空时一律拒绝，但全项目没有任何 `@UseGuards` 或模块引用它，是纯死代码。
+> 历史文档把它写成“发布接口的守卫”是错的；实际生效的一律是 `AdminAuthGuard`。要判断某个守卫是否
+> 生效，`grep` 它在 `@UseGuards` 里的实际引用，不要靠文件名或旧文档推断。
+
+兼容身份的**角色固定为 `super_admin`**（在 `AdminAuthGuard` 里合成），所以它天然通过所有
+`@RequireRole` 校验。这一点是有意为之：存量运维脚本和契约验证脚本都只带静态令牌，收紧权限时
+不能把它们一起锁死。
 
 前端 `api.ts` 的 `authHeaders()` 用**令牌长度**决定头部：长度大于 60 走 `Authorization: Bearer`，
 否则走 `X-Admin-Token`。会话令牌是 48 字节 base64url（约 64 字符），因此走 Bearer；短的手工
@@ -113,19 +118,36 @@ flowchart TD
 
 ## 4. 角色与权限
 
-三种角色，定义在 `admin_users.role` 的 CHECK 约束里：
+三种角色，定义在 `admin_users.role` 的 CHECK 约束里。权限分成两块，一块是**后台自身**
+（管理员账号、审计日志、IP 白名单），一块是**业务管理接口**（发布、Windows 发布、公告、
+用户、图片 Key）：
 
-| 角色 | 能读 | 能写 |
+| 角色 | 后台自身 | 业务管理接口 |
 | --- | --- | --- |
-| `super_admin` | 全部 | 全部，含管理员增删改、IP 白名单 |
-| `admin` | 管理员列表、审计日志 | 仅自己的密码和 2FA |
-| `viewer` | 无 | 无 |
+| `super_admin` | 全部（含管理员增删改、IP 白名单） | 读写 |
+| `admin` | 读管理员列表与审计日志 | 读写 |
+| `viewer` | 无 | **只读**，写操作 403/4030 |
+
+分组常量集中在 `admin-roles.ts`，不要在控制器里手写角色数组：
+
+| 常量 | 取值 | 用途 |
+| --- | --- | --- |
+| `ADMIN_ROLES` | `super_admin` / `admin` / `viewer` | 创建管理员时的合法角色集合 |
+| `READ_ROLES` | 三种角色 | 业务管理接口的读接口 |
+| `WRITE_ROLES` | `super_admin` / `admin` | 业务管理接口的写接口 |
+| `PRIVILEGED_READ_ROLES` | `super_admin` / `admin` | 后台自身：管理员列表、审计日志 |
+
+`READ_ROLES` 与 `PRIVILEGED_READ_ROLES` 必须分开：观察者能进后台看业务数据，但不该看到
+「谁在什么时候改了什么」，管理员列表还会带出 `ip_whitelist`。
 
 `RolesGuard` 读 `@RequireRole(...)` 元数据：
 
-- 方法或类上**没有** `@RequireRole` → 放行（只要求已认证）。
+- 方法或类上**没有** `@RequireRole` → 放行（只要求已认证）。**所以漏标等于没有权限校验，
+  而且不会报错**——这是这套机制最容易出事的地方。
 - 有标注但不满足 → 403/4030，消息里带上需要的角色名。
 - 完全没有身份 → 401/4013。
+
+`super_admin` 在 `RolesGuard` 里直接放行，不必逐个接口列出。
 
 `RolesGuard` 抛异常而不是返回 `false`。返回 `false` 会被 Nest 变成 403 且不带业务码，客户端
 拿不到可判断的错误码；抛 `ApiErrors` 才能落到统一信封里。
@@ -166,18 +188,50 @@ IPv4-mapped 前缀的归一化。写白名单时要填写服务端实际看到�
 ## 6. 操作审计
 
 `admin_audit_log` 记录 `action`、`target_type`、`target_id`、`detail`、`ip_address`、`user_agent`
-和 `created_at`。已使用的 action：
+和 `created_at`。`detail` 是 JSON 字符串，只放结构化摘要，不放长文本（例如公告正文不入审计）。
+
+后台自身的 action：
 
 | action | 触发点 |
 | --- | --- |
 | `auth.login` | 本地密码登录成功 |
 | `auth.login_ldap` | LDAP 登录成功 |
 | `auth.login_totp` | 通过 TOTP 第二步登录成功 |
-| `auth.logout` | 退出登录 |
-| `auth.password_change` | 修改自己的密码 |
-| `auth.totp_enable` / `auth.totp_confirm` / `auth.totp_disable` | 2FA 生命周期 |
+| `auth.change_password` | 修改自己的密码 |
+| `auth.totp_enable_requested` | 生成 2FA 密钥（尚未启用） |
+| `auth.totp_enabled` | 动态码校验通过，2FA 正式生效 |
+| `auth.totp_disabled` | 关闭 2FA |
 | `admin.create` / `admin.update` / `admin.delete` | 管理员增删改 |
-| `admin.ip_whitelist_update` | 修改 IP 白名单 |
+| `admin.ip_whitelist` | 修改 IP 白名单 |
+
+业务管理接口的 action（`target_type` 见括号）：
+
+| action | 触发点 |
+| --- | --- |
+| `release.publish` / `release.rollout` / `release.min_version` | Android 发版、放量、抬高下限（`release`） |
+| `release.patch_publish` / `release.patch_rollout` | 热修复补丁登记与放量（`patch`） |
+| `release.config_set` / `release.config_remove` | 远端配置写入与删除（`remote_config`） |
+| `desktop.artifact_upload` | 上传 Windows 模块（`desktop_artifact`） |
+| `desktop.publish` / `desktop.rollout` / `desktop.min_version` | Windows 发布、放量、抬高下限（`desktop_release`） |
+| `announcement.create` / `update` / `set_enabled` / `set_pinned` / `delete` | 公告生命周期（`announcement`） |
+| `user.set_disabled` / `user.delete` | 禁用与删除普通用户（`user`） |
+| `image_key.import` / `image_key.delete` | 图片 Key 导入与删除（`image_key`） |
+
+注意 `logout` **不写审计** —— 退出接口没有凭据也能调用，记一条没有操作人的记录没有意义。
+
+业务控制器不要直接注入 `AuditLogRepository`，用 `AdminAuditService`：
+
+```ts
+await this.audit.record(request, "release.rollout", "release", `${channel}#${body.versionCode}`, {
+  channel, versionCode: body.versionCode, percent, enabled: body.enabled,
+});
+```
+
+它统一处理两件事：把兼容身份的 `id = 0` 转成 `null`（否则撞 `admin_users` 外键），以及
+只在 `TRUST_PROXY` 开启时才采信 `X-Forwarded-For`。**只在操作成功之后调用** —— 控制器
+抛异常时这行不会执行，审计记的是「发生了什么」，不是「尝试了什么」。
+
+图片 Key 的审计只记 `maskedKey`，明文连审计表也不落。
 
 `GET /admin/auth/audit-log` 支持 `adminId`、`action`、`limit` 查询参数，按时间倒序返回。
 `admin_id` 为 `null` 表示这条记录来自 `X-Admin-Token` 兼容身份，或者原管理员已被删除
@@ -221,6 +275,26 @@ IPv4-mapped 前缀的归一化。写白名单时要填写服务端实际看到�
 
 第一步和第二步分桶，避免密码尝试次数挤占动态码尝试次数；改密码单独一桶，是因为它需要提交当前
 密码，同样属于可爆破的凭据校验入口。
+
+### 业务管理接口
+
+`/app/admin/**` 与 `/desktop/admin/**` 不在本控制器里，但用的是同一套守卫与角色常量：
+
+| 域 | 路径前缀 | 读 | 写 |
+| --- | --- | --- | --- |
+| Android 发布 | `/app/admin`（releases、rollout、min-version、config、patches、patch-rollout） | `READ_ROLES` | `WRITE_ROLES` |
+| Windows 发布 | `/desktop/admin`（releases、artifacts、rollout、min-version） | `READ_ROLES` | `WRITE_ROLES` |
+| 公告 | `/app/admin/announcements` | `READ_ROLES` | `WRITE_ROLES` |
+| 用户 | `/app/admin/users` | `READ_ROLES` | `WRITE_ROLES` |
+| 图片 Key | `/app/admin/image-keys` | `READ_ROLES` | `WRITE_ROLES` |
+
+守卫的挂法两种都有，取决于控制器里有没有公开方法：
+
+- `ReleaseAdminController`、`DesktopReleaseAdminController`、`UserAdminController`、
+  `ImageKeyAdminController` 全是管理接口，守卫挂**类上**：`@UseGuards(AdminAuthGuard, RolesGuard)`。
+- `AnnouncementController` 同时有公开的 `GET /announcements`（客户端首页要用），所以守卫
+  **只能逐个方法挂**。类级守卫会连公开接口一起保护，客户端首页直接 401 —— 这就是
+  `admin-auth.controller.ts` 里 `login` 踩过的同一个坑。
 
 ## 8. 数据模型
 
@@ -270,6 +344,10 @@ UnknownDependenciesException: Nest can't resolve dependencies of the AdminAuthGu
 这是启动致命错误，进程直接起不来。新增模块引用管理守卫时，记得把 `AdminAuthModule` 加进
 `imports`。`ImageGenerationModule` 就踩过这个坑。
 
+同理，业务控制器要写审计就得注入 `AdminAuditService`，而它也在 `AdminAuthModule` 里，
+所以 `AdminAuthModule` 的 `exports` 必须包含 `AdminAuthService`、`AdminUsersRepository`、
+`AdminAuditService` 三个。`RolesGuard` 只依赖 Nest 核心的 `Reflector`（全局可用），不需要导出。
+
 ### 9.3 默认管理员必须建在 `onApplicationBootstrap`
 
 `DatabaseService` 的迁移跑在 `onModuleInit`，而 `main.ts` 里的代码在两个钩子**之前**执行。
@@ -299,6 +377,12 @@ Vue 管理后台在 `src/frontend/`，构建产物输出到 `dist/public`，由 
 viewer 读列表 403/4030、viewer 提权 403/4030、`PATCH` 局部更新、兼容身份写审计不报外键、
 不能禁用最后一个超管 400/4000、删除管理员 204。
 
+紧接着的“业务管理接口：角色校验与审计”一节验证授权与审计的落地：viewer 对
+发布放量、Windows 放量、禁用用户、发布公告、导入图片 Key 五个写接口一律 403/4030；
+同样五个域的读接口对 viewer 返回 200（不能顺手把只读账号锁死）；`admin` 角色能发布公告；
+该公告在 `admin_audit_log` 里查得到且 `admin_id` 记的是发布者本人；`X-Admin-Token`
+兼容身份同样能发布并留痕。
+
 运行方式和数据库准备见 [00-code-index.md](00-code-index.md) 与 [02-development.md](02-development.md)。
 契约脚本是有状态的，必须“重置验证库 → 重启服务 → 单次运行”。
 
@@ -308,10 +392,10 @@ viewer 读列表 403/4030、viewer 提权 403/4030、`PATCH` 局部更新、兼�
 - `temp_token` 存进程内存，多实例部署时第二步可能落到没有票据的那个实例上。
 - IP 白名单只支持精确匹配，不支持 CIDR，也不归一化 IPv4-mapped 地址。
 - `admin_users.email` 列在界面上没有编辑入口（后端已支持）。
-- `common/guards/admin-token.guard.ts` 的 `AdminTokenGuard` 已无任何引用，是死代码。
-- `/app/admin/**` 与 `/desktop/admin/**` 虽然接受会话令牌，但**既不做角色校验、也不写审计**：
-  它们只有 `@UseGuards(AdminAuthGuard)`，没有 `RolesGuard` / `@RequireRole`，Controller 里也不调
-  `AuditLogRepository`。后果是任何能登录后台的角色（含 `viewer`）都能调发布、补丁、公告、用户管理
-  和图片 Key 接口，而且操作记录里查不到是谁做的。`@RequireRole` 目前只出现在
-  `admin-auth.controller.ts` 内部。
+- 观察者（`viewer`）能读 `/app/admin/users` 与 `/app/admin/users/:id/playback`，也就是能看
+  用户资料和听歌历史。这是照现有前端页签划分延续下来的（“用户与统计”页签对观察者可见），
+  不是本轮新增的放行；如果认为观察者不该看用户数据，把这两处的 `READ_ROLES` 换成
+  `PRIVILEGED_READ_ROLES` 即可，同时要改前端的页签可见性。
+- 前端的写按钮没有按角色隐藏：观察者打开发布/公告页仍能看到按钮，点了才会收到 403。
+  服务端是权威，但交互上可以再收敛。
 - 前端 `api.ts` 用令牌长度（> 60）判断走 Bearer 还是 `X-Admin-Token`，是脆弱的隐式约定。

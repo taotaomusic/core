@@ -112,12 +112,13 @@ src/
 它们由同一个 `AdminAuthGuard` 处理：先试 Bearer，失败再退回 `X-Admin-Token`。所以登录后台后
 直接就能操作发布、公告和用户页面，不需要另外填 `ADMIN_TOKEN`。
 
-`/app/admin/*` 与 `/desktop/admin/*` 目前**只有认证、没有角色校验，也不写审计** —— 任何能登录
-后台的角色（含 `viewer`）都能调用它们。需要收紧时得显式补 `RolesGuard` 与 `@RequireRole`。
+`/app/admin/*` 与 `/desktop/admin/*` 的**写操作**要求 `admin` 及以上角色，观察者（`viewer`）
+只能读、写会拿到 403/4030；所有写操作都会记一条审计（`admin_audit_log`），
+`admin` 及以上的角色分配见 [wiki/11-admin-auth.md](wiki/11-admin-auth.md)。
 
 角色与端点权限的对应关系、以及几条不能破的硬约束（类级守卫会连登录一起挡掉、
-2FA 第二步必须带 `temp_token`、用到管理守卫的模块必须自己导入 `AdminAuthModule`、
-兼容身份的 `id = 0` 不能直接落库）逐条列在
+2FA 第二步必须带 `temp_token`、用到管理守卫或审计服务的模块必须自己导入 `AdminAuthModule`、
+兼容身份的 `id = 0` 不能直接落库、管理接口漏标 `@RequireRole` 等于放行）逐条列在
 [../AGENTS.md](../AGENTS.md) 的「管理员认证体系」一节。
 
 后两条是启动级缺陷：漏了 `AdminAuthModule` 会抛 `UnknownDependenciesException`，兼容身份直接

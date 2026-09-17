@@ -61,12 +61,14 @@ codegraph query --path server --kind route --limit 200 --json ""
 
 `AdminAuthGuard` 和 `RolesGuard` **不是全局守卫**，它们由 `AdminAuthModule` 提供。所有管理控制器
 （`/admin/auth/**`、`/app/admin/**`、`/desktop/admin/**`）都挂 `AdminAuthGuard`，它同时接受会话
-`Authorization: Bearer` 和兼容的 `X-Admin-Token`。引用它们的模块必须自己
+`Authorization: Bearer` 和兼容的 `X-Admin-Token`；`RolesGuard` 再按 `@RequireRole` 判角色，
+写操作还要注入 `AdminAuditService` 写审计。引用它们的模块必须自己
 `imports: [AdminAuthModule]`，否则启动时 `UnknownDependenciesException`。
 详见 [11-admin-auth.md](11-admin-auth.md)。
 
-> `common/guards/admin-token.guard.ts` 里的 `AdminTokenGuard` **没有任何引用**，是死代码。它只认
-> `X-Admin-Token`，不要因为文件名像“管理后台守卫”就误以为它在生效。
+> `common/guards/admin-token.guard.ts` 里的 `AdminTokenGuard` **已删除**。它曾是死代码（全项目零引用），
+> 不要因为历史文档或文件名像“管理后台守卫”就以为它还在生效。判断某个守卫是否生效，
+> `grep` 它在 `@UseGuards` 里的实际引用。
 
 ## 3. 启动与请求链路
 
@@ -197,7 +199,8 @@ POST /api/v1/desktop/admin/artifacts
 | 图片轮询 | 桃桃访问令牌 | 每用户 300 次 + 每 IP 1800 次/15 分钟 |
 | IM 会话 | 桃桃访问令牌 | 每用户 30 次 + 每 IP 180 次/15 分钟 |
 | IM 同步/撤回/已读 | 桃桃访问令牌 | 每用户 300 次 + 每 IP 1800 次/15 分钟 |
-| Android/桌面后台、公告、用户、图片 Key | `AdminAuthGuard`：管理员会话或 `X-Admin-Token` | 每 IP 60 次/15 分钟；两条凭据都不可用时 401/4013；**无角色校验** |
+| Android/桌面后台、公告、用户、图片 Key（读） | `AdminAuthGuard` + `RolesGuard`，`READ_ROLES` | 每 IP 60 次/15 分钟；两条凭据都不可用时 401/4013；角色不足 403/4030 |
+| 同上（写：发版、放量、改配置、公告、用户、密钥） | 同上，`WRITE_ROLES` | 同上；观察者被拒，写操作另写 `admin_audit_log` |
 | 管理后台登录、2FA、改密码 | `@Public()` 或已认证 | 每 IP 10 次/15 分钟；`admin-login`/`admin-totp`/`admin-password` 三个独立桶 |
 | 管理后台其它接口 | 管理员会话 `Authorization: Bearer`（兼容 `X-Admin-Token`） | 默认无独立桶；再按角色判 403/4030 |
 

@@ -157,11 +157,12 @@ src/
 - `playlists/` 的所有顺序/完整替换操作在事务内锁定歌单，`source + songId` 是歌曲身份，展示字段只是快照。
 - `release/` 与 `desktop-release/` 各自拥有版本、文件和最低版本语义；桌面端使用内容寻址对象，不能复用 APK 文件名逻辑。
 - `im/` 只代理悟空 IM 的凭据和同步命令；聊天正文、频道游标不进入 PostgreSQL。
-- 下面 5 个控制器都挂 `AdminAuthGuard`（管理员会话或 `X-Admin-Token`），不要误加普通访问令牌依赖：
-  `announcement.controller.ts`（方法级，只保护 `/app/admin/*` 那几个方法）、`release/release-admin.controller.ts`、
-  `desktop-release/desktop-release-admin.controller.ts`、`user-admin/user-admin.controller.ts`、
-  `image-generation/image-key-admin.controller.ts`（后四个是类级）。它们目前**没有**角色校验，也没有写审计。
-- `admin-auth/` 拥有管理后台的身份与权限：账号、会话、2FA、角色守卫、IP 白名单和审计。它对外只暴露 `AdminAuthGuard` 和 `RolesGuard`，其它模块不应自己实现管理员鉴权。
+- 下面 5 个控制器都挂 `AdminAuthGuard` + `RolesGuard`（管理员会话或 `X-Admin-Token`），不要误加普通访问令牌依赖：
+  `announcement.controller.ts`（方法级，只保护 `/app/admin/*` 那几个方法，公开的 `GET /announcements` 不能加）、
+  `release/release-admin.controller.ts`、`desktop-release/desktop-release-admin.controller.ts`、
+  `user-admin/user-admin.controller.ts`、`image-generation/image-key-admin.controller.ts`（后四个是类级）。
+  写操作标 `@RequireRole(...WRITE_ROLES)` 并调 `AdminAuditService` 留痕，读操作标 `@RequireRole(...READ_ROLES)`。
+- `admin-auth/` 拥有管理后台的身份与权限：账号、会话、2FA、角色守卫、IP 白名单和审计。它对外只暴露 `AdminAuthGuard` 与角色常量（`admin-roles.ts`），并提供 `AdminAuditService` 给业务控制器写审计，其它模块不应自己实现管理员鉴权。
 - `ldap/` 只做目录协议（Bind、Search、过滤器编解码）和角色映射，不直接签发会话；`authenticate()` 返回 `success`/`denied`/`skipped` 三态，由 `admin-auth/` 决定是否回落本地口令。
 
 管理后台的完整链路、2FA 两步流程和启动期硬约束见 [11-admin-auth.md](11-admin-auth.md)。
@@ -242,7 +243,8 @@ sequenceDiagram
 
 - 新路由是否默认鉴权，公开路由是否显式 `@Public()`？
 - 控制器里既有公开又有受保护方法时，是否用了方法级守卫而不是类级 `@UseGuards`？
-- 用到 `AdminAuthGuard` / `RolesGuard` 的模块是否导入了 `AdminAuthModule`？
+- 用到 `AdminAuthGuard` / `RolesGuard` / `AdminAuditService` 的模块是否导入了 `AdminAuthModule`？
+- 新增的管理接口是否标了 `@RequireRole`（漏标 = 放行，不报错）？写操作是否调了 `AdminAuditService`？
 - 需要写表的初始化是否放在 `onApplicationBootstrap`，而不是 `main.ts` 或构造函数？
 - 是否误给流式接口套了成功信封？
 - 是否把上游 401 直接透传给客户端？

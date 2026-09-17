@@ -19,7 +19,7 @@
 //   * 每次运行前必须重置验证库。版本/rollout 类的断言依赖空库，
 //     上一轮留下的 release 记录会让「rollout=0 不下发」失败。
 //   * EMAIL_VERIFICATION_TEST_CODE 要同时给**脚本自己**的环境，脚本会读它做断言。
-//   全绿应为「通过 138 项，失败 0 项」。
+//   全绿应为「通过 152 项，失败 0 项」。
 import { createHash, randomBytes } from "node:crypto";
 
 const base = (process.argv[2] ?? "http://127.0.0.1:4720").replace(/\/+$/, "");
@@ -918,6 +918,114 @@ async function main() {
     viewerWrite.status === 403 && viewerWriteBody.code === 4030,
     `${viewerWrite.status} ${JSON.stringify(viewerWriteBody)}`,
   );
+
+  // ---- 业务管理接口的权限模型 ----
+  // 发布、Windows 发布、用户、公告、图片 Key 这 5 个控制器此前只挂 AdminAuthGuard，
+  // 没有任何角色校验：任何能登录后台的账号（包括 viewer）都能放量、删用户、导入密钥，
+  // 而且这些操作一条审计都不留。下面逐个域验证「写被拒、读放行」，并确认写操作落进审计表。
+  section("业务管理接口：角色校验与审计");
+
+  // 造一个 admin 账号，用来证明「拒绝 viewer」不是因为接口整体坏了。
+  const adminRoleName = `aadmin_${randomBytes(3).toString("hex")}`;
+  const createdAdminRole = await fetch(`${base}/api/v1/admin/auth/users`, {
+    method: "POST", headers: bearer(adminSession),
+    body: JSON.stringify({
+      username: adminRoleName, password: "pass123456", role: "admin", displayName: "契约验证管理员",
+    }),
+  });
+  const createdAdminRoleBody = await createdAdminRole.json();
+  const adminRoleId = createdAdminRoleBody.data?.id;
+  const adminRoleLogin = await postJson("/api/v1/admin/auth/login", { username: adminRoleName, password: "pass123456" });
+  const adminRoleSession = adminRoleLogin.body.data?.token;
+  check(
+    "可创建 admin 角色并登录",
+    createdAdminRole.status === 201 && typeof adminRoleSession === "string",
+    `${createdAdminRole.status} ${JSON.stringify(adminRoleLogin.body).slice(0, 120)}`,
+  );
+
+  // 每个域挑一个写接口。守卫在处理器之前执行，所以即使请求体不合法，viewer 也应当
+  // 先被 4030 挡下 —— 这让断言不依赖业务数据当前处于什么状态。
+  const writeProbes = [
+    { name: "发布放量", path: "/api/v1/app/admin/rollout", body: { versionCode: 1, percent: 100 } },
+    { name: "Windows 放量", path: "/api/v1/desktop/admin/rollout", body: { versionCode: 1, percent: 100 } },
+    { name: "禁用用户", path: "/api/v1/app/admin/users/1/disabled", body: { disabled: true } },
+    { name: "发布公告", path: "/api/v1/app/admin/announcements", body: { title: "越权公告", content: "越权公告" } },
+    { name: "导入图片 Key", path: "/api/v1/app/admin/image-keys", body: { key: "viewer-should-not-write-this-key", quota: 1 } },
+  ];
+  for (const probe of writeProbes) {
+    const response = await fetch(`${base}${probe.path}`, {
+      method: "POST", headers: bearer(viewerSession), body: JSON.stringify(probe.body),
+    });
+    const responseBody = await response.json();
+    check(
+      `viewer 写「${probe.name}」被拒 403 且 code 4030`,
+      response.status === 403 && responseBody.code === 4030,
+      `${response.status} ${JSON.stringify(responseBody).slice(0, 120)}`,
+    );
+  }
+
+  // 读接口不能被顺手关掉：观察者进后台就是为了看数据。
+  const readProbes = [
+    { name: "发布列表", path: "/api/v1/app/admin/releases" },
+    { name: "Windows 发布列表", path: "/api/v1/desktop/admin/releases" },
+    { name: "用户列表", path: "/api/v1/app/admin/users" },
+    { name: "公告列表", path: "/api/v1/app/admin/announcements" },
+    { name: "图片 Key 列表", path: "/api/v1/app/admin/image-keys" },
+  ];
+  for (const probe of readProbes) {
+    const response = await fetch(`${base}${probe.path}`, { headers: bearer(viewerSession) });
+    check(
+      `viewer 可读「${probe.name}」`,
+      response.status === 200,
+      `${response.status} ${(await response.text()).slice(0, 120)}`,
+    );
+  }
+
+  // admin（非超管）应当能写业务接口：拒绝 viewer 不等于把接口整体锁死。
+  const adminRoleWrite = await fetch(`${base}/api/v1/app/admin/announcements`, {
+    method: "POST", headers: bearer(adminRoleSession),
+    body: JSON.stringify({ title: "契约验证公告", content: "由契约脚本以 admin 角色创建" }),
+  });
+  const adminRoleWriteBody = await adminRoleWrite.json();
+  const adminAnnouncementId = adminRoleWriteBody.data?.id;
+  check(
+    "admin 角色可发布公告（201）",
+    adminRoleWrite.status === 201 && !!adminAnnouncementId,
+    `${adminRoleWrite.status} ${JSON.stringify(adminRoleWriteBody).slice(0, 160)}`,
+  );
+
+  // 审计留痕：写操作必须能在 admin_audit_log 里查到，并且记在正确的操作人头上。
+  const auditAfterWrite = await fetch(`${base}/api/v1/admin/auth/audit-log?action=announcement.create&limit=20`, {
+    headers: bearer(adminSession),
+  });
+  const auditAfterWriteBody = await auditAfterWrite.json();
+  const auditRow = (auditAfterWriteBody.data?.items ?? []).find(
+    (row) => String(row.target_id) === String(adminAnnouncementId),
+  );
+  check(
+    "公告发布写入审计且操作人正确",
+    !!auditRow && auditRow.admin_id === adminRoleId && auditRow.target_type === "announcement",
+    JSON.stringify(auditRow ?? auditAfterWriteBody).slice(0, 200),
+  );
+
+  // 兼容身份（X-Admin-Token，在 admin_users 里没有对应行）也要能写业务接口并留审计，
+  // 否则 RELEASE.md 里那套「只带静态令牌发版」的流程会当场断掉。
+  const legacyAnnouncement = await fetch(`${base}/api/v1/app/admin/announcements`, {
+    method: "POST", headers: legacyHeaders,
+    body: JSON.stringify({ title: "契约验证兼容身份公告", content: "兼容身份" }),
+  });
+  check(
+    "兼容身份可发布公告（201）",
+    legacyAnnouncement.status === 201,
+    `${legacyAnnouncement.status} ${(await legacyAnnouncement.text()).slice(0, 160)}`,
+  );
+
+  // 清掉本段造出来的账号，别影响后面的断言（删账号会级联清掉它的会话）。
+  if (adminRoleId) {
+    await fetch(`${base}/api/v1/admin/auth/users/${adminRoleId}`, {
+      method: "DELETE", headers: bearer(adminSession),
+    });
+  }
 
   // 前端用 PATCH 做部分更新，控制器必须提供 PATCH 而不是 POST。
   const patched = await fetch(`${base}/api/v1/admin/auth/users/${createdAdminId}`, {

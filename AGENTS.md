@@ -70,7 +70,7 @@
 ## 后端开发
 
 - 构建必须用 `tsc`，开发用 `ts-node`。**不能用 esbuild 或 tsx** —— 它们不支持 `emitDecoratorMetadata`，NestJS 的构造器注入会拿不到 `design:paramtypes`。
-- 数据层改动后必须跑 `server/tools/verify-contract.mjs`（检查项数量随脚本版本变化，以实际输出为准；本次索引时为 138 项，须全绿），用独立的验证库而不是正式库。
+- 数据层改动后必须跑 `server/tools/verify-contract.mjs`（检查项数量随脚本版本变化，以实际输出为准；本次索引时为 152 项，须全绿），用独立的验证库而不是正式库。
 - 新增路由默认就受全局访问令牌守卫保护；公开路由必须显式标 `@Public()`。漏标只会让接口意外要求登录（能立刻发现），不会意外裸奔。
 - 数据层与客户端之间有一组不能破的契约（401 不能变 403、`/search` 必须是裸 NDJSON、SQL 别名必须加双引号等），逐条列在 [RELEASE.md](RELEASE.md) 里。
 
@@ -113,11 +113,13 @@
 - **默认管理员的创建必须挂在 `onApplicationBootstrap`**。建表在 `DatabaseService.onModuleInit`，早于 main.ts 里手动 `app.get()` 的代码执行。
 - **不要用类级 `@Public()` 之外的隐式约定**：管理端控制器统一 `@Public()` + 显式 `@AdminGuarded()`，绕开全局访问令牌守卫。
 
-### 管理端鉴权的两个已知缺口
+### 管理端授权与审计
 
-- **`/app/admin/*` 与 `/desktop/admin/*` 只有认证、没有授权**。它们只挂 `AdminAuthGuard`，没有 `RolesGuard` / `@RequireRole`，所以任何能登录后台的角色（含 `viewer`）都能调发布、补丁、公告、用户管理和图片 Key 接口。`@RequireRole` 目前只用在 `admin-auth.controller.ts` 内部。收紧权限时要给这些控制器补 `RolesGuard`。
-- **这些接口不写审计**。Controller 里没有调 `AuditLogRepository`，所以「谁放量的、谁删的用户」在 `admin_audit_log` 里查不到。要审计就得在写操作里显式落一条。
-- **`common/guards/admin-token.guard.ts` 的 `AdminTokenGuard` 是死代码**，全项目零引用。所有管理控制器用的都是 `AdminAuthGuard`（同时接受会话 Bearer 和 `X-Admin-Token`）。新增管理接口时不要再用它，也不要照着文件名推断鉴权行为。
+- **业务管理接口的角色矩阵只有一个定义处**：`server/src/admin-auth/admin-roles.ts`。新增管理接口时从那里取 `READ_ROLES` / `WRITE_ROLES` / `PRIVILEGED_READ_ROLES`，不要手写角色数组 —— 手写迟早会把 `viewer` 放进写权限。
+- **`/app/admin/*` 与 `/desktop/admin/*` 的写操作必须标 `@RequireRole(...WRITE_ROLES)`**，只读账号（`viewer`）被拒 403/4030。读接口用 `READ_ROLES`。`RolesGuard` 对没标注的路由一律放行，所以**漏标等于没有权限校验**，这一点不会报错、也不会被类型检查发现。
+- **管理端写操作必须写审计**：注入 `AdminAuditService`，在操作成功之后 `await this.audit.record(request, "域.动作", targetType, targetId, detail)`。它统一处理「兼容身份 `id=0` 不能落库」和「`X-Forwarded-For` 只在 `TRUST_PROXY` 下可信」两个坑。漏写不会报错，但 `admin_audit_log` 里就查不到这次操作。
+- **`AdminAuthModule` 必须导出 `AdminAuditService`**（以及 `AdminAuthService`、`AdminUsersRepository`）。业务模块的控制器要用它们，而依赖是在**声明 Controller 的模块**里解析的。
+- **`common/guards/admin-token.guard.ts` 的 `AdminTokenGuard` 已删除**。它曾是死代码（全项目零引用），所有管理控制器用的都是 `AdminAuthGuard`（同时接受会话 Bearer 和 `X-Admin-Token`）。不要照着历史文件名推断鉴权行为，也不要用 `grep` 之外的方式猜守卫是否生效 —— 要 `grep` 它在 `@UseGuards` 里的实际引用。
 
 
 ## 测试规范
