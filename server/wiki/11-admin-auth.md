@@ -211,8 +211,16 @@ IPv4-mapped 前缀的归一化。写白名单时要填写服务端实际看到�
 `logout` 虽然不带守卫，但会尝试解析 `Authorization: Bearer` 并撤销对应会话；没有凭据时直接
 返回 204，不做任何事 —— 这样退出接口本身不会把用户卡在登录页。
 
-限流：`login` 走 `auth:admin-login` 桶，`totp-verify` 走 `auth:admin-totp` 桶，都是**每 IP
-10 次/15 分钟**。两个桶分开，避免第一步的尝试次数挤占第二步。
+限流分三个独立桶，都是**每 IP 10 次/15 分钟**，互不挤占：
+
+| 桶 | 挂载点 |
+| --- | --- |
+| `auth:admin-login` | `POST /admin/auth/login` |
+| `auth:admin-totp` | `POST /admin/auth/totp-verify`、`totp-enable`、`totp-confirm`、`totp-disable` |
+| `auth:admin-password` | `POST /admin/auth/change-password` |
+
+第一步和第二步分桶，避免密码尝试次数挤占动态码尝试次数；改密码单独一桶，是因为它需要提交当前
+密码，同样属于可爆破的凭据校验入口。
 
 ## 8. 数据模型
 

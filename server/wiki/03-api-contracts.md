@@ -507,7 +507,8 @@ Content-Type: application/json
 | --- | --- |
 | `auth:*` | 每 IP 10 次 |
 | `auth:admin-login` | 每 IP 10 次（管理后台登录） |
-| `auth:admin-totp` | 每 IP 10 次（2FA 第二步，独立桶） |
+| `auth:admin-totp` | 每 IP 10 次（2FA 第二步与开关，独立桶） |
+| `auth:admin-password` | 每 IP 10 次（管理后台改密码，独立桶） |
 | `email-verification` | 每 IP 5 次 |
 | `app` | 每 IP 900 次 + 每设备/来源 60 次 |
 | `admin` | 每 IP 60 次 |

@@ -9,8 +9,17 @@
 //   $env:PORT=4720; $env:APK_DIR="./tmp/apk"
 //   $env:AUTH_SECRET="0123456789012345678901234567890123456789"; $env:ADMIN_TOKEN="verify-token"
 //   $env:NODE_ENV="test"; $env:EMAIL_VERIFICATION_TEST_CODE="123456"
+//   $env:IM_ENABLED="false"
 //   npm run dev
 //   node tools/verify-contract.mjs http://127.0.0.1:4720 verify-token
+//
+// 两个容易踩的坑：
+//   * IM_ENABLED 必须显式设为 false。.env 里通常是 true，服务会继承它，
+//     于是「未启用 IM 时会话入口返回 503/5031」这一项会变成 502/5020。
+//   * 每次运行前必须重置验证库。版本/rollout 类的断言依赖空库，
+//     上一轮留下的 release 记录会让「rollout=0 不下发」失败。
+//   * EMAIL_VERIFICATION_TEST_CODE 要同时给**脚本自己**的环境，脚本会读它做断言。
+//   全绿应为「通过 138 项，失败 0 项」。
 import { createHash, randomBytes } from "node:crypto";
 
 const base = (process.argv[2] ?? "http://127.0.0.1:4720").replace(/\/+$/, "");

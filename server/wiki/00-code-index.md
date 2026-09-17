@@ -198,7 +198,7 @@ POST /api/v1/desktop/admin/artifacts
 | IM 会话 | 桃桃访问令牌 | 每用户 30 次 + 每 IP 180 次/15 分钟 |
 | IM 同步/撤回/已读 | 桃桃访问令牌 | 每用户 300 次 + 每 IP 1800 次/15 分钟 |
 | Android/桌面后台、公告、用户、图片 Key | `AdminAuthGuard`：管理员会话或 `X-Admin-Token` | 每 IP 60 次/15 分钟；两条凭据都不可用时 401/4013；**无角色校验** |
-| 管理后台登录、2FA 第二步 | `@Public()` | 每 IP 10 次/15 分钟；两个用途各一个桶，互不挤占 |
+| 管理后台登录、2FA、改密码 | `@Public()` 或已认证 | 每 IP 10 次/15 分钟；`admin-login`/`admin-totp`/`admin-password` 三个独立桶 |
 | 管理后台其它接口 | 管理员会话 `Authorization: Bearer`（兼容 `X-Admin-Token`） | 默认无独立桶；再按角色判 403/4030 |
 
 限流器是进程内滑动窗口，重启清空，多实例不共享。不能把它当成跨实例的安全配额。
@@ -234,6 +234,7 @@ admin_users                   admin_sessions            admin_audit_log
 | 变量 | 默认值/必需 | 用途 |
 | --- | --- | --- |
 | `PORT` | `4500` | HTTP 监听端口 |
+| `ENV_FILE` | `.env` | 指定其它 dotenv 文件路径；系统环境变量优先于文件 |
 | `DATABASE_URL` | 必需 | PostgreSQL 连接串 |
 | `AUTH_SECRET` | 开发兜底；生产至少 32 字符 | 访问令牌 HMAC |
 | `ADMIN_TOKEN` | 空 | 静态管理令牌；为空则 `/app/admin/*` 与 `/desktop/admin/*` 关闭，不影响管理后台登录 |
