@@ -53,7 +53,8 @@ const password = ref("");
 const totpCode = ref("");
 const loading = ref(false);
 const error = ref("");
-const tempAdminId = ref(0);
+// 第二步要带上第一步签发的挑战票据，服务端靠它确认密码已经验过。
+const tempToken = ref("");
 
 async function handleLogin() {
   if (!username.value || !password.value) return;
@@ -62,7 +63,8 @@ async function handleLogin() {
   try {
     const result = await adminLogin(username.value, password.value);
     if (result.requires_totp) {
-      tempAdminId.value = result.admin_id!;
+      tempToken.value = result.temp_token ?? "";
+      totpCode.value = "";
       step.value = "totp";
     } else if (result.token && result.admin) {
       emit("login", { token: result.token, admin: result.admin });
@@ -79,10 +81,13 @@ async function handleTotp() {
   loading.value = true;
   error.value = "";
   try {
-    const result = await adminTotpVerify(tempAdminId.value, totpCode.value);
+    const result = await adminTotpVerify(tempToken.value, totpCode.value);
     emit("login", { token: result.token, admin: result.admin });
   } catch (e) {
     error.value = (e as Error).message;
+    // 票据是一次性的：无论动态码对错都已被服务端核销，只能退回第一步重来。
+    tempToken.value = "";
+    step.value = "credentials";
   } finally {
     loading.value = false;
   }

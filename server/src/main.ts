@@ -9,8 +9,6 @@ import { existsSync } from "fs";
 import { join } from "path";
 import { AppModule } from "./app.module";
 import { AppConfigService } from "./config/app-config.service";
-import { AdminUsersRepository } from "./admin-auth/admin-users.repository";
-import { AdminAuthService } from "./admin-auth/admin-auth.service";
 
 /**
  * 请求体是原始字节、必须绕开 JSON 解析的路由。
@@ -113,19 +111,9 @@ async function bootstrap(): Promise<void> {
   app.useGlobalPipes(new ValidationPipe({ transform: true, forbidUnknownValues: false }));
   app.getHttpAdapter().getInstance().disable("x-powered-by");
 
-  // 创建默认超级管理员（如果不存在）
-  try {
-    const adminUsers = app.get(AdminUsersRepository);
-    const adminAuth = app.get(AdminAuthService);
-    const existing = await adminUsers.findByUsername("admin");
-    if (!existing) {
-      const { hash, salt } = adminAuth.hashPassword("admin123");
-      await adminUsers.create("admin", hash, salt, "超级管理员", "super_admin", null);
-      new Logger("Bootstrap").log("已创建默认管理员账号：admin / admin123（请尽快修改密码）");
-    }
-  } catch (error) {
-    new Logger("Bootstrap").warn(`创建默认管理员失败：${(error as Error).message}`);
-  }
+  // 默认超级管理员的创建放在 [AdminBootstrapService.onApplicationBootstrap]，
+  // 不在这里手动 app.get()：建表在 DatabaseService.onModuleInit，早于本文件
+  // 这段代码执行，在这里查表只会得到「关系 admin_users 不存在」。
 
   await app.listen(config.port);
   new Logger("Bootstrap").log(`桃桃音乐代理服务已启动：http://localhost:${config.port}`);

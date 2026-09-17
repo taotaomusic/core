@@ -74,7 +74,7 @@ async function fetchLogs() {
   try {
     const params = new URLSearchParams({ limit: "50", offset: String((page.value - 1) * 50) });
     if (filterAction.value) params.set("action", filterAction.value);
-    const data = await apiGet<{ items: AuditLog[]; total: number }>(`/admin/audit-log?${params}`, props.adminToken);
+    const data = await apiGet<{ items: AuditLog[]; total: number }>(`/admin/auth/audit-log?${params}`, props.adminToken);
     logs.value = data.items;
     total.value = data.total;
   } catch (e) {
@@ -86,7 +86,7 @@ async function fetchLogs() {
 
 async function fetchAdmins() {
   try {
-    const users = await apiGet<Array<{ id: number; username: string }>>("/admin/users", props.adminToken);
+    const users = await apiGet<Array<{ id: number; username: string }>>("/admin/auth/users", props.adminToken);
     const map: Record<number, string> = {};
     for (const u of users) map[u.id] = u.username;
     adminMap.value = map;

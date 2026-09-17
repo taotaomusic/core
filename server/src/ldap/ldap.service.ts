@@ -1,569 +1,677 @@
 import { Injectable, Logger } from "@nestjs/common";
-import { AppConfigService } from "../config/app-config.service";
-import { AdminUsersRepository, type AdminCredentials } from "../admin-auth/admin-users.repository";
-import { AdminAuthService } from "../admin-auth/admin-auth.service";
+import { randomBytes } from "node:crypto";
 import * as net from "node:net";
 import * as tls from "node:tls";
+import { AppConfigService } from "../config/app-config.service";
+import { AdminUsersRepository } from "../admin-auth/admin-users.repository";
+import { AdminAuthService } from "../admin-auth/admin-auth.service";
+import type { AdminActor } from "../common/request.types";
 
 /**
- * LDAP 操作结果。
+ * LDAP 认证结果。
+ *
+ * 三种结果的差别是**要不要回落到本地密码校验**，所以不能简化成
+ * 「成功/失败」两态：
+ *
+ * - `success`：目录已确认身份，直接用这个本地账号签发会话
+ * - `denied`：目录明确拒绝（口令错，或本地已禁用），**不再回落**
+ * - `skipped`：未配置、目录不可达、或目录里没这个人 —— 交给本地密码校验。
+ *   这条路径是配置写错/目录挂掉时的 break-glass 通道
  */
-interface LdapSearchResult {
-    dn: string;
-    attributes: Record<string, string[]>;
+export type LdapAuthResult =
+  | { outcome: "success"; admin: AdminActor }
+  | { outcome: "denied"; message: string }
+  | { outcome: "skipped"; message: string };
+
+/** 目录条目：DN 加上请求到的属性。 */
+export interface LdapEntry {
+  dn: string;
+  attributes: Record<string, string[]>;
 }
+
+/** 只取 DN、不要属性时用的 OID（RFC 4511 §4.5.1.8 的 "1.1"）。 */
+const NO_ATTRIBUTES = ["1.1"];
 
 /**
  * LDAP 服务。
  *
- * 使用 Node.js 原生 net/tls 模块实现 LDAP 协议交互。
- * 负责：
- * - 连接 LDAP 服务器并验证用户凭据
- * - 搜索用户并获取组信息
- * - 根据 LDAP 组映射到 admin role
- * - 如果 LDAP 用户在 admin_users 表中不存在，自动创建
+ * 用 Node 原生 net/tls 手写 LDAP 协议（不引第三方库），负责：
+ * - 校验用户凭据：服务账号绑定 → 搜用户 → 用用户 DN 再绑定
+ * - 取用户所属组并按 [AppConfigService.ldapRoleMapping] 映射到 admin 角色
+ * - 把目录用户同步到本地 `admin_users`，供审计与角色判断使用
  */
 @Injectable()
 export class LdapService {
-    private readonly logger = new Logger(LdapService.name);
+  private readonly logger = new Logger(LdapService.name);
 
-    constructor(
-        private readonly config: AppConfigService,
-        private readonly adminUsers: AdminUsersRepository,
-        private readonly adminAuth: AdminAuthService,
-    ) {}
+  constructor(
+    private readonly config: AppConfigService,
+    private readonly adminUsers: AdminUsersRepository,
+    private readonly adminAuth: AdminAuthService,
+  ) {}
 
-    /**
-     * 用 LDAP 验证用户凭据并同步到本地 admin_users 表。
-     * 返回本地 admin 用户记录。
-     */
-    async authenticate(username: string, password: string): Promise<{
-        id: number;
-        username: string;
-        display_name: string;
-        role: string;
-    } | null> {
-        if (!this.config.isLdapConfigured) return null;
-
-        let client: LdapClient | null = null;
-        try {
-            // 1. 创建 LDAP 客户端连接
-            client = await this.createClient();
-
-            // 2. 绑定服务账号
-            await client.bind(this.config.ldapBindDn, this.config.ldapBindPassword);
-
-            // 3. 搜索用户
-            const userDn = await this.searchUser(client, username);
-            if (!userDn) {
-                this.logger.warn(`LDAP 用户不存在: ${username}`);
-                return null;
-            }
-
-            // 4. 用用户凭据绑定（验证密码）
-            await client.bind(userDn, password);
-
-            // 5. 获取用户组信息
-            const groups = await this.getUserGroups(client, userDn);
-
-            // 6. 映射 role
-            const role = this.mapRole(groups);
-
-            // 7. 同步到本地 admin_users
-            const localUser = await this.syncToLocal(username, userDn, role);
-
-            this.logger.log(`LDAP 认证成功: ${username} -> role=${role}`);
-            return localUser;
-        } catch (error) {
-            this.logger.warn(`LDAP 认证失败: ${username} - ${(error as Error).message}`);
-            return null;
-        } finally {
-            client?.destroy();
-        }
+  /**
+   * 用 LDAP 校验凭据并同步到本地 `admin_users`。
+   *
+   * 所有异常都在这里收敛成 `skipped` —— 目录超时、TLS 握手失败之类的问题
+   * 不该让登录接口 500，也不该把本地超管一起挡在门外。
+   */
+  async authenticate(username: string, password: string): Promise<LdapAuthResult> {
+    if (!this.config.isLdapConfigured) {
+      return { outcome: "skipped", message: "未配置 LDAP" };
+    }
+    if (!username || !password) {
+      return { outcome: "skipped", message: "缺少凭据" };
     }
 
-    /**
-     * 创建 LDAP 客户端连接。
-     * 根据配置使用 TLS 或普通 TCP。
-     */
-    private createClient(): Promise<LdapClient> {
-        return new Promise((resolve, reject) => {
-            const url = new URL(this.config.ldapUrl);
-            const host = url.hostname;
-            const port = Number(url.port) || (url.protocol === "ldaps:" ? 636 : 389);
-            const useTls = url.protocol === "ldaps:";
+    const timeout = this.config.ldapTimeoutMs;
+    let client: LdapClient | null = null;
+    try {
+      client = await this.createClient();
 
-            const options: tls.ConnectionOptions = {
-                host,
-                port,
-                rejectUnauthorized: false, // 内网环境通常不验证证书
-            };
+      // 服务账号绑定：失败属于配置问题，不是用户凭据问题。
+      try {
+        await client.bind(this.config.ldapBindDn, this.config.ldapBindPassword, timeout);
+      } catch (error) {
+        this.logger.warn(`LDAP 服务账号绑定失败，本次登录回落本地校验：${(error as Error).message}`);
+        return { outcome: "skipped", message: "目录不可用" };
+      }
 
-            const connect = useTls ? tls.connect(options) : net.connect({ host, port });
+      const userDn = await this.searchUser(client, username);
+      if (!userDn) {
+        this.logger.log(`LDAP 目录中不存在用户 ${username}，本次登录回落本地校验`);
+        return { outcome: "skipped", message: "目录中不存在该用户" };
+      }
 
-            const client = new LdapClient(connect);
-            const timeout = setTimeout(() => {
-                connect.destroy();
-                reject(new Error(`LDAP 连接超时: ${host}:${port}`));
-            }, 10_000);
+      // 用用户自己的 DN 再绑定一次，这才是真正的口令校验。
+      try {
+        await client.bind(userDn, password, timeout);
+      } catch {
+        return { outcome: "denied", message: "目录口令校验失败" };
+      }
 
-            connect.once("connect", () => {
-                clearTimeout(timeout);
-                resolve(client);
-            });
+      const groups = await this.getUserGroups(client, userDn);
+      const role = this.mapRole(groups);
+      const synced = await this.syncToLocal(username, role);
+      if (!synced) {
+        // 本地已禁用：目录放行也不算数，否则禁用等于没禁。
+        return { outcome: "denied", message: "该账号已被禁用" };
+      }
 
-            connect.once("error", (err) => {
-                clearTimeout(timeout);
-                reject(new Error(`LDAP 连接失败: ${err.message}`));
-            });
-        });
+      this.logger.log(`LDAP 认证成功：${username} -> role=${role}`);
+      return { outcome: "success", admin: synced };
+    } catch (error) {
+      this.logger.warn(`LDAP 认证异常，本次登录回落本地校验：${(error as Error).message}`);
+      return { outcome: "skipped", message: "目录不可用" };
+    } finally {
+      client?.destroy();
+    }
+  }
+
+  /**
+   * 建立连接。
+   *
+   * LDAPS 走 `secureConnect` 而不是 `connect` —— 后者在 TLS 握手完成前就触发，
+   * 之后写入的绑定请求会撞在还没就绪的会话上。
+   */
+  private createClient(): Promise<LdapClient> {
+    return new Promise((resolve, reject) => {
+      const url = new URL(this.config.ldapUrl);
+      const host = url.hostname;
+      const port = Number(url.port) || (url.protocol === "ldaps:" ? 636 : 389);
+      const useTls = url.protocol === "ldaps:";
+      const timeout = this.config.ldapTimeoutMs;
+
+      const socket = useTls
+        ? tls.connect({
+            host,
+            port,
+            servername: host,
+            rejectUnauthorized: this.config.ldapTlsRejectUnauthorized,
+          })
+        : net.connect({ host, port });
+
+      const client = new LdapClient(socket, timeout);
+      const timer = setTimeout(() => {
+        socket.destroy();
+        reject(new Error(`LDAP 连接超时：${host}:${port}`));
+      }, timeout);
+
+      socket.once(useTls ? "secureConnect" : "connect", () => {
+        clearTimeout(timer);
+        resolve(client);
+      });
+      socket.once("error", (error) => {
+        clearTimeout(timer);
+        reject(new Error(`LDAP 连接失败：${error.message}`));
+      });
+    });
+  }
+
+  /** 搜索用户并返回 DN。 */
+  private async searchUser(client: LdapClient, username: string): Promise<string | null> {
+    const filter = this.config.ldapUserSearchFilter.replace(
+      /\{\{username\}\}/g, escapeFilterValue(username));
+    const entries = await client.search(this.config.ldapUserSearchBase, filter, NO_ATTRIBUTES);
+    return entries.length > 0 ? entries[0].dn : null;
+  }
+
+  /**
+   * 取用户所属的组 DN 列表。
+   *
+   * 组搜索用的是 `member=<用户DN>` 这类过滤器，命中的条目 DN 就是组 DN，
+   * 所以不需要回读属性。
+   */
+  private async getUserGroups(client: LdapClient, userDn: string): Promise<string[]> {
+    if (!this.config.ldapGroupSearchBase || !this.config.ldapGroupSearchFilter) return [];
+    const filter = this.config.ldapGroupSearchFilter.replace(
+      /\{\{userDn\}\}/g, escapeFilterValue(userDn));
+    const entries = await client.search(this.config.ldapGroupSearchBase, filter, NO_ATTRIBUTES);
+    return entries.map((entry) => entry.dn);
+  }
+
+  /**
+   * 按映射表把组 DN 换成 admin 角色。
+   *
+   * 比较时统一小写：DN 的属性名不区分大小写，值在实践中也几乎总是
+   * 大小写不敏感，逐字节比较会让「配置里少写一个大写字母」变成静默失效。
+   */
+  private mapRole(groups: string[]): string {
+    const normalizedGroups = new Set(groups.map((group) => group.toLowerCase()));
+    for (const [groupDn, role] of Object.entries(this.config.ldapRoleMapping)) {
+      if (normalizedGroups.has(groupDn.toLowerCase())) return role;
+    }
+    return "viewer"; // 默认角色：最小权限
+  }
+
+  /**
+   * 把目录用户同步到本地 `admin_users`。
+   *
+   * 返回 `null` 表示本地已禁用该账号，调用方必须据此拒绝登录。查的是
+   * **包含禁用**的版本：用过滤版查会看不见禁用状态，于是每次登录都当成
+   * 新账号重建，禁用形同虚设。
+   */
+  private async syncToLocal(username: string, role: string): Promise<AdminActor | null> {
+    const existing = await this.adminUsers.findAnyByUsername(username);
+    if (existing) {
+      if (existing.disabled_at) return null;
+      if (existing.role !== role) {
+        await this.adminUsers.setRole(existing.id, role);
+        this.logger.log(`LDAP 用户角色已更新：${username} ${existing.role} -> ${role}`);
+      }
+      return {
+        id: existing.id,
+        username: existing.username,
+        display_name: existing.display_name,
+        role,
+      };
     }
 
-    /**
-     * 搜索用户并返回 DN。
-     */
-    private async searchUser(client: LdapClient, username: string): Promise<string | null> {
-        const filter = this.config.ldapUserSearchFilter.replace(/\{\{username\}\}/g, username);
-        const results = await client.search(this.config.ldapUserSearchBase, filter);
-        return results.length > 0 ? results[0].dn : null;
+    // 目录用户不掌握本地密码，存一个随机占位哈希，杜绝「本地密码后门」。
+    const placeholder = this.adminAuth.hashPassword(randomBytes(32).toString("hex"));
+    const created = await this.adminUsers.create(
+      username, placeholder.hash, placeholder.salt, username, role, null, null,
+    );
+    this.logger.log(`LDAP 用户已同步到本地：${username} (role=${role})`);
+    return {
+      id: created.id,
+      username: created.username,
+      display_name: created.display_name,
+      role: created.role,
+    };
+  }
+}
+
+// ==================== RFC 4515 过滤器 ====================
+
+/**
+ * 转义过滤器里作为**值**出现的字符串（RFC 4515 §3）。
+ *
+ * 不做这件事的话，用户名或用户 DN 里的 `(`、`)`、`*`、`\` 会被当成过滤器
+ * 语法解析，轻则搜不到人，重则被拼成别处的过滤器（LDAP 注入）。
+ */
+export function escapeFilterValue(value: string): string {
+  return value.replace(/[\\*()\u0000]/g, (char) =>
+    `\\${char.charCodeAt(0).toString(16).padStart(2, "0")}`);
+}
+
+type FilterNode =
+  | { kind: "and"; children: FilterNode[] }
+  | { kind: "or"; children: FilterNode[] }
+  | { kind: "not"; child: FilterNode }
+  | { kind: "present"; attribute: string }
+  | { kind: "equality"; attribute: string; value: string }
+  | { kind: "substrings"; attribute: string; parts: string[] };
+
+/**
+ * 解析 RFC 4515 过滤器字符串。
+ *
+ * 支持 `(attr=value)`、`(attr=*)`、`(attr=a*b)`、`(&...)`、`(|...)`、`(!...)`，
+ * 够覆盖 `(uid={{username}})`、`(member={{userDn}})` 以及常见的
+ * `(&(objectClass=person)(uid=x))`。
+ *
+ * 原来的实现把整串过滤器当成 present 过滤器编码（只有标签 0x87），任何带
+ * `=` 的配置都发不出去，目录只会返回空结果 —— 这是「配了 LDAP 也登不上」
+ * 的根因之一。
+ */
+export function parseFilter(text: string): FilterNode {
+  const state = { text, pos: 0 };
+
+  function peek(): string {
+    return state.text[state.pos] ?? "";
+  }
+
+  function expect(char: string): void {
+    if (peek() !== char) throw new Error(`过滤器语法错误：期望 ${char}`);
+    state.pos++;
+  }
+
+  function parseItem(): FilterNode {
+    const start = state.pos;
+    while (state.pos < state.text.length && state.text[state.pos] !== "=") state.pos++;
+    if (state.pos >= state.text.length) throw new Error("过滤器缺少 =");
+    const attribute = state.text.slice(start, state.pos).trim();
+    if (!attribute) throw new Error("过滤器缺少属性名");
+    state.pos++; // 吃掉 =
+
+    const valueStart = state.pos;
+    while (state.pos < state.text.length && state.text[state.pos] !== ")") state.pos++;
+    const raw = state.text.slice(valueStart, state.pos);
+
+    if (raw === "*") return { kind: "present", attribute };
+    if (raw.includes("*")) {
+      return { kind: "substrings", attribute, parts: raw.split("*").map(unescapeFilterValue) };
     }
+    return { kind: "equality", attribute, value: unescapeFilterValue(raw) };
+  }
 
-    /**
-     * 获取用户所属的组 DN 列表。
-     */
-    private async getUserGroups(client: LdapClient, userDn: string): Promise<string[]> {
-        if (!this.config.ldapGroupSearchBase || !this.config.ldapGroupSearchFilter) {
-            return [];
-        }
-        const filter = this.config.ldapGroupSearchFilter.replace(/\{\{userDn\}\}/g, this.escapeLdapDn(userDn));
-        const results = await client.search(this.config.ldapGroupSearchBase, filter);
-        return results.map((r) => r.dn);
+  function parseNode(): FilterNode {
+    expect("(");
+    const next = peek();
+    let node: FilterNode;
+    if (next === "&" || next === "|") {
+      state.pos++;
+      const children: FilterNode[] = [];
+      while (peek() === "(") children.push(parseNode());
+      if (children.length === 0) throw new Error("空的多值过滤器");
+      node = { kind: next === "&" ? "and" : "or", children };
+    } else if (next === "!") {
+      state.pos++;
+      node = { kind: "not", child: parseNode() };
+    } else {
+      node = parseItem();
     }
+    expect(")");
+    return node;
+  }
 
-    /**
-     * 根据 LDAP 组映射到 admin role。
-     */
-    private mapRole(groups: string[]): string {
-        const mapping = this.config.ldapRoleMapping;
-        for (const [groupDn, role] of Object.entries(mapping)) {
-            if (groups.includes(groupDn)) {
-                return role;
-            }
-        }
-        return "viewer"; // 默认角色
+  const node = parseNode();
+  if (state.pos !== state.text.length) throw new Error("过滤器尾部有多余内容");
+  return node;
+}
+
+/** 还原 RFC 4515 的 `\xx` 转义。 */
+function unescapeFilterValue(raw: string): string {
+  return raw.replace(/\\([0-9a-fA-F]{2})/g, (_match, hex: string) =>
+    String.fromCharCode(Number.parseInt(hex, 16)));
+}
+
+/** 把过滤器节点编码成 BER。标签按 RFC 4511 §4.5.1 的 [0]-[7]。 */
+export function encodeFilterNode(node: FilterNode): Buffer {
+  switch (node.kind) {
+    case "and":
+      return berConstructed(0xa0, node.children.map(encodeFilterNode));
+    case "or":
+      return berConstructed(0xa1, node.children.map(encodeFilterNode));
+    case "not":
+      return berConstructed(0xa2, [encodeFilterNode(node.child)]);
+    case "equality":
+      return berConstructed(0xa3, [berOctetString(node.attribute), berOctetString(node.value)]);
+    case "substrings": {
+      // [4] SubstringFilter { type, substrings SEQUENCE OF CHOICE { initial[0], any[1], final[2] } }
+      const parts: Buffer[] = [];
+      node.parts.forEach((part, index) => {
+        if (part === "") return; // `a**b` 里的空段没有对应编码
+        const tag = index === 0 ? 0x80 : index === node.parts.length - 1 ? 0x82 : 0x81;
+        parts.push(berPrimitive(tag, Buffer.from(part, "utf8")));
+      });
+      return berConstructed(0xa4, [berOctetString(node.attribute), berConstructed(0x30, parts)]);
     }
+    case "present":
+      return berPrimitive(0x87, Buffer.from(node.attribute, "utf8"));
+  }
+}
 
-    /**
-     * 转义 LDAP DN 中的特殊字符。
-     */
-    private escapeLdapDn(dn: string): string {
-        return dn.replace(/[,+="<>#;\\]/g, (char) => `\\${char}`);
-    }
+// ==================== BER 编解码 ====================
 
-    /**
-     * 将 LDAP 用户同步到本地 admin_users 表。
-     */
-    private async syncToLocal(
-        username: string,
-        _userDn: string,
-        role: string,
-    ): Promise<{ id: number; username: string; display_name: string; role: string }> {
-        const existing = await this.adminUsers.findByUsername(username);
-        if (existing) {
-            // 用户已存在，如果角色发生变化则更新
-            if (existing.role !== role) {
-                await this.adminUsers.setRole(existing.id, role);
-                this.logger.log(`LDAP 用户角色已更新: ${username} ${existing.role} -> ${role}`);
-            }
-            return {
-                id: existing.id,
-                username: existing.username,
-                display_name: existing.display_name,
-                role,
-            };
-        }
+/** 编码 BER 长度。 */
+export function berLength(length: number): Buffer {
+  if (length < 0x80) return Buffer.from([length]);
+  const bytes: number[] = [];
+  let remaining = length;
+  while (remaining > 0) {
+    bytes.unshift(remaining & 0xff);
+    remaining = Math.floor(remaining / 256);
+  }
+  return Buffer.from([0x80 | bytes.length, ...bytes]);
+}
 
-        // 创建本地记录（LDAP 用户不需要本地密码，用随机哈希占位）
-        const placeholder = this.adminAuth.hashPassword(`ldap_${Date.now()}_${username}`);
-        const created = await this.adminUsers.create(
-            username,
-            placeholder.hash,
-            placeholder.salt,
-            username, // display_name 默认用 username
-            role,
-            null, // created_by
-        );
+function berPrimitive(tag: number, content: Buffer): Buffer {
+  return Buffer.concat([Buffer.from([tag]), berLength(content.length), content]);
+}
 
-        this.logger.log(`LDAP 用户已同步到本地: ${username} (role=${role})`);
-        return {
-            id: created.id,
-            username: created.username,
-            display_name: created.display_name,
-            role: created.role,
-        };
-    }
+function berConstructed(tag: number, parts: Buffer[]): Buffer {
+  return berPrimitive(tag, Buffer.concat(parts));
+}
+
+function berInteger(value: number): Buffer {
+  const bytes: number[] = [];
+  let remaining = value;
+  do {
+    bytes.unshift(remaining & 0xff);
+    remaining = Math.floor(remaining / 256);
+  } while (remaining > 0);
+  // 最高位是 1 时要补一个 0x00，否则会被解析成负数。
+  if (bytes[0] & 0x80) bytes.unshift(0x00);
+  return berPrimitive(0x02, Buffer.from(bytes));
+}
+
+function berOctetString(value: string): Buffer {
+  return berPrimitive(0x04, Buffer.from(value, "utf8"));
+}
+
+function berEnumerated(value: number): Buffer {
+  return berPrimitive(0x0a, Buffer.from([value]));
+}
+
+function berBoolean(value: boolean): Buffer {
+  return berPrimitive(0x01, Buffer.from([value ? 0xff : 0x00]));
+}
+
+function berSequence(parts: Buffer[]): Buffer {
+  return berConstructed(0x30, parts);
+}
+
+/** 读出 INTEGER / ENUMERATED 的内容。 */
+function decodeInteger(content: Buffer): number {
+  let value = 0;
+  for (const byte of content) value = value * 256 + byte;
+  return value;
 }
 
 /**
- * 简化的 LDAP 客户端。
- * 实现 LDAP 协议的 Bind 和 Search 操作。
+ * BER 读取游标。
+ *
+ * 长度用 `value * 256 + byte` 累加而不是 `<<` —— 移位在 32 位有符号数上
+ * 会溢出，超过 2GB 的长度会被解析成负数。
  */
+class BerReader {
+  private offset = 0;
+
+  constructor(private readonly buffer: Buffer) {}
+
+  get remaining(): number {
+    return this.buffer.length - this.offset;
+  }
+
+  readTlv(): { tag: number; content: Buffer } {
+    const tag = this.readByte();
+    const length = this.readLength();
+    if (this.remaining < length) throw new Error("BER 数据不完整");
+    const content = this.buffer.subarray(this.offset, this.offset + length);
+    this.offset += length;
+    return { tag, content };
+  }
+
+  /** 读一个 TLV 并断言标签，用来校验结构而不是靠运气。 */
+  readExpected(tag: number, what: string): Buffer {
+    const tlv = this.readTlv();
+    if (tlv.tag !== tag) throw new Error(`BER 结构错误：${what} 期望 0x${tag.toString(16)}`);
+    return tlv.content;
+  }
+
+  private readByte(): number {
+    if (this.remaining < 1) throw new Error("BER 数据不完整");
+    return this.buffer[this.offset++];
+  }
+
+  private readLength(): number {
+    const first = this.readByte();
+    if (first < 0x80) return first;
+    const count = first & 0x7f;
+    if (count === 0) throw new Error("不支持不定长 BER 编码");
+    let length = 0;
+    for (let index = 0; index < count; index++) length = length * 256 + this.readByte();
+    return length;
+  }
+}
+
+/**
+ * 窥探缓冲区开头的 TLV 头部，不移动游标。
+ *
+ * 返回 `undefined` 表示数据还没收全 —— TCP 会把一条 LDAP 消息拆成多个分片，
+ * 必须等整条到齐再解析。
+ */
+function peekTlv(buffer: Buffer): { contentStart: number; contentLength: number } | undefined {
+  if (buffer.length < 2) return undefined;
+  let cursor = 1;
+  let length = buffer[cursor++];
+  if (length & 0x80) {
+    const count = length & 0x7f;
+    if (count === 0) throw new Error("不支持不定长 BER 编码");
+    if (buffer.length < cursor + count) return undefined;
+    length = 0;
+    for (let index = 0; index < count; index++) length = length * 256 + buffer[cursor++];
+  }
+  if (buffer.length < cursor + length) return undefined;
+  return { contentStart: cursor, contentLength: length };
+}
+
+// ==================== LDAP 客户端 ====================
+
+interface PendingRequest {
+  resolve: (entries: LdapEntry[]) => void;
+  reject: (error: Error) => void;
+  entries: LdapEntry[];
+  timer: NodeJS.Timeout;
+}
+
+/** 简化但结构正确的 LDAP 客户端，实现 Bind 与 Search。 */
 class LdapClient {
-    private readonly socket: net.Socket | tls.TLSSocket;
-    private messageId = 0;
-    private readonly pending = new Map<number, {
-        resolve: (value: any) => void;
-        reject: (reason: any) => void;
-    }>();
-    private buffer = Buffer.alloc(0);
+  private readonly socket: net.Socket | tls.TLSSocket;
+  private readonly defaultTimeout: number;
+  private messageId = 0;
+  private readonly pending = new Map<number, PendingRequest>();
+  private buffer: Buffer = Buffer.alloc(0);
 
-    constructor(socket: net.Socket | tls.TLSSocket) {
-        this.socket = socket;
-        this.socket.on("data", (chunk) => this.onData(chunk));
+  constructor(socket: net.Socket | tls.TLSSocket, defaultTimeout: number) {
+    this.socket = socket;
+    this.defaultTimeout = defaultTimeout;
+    this.socket.on("data", (chunk: Buffer) => this.onData(chunk));
+  }
+
+  /** LDAP Bind。失败时 reject，reason 取目录返回的 diagnosticMessage。 */
+  bind(dn: string, password: string, timeout = this.defaultTimeout): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const id = ++this.messageId;
+      this.register(id, timeout, { resolve: () => resolve(), reject, entries: [] });
+      this.socket.write(encodeBindRequest(id, dn, password));
+    });
+  }
+
+  /** LDAP Search，返回全部条目。 */
+  search(base: string, filter: string, attributes: string[],
+         timeout = this.defaultTimeout): Promise<LdapEntry[]> {
+    return new Promise((resolve, reject) => {
+      const id = ++this.messageId;
+      this.register(id, timeout, { resolve, reject, entries: [] });
+      this.socket.write(encodeSearchRequest(id, base, filter, attributes));
+    });
+  }
+
+  destroy(): void {
+    this.socket.destroy();
+    for (const [id, request] of this.pending) {
+      clearTimeout(request.timer);
+      request.reject(new Error("连接已关闭"));
+      this.pending.delete(id);
     }
+  }
 
-    /**
-     * LDAP Bind 操作。
-     */
-    bind(dn: string, password: string): Promise<void> {
-        return new Promise((resolve, reject) => {
-            const id = ++this.messageId;
-            const request = this.encodeBindRequest(id, dn, password);
-            this.pending.set(id, {
-                resolve: () => resolve(),
-                reject,
-            });
-            this.socket.write(request);
-        });
+  private register(id: number, timeout: number, handlers: Omit<PendingRequest, "timer">): void {
+    // 每个操作都要有自己的超时：连接超时只管握手，目录收下请求后不回应时，
+    // 没有这层的话 Promise 会永远挂着。
+    const timer = setTimeout(() => {
+      if (this.pending.delete(id)) handlers.reject(new Error("LDAP 操作超时"));
+    }, timeout);
+    this.pending.set(id, { ...handlers, timer });
+  }
+
+  private settle(id: number): PendingRequest | undefined {
+    const request = this.pending.get(id);
+    if (!request) return undefined;
+    clearTimeout(request.timer);
+    this.pending.delete(id);
+    return request;
+  }
+
+  private onData(chunk: Buffer): void {
+    this.buffer = Buffer.concat([this.buffer, chunk]);
+    for (;;) {
+      let head: { contentStart: number; contentLength: number } | undefined;
+      try {
+        head = peekTlv(this.buffer);
+      } catch (error) {
+        // 协议已经跑偏，继续等数据只会一直错下去。
+        this.failAll(new Error(`LDAP 响应解析失败：${(error as Error).message}`));
+        return;
+      }
+      if (!head) return;
+      const total = head.contentStart + head.contentLength;
+      const payload = this.buffer.subarray(head.contentStart, total);
+      this.buffer = this.buffer.subarray(total);
+      try {
+        this.handleMessage(payload);
+      } catch (error) {
+        this.failAll(new Error(`LDAP 响应解析失败：${(error as Error).message}`));
+        return;
+      }
     }
+  }
 
-    /**
-     * LDAP Search 操作。
-     */
-    search(base: string, filter: string): Promise<LdapSearchResult[]> {
-        return new Promise((resolve, reject) => {
-            const id = ++this.messageId;
-            const request = this.encodeSearchRequest(id, base, filter);
-            const results: LdapSearchResult[] = [];
-            this.pending.set(id, {
-                resolve: (entries: LdapSearchResult[]) => {
-                    results.push(...entries);
-                    resolve(results);
-                },
-                reject,
-            });
-            this.socket.write(request);
-        });
+  private failAll(error: Error): void {
+    for (const [id, request] of this.pending) {
+      clearTimeout(request.timer);
+      request.reject(error);
+      this.pending.delete(id);
     }
+    this.buffer = Buffer.alloc(0);
+  }
 
-    /**
-     * 关闭连接。
-     */
-    destroy(): void {
-        this.socket.destroy();
-        for (const [id, handler] of this.pending) {
-            handler.reject(new Error("连接已关闭"));
-            this.pending.delete(id);
+  /** 处理一条 LDAPMessage 的内容部分（messageID + protocolOp）。 */
+  private handleMessage(payload: Buffer): void {
+    const reader = new BerReader(payload);
+    const messageId = decodeInteger(reader.readExpected(0x02, "messageID"));
+    const operation = reader.readTlv();
+    const request = this.pending.get(messageId);
+    if (!request) return; // 迟到的响应，对应请求早已超时
+
+    switch (operation.tag) {
+      case 0x61: { // BindResponse
+        const { resultCode, diagnosticMessage } = parseResult(operation.content);
+        const settled = this.settle(messageId);
+        if (!settled) return;
+        if (resultCode === 0) settled.resolve([]);
+        else settled.reject(new Error(diagnosticMessage || `LDAP 绑定失败（resultCode=${resultCode}）`));
+        return;
+      }
+      case 0x64: { // SearchResultEntry
+        // 原实现解析出 dn 之后只把空对象塞进结果集，上游永远拿不到 DN，
+        // 于是每次搜索都「查无此人」。这里保留完整条目。
+        const entryReader = new BerReader(operation.content);
+        const dn = entryReader.readExpected(0x04, "objectName").toString("utf8");
+        const attributes = parseAttributes(entryReader.readExpected(0x30, "attributes"));
+        request.entries.push({ dn, attributes });
+        return;
+      }
+      case 0x65: { // SearchResultDone
+        const { resultCode, diagnosticMessage } = parseResult(operation.content);
+        const settled = this.settle(messageId);
+        if (!settled) return;
+        // 部分目录会在结果集非空时以 sizeLimitExceeded(4) 结束，
+        // 这时已有条目仍然可用，不当成失败。
+        if (resultCode === 0 || (resultCode === 4 && settled.entries.length > 0)) {
+          settled.resolve(settled.entries);
+        } else {
+          settled.reject(new Error(diagnosticMessage || `LDAP 搜索失败（resultCode=${resultCode}）`));
         }
+        return;
+      }
+      default:
+        return; // 其它协议操作（如 SearchResultReference）忽略
     }
+  }
+}
 
-    /**
-     * 处理接收到的数据。
-     */
-    private onData(chunk: Buffer): void {
-        this.buffer = Buffer.concat([this.buffer, chunk]);
+/** 解析 LDAPResult：resultCode + matchedDN + diagnosticMessage。 */
+function parseResult(content: Buffer): { resultCode: number; diagnosticMessage: string } {
+  const reader = new BerReader(content);
+  const resultCode = decodeInteger(reader.readTlv().content);
+  reader.readTlv(); // matchedDN，用不到
+  const diagnosticMessage = reader.readTlv().content.toString("utf8");
+  return { resultCode, diagnosticMessage };
+}
 
-        // 尝试解析 LDAP 消息
-        while (this.buffer.length > 0) {
-            try {
-                const { message, bytesRead } = this.parseLdapMessage(this.buffer);
-                if (bytesRead === 0) break;
+/** 解析 PartialAttributeList：SEQUENCE OF { type, SET OF values }。 */
+function parseAttributes(content: Buffer): Record<string, string[]> {
+  const attributes: Record<string, string[]> = {};
+  const reader = new BerReader(content);
+  while (reader.remaining > 0) {
+    const attribute = new BerReader(reader.readTlv().content);
+    const type = attribute.readTlv().content.toString("utf8");
+    const values = new BerReader(attribute.readTlv().content);
+    const collected: string[] = [];
+    while (values.remaining > 0) collected.push(values.readTlv().content.toString("utf8"));
+    attributes[type] = collected;
+  }
+  return attributes;
+}
 
-                this.buffer = this.buffer.subarray(bytesRead);
-                this.handleMessage(message);
-            } catch {
-                // 数据不完整，等待更多数据
-                break;
-            }
-        }
-    }
+/**
+ * 编码 LDAPMessage 包 BindRequest。
+ *
+ * BindRequest ::= [APPLICATION 0] SEQUENCE { version INTEGER, name LDAPDN,
+ *   authentication AuthenticationChoice }，简单认证是上下文标签 [0] 基本型。
+ */
+function encodeBindRequest(id: number, dn: string, password: string): Buffer {
+  return berSequence([
+    berInteger(id),
+    berConstructed(0x60, [
+      berInteger(3),
+      berOctetString(dn),
+      berPrimitive(0x80, Buffer.from(password, "utf8")),
+    ]),
+  ]);
+}
 
-    /**
-     * 处理 LDAP 消息。
-     */
-    private handleMessage(message: any): void {
-        const id = message.messageId;
-        const handler = this.pending.get(id);
-        if (!handler) return;
-
-        if (message.protocolOp === 1) {
-            // Bind Response
-            if (message.resultCode === 0) {
-                handler.resolve(null);
-            } else {
-                handler.reject(new Error(`LDAP 操作失败: ${message.diagnosticMessage || "未知错误"}`));
-            }
-            this.pending.delete(id);
-        } else if (message.protocolOp === 4) {
-            // Search Result Entry
-            if (message.entries) {
-                // 临时存储条目，等收到 Search Result Done 后一起返回
-                if (!this.pending.has(id)) {
-                    this.pending.set(id, handler);
-                }
-                // 将条目附加到处理函数上
-                (handler as any)._entries = (handler as any)._entries || [];
-                (handler as any)._entries.push(message.entries);
-            }
-        } else if (message.protocolOp === 5) {
-            // Search Result Done
-            const entries = (handler as any)._entries || [];
-            handler.resolve(entries);
-            this.pending.delete(id);
-        }
-    }
-
-    /**
-     * 编码 LDAP Bind Request。
-     */
-    private encodeBindRequest(id: number, dn: string, password: string): Buffer {
-        // 简化的 ASN.1 BER 编码
-        const dnBuffer = Buffer.from(dn, "utf-8");
-        const passwordBuffer = Buffer.from(password, "utf-8");
-
-        // 认证字段
-        const authBuffer = Buffer.concat([
-            Buffer.from([0x04]), // Octet String tag
-            this.encodeLength(passwordBuffer.length),
-            passwordBuffer,
-        ]);
-
-        // Bind Request 体
-        const bodyBuffer = Buffer.concat([
-            Buffer.from([0x02]), // Integer tag (message ID)
-            this.encodeLength(this.encodeInteger(id).length),
-            this.encodeInteger(id),
-            Buffer.from([0x30]), // Sequence tag (Bind Request)
-            this.encodeLength(
-                this.encodeInteger(3).length + // version
-                this.encodeLength(dnBuffer.length).length + 1 + dnBuffer.length +
-                authBuffer.length
-            ),
-            Buffer.from([0x02]), // Integer tag (version)
-            this.encodeLength(this.encodeInteger(3).length),
-            this.encodeInteger(3),
-            Buffer.from([0x04]), // Octet String tag (DN)
-            this.encodeLength(dnBuffer.length),
-            dnBuffer,
-            authBuffer,
-        ]);
-
-        // LDAP Message
-        return Buffer.concat([
-            Buffer.from([0x30]), // Sequence tag
-            this.encodeLength(bodyBuffer.length),
-            bodyBuffer,
-        ]);
-    }
-
-    /**
-     * 编码 LDAP Search Request。
-     */
-    private encodeSearchRequest(id: number, base: string, filter: string): Buffer {
-        const baseBuffer = Buffer.from(base, "utf-8");
-        const filterBuffer = this.encodeFilter(filter);
-
-        // Search Request 体
-        const bodyBuffer = Buffer.concat([
-            Buffer.from([0x02]), // Integer tag (message ID)
-            this.encodeLength(this.encodeInteger(id).length),
-            this.encodeInteger(id),
-            Buffer.from([0x63]), // Application 3 (Search Request)
-            this.encodeLength(
-                this.encodeLength(baseBuffer.length).length + 1 + baseBuffer.length +
-                this.encodeInteger(0).length + 2 + // scope (wholeSubtree)
-                this.encodeInteger(0).length + 2 + // derefAliases
-                this.encodeInteger(0).length + 2 + // sizeLimit
-                this.encodeInteger(0).length + 2 + // timeLimit
-                this.encodeInteger(0).length + 2 + // typesOnly
-                filterBuffer.length +
-                this.encodeLength(0).length + 1 // attributes (empty)
-            ),
-            Buffer.from([0x04]), // Octet String tag (base DN)
-            this.encodeLength(baseBuffer.length),
-            baseBuffer,
-            Buffer.from([0x0a]), // Enum tag (scope)
-            this.encodeLength(this.encodeInteger(0).length),
-            this.encodeInteger(0),
-            Buffer.from([0x0a]), // Enum tag (derefAliases)
-            this.encodeLength(this.encodeInteger(0).length),
-            this.encodeInteger(0),
-            Buffer.from([0x02]), // Integer tag (sizeLimit)
-            this.encodeLength(this.encodeInteger(0).length),
-            this.encodeInteger(0),
-            Buffer.from([0x02]), // Integer tag (timeLimit)
-            this.encodeLength(this.encodeInteger(0).length),
-            this.encodeInteger(0),
-            Buffer.from([0x01]), // Boolean tag (typesOnly)
-            this.encodeLength(1),
-            Buffer.from([0x00]),
-            filterBuffer,
-            Buffer.from([0x30]), // Sequence tag (attributes)
-            this.encodeLength(0),
-        ]);
-
-        // LDAP Message
-        return Buffer.concat([
-            Buffer.from([0x30]), // Sequence tag
-            this.encodeLength(bodyBuffer.length),
-            bodyBuffer,
-        ]);
-    }
-
-    /**
-     * 编码 LDAP 过滤器。
-     */
-    private encodeFilter(filter: string): Buffer {
-        // 简化的过滤器编码
-        const filterBuffer = Buffer.from(filter, "utf-8");
-        return Buffer.concat([
-            Buffer.from([0x87]), // Context tag 7 (present filter)
-            this.encodeLength(filterBuffer.length),
-            filterBuffer,
-        ]);
-    }
-
-    /**
-     * 编码 BER 长度。
-     */
-    private encodeLength(length: number): Buffer {
-        if (length < 0x80) {
-            return Buffer.from([length]);
-        }
-        const bytes: number[] = [];
-        let temp = length;
-        while (temp > 0) {
-            bytes.unshift(temp & 0xff);
-            temp >>= 8;
-        }
-        return Buffer.from([0x80 | bytes.length, ...bytes]);
-    }
-
-    /**
-     * 编码整数为 BER 格式。
-     */
-    private encodeInteger(value: number): Buffer {
-        if (value === 0) return Buffer.from([0x00]);
-        const bytes: number[] = [];
-        let temp = value;
-        while (temp > 0) {
-            bytes.unshift(temp & 0xff);
-            temp >>= 8;
-        }
-        return Buffer.from(bytes);
-    }
-
-    /**
-     * 解析 LDAP 消息。
-     */
-    private parseLdapMessage(buffer: Buffer): { message: any; bytesRead: number } {
-        // 简化的 BER 解析
-        if (buffer.length < 2) {
-            return { message: null, bytesRead: 0 };
-        }
-
-        if (buffer[0] !== 0x30) {
-            throw new Error("无效的 LDAP 消息");
-        }
-
-        const { length, bytesRead: lengthBytes } = this.parseLength(buffer.subarray(1));
-        const totalLength = lengthBytes + 1 + length;
-
-        if (buffer.length < totalLength) {
-            return { message: null, bytesRead: 0 };
-        }
-
-        // 解析消息 ID
-        let offset = lengthBytes + 1;
-        const messageId = this.parseInt(buffer.subarray(offset));
-        offset += messageId.bytesRead;
-
-        // 解析协议操作
-        const protocolOpTag = buffer[offset];
-        offset += 1;
-
-        const { length: opLength, bytesRead: opLengthBytes } = this.parseLength(buffer.subarray(offset));
-        offset += opLengthBytes;
-
-        let result: any = { messageId, protocolOp: 0 };
-
-        if (protocolOpTag === 0x61) {
-            // Bind Response
-            result.protocolOp = 1;
-            const { value: resultCode, bytesRead: rcBytes } = this.parseInt(buffer.subarray(offset));
-            offset += rcBytes;
-            result.resultCode = resultCode;
-
-            // 跳过 matchedDN 和 diagnosticMessage
-            offset += 4 + this.parseLength(buffer.subarray(offset + 1)).length + 1;
-            const diagLen = this.parseLength(buffer.subarray(offset)).length;
-            offset += diagLen;
-        } else if (protocolOpTag === 0x64) {
-            // Search Result Entry
-            result.protocolOp = 4;
-            result.entries = {};
-
-            // 解析 DN
-            const { value: dn, bytesRead: dnBytes } = this.parseOctetString(buffer.subarray(offset));
-            result.dn = dn;
-            offset += dnBytes;
-        } else if (protocolOpTag === 0x65) {
-            // Search Result Done
-            result.protocolOp = 5;
-        }
-
-        return { message: result, bytesRead: totalLength };
-    }
-
-    /**
-     * 解析 BER 长度。
-     */
-    private parseLength(buffer: Buffer): { length: number; bytesRead: number } {
-        if (buffer.length === 0) {
-            return { length: 0, bytesRead: 0 };
-        }
-
-        const firstByte = buffer[0];
-        if (firstByte < 0x80) {
-            return { length: firstByte, bytesRead: 1 };
-        }
-
-        const numBytes = firstByte & 0x7f;
-        let length = 0;
-        for (let i = 0; i < numBytes; i++) {
-            length = (length << 8) | buffer[i + 1];
-        }
-        return { length, bytesRead: numBytes + 1 };
-    }
-
-    /**
-     * 解析 BER 整数。
-     */
-    private parseInt(buffer: Buffer): { value: number; bytesRead: number } {
-        const { length, bytesRead } = this.parseLength(buffer);
-        let value = 0;
-        for (let i = bytesRead; i < bytesRead + length; i++) {
-            value = (value << 8) | buffer[i];
-        }
-        return { value, bytesRead: bytesRead + length };
-    }
-
-    /**
-     * 解析 BER Octet String。
-     */
-    private parseOctetString(buffer: Buffer): { value: string; bytesRead: number } {
-        const { length, bytesRead } = this.parseLength(buffer);
-        const value = buffer.subarray(bytesRead, bytesRead + length).toString("utf-8");
-        return { value, bytesRead: bytesRead + length };
-    }
+/**
+ * 编码 LDAPMessage 包 SearchRequest。
+ *
+ * SearchRequest ::= [APPLICATION 3] SEQUENCE { baseObject, scope, derefAliases,
+ *   sizeLimit, timeLimit, typesOnly, filter, attributes }
+ */
+function encodeSearchRequest(id: number, base: string, filter: string, attributes: string[]): Buffer {
+  return berSequence([
+    berInteger(id),
+    berConstructed(0x63, [
+      berOctetString(base),
+      berEnumerated(2), // wholeSubtree
+      berEnumerated(0), // neverDerefAliases
+      berInteger(0), // sizeLimit：0 表示不限
+      berInteger(0), // timeLimit：0 表示不限，超时由客户端控制
+      berBoolean(false), // typesOnly
+      encodeFilterNode(parseFilter(filter)),
+      berSequence(attributes.map(berOctetString)),
+    ]),
+  ]);
 }

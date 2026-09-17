@@ -118,11 +118,13 @@ export async function adminLogin(username: string, password: string) {
 }
 
 /** 管理员认证 —— TOTP 二次验证 */
-export async function adminTotpVerify(adminId: number, token: string) {
+export async function adminTotpVerify(tempToken: string, token: string) {
   const response = await fetch(`${BASE}/admin/auth/totp-verify`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ admin_id: adminId, token }),
+    // temp_token 是第一步登录签发的挑战票据：没有它服务端不认第二步，
+    // 这是把「密码已验证」这个事实带到第二步的唯一凭据。
+    body: JSON.stringify({ temp_token: tempToken, token }),
   });
   return unwrap<{ token: string; admin: { id: number; username: string; role: string; display_name: string } }>(response);
 }

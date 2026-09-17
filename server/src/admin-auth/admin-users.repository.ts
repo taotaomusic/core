@@ -29,27 +29,71 @@ export class AdminUsersRepository {
     );
   }
 
+  /**
+   * 按用户名取凭据，**包含已禁用账号**。
+   *
+   * LDAP 同步专用：同步前必须能看见「本地已禁用」这个状态，否则被禁用的
+   * 目录用户每次登录都会被当成新账号重新建出来，禁用等于没禁。
+   */
+  findAnyByUsername(username: string): Promise<AdminCredentials | undefined> {
+    return this.database.first<AdminCredentials>(
+      `SELECT id, username, password_hash, password_salt, display_name, email, role,
+              totp_secret, totp_enabled, ip_whitelist, last_login_at, last_login_ip,
+              disabled_at, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS created_at,
+              created_by
+       FROM admin_users WHERE username = $1`,
+      [username],
+    );
+  }
+
+  /**
+   * 按 ID 取管理员。
+   *
+   * **刻意不过滤 `disabled_at`**：管理端需要能列出、编辑和重新启用已禁用的账号，
+   * 过滤掉会让「刚禁用的账号在响应里变成 undefined」。登录与鉴权路径各自显式
+   * 检查 `disabled_at`（[AdminUsersRepository.findByUsername] 与
+   * [AdminAuthService.validateSession]），不依赖这里。
+   */
   findById(id: number): Promise<AdminUserRecord | undefined> {
     return this.database.first<AdminUserRecord>(
       `SELECT id, username, display_name, email, role, totp_enabled, ip_whitelist,
               last_login_at, last_login_ip, disabled_at,
               to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS created_at,
               created_by
-       FROM admin_users WHERE id = $1 AND disabled_at IS NULL`,
+       FROM admin_users WHERE id = $1`,
+      [id],
+    );
+  }
+
+  /**
+   * 按 ID 取含密码哈希与 TOTP 密钥的完整凭据。
+   *
+   * TOTP 二次验证只拿得到第一步登录返回的 admin_id，需要单独一条能读到
+   * `totp_secret` 的查询 —— [findById] 返回的 [AdminUserRecord] 刻意不含密钥，
+   * 不能直接复用。
+   */
+  findCredentialsById(id: number): Promise<AdminCredentials | undefined> {
+    return this.database.first<AdminCredentials>(
+      `SELECT id, username, password_hash, password_salt, display_name, email, role,
+              totp_secret, totp_enabled, ip_whitelist, last_login_at, last_login_ip,
+              disabled_at, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS created_at,
+              created_by
+       FROM admin_users WHERE id = $1`,
       [id],
     );
   }
 
   async create(username: string, passwordHash: string, passwordSalt: string,
-               displayName: string, role: string, createdBy: number | null): Promise<AdminUserRecord> {
+               displayName: string, role: string, createdBy: number | null,
+               email: string | null = null): Promise<AdminUserRecord> {
     try {
       return (await this.database.first<AdminUserRecord>(
-        `INSERT INTO admin_users (username, password_hash, password_salt, display_name, role, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6)
+        `INSERT INTO admin_users (username, password_hash, password_salt, display_name, role, created_by, email)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
          RETURNING id, username, display_name, email, role, totp_enabled, ip_whitelist,
                    last_login_at, last_login_ip, disabled_at,
                    to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS created_at, created_by`,
-        [username, passwordHash, passwordSalt, displayName, role, createdBy],
+        [username, passwordHash, passwordSalt, displayName, role, createdBy, email],
       ))!;
     } catch (error) {
       if (isUniqueViolation(error)) throw ApiErrors.conflict(4090, "管理员用户名已存在");
@@ -66,8 +110,47 @@ export class AdminUsersRepository {
 
   async setRole(id: number, role: string): Promise<boolean> {
     return (await this.database.run(
-      `UPDATE admin_users SET role = $2 WHERE id = $1 AND disabled_at IS NULL`, [id, role],
+      `UPDATE admin_users SET role = $2 WHERE id = $1`, [id, role],
     )) === 1;
+  }
+
+  /**
+   * 更新展示名与邮箱。
+   *
+   * 只更新显式传入的字段：`display_name` 缺失表示不改，`email` 传 `null`
+   * 表示清空。因此不能写成 `COALESCE($n, 原值)` —— 那样就分不清
+   * 「不改」和「清空」了。
+   */
+  async updateProfile(
+    id: number,
+    fields: { displayName?: string; email?: string | null },
+  ): Promise<boolean> {
+    const assignments: string[] = [];
+    const params: unknown[] = [id];
+    if (fields.displayName !== undefined) {
+      params.push(fields.displayName);
+      assignments.push(`display_name = $${params.length}`);
+    }
+    if (fields.email !== undefined) {
+      params.push(fields.email);
+      assignments.push(`email = $${params.length}`);
+    }
+    if (assignments.length === 0) return false;
+    return (await this.database.run(
+      `UPDATE admin_users SET ${assignments.join(", ")} WHERE id = $1`, params,
+    )) === 1;
+  }
+
+  /**
+   * 统计仍然可用的超级管理员数量。
+   *
+   * 用于「不能把最后一个 super_admin 降级/禁用/删除」的保护：一旦归零，
+   * 后台就再没人能创建管理员了，只能改库救场。
+   */
+  async countActiveSuperAdmins(): Promise<number> {
+    return (await this.database.first<{ count: number }>(
+      `SELECT COUNT(*)::integer AS count FROM admin_users WHERE role = 'super_admin' AND disabled_at IS NULL`,
+    ))?.count ?? 0;
   }
 
   async setDisabled(id: number, disabled: boolean): Promise<boolean> {

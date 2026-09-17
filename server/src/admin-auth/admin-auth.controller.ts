@@ -1,17 +1,41 @@
-import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Post, Query, Req, UseGuards } from "@nestjs/common";
+import {
+  Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Patch, Post, Query, Req, UseGuards,
+} from "@nestjs/common";
 import type { Request } from "express";
 import { ApiErrors } from "../common/api.exception";
 import { Public } from "../common/decorators/public.decorator";
 import { RateLimit } from "../common/decorators/rate-limit.decorator";
+import {
+  auditActorId, forwardedClientAddress, type AdminActor, type AdminAuthenticatedRequest,
+} from "../common/request.types";
 import { AdminAuthService } from "./admin-auth.service";
 import { AdminAuthGuard } from "./admin-auth.guard";
-import { AdminUsersRepository } from "./admin-users.repository";
+import { RolesGuard } from "./roles.guard";
+import { RequireRole } from "./roles.decorator";
+import { AdminUsersRepository, type AdminUserRecord } from "./admin-users.repository";
 import { AdminSessionsRepository } from "./admin-sessions.repository";
 import { AuditLogRepository } from "./audit-log.repository";
-import { AppConfigService } from "../config/app-config.service";
+import { LdapService } from "../ldap/ldap.service";
+
+const ADMIN_ROLES = ["super_admin", "admin", "viewer"];
+
+/** 本地创建的管理员用户名。允许点、下划线、连字符，避免出现难排查的怪名字。 */
+const USERNAME_PATTERN = /^[A-Za-z0-9._-]{3,64}$/;
+
+/** 读操作（管理员列表、审计日志）所需的最低角色。 */
+const READ_ROLES = ["super_admin", "admin"];
+
+/**
+ * 需要管理员会话的路由。
+ *
+ * **不能把 `@UseGuards` 挂在控制器类上** —— 类级守卫对 `login` 同样生效，
+ * 而登录时用户手里还没有凭据，结果是所有登录请求先被自己的守卫 401 掉，
+ * 整个后台没人能进。公开路由（login / totp-verify / logout）因此必须
+ * 逐个方法标注，而不是靠类级默认值。
+ */
+const AdminGuarded = () => UseGuards(AdminAuthGuard, RolesGuard);
 
 @Public()
-@UseGuards(AdminAuthGuard)
 @Controller("admin/auth")
 export class AdminAuthController {
   constructor(
@@ -19,9 +43,20 @@ export class AdminAuthController {
     private readonly adminUsers: AdminUsersRepository,
     private readonly sessions: AdminSessionsRepository,
     private readonly auditLog: AuditLogRepository,
-    private readonly config: AppConfigService,
+    private readonly ldap: LdapService,
   ) {}
 
+  // ==================== 登录 ====================
+
+  /**
+   * 第一步：校验密码。
+   *
+   * 顺序是「先 LDAP，未命中再回落本地密码」。回落是刻意保留的 break-glass 通道：
+   * LDAP 配置错误或目录不可达时，本地超管账号仍能进后台救场；而 LDAP 明确
+   * 拒绝的账号（用户不存在、密码错、本地已禁用）不会走回落，直接 401。
+   *
+   * 开了 TOTP 的账号这里只签发一张挑战票据，不直接发会话。
+   */
   @Public()
   @RateLimit("auth:admin-login")
   @Post("login")
@@ -32,31 +67,55 @@ export class AdminAuthController {
     const ip = this.extractIp(req);
     const userAgent = req.headers["user-agent"] ?? "";
 
-    // 尝试 LDAP 登录（如果配置了）
-    if (this.config.isLdapConfigured && !password.startsWith("__legacy__")) {
-      // LDAP 逻辑由 LdapService 处理（如果存在）
-    }
+    if (!username || !password) throw ApiErrors.unauthorized(4011, "用户名或密码错误");
 
-    const admin = await this.adminUsers.findByUsername(username);
-    if (!admin || !this.auth.verifyPassword(password, admin.password_salt, admin.password_hash)) {
+    const ldapResult = await this.ldap.authenticate(username, password);
+    if (ldapResult.outcome === "denied") {
       throw ApiErrors.unauthorized(4011, "用户名或密码错误");
     }
 
-    // IP 白名单检查
-    if (admin.ip_whitelist && !this.isIpAllowed(ip, admin.ip_whitelist)) {
-      throw ApiErrors.forbidden(4030, "当前 IP 不在白名单中");
+    let admin: AdminActor;
+    let viaLdap = false;
+    if (ldapResult.outcome === "success") {
+      admin = ldapResult.admin;
+      viaLdap = true;
+    } else {
+      const credentials = await this.adminUsers.findByUsername(username);
+      // 用户名不存在时也跑一次等价 scrypt，否则响应时间会泄漏账号是否存在。
+      if (!credentials) {
+        this.auth.verifyAgainstNothing(password);
+        throw ApiErrors.unauthorized(4011, "用户名或密码错误");
+      }
+      if (!this.auth.verifyPassword(password, credentials.password_salt, credentials.password_hash)) {
+        throw ApiErrors.unauthorized(4011, "用户名或密码错误");
+      }
+      admin = {
+        id: credentials.id,
+        username: credentials.username,
+        role: credentials.role,
+        display_name: credentials.display_name,
+      };
     }
 
-    // 2FA 检查
-    if (admin.totp_enabled) {
-      const tempToken = this.auth.hashPassword(username + Date.now()).hash.slice(0, 32);
-      // 存储临时 token 到内存（5分钟有效），这里简化处理
-      return { requires_totp: true, temp_token: tempToken, admin_id: admin.id };
+    await this.assertIpAllowed(admin.id, ip);
+
+    // 2FA：本地账号开了 TOTP 就只发挑战票据，正式会话留给 totp-verify。
+    // LDAP 目录已经承担了第二因子的职责，不再叠加本地 TOTP。
+    if (!viaLdap) {
+      const credentials = await this.adminUsers.findCredentialsById(admin.id);
+      if (credentials?.totp_enabled) {
+        return {
+          requires_totp: true,
+          temp_token: this.auth.issueTotpChallenge(admin.id),
+          admin_id: admin.id,
+        };
+      }
     }
 
     const sessionToken = await this.auth.createSession(admin.id, ip, userAgent);
     await this.adminUsers.updateLastLogin(admin.id, ip);
-    await this.auditLog.log(admin.id, "auth.login", "admin_user", String(admin.id), null, ip, userAgent);
+    await this.auditLog.log(admin.id, viaLdap ? "auth.login_ldap" : "auth.login",
+      "admin_user", String(admin.id), null, ip, userAgent);
 
     return {
       token: sessionToken,
@@ -64,21 +123,44 @@ export class AdminAuthController {
     };
   }
 
+  /**
+   * 第二步：核销 TOTP 动态码。
+   *
+   * 必须同时出示第一步签发的 `temp_token`。没有它的话，任何知道 `admin_id`
+   * 的人都能跳过密码直接进这一步猜 6 位码 —— 那等于 2FA 形同虚设。
+   * 票据一次性使用，同一张票无法反复试码。
+   */
   @Public()
+  @RateLimit("auth:admin-totp")
   @Post("totp-verify")
   @HttpCode(HttpStatus.OK)
   async totpVerify(@Body() body: Record<string, unknown>, @Req() req: Request) {
-    const adminId = Number(body?.admin_id);
+    const tempToken = String(body?.temp_token ?? "");
     const token = String(body?.token ?? "");
     const ip = this.extractIp(req);
     const userAgent = req.headers["user-agent"] ?? "";
 
-    const admin = await this.adminUsers.findById(adminId);
-    if (!admin || !admin.totp_secret) throw ApiErrors.unauthorized(4011, "验证失败");
+    const challengeAdminId = tempToken ? this.auth.consumeTotpChallenge(tempToken) : undefined;
+    if (challengeAdminId === undefined) {
+      throw ApiErrors.unauthorized(4011, "验证已过期，请重新登录");
+    }
 
+    // 传了 admin_id 就要求它与票据绑定的一致，防止拿别人的票据试探。
+    const claimedAdminId = body?.admin_id === undefined ? undefined : Number(body.admin_id);
+    if (claimedAdminId !== undefined && claimedAdminId !== challengeAdminId) {
+      throw ApiErrors.unauthorized(4011, "验证失败");
+    }
+
+    const admin = await this.adminUsers.findCredentialsById(challengeAdminId);
+    // 禁用、删号、或没开 TOTP 的账号都不能靠这张票拿到会话。
+    if (!admin || admin.disabled_at || !admin.totp_enabled || !admin.totp_secret) {
+      throw ApiErrors.unauthorized(4011, "验证失败");
+    }
     if (!this.auth.verifyTotp(admin.totp_secret, token)) {
       throw ApiErrors.unauthorized(4011, "动态码错误");
     }
+
+    await this.assertIpAllowed(admin.id, ip);
 
     const sessionToken = await this.auth.createSession(admin.id, ip, userAgent);
     await this.adminUsers.updateLastLogin(admin.id, ip);
@@ -99,155 +181,225 @@ export class AdminAuthController {
     }
   }
 
+  @AdminGuarded()
   @Get("me")
-  async me(@Req() req: Request) {
-    const adminUser = (req as any).adminUser;
-    if (!adminUser) throw ApiErrors.unauthorized(4010, "未登录");
-    return adminUser;
+  async me(@Req() req: AdminAuthenticatedRequest) {
+    return this.requireActor(req);
   }
 
+  // ==================== 本人密码与 2FA ====================
+
+  @AdminGuarded()
+  @RateLimit("auth:admin-password")
   @Post("change-password")
   @HttpCode(HttpStatus.NO_CONTENT)
-  async changePassword(@Req() req: Request, @Body() body: Record<string, unknown>) {
-    const adminUser = (req as any).adminUser;
-    if (!adminUser) throw ApiErrors.unauthorized(4010, "未登录");
+  async changePassword(@Req() req: AdminAuthenticatedRequest, @Body() body: Record<string, unknown>) {
+    const actor = this.requireActor(req);
     const oldPassword = String(body?.oldPassword ?? "");
     const newPassword = String(body?.newPassword ?? "");
     if (newPassword.length < 8) throw ApiErrors.badRequest(4000, "新密码至少8位");
-    const admin = await this.adminUsers.findByUsername(adminUser.username);
+    if (newPassword === oldPassword) throw ApiErrors.badRequest(4000, "新密码不能与当前密码相同");
+
+    const admin = await this.adminUsers.findCredentialsById(actor.id);
     if (!admin || !this.auth.verifyPassword(oldPassword, admin.password_salt, admin.password_hash)) {
       throw ApiErrors.unauthorized(4011, "当前密码错误");
     }
     const { hash, salt } = this.auth.hashPassword(newPassword);
     await this.adminUsers.updatePassword(admin.id, hash, salt);
-    await this.sessions.revokeAllForAdmin(admin.id);
+
+    // 只留当前会话，其它设备下线；不把发起改密的这台一起踢掉。
+    const authHeader = String(req.headers["authorization"] ?? "");
+    if (authHeader.startsWith("Bearer ")) {
+      await this.auth.revokeOtherSessions(admin.id, authHeader.slice(7));
+    } else {
+      await this.sessions.revokeAllForAdmin(admin.id);
+    }
+
     await this.auditLog.log(admin.id, "auth.change_password", "admin_user", String(admin.id), null,
       this.extractIp(req), req.headers["user-agent"] ?? "");
   }
 
+  @AdminGuarded()
+  @RateLimit("auth:admin-totp")
   @Post("totp-enable")
   @HttpCode(HttpStatus.OK)
-  async enableTotp(@Req() req: Request, @Body() body: Record<string, unknown>) {
-    const adminUser = (req as any).adminUser;
-    if (!adminUser) throw ApiErrors.unauthorized(4010, "未登录");
+  async enableTotp(@Req() req: AdminAuthenticatedRequest, @Body() body: Record<string, unknown>) {
+    const actor = this.requireActor(req);
     const password = String(body?.password ?? "");
-    const admin = await this.adminUsers.findByUsername(adminUser.username);
+    const admin = await this.adminUsers.findCredentialsById(actor.id);
     if (!admin || !this.auth.verifyPassword(password, admin.password_salt, admin.password_hash)) {
       throw ApiErrors.unauthorized(4011, "密码错误");
     }
     const { secret, otpauthUrl } = this.auth.generateTotpSecret(admin.username);
+    // 先存密钥但保持未启用，等 totp-confirm 校验通过后才真正生效。
     await this.adminUsers.setTotpSecret(admin.id, secret, false);
+    await this.auditLog.log(admin.id, "auth.totp_enable_requested", "admin_user", String(admin.id), null,
+      this.extractIp(req), req.headers["user-agent"] ?? "");
     return { secret, otpauth_url: otpauthUrl };
   }
 
+  @AdminGuarded()
+  @RateLimit("auth:admin-totp")
   @Post("totp-confirm")
   @HttpCode(HttpStatus.NO_CONTENT)
-  async confirmTotp(@Req() req: Request, @Body() body: Record<string, unknown>) {
-    const adminUser = (req as any).adminUser;
-    if (!adminUser) throw ApiErrors.unauthorized(4010, "未登录");
+  async confirmTotp(@Req() req: AdminAuthenticatedRequest, @Body() body: Record<string, unknown>) {
+    const actor = this.requireActor(req);
     const token = String(body?.token ?? "");
-    const admin = await this.adminUsers.findByUsername(adminUser.username);
+    const admin = await this.adminUsers.findCredentialsById(actor.id);
     if (!admin || !admin.totp_secret) throw ApiErrors.badRequest(4000, "请先生成密钥");
     if (!this.auth.verifyTotp(admin.totp_secret, token)) {
       throw ApiErrors.badRequest(4000, "动态码错误");
     }
     await this.adminUsers.setTotpSecret(admin.id, admin.totp_secret, true);
+    await this.auditLog.log(admin.id, "auth.totp_enabled", "admin_user", String(admin.id), null,
+      this.extractIp(req), req.headers["user-agent"] ?? "");
   }
 
+  @AdminGuarded()
+  @RateLimit("auth:admin-totp")
   @Post("totp-disable")
   @HttpCode(HttpStatus.NO_CONTENT)
-  async disableTotp(@Req() req: Request, @Body() body: Record<string, unknown>) {
-    const adminUser = (req as any).adminUser;
-    if (!adminUser) throw ApiErrors.unauthorized(4010, "未登录");
+  async disableTotp(@Req() req: AdminAuthenticatedRequest, @Body() body: Record<string, unknown>) {
+    const actor = this.requireActor(req);
     const password = String(body?.password ?? "");
-    const admin = await this.adminUsers.findByUsername(adminUser.username);
+    const admin = await this.adminUsers.findCredentialsById(actor.id);
     if (!admin || !this.auth.verifyPassword(password, admin.password_salt, admin.password_hash)) {
       throw ApiErrors.unauthorized(4011, "密码错误");
     }
     await this.adminUsers.setTotpSecret(admin.id, null, false);
+    await this.auditLog.log(admin.id, "auth.totp_disabled", "admin_user", String(admin.id), null,
+      this.extractIp(req), req.headers["user-agent"] ?? "");
   }
 
   // ==================== 管理员 CRUD ====================
 
+  /**
+   * 管理员列表。
+   *
+   * admin 角色也需要它 —— 审计日志页要用它把 admin_id 映射成用户名。所以
+   * 对非超管做字段裁剪：`ip_whitelist` 和 `last_login_ip` 属于网络访问控制
+   * 信息，只给超管看。
+   */
+  @AdminGuarded()
   @Get("users")
-  async listAdmins() {
-    return this.adminUsers.list();
+  @RequireRole(...READ_ROLES)
+  async listAdmins(@Req() req: AdminAuthenticatedRequest) {
+    const actor = this.requireActor(req);
+    const isSuperAdmin = actor.role === "super_admin";
+    const rows = await this.adminUsers.list();
+    return rows.map((row) => (isSuperAdmin ? row : this.trimAdminRow(row)));
   }
 
+  @AdminGuarded()
   @Post("users")
+  @RequireRole("super_admin")
   @HttpCode(HttpStatus.CREATED)
-  async createAdmin(@Req() req: Request, @Body() body: Record<string, unknown>) {
-    const adminUser = (req as any).adminUser;
-    if (!adminUser || adminUser.role !== "super_admin") {
-      throw ApiErrors.forbidden(4030, "仅超级管理员可创建管理员");
-    }
+  async createAdmin(@Req() req: AdminAuthenticatedRequest, @Body() body: Record<string, unknown>) {
+    const actor = this.requireActor(req);
     const username = String(body?.username ?? "").trim();
     const password = String(body?.password ?? "");
     const displayName = String(body?.displayName ?? body?.display_name ?? "").trim() || username;
+    const email = this.normalizeEmail(body?.email);
     const role = String(body?.role ?? "viewer");
-    if (!username || username.length < 3) throw ApiErrors.badRequest(4000, "用户名至少3位");
-    if (password.length < 8) throw ApiErrors.badRequest(4000, "密码至少8位");
-    if (!["super_admin", "admin", "viewer"].includes(role)) {
-      throw ApiErrors.badRequest(4000, "角色不合法");
+
+    if (!USERNAME_PATTERN.test(username)) {
+      throw ApiErrors.badRequest(4000, "用户名只能是 3-64 位的字母、数字、点、下划线或连字符");
     }
+    if (password.length < 8) throw ApiErrors.badRequest(4000, "密码至少8位");
+    if (!ADMIN_ROLES.includes(role)) throw ApiErrors.badRequest(4000, "角色不合法");
+
     const { hash, salt } = this.auth.hashPassword(password);
-    const created = await this.adminUsers.create(username, hash, salt, displayName, role, adminUser.id);
-    await this.auditLog.log(adminUser.id, "admin.create", "admin_user", String(created.id),
+    const created = await this.adminUsers.create(username, hash, salt, displayName, role,
+      auditActorId(actor), email);
+    await this.auditLog.log(auditActorId(actor), "admin.create", "admin_user", String(created.id),
       JSON.stringify({ username, role }), this.extractIp(req), req.headers["user-agent"] ?? "");
     return created;
   }
 
-  @Post("users/:id")
-  async updateAdmin(@Req() req: Request, @Param("id") id: string, @Body() body: Record<string, unknown>) {
-    const adminUser = (req as any).adminUser;
-    if (!adminUser || adminUser.role !== "super_admin") {
-      throw ApiErrors.forbidden(4030, "仅超级管理员可编辑管理员");
+  /** 编辑管理员。这是部分更新，用 PATCH —— 前端也按 PATCH 发。 */
+  @AdminGuarded()
+  @Patch("users/:id")
+  @RequireRole("super_admin")
+  async updateAdmin(@Req() req: AdminAuthenticatedRequest, @Param("id") id: string,
+                    @Body() body: Record<string, unknown>) {
+    const actor = this.requireActor(req);
+    const targetId = this.parseId(id);
+    const target = await this.adminUsers.findById(targetId);
+    if (!target) throw ApiErrors.notFound(4044, "管理员不存在");
+
+    const touchesRole = body?.role !== undefined;
+    const touchesDisabled = body?.disabled !== undefined;
+    const touchesProfile = body?.display_name !== undefined || body?.email !== undefined;
+    if (!touchesRole && !touchesDisabled && !touchesProfile) {
+      throw ApiErrors.badRequest(4000, "没有需要更新的字段");
     }
-    const targetId = Number(id);
-    if (!Number.isInteger(targetId) || targetId <= 0) throw ApiErrors.badRequest(4000, "ID 不合法");
-    if (body?.role) {
-      const role = String(body.role);
-      if (!["super_admin", "admin", "viewer"].includes(role)) {
-        throw ApiErrors.badRequest(4000, "角色不合法");
-      }
-      await this.adminUsers.setRole(targetId, role);
+
+    const nextRole = touchesRole ? String(body.role) : target.role;
+    if (touchesRole && !ADMIN_ROLES.includes(nextRole)) {
+      throw ApiErrors.badRequest(4000, "角色不合法");
     }
-    if (body?.disabled !== undefined) {
-      await this.adminUsers.setDisabled(targetId, Boolean(body.disabled));
+    const nextDisabled = touchesDisabled ? Boolean(body.disabled) : Boolean(target.disabled_at);
+
+    // 降级或禁用自己会当场把自己锁在门外，直接拒绝。
+    if (targetId === actor.id && (nextRole !== target.role || nextDisabled)) {
+      throw ApiErrors.badRequest(4000, "不能降级或禁用当前登录的账号");
     }
-    if (body?.display_name !== undefined) {
-      // display_name 更新需要额外方法，暂不支持
+    // 最后一个可用超管一旦降级/禁用，后台就没人能再创建管理员了。
+    if (target.role === "super_admin" && !target.disabled_at
+        && (nextRole !== "super_admin" || nextDisabled)) {
+      await this.assertNotLastSuperAdmin("降级或禁用");
     }
-    await this.auditLog.log(adminUser.id, "admin.update", "admin_user", String(targetId),
-      JSON.stringify(body), this.extractIp(req), req.headers["user-agent"] ?? "");
+
+    if (touchesRole) await this.adminUsers.setRole(targetId, nextRole);
+    if (touchesDisabled) await this.adminUsers.setDisabled(targetId, nextDisabled);
+    if (touchesProfile) {
+      const displayName = body?.display_name === undefined
+        ? undefined
+        : String(body.display_name).trim() || target.username;
+      const email = body?.email === undefined ? undefined : this.normalizeEmail(body.email);
+      await this.adminUsers.updateProfile(targetId, { displayName, email });
+    }
+
+    await this.auditLog.log(auditActorId(actor), "admin.update", "admin_user", String(targetId),
+      JSON.stringify({ role: touchesRole ? nextRole : undefined, disabled: touchesDisabled ? nextDisabled : undefined }),
+      this.extractIp(req), req.headers["user-agent"] ?? "");
     return this.adminUsers.findById(targetId);
   }
 
+  @AdminGuarded()
   @Delete("users/:id")
+  @RequireRole("super_admin")
   @HttpCode(HttpStatus.NO_CONTENT)
-  async deleteAdmin(@Req() req: Request, @Param("id") id: string): Promise<void> {
-    const adminUser = (req as any).adminUser;
-    if (!adminUser || adminUser.role !== "super_admin") {
-      throw ApiErrors.forbidden(4030, "仅超级管理员可删除管理员");
+  async deleteAdmin(@Req() req: AdminAuthenticatedRequest, @Param("id") id: string): Promise<void> {
+    const actor = this.requireActor(req);
+    const targetId = this.parseId(id);
+    if (targetId === actor.id) throw ApiErrors.badRequest(4000, "不能删除自己");
+
+    const target = await this.adminUsers.findById(targetId);
+    if (!target) throw ApiErrors.notFound(4044, "管理员不存在");
+    if (target.role === "super_admin" && !target.disabled_at) {
+      await this.assertNotLastSuperAdmin("删除");
     }
-    const targetId = Number(id);
-    if (!Number.isInteger(targetId) || targetId <= 0) throw ApiErrors.badRequest(4000, "ID 不合法");
-    if (targetId === adminUser.id) throw ApiErrors.badRequest(4000, "不能删除自己");
+
     await this.adminUsers.delete(targetId);
-    await this.auditLog.log(adminUser.id, "admin.delete", "admin_user", String(targetId),
-      null, this.extractIp(req), req.headers["user-agent"] ?? "");
+    await this.auditLog.log(auditActorId(actor), "admin.delete", "admin_user", String(targetId),
+      JSON.stringify({ username: target.username }), this.extractIp(req), req.headers["user-agent"] ?? "");
   }
 
   // ==================== 审计日志 ====================
 
+  @AdminGuarded()
   @Get("audit-log")
-  async listAuditLog(@Req() req: Request, @Query("adminId") adminId?: string,
+  @RequireRole(...READ_ROLES)
+  async listAuditLog(@Query("adminId") adminId?: string,
                      @Query("action") action?: string, @Query("limit") limit?: string,
                      @Query("offset") offset?: string) {
-    const adminUser = (req as any).adminUser;
-    if (!adminUser) throw ApiErrors.unauthorized(4010, "未登录");
+    const parsedAdminId = adminId === undefined || adminId === "" ? undefined : Number(adminId);
+    if (parsedAdminId !== undefined && (!Number.isInteger(parsedAdminId) || parsedAdminId <= 0)) {
+      throw ApiErrors.badRequest(4000, "adminId 不合法");
+    }
     return this.auditLog.list({
-      adminId: adminId ? Number(adminId) : undefined,
+      adminId: parsedAdminId,
       action: action || undefined,
       limit: Math.min(200, Math.max(1, Number(limit) || 50)),
       offset: Math.max(0, Number(offset) || 0),
@@ -256,33 +408,94 @@ export class AdminAuthController {
 
   // ==================== IP 白名单 ====================
 
+  @AdminGuarded()
   @Get("ip-whitelist/:adminId")
-  async getIpWhitelist(@Req() req: Request, @Param("adminId") adminId: string) {
-    const adminUser = (req as any).adminUser;
-    if (!adminUser) throw ApiErrors.unauthorized(4010, "未登录");
-    const target = await this.adminUsers.findById(Number(adminId));
+  @RequireRole("super_admin")
+  async getIpWhitelist(@Param("adminId") adminId: string) {
+    const target = await this.adminUsers.findById(this.parseId(adminId));
     if (!target) throw ApiErrors.notFound(4044, "管理员不存在");
     return { whitelist: target.ip_whitelist || "" };
   }
 
+  @AdminGuarded()
   @Post("ip-whitelist/:adminId")
+  @RequireRole("super_admin")
   @HttpCode(HttpStatus.NO_CONTENT)
-  async setIpWhitelist(@Req() req: Request, @Param("adminId") adminId: string,
+  async setIpWhitelist(@Req() req: AdminAuthenticatedRequest, @Param("adminId") adminId: string,
                        @Body() body: Record<string, unknown>): Promise<void> {
-    const adminUser = (req as any).adminUser;
-    if (!adminUser || adminUser.role !== "super_admin") {
-      throw ApiErrors.forbidden(4030, "仅超级管理员可管理 IP 白名单");
+    const actor = this.requireActor(req);
+    const targetId = this.parseId(adminId);
+    const target = await this.adminUsers.findById(targetId);
+    if (!target) throw ApiErrors.notFound(4044, "管理员不存在");
+
+    const normalized = this.normalizeIpWhitelist(String(body?.whitelist ?? ""));
+    await this.adminUsers.setIpWhitelist(targetId, normalized || null);
+    await this.auditLog.log(auditActorId(actor), "admin.ip_whitelist", "admin_user", String(targetId),
+      JSON.stringify({ whitelist: normalized }), this.extractIp(req), req.headers["user-agent"] ?? "");
+  }
+
+  // ==================== 内部工具 ====================
+
+  /**
+   * 取当前管理员身份。
+   *
+   * 守卫保证这里一定有值；`id` 为 0 的是兼容令牌身份，它没有对应的
+   * `admin_users` 行，所以按 id 查自身记录的接口对它自然返回 4011。
+   */
+  private requireActor(req: AdminAuthenticatedRequest): AdminActor {
+    const actor = req.adminUser;
+    if (!actor) throw ApiErrors.unauthorized(4013, "管理员认证失败");
+    return actor;
+  }
+
+  private parseId(value: string): number {
+    const id = Number(value);
+    if (!Number.isInteger(id) || id <= 0) throw ApiErrors.badRequest(4000, "ID 不合法");
+    return id;
+  }
+
+  private normalizeEmail(value: unknown): string | null {
+    if (value === undefined || value === null || value === "") return null;
+    const email = String(value).trim();
+    if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      throw ApiErrors.badRequest(4000, "邮箱格式不正确");
     }
-    const whitelist = String(body?.whitelist ?? "");
-    await this.adminUsers.setIpWhitelist(Number(adminId), whitelist || null);
+    return email;
   }
 
+  private normalizeIpWhitelist(value: string): string {
+    return value.split(",").map((item) => item.trim()).filter(Boolean).join(",");
+  }
+
+  /** 非超管可见的管理员字段：去掉网络访问控制相关的两列。 */
+  private trimAdminRow(row: AdminUserRecord) {
+    const { ip_whitelist: _ipWhitelist, last_login_ip: _lastLoginIp, ...rest } = row;
+    return rest;
+  }
+
+  private async assertNotLastSuperAdmin(action: string): Promise<void> {
+    if (await this.adminUsers.countActiveSuperAdmins() <= 1) {
+      throw ApiErrors.badRequest(4000, `不能${action}最后一个超级管理员`);
+    }
+  }
+
+  /** IP 白名单为空表示不限制；否则必须命中，不命中直接 403。 */
+  private async assertIpAllowed(adminId: number, ip: string): Promise<void> {
+    const admin = await this.adminUsers.findById(adminId);
+    if (!admin?.ip_whitelist) return;
+    const allowed = admin.ip_whitelist.split(",").map((item) => item.trim()).filter(Boolean);
+    if (allowed.length === 0 || allowed.includes(ip)) return;
+    throw ApiErrors.forbidden(4030, "当前 IP 不在白名单中");
+  }
+
+  /**
+   * 取客户端地址。
+   *
+   * 与限流共用 [forwardedClientAddress]：只有显式开启 TRUST_PROXY 时才采信
+   * `X-Forwarded-For`。以前这里无条件信任该请求头，等于谁都能靠一个头
+   * 伪造出白名单里的 IP 绕过访问控制。
+   */
   private extractIp(req: Request): string {
-    return String(req.headers["x-forwarded-for"] ?? req.socket.remoteAddress ?? "unknown").split(",")[0].trim();
-  }
-
-  private isIpAllowed(ip: string, whitelist: string): boolean {
-    const allowed = whitelist.split(",").map(s => s.trim()).filter(Boolean);
-    return allowed.length === 0 || allowed.includes(ip);
+    return forwardedClientAddress(req);
   }
 }

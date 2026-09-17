@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { resolve } from "node:path";
 
@@ -89,6 +89,15 @@ export class AppConfigService {
   readonly ldapGroupSearchBase: string;
   readonly ldapGroupSearchFilter: string;
   readonly ldapRoleMapping: Record<string, string>; // LDAP group -> role mapping
+  /**
+   * LDAPS 是否校验证书。
+   *
+   * 默认 `true`：无条件信任自签证书等于把目录口令交给任何能中间人的人。
+   * 内网自签证书环境显式设 `LDAP_TLS_REJECT_UNAUTHORIZED=false` 才关闭。
+   */
+  readonly ldapTlsRejectUnauthorized: boolean;
+  /** LDAP 单次操作的超时（毫秒）。连接和搜索都要有，否则目录无响应会一直挂着。 */
+  readonly ldapTimeoutMs: number;
 
   /**
    * 仅供独立契约验证使用的固定验证码。环境校验已限制它只能出现在
@@ -160,7 +169,33 @@ export class AppConfigService {
     this.ldapGroupSearchFilter = String(config.get("LDAP_GROUP_SEARCH_FILTER") ?? "");
     // LDAP 角色映射：LDAP group DN -> admin role
     const mappingStr = String(config.get("LDAP_ROLE_MAPPING") ?? "");
-    this.ldapRoleMapping = mappingStr ? JSON.parse(mappingStr) : {};
+    this.ldapRoleMapping = this.parseRoleMapping(mappingStr);
+    // 只有显式写成 false/0/no 才关闭校验，其余一律按校验证书处理。
+    const tlsFlag = String(config.get("LDAP_TLS_REJECT_UNAUTHORIZED") ?? "true").toLowerCase();
+    this.ldapTlsRejectUnauthorized = !["false", "0", "no", "off"].includes(tlsFlag);
+    this.ldapTimeoutMs = Number(config.get("LDAP_TIMEOUT_MS") ?? 10_000);
+  }
+
+  /**
+   * 解析 LDAP 角色映射。
+   *
+   * 配置写坏了不能让进程起不来 —— 那会把「LDAP 映射有问题」升级成
+   * 「整个后台服务挂掉」。这里退化成空映射并打日志，登录流程会因此
+   * 把所有 LDAP 用户映射成 viewer（最小权限），比崩掉好得多。
+   */
+  private parseRoleMapping(raw: string): Record<string, string> {
+    if (!raw) return {};
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("LDAP_ROLE_MAPPING 必须是 JSON 对象");
+      }
+      return parsed as Record<string, string>;
+    } catch (error) {
+      new Logger(AppConfigService.name).warn(
+        `LDAP_ROLE_MAPPING 解析失败，按空映射处理（LDAP 用户将全部是 viewer）：${(error as Error).message}`);
+      return {};
+    }
   }
 
   /** LDAP 是否配置了最小必填字段（地址、绑定 DN、用户搜索基）。 */

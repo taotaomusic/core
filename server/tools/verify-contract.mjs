@@ -771,6 +771,188 @@ async function main() {
     JSON.stringify(imDisabledBody),
   );
 
+  // ==================== 管理后台认证 ====================
+  //
+  // 这一段覆盖 /api/v1/admin/auth/* —— 迁移到企业级认证后它一直没有任何
+  // 断言，导致「契约全绿」和「管理员能不能登录」完全无关。
+  section("管理后台认证：账号 / 角色 / 2FA / 审计");
+
+  const bearer = (token) => ({ "content-type": "application/json", authorization: `Bearer ${token}` });
+  const legacyHeaders = { "content-type": "application/json", "x-admin-token": adminToken };
+
+  const anonymousAdmin = await fetch(`${base}/api/v1/admin/auth/me`);
+  const anonymousAdminBody = await anonymousAdmin.json();
+  check(
+    "无凭据访问管理接口 401 且 code 4013",
+    anonymousAdmin.status === 401 && anonymousAdminBody.code === 4013,
+    `${anonymousAdmin.status} ${JSON.stringify(anonymousAdminBody)}`,
+  );
+
+  const wrongAdminPassword = await postJson("/api/v1/admin/auth/login", { username: "admin", password: "definitely-wrong" });
+  check(
+    "管理员密码错误 401 且 code 4011",
+    wrongAdminPassword.status === 401 && wrongAdminPassword.body.code === 4011,
+    `${wrongAdminPassword.status} ${JSON.stringify(wrongAdminPassword.body)}`,
+  );
+
+  // 服务启动时会 bootstrap 出默认超管 admin / admin123。
+  const adminLogin = await postJson("/api/v1/admin/auth/login", { username: "admin", password: "admin123" });
+  const adminSession = adminLogin.body.data?.token;
+  check(
+    "管理员登录返回会话 token 与 super_admin 身份",
+    adminLogin.status === 200 && typeof adminSession === "string" && adminLogin.body.data?.admin?.role === "super_admin",
+    `${adminLogin.status} ${JSON.stringify(adminLogin.body).slice(0, 160)}`,
+  );
+
+  const adminMe = await fetch(`${base}/api/v1/admin/auth/me`, { headers: { authorization: `Bearer ${adminSession}` } });
+  const adminMeBody = await adminMe.json();
+  check(
+    "Bearer 会话可访问 /admin/auth/me",
+    adminMe.status === 200 && adminMeBody.data?.username === "admin",
+    `${adminMe.status} ${JSON.stringify(adminMeBody).slice(0, 160)}`,
+  );
+
+  // 这条路径就是前端管理员页实际请求的地址：控制器前缀是 admin/auth，
+  // 前端曾按 /admin/users 调，结果整页 404。
+  const adminList = await fetch(`${base}/api/v1/admin/auth/users`, { headers: { authorization: `Bearer ${adminSession}` } });
+  const adminListBody = await adminList.json();
+  check(
+    "超管可列出管理员（/admin/auth/users）",
+    adminList.status === 200 && Array.isArray(adminListBody.data)
+      && adminListBody.data.some((item) => item.username === "admin"),
+    `${adminList.status} ${JSON.stringify(adminListBody).slice(0, 160)}`,
+  );
+
+  const auditList = await fetch(`${base}/api/v1/admin/auth/audit-log?limit=5`, { headers: { authorization: `Bearer ${adminSession}` } });
+  const auditListBody = await auditList.json();
+  check(
+    "审计日志可读且已记录登录事件",
+    auditList.status === 200 && Array.isArray(auditListBody.data?.items) && auditListBody.data?.total >= 1,
+    `${auditList.status} ${JSON.stringify(auditListBody).slice(0, 160)}`,
+  );
+
+  // 2FA 不能被绕过：没有第一步签发的挑战票据就换不到会话。
+  const totpWithoutTicket = await postJson("/api/v1/admin/auth/totp-verify", { admin_id: 1, token: "000000" });
+  check(
+    "缺少 temp_token 时 totp-verify 401 且 code 4011",
+    totpWithoutTicket.status === 401 && totpWithoutTicket.body.code === 4011,
+    `${totpWithoutTicket.status} ${JSON.stringify(totpWithoutTicket.body)}`,
+  );
+  const totpForgedTicket = await postJson("/api/v1/admin/auth/totp-verify", { temp_token: "forged-ticket", token: "000000" });
+  check(
+    "伪造 temp_token 时 totp-verify 401 且 code 4011",
+    totpForgedTicket.status === 401 && totpForgedTicket.body.code === 4011,
+    `${totpForgedTicket.status} ${JSON.stringify(totpForgedTicket.body)}`,
+  );
+
+  // 兼容路径仍然可用（发布接口的运维脚本还在用 X-Admin-Token）。
+  const legacyMe = await fetch(`${base}/api/v1/admin/auth/me`, { headers: { "x-admin-token": adminToken } });
+  const legacyMeBody = await legacyMe.json();
+  check(
+    "X-Admin-Token 兼容身份仍可访问 /admin/auth/me",
+    legacyMe.status === 200 && legacyMeBody.data?.username === "legacy_admin",
+    `${legacyMe.status} ${JSON.stringify(legacyMeBody).slice(0, 160)}`,
+  );
+
+  // IP 白名单不能被 X-Forwarded-For 伪造：把白名单设成一个非本机地址，
+  // 再用伪造的 XFF 头登录，必须仍然被拒（默认不信任该请求头）。
+  const whitelistSet = await fetch(`${base}/api/v1/admin/auth/ip-whitelist/1`, {
+    method: "POST", headers: bearer(adminSession), body: JSON.stringify({ whitelist: "10.99.99.99" }),
+  });
+  const spoofedLogin = await postJson("/api/v1/admin/auth/login", { username: "admin", password: "admin123" });
+  check(
+    "伪造 X-Forwarded-For 无法绕过 IP 白名单（403/4030）",
+    whitelistSet.status === 204 && spoofedLogin.status === 403 && spoofedLogin.body.code === 4030,
+    `白名单 ${whitelistSet.status}，登录 ${spoofedLogin.status} ${JSON.stringify(spoofedLogin.body)}`,
+  );
+  await fetch(`${base}/api/v1/admin/auth/ip-whitelist/1`, {
+    method: "POST", headers: bearer(adminSession), body: JSON.stringify({ whitelist: "" }),
+  });
+
+  // 角色模型：viewer 能登录、能看自己的信息，但不能读管理员列表、不能建账号。
+  const viewerName = `vadmin_${randomBytes(3).toString("hex")}`;
+  const createdAdmin = await fetch(`${base}/api/v1/admin/auth/users`, {
+    method: "POST", headers: bearer(adminSession),
+    body: JSON.stringify({ username: viewerName, password: "pass123456", role: "viewer", displayName: "契约验证只读" }),
+  });
+  const createdAdminBody = await createdAdmin.json();
+  const createdAdminId = createdAdminBody.data?.id;
+  check(
+    "超管可创建管理员（201，角色落库）",
+    createdAdmin.status === 201 && createdAdminBody.data?.role === "viewer" && !!createdAdminId,
+    `${createdAdmin.status} ${JSON.stringify(createdAdminBody).slice(0, 160)}`,
+  );
+
+  const viewerLogin = await postJson("/api/v1/admin/auth/login", { username: viewerName, password: "pass123456" });
+  const viewerSession = viewerLogin.body.data?.token;
+  check(
+    "新建的 viewer 可登录",
+    viewerLogin.status === 200 && typeof viewerSession === "string",
+    `${viewerLogin.status} ${JSON.stringify(viewerLogin.body).slice(0, 160)}`,
+  );
+
+  const viewerRead = await fetch(`${base}/api/v1/admin/auth/users`, { headers: { authorization: `Bearer ${viewerSession}` } });
+  const viewerReadBody = await viewerRead.json();
+  check(
+    "viewer 读管理员列表被拒 403 且 code 4030",
+    viewerRead.status === 403 && viewerReadBody.code === 4030,
+    `${viewerRead.status} ${JSON.stringify(viewerReadBody)}`,
+  );
+
+  const viewerWrite = await fetch(`${base}/api/v1/admin/auth/users`, {
+    method: "POST", headers: bearer(viewerSession),
+    body: JSON.stringify({ username: `nope_${randomBytes(3).toString("hex")}`, password: "pass123456", role: "super_admin" }),
+  });
+  const viewerWriteBody = await viewerWrite.json();
+  check(
+    "viewer 提权创建超管被拒 403 且 code 4030",
+    viewerWrite.status === 403 && viewerWriteBody.code === 4030,
+    `${viewerWrite.status} ${JSON.stringify(viewerWriteBody)}`,
+  );
+
+  // 前端用 PATCH 做部分更新，控制器必须提供 PATCH 而不是 POST。
+  const patched = await fetch(`${base}/api/v1/admin/auth/users/${createdAdminId}`, {
+    method: "PATCH", headers: bearer(adminSession),
+    body: JSON.stringify({ display_name: "契约验证已改名" }),
+  });
+  const patchedBody = await patched.json();
+  check(
+    "PATCH 可部分更新展示名",
+    patched.status === 200 && patchedBody.data?.display_name === "契约验证已改名",
+    `${patched.status} ${JSON.stringify(patchedBody).slice(0, 160)}`,
+  );
+
+  // 兼容身份（admin_users 里没有对应行）写审计不能因为外键报 500。
+  const legacyPatch = await fetch(`${base}/api/v1/admin/auth/users/${createdAdminId}`, {
+    method: "PATCH", headers: legacyHeaders, body: JSON.stringify({ display_name: "契约验证兼容身份改名" }),
+  });
+  check(
+    "兼容身份写审计不撞外键（PATCH 返回 200）",
+    legacyPatch.status === 200,
+    `${legacyPatch.status} ${JSON.stringify(await legacyPatch.json()).slice(0, 160)}`,
+  );
+
+  // 最后一个可用超管不能被降级/禁用，否则后台再没人能创建管理员。
+  const disableLastSuperAdmin = await fetch(`${base}/api/v1/admin/auth/users/1`, {
+    method: "PATCH", headers: legacyHeaders, body: JSON.stringify({ disabled: true }),
+  });
+  const disableLastSuperAdminBody = await disableLastSuperAdmin.json();
+  check(
+    "不能禁用最后一个超级管理员 400 且 code 4000",
+    disableLastSuperAdmin.status === 400 && disableLastSuperAdminBody.code === 4000,
+    `${disableLastSuperAdmin.status} ${JSON.stringify(disableLastSuperAdminBody)}`,
+  );
+
+  // 删除管理员：审计表外键是 ON DELETE SET NULL，硬删不该再报 23503。
+  const deletedAdmin = await fetch(`${base}/api/v1/admin/auth/users/${createdAdminId}`, {
+    method: "DELETE", headers: bearer(adminSession),
+  });
+  check(
+    "删除已有审计记录的管理员返回 204（外键不再阻断）",
+    deletedAdmin.status === 204,
+    `${deletedAdmin.status} ${(await deletedAdmin.text()).slice(0, 160)}`,
+  );
+
   console.log(`\n通过 ${passed} 项，失败 ${failed} 项`);  process.exitCode = failed === 0 ? 0 : 1;
 }
 

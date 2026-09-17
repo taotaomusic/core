@@ -439,7 +439,7 @@ export async function runMigrations(pool: Pool): Promise<void> {
         last_login_ip text,
         disabled_at   bigint,
         created_at    timestamptz NOT NULL DEFAULT now(),
-        created_by    integer REFERENCES admin_users(id)
+        created_by    integer REFERENCES admin_users(id) ON DELETE SET NULL
       );
 
       -- 管理员会话
@@ -456,10 +456,14 @@ export async function runMigrations(pool: Pool): Promise<void> {
       CREATE INDEX IF NOT EXISTS idx_admin_sessions_active
         ON admin_sessions (admin_id, expires_at) WHERE revoked_at IS NULL;
 
-      -- 操作审计日志
+      -- 操作审计日志。
+      --
+      -- admin_id 可空且 ON DELETE SET NULL：管理员被删除后，历史审计必须保留，
+      -- 只是变成「无归属」。可空还有一个用途 —— X-Admin-Token 兼容身份在
+      -- admin_users 里没有行，写具体 ID 会直接撞外键。
       CREATE TABLE IF NOT EXISTS admin_audit_log (
         id            integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-        admin_id      integer NOT NULL REFERENCES admin_users(id),
+        admin_id      integer REFERENCES admin_users(id) ON DELETE SET NULL,
         action        text NOT NULL,
         target_type   text,
         target_id     text,
@@ -472,6 +476,17 @@ export async function runMigrations(pool: Pool): Promise<void> {
         ON admin_audit_log (admin_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_admin_audit_action
         ON admin_audit_log (action, created_at DESC);
+
+      -- 上面两张表在更早的版本里建成了 NOT NULL + 无 ON DELETE 的外键，
+      -- 导致「删除管理员」和「兼容身份写审计」都必然报 23503。CREATE TABLE
+      -- IF NOT EXISTS 不会修正已存在的表，所以这里显式补齐，可重复执行。
+      ALTER TABLE admin_audit_log ALTER COLUMN admin_id DROP NOT NULL;
+      ALTER TABLE admin_audit_log DROP CONSTRAINT IF EXISTS admin_audit_log_admin_id_fkey;
+      ALTER TABLE admin_audit_log ADD CONSTRAINT admin_audit_log_admin_id_fkey
+        FOREIGN KEY (admin_id) REFERENCES admin_users(id) ON DELETE SET NULL;
+      ALTER TABLE admin_users DROP CONSTRAINT IF EXISTS admin_users_created_by_fkey;
+      ALTER TABLE admin_users ADD CONSTRAINT admin_users_created_by_fkey
+        FOREIGN KEY (created_by) REFERENCES admin_users(id) ON DELETE SET NULL;
     `);
     await client.query("COMMIT");
   } catch (error) {

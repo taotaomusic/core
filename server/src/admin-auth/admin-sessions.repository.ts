@@ -40,6 +40,19 @@ export class AdminSessionsRepository {
     );
   }
 
+  /**
+   * 撤销该管理员除 `keepTokenHash` 之外的会话。
+   *
+   * 改密码后要把其它设备踢下线，但发起改密码的这台不该被一起踢掉。
+   */
+  async revokeAllExcept(adminId: number, keepTokenHash: string): Promise<void> {
+    await this.database.run(
+      `UPDATE admin_sessions SET revoked_at = $1
+        WHERE admin_id = $2 AND revoked_at IS NULL AND token_hash <> $3`,
+      [Date.now(), adminId, keepTokenHash],
+    );
+  }
+
   async cleanup(): Promise<void> {
     await this.database.run(
       `DELETE FROM admin_sessions WHERE revoked_at IS NOT NULL OR expires_at < $1`, [Date.now()],

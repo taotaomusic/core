@@ -105,7 +105,7 @@ onMounted(fetchUsers);
 async function fetchUsers() {
   loading.value = true;
   try {
-    users.value = await apiGet<AdminUser[]>("/admin/users", props.adminToken);
+    users.value = await apiGet<AdminUser[]>("/admin/auth/users", props.adminToken);
   } catch (e) {
     ElMessage.error(`加载失败：${(e as Error).message}`);
   } finally {
@@ -135,13 +135,13 @@ async function save() {
   saving.value = true;
   try {
     if (editing.value) {
-      await apiPatch(`/admin/users/${editing.value.id}`, props.adminToken, {
+      await apiPatch(`/admin/auth/users/${editing.value.id}`, props.adminToken, {
         role: form.value.role,
         display_name: form.value.displayName,
         email: form.value.email || null,
       });
     } else {
-      await apiPostJson("/admin/users", props.adminToken, form.value);
+      await apiPostJson("/admin/auth/users", props.adminToken, form.value);
     }
     ElMessage.success("已保存");
     dialogVisible.value = false;
@@ -155,7 +155,7 @@ async function save() {
 
 async function toggleDisabled(user: AdminUser) {
   try {
-    await apiPatch(`/admin/users/${user.id}`, props.adminToken, {
+    await apiPatch(`/admin/auth/users/${user.id}`, props.adminToken, {
       disabled: !user.disabled_at,
     });
     await fetchUsers();
@@ -166,7 +166,7 @@ async function toggleDisabled(user: AdminUser) {
 
 async function remove(user: AdminUser) {
   try {
-    await apiDelete(`/admin/users/${user.id}`, props.adminToken);
+    await apiDelete(`/admin/auth/users/${user.id}`, props.adminToken);
     ElMessage.success("已删除");
     await fetchUsers();
   } catch (e) {

@@ -2,7 +2,7 @@ import { Injectable } from "@nestjs/common";
 import { DatabaseService } from "../database/database.service";
 
 export type AuditLogEntry = {
-  id: number; admin_id: number; action: string; target_type: string | null;
+  id: number; admin_id: number | null; action: string; target_type: string | null;
   target_id: string | null; detail: string | null; ip_address: string | null;
   user_agent: string | null; created_at: number;
 };
@@ -11,7 +11,15 @@ export type AuditLogEntry = {
 export class AuditLogRepository {
   constructor(private readonly database: DatabaseService) {}
 
-  async log(adminId: number, action: string, targetType: string | null, targetId: string | null,
+  /**
+   * 写一条审计记录。
+   *
+   * `adminId` 允许为 `null`：`X-Admin-Token` 兼容身份（[AdminAuthGuard] 里
+   * `id = 0`）在 `admin_users` 里没有对应行，写 0 会撞外键。这类操作按
+   * 「无归属管理员」记录，但同样留痕。管理员被删除后，其历史记录也会
+   * 因外键 `ON DELETE SET NULL` 变成无归属，而不是被连带删除。
+   */
+  async log(adminId: number | null, action: string, targetType: string | null, targetId: string | null,
             detail: string | null, ip: string, userAgent: string): Promise<void> {
     await this.database.run(
       `INSERT INTO admin_audit_log (admin_id, action, target_type, target_id, detail, ip_address, user_agent, created_at)

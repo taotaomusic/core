@@ -22,7 +22,7 @@ const saving = ref(false);
 
 onMounted(async () => {
   try {
-    const data = await apiGet<{ whitelist: string }>(`/admin/ip-whitelist/${props.adminId}`, props.adminToken);
+    const data = await apiGet<{ whitelist: string }>(`/admin/auth/ip-whitelist/${props.adminId}`, props.adminToken);
     whitelist.value = data.whitelist ?? "";
   } catch { /* 忽略 */ }
 });
@@ -30,7 +30,7 @@ onMounted(async () => {
 async function save() {
   saving.value = true;
   try {
-    await apiPostJson(`/admin/ip-whitelist/${props.adminId}`, props.adminToken, { whitelist: whitelist.value });
+    await apiPostJson(`/admin/auth/ip-whitelist/${props.adminId}`, props.adminToken, { whitelist: whitelist.value });
     ElMessage.success("已保存");
   } catch (e) {
     ElMessage.error(`保存失败：${(e as Error).message}`);
