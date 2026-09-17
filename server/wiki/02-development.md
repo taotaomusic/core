@@ -56,6 +56,16 @@ IM_INTERNAL_API_BASE_URL=http://127.0.0.1:5001
 IM_EXTERNAL_GATEWAY_URL=tcp://im.xydaigua.cn:5100
 IM_API_TOKEN=
 IM_SESSION_LIFETIME_SECONDS=900
+TOTP_ISSUER=桃桃音乐管理后台
+# 可选：LDAP/SSO。不配置则只用本地管理员账号。
+# LDAP_URL=ldap://ldap.example.com:389
+# LDAP_BIND_DN=cn=admin,dc=example,dc=com
+# LDAP_BIND_PASSWORD=
+# LDAP_USER_SEARCH_BASE=ou=users,dc=example,dc=com
+# LDAP_TLS_REJECT_UNAUTHORIZED=true
+# LDAP_TIMEOUT_MS=10000
+# 只在可信反向代理之后才打开，否则 IP 白名单可被伪造请求头绕过。
+# TRUST_PROXY=1
 ```
 
 `.env` 不提交。环境中已有的变量优先于 `.env`。
@@ -67,7 +77,7 @@ IM_SESSION_LIFETIME_SECONDS=900
 | `PORT` | `4500` | 否 | 监听端口 |
 | `DATABASE_URL` | 无 | 是 | PostgreSQL 连接串 |
 | `AUTH_SECRET` | 开发兜底值 | 生产必需 | 生产环境至少 32 字符 |
-| `ADMIN_TOKEN` | 空 | 管理接口必需 | `X-Admin-Token` 的校验值 |
+| `ADMIN_TOKEN` | 空 | `/app/admin/*`、`/desktop/admin/*` 必需 | `X-Admin-Token` 的校验值；留空只关闭这两组，管理后台登录不受影响 |
 | `APK_DIR` | `./data/apk` | 否 | Android APK 和补丁文件目录 |
 | `DESKTOP_RELEASE_DIR` | `./data/desktop` | 否 | Windows 内容寻址模块和差分目录 |
 | `SHARE_PREVIEW_DIR` | `./data/share-preview` | 否 | 分享试听缓存目录 |
@@ -86,6 +96,14 @@ IM_SESSION_LIFETIME_SECONDS=900
 | `IM_API_TOKEN` | 空 | 否 | 悟空 IM 服务端 API Token |
 | `IM_SESSION_LIFETIME_SECONDS` | `900` | IM 启用时 60–86400 | 会话凭据续签周期 |
 | `EMAIL_VERIFICATION_TEST_CODE` | 空 | 仅 `NODE_ENV=test` | 契约验证固定验证码 |
+| `TOTP_ISSUER` | `桃桃音乐管理后台` | 否 | 管理员 2FA 在验证器里显示的名称 |
+| `LDAP_URL` / `LDAP_BIND_DN` / `LDAP_BIND_PASSWORD` / `LDAP_USER_SEARCH_BASE` | 空 | 否 | LDAP 对接最小必填组，缺任一项即视为未配置 |
+| `LDAP_USER_SEARCH_FILTER` | `(uid={{username}})` | 否 | 用户搜索过滤器，`{{username}}` 会被转义后替换 |
+| `LDAP_GROUP_SEARCH_BASE` / `LDAP_GROUP_SEARCH_FILTER` | 空 | 否 | 组搜索；过滤器可用 `{{userDn}}` |
+| `LDAP_ROLE_MAPPING` | 空 | 否 | JSON 对象，LDAP 组 DN → 角色；写坏了只告警不崩 |
+| `LDAP_TLS_REJECT_UNAUTHORIZED` | `true` | 否 | 只有显式 `false`/`0`/`no`/`off` 才关闭 LDAPS 证书校验 |
+| `LDAP_TIMEOUT_MS` | `10000` | 否 | 单次 LDAP 操作超时，连接和搜索都受它约束 |
+| `TRUST_PROXY` | 关闭 | 否 | 只有 `1`/`true` 才采信 `X-Forwarded-For` |
 | `ENV_FILE` | `.env` | 否 | 指定其它配置文件 |
 
 ApiSweet API Key 存在 PostgreSQL `api_key` 表，不使用环境变量。
@@ -152,11 +170,14 @@ src/example/
 1. 创建 Module、Controller 和必要的 Service/Repository。
 2. 在 `AppModule.imports` 注册模块。
 3. 默认依赖全局访问令牌守卫，不要重复实现鉴权。
-4. 需要公开时添加 `@Public()`。
-5. 需要独立限流时扩展 `RateLimitBucket` 和 `RateLimitService`。
-6. 普通 JSON 返回领域数据，由 `EnvelopeInterceptor` 包装。
-7. 流式或二进制响应添加 `@RawResponse()` 并自行结束响应。
-8. 更新接口和架构文档。
+4. 需要管理员会话鉴权时用 `@UseGuards(AdminAuthGuard, RolesGuard)`，并且**必须在
+   `imports` 里加 `AdminAuthModule`**，否则启动报 `UnknownDependenciesException`。控制器里既有
+   公开又有受保护方法时，守卫只能挂方法，不能提到类上。
+5. 需要公开时添加 `@Public()`。
+6. 需要独立限流时扩展 `RateLimitBucket` 和 `RateLimitService`。
+7. 普通 JSON 返回领域数据，由 `EnvelopeInterceptor` 包装。
+8. 流式或二进制响应添加 `@RawResponse()` 并自行结束响应。
+9. 更新接口和架构文档。
 
 新增桌面发布或 IM 路由时，还要更新 [00-code-index.md](00-code-index.md) 的路由计数和配置索引。
 
@@ -231,6 +252,10 @@ node tools/verify-contract.mjs http://127.0.0.1:4720 verify-token
 ```
 
 以验证脚本的实际汇总数量为准，必须全部通过。
+
+验证实例首次启动时会自动创建默认管理员 `admin / admin123`（`super_admin`），管理后台认证的
+契约断言依赖它。注意验证库每次被 `reset-db.mjs` 清空后都要**重启服务**，让
+`AdminBootstrapService` 重新创建这个账号，否则相关断言会因为登不进去而失败。
 
 ## 10. 提交前流程
 
@@ -339,3 +364,18 @@ npx tsc -p tsconfig.json --noEmit
 `npm run dev:frontend` 使用 Vite `5173`，`vite.config.ts` 将 `/api` 默认代理到后端
 `http://localhost:4500`。如果后端使用其它端口，先设置 `VITE_API_PROXY_TARGET=http://localhost:<端口>`；
 生产构建后由 NestJS 在 `/admin/` 提供静态文件，不经过 Vite 代理。
+
+### 管理后台登不进去
+
+按顺序确认：
+
+```powershell
+# 1. 默认管理员是否建出来了（首次启动日志里应有一行「已创建默认管理员账号」）
+# 2. 直接打登录接口，看返回的是 401 还是别的
+curl.exe -i -X POST "http://127.0.0.1:4500/api/v1/admin/auth/login" `
+  -H "Content-Type: application/json" `
+  -d '{\"username\":\"admin\",\"password\":\"admin123\"}'
+```
+
+如果**所有**登录请求都是 401/4013，第一嫌疑是 `@UseGuards` 被挂到了控制器类上 —— 类级守卫
+连 `login` 一起拦，谁也进不去。详细排查见 [07-troubleshooting.md](07-troubleshooting.md)。

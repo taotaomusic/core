@@ -44,7 +44,10 @@ node dist/main.js
 | --- | --- |
 | `DATABASE_URL` | 明确指向正式 PostgreSQL，不能使用验证库 |
 | `AUTH_SECRET` | 至少 32 字符随机值 |
-| `ADMIN_TOKEN` | 非空且妥善保管 |
+| `ADMIN_TOKEN` | 非空且妥善保管；只保护 `/app/admin/*` 与 `/desktop/admin/*`，管理后台登录不走它 |
+| `TOTP_ISSUER` | 可选；管理员 2FA 在验证器里显示的名称 |
+| `TRUST_PROXY` | 只在可信反向代理之后设为 `1`；直接暴露公网时必须留空，否则 IP 白名单可被伪造 |
+| `LDAP_*` | 可选；对接企业目录时配置，`LDAP_TLS_REJECT_UNAUTHORIZED` 保持默认 `true` |
 | `APK_DIR` | 服务进程可写、磁盘空间充足 |
 | `DESKTOP_RELEASE_DIR` | 桌面模块和差分对象目录可写、磁盘空间充足 |
 | `SHARE_PREVIEW_DIR` | 分享试听缓存目录可写；未安装 ffmpeg 时试听会返回 5034 |
@@ -59,6 +62,11 @@ node dist/main.js
 | `IM_EXTERNAL_GATEWAY_URL` | IM 启用时必须是 `tcp://` Gateway 地址 |
 
 ApiSweet Key 在数据库，不在生产 `.env`。
+
+**首次上线后必须立刻改掉默认管理员密码。** 服务第一次启动会自动创建 `admin / admin123`
+（`super_admin`），代码里没有强制首次改密的机制。登录 `/admin/` 后立即调用
+`POST /api/v1/admin/auth/change-password`，并给该账号开启 2FA。管理后台的账号体系见
+[11-admin-auth.md](11-admin-auth.md)。
 
 ## 4. 启动顺序
 

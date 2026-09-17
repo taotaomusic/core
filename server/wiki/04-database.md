@@ -189,6 +189,100 @@ Android 补丁按 `(channel, target_version_code, patch_version)` 唯一，保�
 桌面最低版本使用 `app_channel.desktop_min_supported_version_code`，Android 继续使用同表中的
 `min_supported_version_code`，两者不能混用。
 
+### `admin_users`
+
+```sql
+CREATE TABLE admin_users (
+  id            integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  username      text NOT NULL UNIQUE,
+  password_hash text NOT NULL,
+  password_salt text NOT NULL,
+  display_name  text NOT NULL DEFAULT '',
+  email         text,
+  role          text NOT NULL DEFAULT 'viewer'
+                CHECK (role IN ('super_admin', 'admin', 'viewer')),
+  totp_secret   text,
+  totp_enabled  smallint NOT NULL DEFAULT 0 CHECK (totp_enabled IN (0, 1)),
+  ip_whitelist  text,
+  last_login_at bigint,
+  last_login_ip text,
+  disabled_at   bigint,
+  created_at    timestamptz NOT NULL DEFAULT now(),
+  created_by    integer REFERENCES admin_users(id) ON DELETE SET NULL
+);
+```
+
+这张表独立于普通 `users`，管理员不是用户、用户也不是管理员，不要试图合并。
+
+- `password_hash` 是 scrypt（`N=65536, r=8, p=1, maxmem=128MB`）的十六进制结果，`password_salt`
+  是 16 字节随机盐。校验用 `timingSafeEqual`，不用字符串比较。
+- `totp_secret` 非空且 `totp_enabled = 1` 才表示 2FA 真正生效；只有密钥没有确认是中间态。
+- `ip_whitelist` 是可空文本，按换行/逗号分隔；为空表示不限制。只做精确匹配，不支持 CIDR。
+- `disabled_at` 是可空毫秒时间戳。会话校验每次回表检查它，所以禁用能立即生效。
+- `created_by` 是 `ON DELETE SET NULL`：创建者被删掉后账号仍在，只是失去来源信息。
+
+### `admin_sessions`
+
+```sql
+CREATE TABLE admin_sessions (
+  id         integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  admin_id   integer NOT NULL REFERENCES admin_users(id) ON DELETE CASCADE,
+  token_hash text NOT NULL UNIQUE,
+  expires_at bigint NOT NULL,
+  created_at bigint NOT NULL,
+  revoked_at bigint,
+  login_ip   text,
+  user_agent text
+);
+```
+
+**只存令牌的 SHA-256 哈希**，明文令牌只在登录响应里出现一次。有效期 24 小时。
+`revoked_at` 非空即失效。删除管理员会级联删掉他的全部会话。
+
+改密码调用 `revokeAllExcept(admin_id, keepTokenHash)`，撤销该管理员的其它会话、保留当前这条。
+
+### `admin_audit_log`
+
+```sql
+CREATE TABLE admin_audit_log (
+  id          integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  admin_id    integer REFERENCES admin_users(id) ON DELETE SET NULL,
+  action      text NOT NULL,
+  target_type text,
+  target_id   text,
+  detail      text,
+  ip_address  text,
+  user_agent  text,
+  created_at  bigint NOT NULL
+);
+```
+
+`admin_id` **可空**是刻意的，有两个原因：
+
+1. 管理员被删除后历史审计必须保留，只是变成“无归属”。写成 `NOT NULL` 且无 `ON DELETE` 动作
+   时，删除管理员会直接撞外键报 23503。
+2. `X-Admin-Token` 兼容路径合成的身份 `id = 0` 在 `admin_users` 里没有对应行，写具体 ID 同样
+   撞外键。落库前必须过 `auditActorId()`，把 `id = 0` 折成 `null`。
+
+早期版本这两张表建成了 `NOT NULL` + 无 `ON DELETE` 的外键，`CREATE TABLE IF NOT EXISTS`
+**不会**修正已存在的表定义。迁移里因此显式补了可重复执行的修正：
+
+```sql
+ALTER TABLE admin_audit_log ALTER COLUMN admin_id DROP NOT NULL;
+ALTER TABLE admin_audit_log DROP CONSTRAINT IF EXISTS admin_audit_log_admin_id_fkey;
+ALTER TABLE admin_audit_log ADD CONSTRAINT admin_audit_log_admin_id_fkey
+  FOREIGN KEY (admin_id) REFERENCES admin_users(id) ON DELETE SET NULL;
+ALTER TABLE admin_users DROP CONSTRAINT IF EXISTS admin_users_created_by_fkey;
+ALTER TABLE admin_users ADD CONSTRAINT admin_users_created_by_fkey
+  FOREIGN KEY (created_by) REFERENCES admin_users(id) ON DELETE SET NULL;
+```
+
+这是“给已有表收紧或放宽约束”的通用写法：先 `DROP CONSTRAINT IF EXISTS` 再 `ADD CONSTRAINT`，
+整段可重复执行。修改已有表约束时照抄这个模式，不要指望 `CREATE TABLE IF NOT EXISTS`。
+
+迁移文件里的 SQL 注释不能出现反引号 —— 迁移 SQL 写在模板字符串里，反引号会提前终止字符串，
+报 `TS1005: ',' expected`。
+
 ## 4. 类型规则
 
 ### 时间
@@ -322,6 +416,20 @@ WHERE id = 1;
 
 先发布同时兼容新旧字段的代码，再迁移数据，最后才能删除旧字段。线上仍有旧后端进程或回滚产物时，立即删除字段会让回滚失效。
 
+### 修改已有列的可空性或外键动作
+
+`CREATE TABLE IF NOT EXISTS` 对已存在的表完全不起作用，`ALTER TABLE ... ADD COLUMN IF NOT EXISTS`
+也只能加列、改不了约束。放宽 `NOT NULL` 或换外键动作要用可重复执行的组合：
+
+```sql
+ALTER TABLE t ALTER COLUMN c DROP NOT NULL;
+ALTER TABLE t DROP CONSTRAINT IF EXISTS t_c_fkey;
+ALTER TABLE t ADD CONSTRAINT t_c_fkey FOREIGN KEY (c) REFERENCES other(id) ON DELETE SET NULL;
+```
+
+先 `DROP ... IF EXISTS` 再 `ADD` 才能重复执行，否则第二次启动会因为约束已存在而失败。
+`admin_audit_log.admin_id` 和 `admin_users.created_by` 就是这么修的。
+
 ## 10. 事务边界
 
 应该放在一个数据库事务中的操作：
@@ -396,5 +504,8 @@ ORDER BY api_key_id;
 | `idx_desktop_jar_sha256` | 内容寻址模块引用检查 |
 | `idx_desktop_patch_manifest` | 桌面差分按版本/路径查找 |
 | `idx_desktop_patch_sha256` | 内容寻址差分引用检查 |
+| `idx_admin_sessions_active`（部分） | 按 `admin_id` 查未撤销会话；`WHERE revoked_at IS NULL` |
+| `idx_admin_audit_admin` | 审计按管理员和时间倒序读取 |
+| `idx_admin_audit_action` | 审计按 action 和时间倒序筛选 |
 
 新增查询先确认过滤列和排序列是否匹配现有索引；不要为低频管理查询盲目增加索引。

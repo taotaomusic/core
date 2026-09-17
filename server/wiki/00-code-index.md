@@ -2,7 +2,7 @@
 
 [返回文档中心](README.md)
 
-本页是后端源码、接口和数据库文档的导航基准。内容在 2026-09-13 按 `server/.codegraph` 索引和源码逐项核对，索引快照包含 **115 个文件、2,260 个节点、5,607 条边、89 条路由**。路由清单中的路径是 Controller 相对路径，除 `/health` 外实际都要加全局前缀 `/api/v1`。
+本页是后端源码、接口和数据库文档的导航基准。内容在 2026-09-17 按 `server/.codegraph` 索引和源码逐项核对，索引快照包含 **131 个文件、2,653 个节点、6,455 条边、104 条路由**。路由清单中的路径是 Controller 相对路径，除 `/health` 外实际都要加全局前缀 `/api/v1`。
 
 ## 1. 如何刷新索引
 
@@ -12,7 +12,7 @@ CodeGraph 数据库是本机生成物，不应提交 `codegraph.db`。源码变�
 codegraph index server
 codegraph status server --json
 
-# 查看所有路由（输出 89 条左右，数量变化意味着需要同步本页）
+# 查看所有路由（输出 104 条左右，数量变化意味着需要同步本页）
 codegraph query --path server --kind route --limit 200 --json ""
 ```
 
@@ -41,6 +41,8 @@ codegraph query --path server --kind route --limit 200 --json ""
 | `src/desktop-release/` | Windows 模块化发布、内容寻址文件和二进制差分 | `desktop_*`、Courgette/bsdiff-wasm |
 | `src/im/` | 悟空 IM 会话凭据和同步代理 | `im_device_session`、悟空 IM HTTP API |
 | `src/user-admin/` | 后台用户列表、播放统计、禁用和删除 | `users`、refresh/playback 外键级联 |
+| `src/admin-auth/` | 管理后台账号、数据库会话、TOTP 2FA、角色守卫、IP 白名单和审计 | `admin_users`、`admin_sessions`、`admin_audit_log` |
+| `src/ldap/` | LDAP/SSO 目录对接：Bind、Search、过滤器编解码、角色映射 | 企业目录、`admin_users` 同步 |
 | `src/frontend/` | Vue 管理后台；发布时产到 `dist/public` | Vite、Element Plus |
 | `native/kiwi-crypto/` | Kiwi Crypto 原生加密和防重放测试 | C++ |
 
@@ -56,6 +58,10 @@ codegraph query --path server --kind route --limit 200 --json ""
 | `SecurityHeadersInterceptor` | 写 CORS `*`、`nosniff`、`DENY`、`no-referrer` 和默认 `no-store` |
 | `AllExceptionsFilter` | 将异常统一成业务信封；未知异常为 HTTP 502/5020；已发送响应的流只结束连接 |
 
+`AdminAuthGuard` 和 `RolesGuard` **不是全局守卫**，它们由 `AdminAuthModule` 提供，只挂在
+`/api/v1/admin/auth/**` 的受保护方法上。引用它们的模块必须自己 `imports: [AdminAuthModule]`，
+否则启动时 `UnknownDependenciesException`。详见 [11-admin-auth.md](11-admin-auth.md)。
+
 ## 3. 启动与请求链路
 
 ```text
@@ -67,8 +73,13 @@ codegraph query --path server --kind route --limit 200 --json ""
   → 挂载按路由分流的 JSON parser（普通 16KB、桌面清单 1MB、原始上传跳过）
   → /api/v1 全局前缀（/health 例外）
   → 全局 ValidationPipe(transform=true)
+  → onApplicationBootstrap：AdminBootstrapService 创建默认管理员 admin/admin123
   → app.listen(PORT)
 ```
+
+`main.ts` 的顶层代码在两个生命周期钩子**之前**执行，`onModuleInit` 早于
+`onApplicationBootstrap`。因此默认管理员必须在 `onApplicationBootstrap` 创建，写进 `main.ts`
+会先撞“关系 admin_users 不存在”。
 
 当前原始请求体例外路径：
 
@@ -90,7 +101,7 @@ POST /api/v1/desktop/admin/artifacts
 
 ## 4. 完整路由索引
 
-以下路径均省略 `/api/v1` 前缀；`/health` 是唯一例外。总数由 CodeGraph 当前索引统计为 89。
+以下路径均省略 `/api/v1` 前缀；`/health` 是唯一例外。总数由 CodeGraph 当前索引统计为 104。
 
 ### 公开公告（1）
 
@@ -118,6 +129,21 @@ POST /api/v1/desktop/admin/artifacts
 - `POST /auth/avatar`：5 MiB 以内图片上传到 Lsky。
 - `POST /auth/email/bind-verification`、`POST /auth/email/bind`：首次绑定邮箱。
 - `POST /auth/email/change-verification`、`POST /auth/email/change`：换绑邮箱。
+
+### 管理后台认证（15）
+
+除 `login`、`totp-verify`、`logout` 外都挂 `AdminAuthGuard` + `RolesGuard`。会话用
+`Authorization: Bearer`，旧的 `X-Admin-Token` 仍兼容但身份不可写外键。细节见
+[11-admin-auth.md](11-admin-auth.md)。
+
+- `POST /admin/auth/login`、`POST /admin/auth/totp-verify`、`POST /admin/auth/logout`：公开；登录时开了
+  TOTP 的账号只拿到 `temp_token`，第二步必须出示它。
+- `GET /admin/auth/me`、`POST /admin/auth/change-password`：当前管理员信息与改密。
+- `POST /admin/auth/totp-enable`、`POST /admin/auth/totp-confirm`、`POST /admin/auth/totp-disable`：2FA 生命周期。
+- `GET /admin/auth/users`、`POST /admin/auth/users`、`PATCH /admin/auth/users/:id`、`DELETE /admin/auth/users/:id`：
+  管理员增删改查；读取需 `admin` 以上，写入需 `super_admin`。
+- `GET /admin/auth/audit-log`：操作审计查询。
+- `GET /admin/auth/ip-whitelist/:adminId`、`POST /admin/auth/ip-whitelist/:adminId`：IP 白名单读写，仅 `super_admin`。
 
 ### Windows 桌面发布（10）
 
@@ -166,12 +192,14 @@ POST /api/v1/desktop/admin/artifacts
 | IM 会话 | 桃桃访问令牌 | 每用户 30 次 + 每 IP 180 次/15 分钟 |
 | IM 同步/撤回/已读 | 桃桃访问令牌 | 每用户 300 次 + 每 IP 1800 次/15 分钟 |
 | Android/桌面后台、公告、用户、图片 Key | `X-Admin-Token` | 每 IP 60 次/15 分钟；管理令牌未配置时固定 401/4013 |
+| 管理后台登录、2FA 第二步 | `@Public()` | 每 IP 10 次/15 分钟；两个用途各一个桶，互不挤占 |
+| 管理后台其它接口 | 管理员会话 `Authorization: Bearer`（兼容 `X-Admin-Token`） | 默认无独立桶；再按角色判 403/4030 |
 
 限流器是进程内滑动窗口，重启清空，多实例不共享。不能把它当成跨实例的安全配额。
 
 ## 6. 数据模型速览
 
-迁移当前创建 21 张表：
+迁移当前创建 24 张表：
 
 ```text
 users                         refresh_tokens
@@ -182,6 +210,7 @@ app_release                   app_channel               app_config
 app_announcement              api_key                    image_generation_task
 im_device_session             app_patch                  desktop_release
 desktop_jar                   desktop_patch
+admin_users                   admin_sessions            admin_audit_log
 ```
 
 主要外键和删除语义：
@@ -190,6 +219,7 @@ desktop_jar                   desktop_patch
 - `image_generation_task.api_key_id` 使用 `ON DELETE RESTRICT`，仍有任务引用时不能删除 Key。
 - `desktop_jar`/`desktop_patch` 随 `desktop_release` 级联删除；磁盘内容寻址文件不会自动回收。
 - 播放清空只推进 `playback_history_state.revision`，不删除累计统计；每个 marker 另存于 `playback_history_clear_operation` 保证重试幂等。
+- `admin_sessions.admin_id` 随 `admin_users` 级联删除；`admin_audit_log.admin_id` 与 `admin_users.created_by` 是 `ON DELETE SET NULL`，管理员被删后审计仍保留、只是变成无归属。
 
 所有 `Date.now()` 语义的字段使用 `bigint`，版本/大小/百分比使用 `integer`，历史布尔值使用 `smallint` 0/1。SQL 返回 TypeScript camelCase 时必须给别名加双引号。
 
@@ -200,7 +230,7 @@ desktop_jar                   desktop_patch
 | `PORT` | `4500` | HTTP 监听端口 |
 | `DATABASE_URL` | 必需 | PostgreSQL 连接串 |
 | `AUTH_SECRET` | 开发兜底；生产至少 32 字符 | 访问令牌 HMAC |
-| `ADMIN_TOKEN` | 空 | 管理后台令牌；为空则后台关闭 |
+| `ADMIN_TOKEN` | 空 | 静态管理令牌；为空则 `/app/admin/*` 与 `/desktop/admin/*` 关闭，不影响管理后台登录 |
 | `APK_DIR` | `./data/apk` | Android APK/补丁文件 |
 | `DESKTOP_RELEASE_DIR` | `./data/desktop` | 桌面内容寻址文件和差分 |
 | `SHARE_PREVIEW_DIR` | `./data/share-preview` | 分享试听缓存 |
@@ -222,6 +252,14 @@ desktop_jar                   desktop_patch
 | `IM_API_TOKEN` | 空 | 悟空 IM 服务端 API Token |
 | `IM_SESSION_LIFETIME_SECONDS` | `900`，启用时 60–86400 | IM 会话凭据有效期 |
 | `EMAIL_VERIFICATION_TEST_CODE` | 空，仅 `NODE_ENV=test` | 契约测试固定验证码 |
+| `TOTP_ISSUER` | `桃桃音乐管理后台` | 管理员 2FA 在验证器里显示的名称 |
+| `LDAP_URL` / `LDAP_BIND_DN` / `LDAP_BIND_PASSWORD` / `LDAP_USER_SEARCH_BASE` | 空 | LDAP 对接的最小必填组，三者缺一即视为未配置 |
+| `LDAP_USER_SEARCH_FILTER` | `(uid={{username}})` | 用户搜索过滤器，`{{username}}` 会被转义后替换 |
+| `LDAP_GROUP_SEARCH_BASE` / `LDAP_GROUP_SEARCH_FILTER` | 空 | 组搜索；过滤器可用 `{{userDn}}` |
+| `LDAP_ROLE_MAPPING` | 空 | JSON 对象，LDAP 组 DN → 角色；解析失败退化为空映射并告警 |
+| `LDAP_TLS_REJECT_UNAUTHORIZED` | `true` | 只有显式 `false`/`0`/`no`/`off` 才关闭 LDAPS 证书校验 |
+| `LDAP_TIMEOUT_MS` | `10000` | 单次 LDAP 操作超时；连接和搜索都受它约束 |
+| `TRUST_PROXY` | 关闭 | 只有 `1`/`true` 才采信 `X-Forwarded-For`；否则用 `socket.remoteAddress` |
 
 `BSDIFF_BIN` 在 `AppConfigService` 中仍有兼容字段，但当前差分实现直接使用 `bsdiff-wasm`；不要把它写成部署必需项。生产配置不要提交 SMTP 密码、Lsky Key、IM Token 或数据库凭据。
 
@@ -242,6 +280,7 @@ git diff --check
 3. `03-api-contracts.md`（客户端可见契约）；
 4. `04-database.md`（表、索引、事务）；
 5. `02-development.md` 与 `.env.example`（配置/命令）；
-6. `06-release-deployment.md`、`07-troubleshooting.md`（运维路径）。
+6. `06-release-deployment.md`、`07-troubleshooting.md`（运维路径）；
+7. 改动 `admin-auth/` 或 `ldap/` 时同步 `11-admin-auth.md`（会话、2FA、角色、白名单、审计）。
 
 本页是索引，不替代专题中的参数细节；当本页与源码冲突时，以源码和 CodeGraph 最新索引为准，并在同一提交中修正文档。

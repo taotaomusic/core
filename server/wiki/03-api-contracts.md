@@ -8,7 +8,8 @@
 - 健康检查：`/health`，不带前缀。
 - 普通 JSON 请求体上限：16KB；桌面发布清单 `POST /desktop/admin/releases` 单独上限 1MB。
 - 普通接口默认需要 `Authorization: Bearer <accessToken>`。
-- 管理接口使用 `X-Admin-Token`。
+- 管理接口分两套：`/app/admin/**` 与 `/desktop/admin/**` 用 `X-Admin-Token`；
+  `/admin/auth/**` 用登录后签发的管理员会话 Bearer 令牌（兼容 `X-Admin-Token`）。
 - 客户端判断成功的唯一依据是响应体 `code === 0`。
 
 ## 2. 响应信封
@@ -54,12 +55,20 @@
 | HTTP | 业务码示例 | 含义 |
 | --- | --- | --- |
 | 400 | 4000、4001、4002、4003、4004、4005、4006、4007、4008、4009 | 输入、来源、文件校验、邮箱或歌单集合不合法 |
-| 401 | 4010、4011、4012、4013 | 用户、刷新令牌或管理令牌无效 |
+| 401 | 4010、4011、4012、4013 | 用户、刷新令牌、管理令牌或管理员会话无效 |
+| 403 | 4030 | 管理员角色不足，或当前 IP 不在白名单中 |
 | 404 | 4040、4041、4042、4043、4044、4045 | 路由、版本、文件、公告、用户、歌单或分享不存在 |
 | 409 | 4090、4091、4092、4093、4094、4095、4096 | 唯一约束、发布守卫、邮箱状态或播放因果冲突 |
 | 429 | 4290、4291 | 本地或图片上游限流 |
 | 502 | 5020、5021 | 音乐、图片、IM 或未知上游失败 |
 | 503 | 5031、5032、5034 | IM 未启用、发布读写失败或试听 ffmpeg 不可用 |
+
+4011 在两个语境下复用：普通用户登录失败，以及管理员登录 / 2FA 校验失败。两者不会混淆，
+因为路径不同；但排查时要先确认是哪一个入口。
+
+`4030` 是本次新增的“已认证但权限不够”码。注意它和管理令牌缺失时的 401/4013 语义不同：
+**没有凭据是 401，凭据有效但角色不够才是 403**。不要为了省事把权限不足改成 401 —— 前端收到
+401 会清本地会话并跳登录页，把一次“换个超管账号再来”变成“整个后台被登出”。
 
 新增业务码前先搜索现有使用点，不能复用语义不同的旧码。
 
@@ -293,6 +302,8 @@ APK 下载必须支持：
 | `/draw/**` | 必须 | 不使用 | 图片任务属于当前登录用户调用会话，但任务表当前不存 user_id |
 | `/app/bootstrap`、`/app/apk/**`、`/app/patch/**` | 不要求 | 不要求 | Android 热更新通道必须公开 |
 | `/app/admin/**` | 不使用 | `X-Admin-Token` | 由 AdminTokenGuard 校验 |
+| `/admin/auth/login`、`/totp-verify`、`/logout` | 不要求 | 不要求 | 显式公开；2FA 第二步额外要求 `temp_token` |
+| `/admin/auth/**`（其余） | 不使用 | 管理员会话或 `X-Admin-Token` | 由 AdminAuthGuard + RolesGuard 校验；角色不足为 403/4030 |
 | `/desktop/bootstrap`、`/desktop/artifacts/**`、`/desktop/patches/**` | 不要求 | 不要求 | 桌面更新通道必须公开 |
 | `/desktop/admin/**` | 不使用 | `X-Admin-Token` | 与 Android 共用管理令牌但版本表分开 |
 | `/announcements`、`/public/shares/**` | 不要求 | 不使用 | 公开公告、分享元数据和试听 |
@@ -447,11 +458,56 @@ Controller 不应返回 HTTP 200 加错误业务码；失败应同时使用正�
 - `POST /auth/avatar` 使用 multipart 字段 `file`，仅接受图片 MIME，最大 5 MiB；服务端把文件转发
   到 Lsky，客户端只能拿到 HTTPS 图片地址。`PATCH /auth/profile` 的 `avatarUrl` 也只接受 HTTPS。
 
+### 管理后台认证
+
+`/api/v1/admin/auth/**` 是管理后台自己的登录体系，和 `/app/admin/**` 的静态令牌互不影响。
+
+```http
+POST /api/v1/admin/auth/login
+Content-Type: application/json
+
+{ "username": "admin", "password": "..." }
+```
+
+两种成功响应：
+
+```json
+{ "code": 0, "message": "success",
+  "data": { "token": "...", "admin": { "id": 1, "username": "admin", "display_name": "超级管理员", "role": "super_admin" } } }
+```
+
+```json
+{ "code": 0, "message": "success",
+  "data": { "requires_totp": true, "temp_token": "...", "admin_id": 1 } }
+```
+
+拿到 `requires_totp` 时**没有**会话，必须再调第二步：
+
+```http
+POST /api/v1/admin/auth/totp-verify
+Content-Type: application/json
+
+{ "temp_token": "...", "token": "123456" }
+```
+
+红线：
+
+- `temp_token` 必填。缺它或伪造它一律 401/4011，**不能**退化成“只校验 `admin_id` + 动态码”。
+- 票据 5 分钟过期、一次性使用，同一张票不能反复试码。
+- 登录失败统一 401/4011，不区分“用户名不存在”和“密码错”。
+- 角色不足是 403/4030，不是 401。
+- 会话令牌只存 SHA-256 哈希，有效期 24 小时；响应里出现的明文令牌只此一次。
+
+会话令牌后续放在 `Authorization: Bearer`，旧的 `X-Admin-Token` 仍然可用但**不能**用于写外键的
+操作。完整链路、LDAP 回落规则和启动期硬约束见 [11-admin-auth.md](11-admin-auth.md)。
+
 ### 当前限流桶
 
 | 桶 | 限制（15 分钟） |
 | --- | --- |
 | `auth:*` | 每 IP 10 次 |
+| `auth:admin-login` | 每 IP 10 次（管理后台登录） |
+| `auth:admin-totp` | 每 IP 10 次（2FA 第二步，独立桶） |
 | `email-verification` | 每 IP 5 次 |
 | `app` | 每 IP 900 次 + 每设备/来源 60 次 |
 | `admin` | 每 IP 60 次 |

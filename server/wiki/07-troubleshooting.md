@@ -40,6 +40,33 @@
 
 处理：只使用 `npm run dev` 或 `npm run build`。
 
+### 启动报 `UnknownDependenciesException`（守卫解析不到依赖）
+
+表现：
+
+```text
+UnknownDependenciesException: Nest can't resolve dependencies of the AdminAuthGuard (?)
+```
+
+原因：某个模块的 Controller 用了 `AdminAuthGuard` 或 `RolesGuard`，但没有在自己的 `imports`
+里加 `AdminAuthModule`。守卫的依赖是在**声明 Controller 的模块**里解析的，不是在提供守卫的
+模块里。
+
+处理：给该模块补 `imports: [AdminAuthModule]`。这是启动致命错误，进程完全起不来。
+
+### 启动报「关系 admin_users 不存在」
+
+表现：
+
+```text
+WARN [Bootstrap] 创建默认管理员失败：关系 "admin_users" 不存在
+```
+
+原因：初始化代码写在了 `main.ts` 或某个构造函数里。建表在 `DatabaseService.onModuleInit`，
+而 `main.ts` 顶层代码更早执行。
+
+处理：把需要写表的初始化移到 `onApplicationBootstrap`（`AdminBootstrapService` 就是这么做的）。
+
 ### 端口不合法或被占用
 
 `PORT` 必须是 1–65535 的整数。确认没有旧验证实例仍监听 4500/4720。
@@ -91,6 +118,86 @@ AS "songId"
 ### bootstrap 返回 401
 
 这是热更新红线。`/app/bootstrap` 必须 `@Public()`，公开守卫只能尝试解析令牌，失败后继续放行。
+
+## 4.1 管理后台登录
+
+### 所有 `/admin/auth/login` 请求都返回 401/4013
+
+第一嫌疑：`@UseGuards(AdminAuthGuard, RolesGuard)` 被挂在了 `AdminAuthController` 类上。类级
+守卫对 `login` 同样生效，而登录时用户还没有凭据，于是登录请求先被自己的守卫拦掉。
+
+处理：改成方法级装饰器 `@AdminGuarded()`，只挂在需要会话的方法上。这不是类型错误，`tsc`
+查不出来。
+
+### 登录返回 401/4011，但密码确实是对的
+
+按顺序检查：
+
+- 该账号是否 `disabled_at` 非空（禁用后本地登录直接失败）。
+- 配了 LDAP 时，目录是否明确拒绝了这个账号。LDAP 返回 `denied`（用户不存在、目录口令错、
+  本地已禁用）时**不会**回落到本地密码，这是刻意设计。
+- LDAP 返回 `skipped`（目录不可达、没配 LDAP、目录里没这个人）时才会用本地口令。
+- 是否触发了 `auth:admin-login` 限流（每 IP 10 次/15 分钟），此时是 429 而不是 401。
+
+注意 401/4011 不区分“用户名不存在”和“密码错”，这是防用户名枚举的刻意行为，不要试图改成
+更精确的提示。
+
+### 第二步 2FA 报 401/4011「验证已过期，请重新登录」
+
+`temp_token` 只在进程内存里活 5 分钟，且用后即焚：
+
+- 超过 5 分钟、或者已经用过一次，都会过期。
+- 服务重启过（票据不持久化）。
+- 多实例部署时，第二步落到了没有这张票的那个实例上。
+
+处理：重新走第一步拿新票据。前端在 `AdminLogin.vue` 里遇到这种情况会清空票据并退回第一步。
+
+### 第二步报「验证失败」而不是「动态码错误」
+
+说明票据本身有问题，不是动态码算错：
+
+- 请求体里的 `admin_id` 与票据绑定的 `admin_id` 不一致。
+- 该账号在两步之间被禁用、删除，或 `totp_enabled` 被关掉。
+
+### 管理员接口返回 403/4030
+
+这是“已认证但角色不够”，不是登录失效：
+
+- `viewer` 读管理员列表或审计日志会 403。
+- `admin` 做写操作（创建/编辑/删除管理员、改 IP 白名单）会 403，这些需要 `super_admin`。
+- 「当前 IP 不在白名单中」也是 403/4030，来自 `assertIpAllowed`。
+
+**不要**把它改成 401：前端收到 401 会清本地会话并跳登录页，等于因为权限不足被登出。
+
+### 白名单里明明有我的 IP 却还是 403
+
+按顺序检查：
+
+- `TRUST_PROXY` 是否开启。关闭时服务端用 `socket.remoteAddress`，**忽略** `X-Forwarded-For`；
+  写在白名单里的必须是服务端实际看到的地址。
+- 地址格式。白名单只做精确字符串匹配，不支持 CIDR；`::ffff:192.168.1.1` 和 `192.168.1.1`
+  不相等，写哪个取决于服务端实际看到哪个。
+- 反向代理是否覆写而不是追加 `X-Forwarded-For`（追加时取第一个值，可能是客户端伪造的）。
+
+### 删除管理员报外键错误（23503）
+
+`admin_audit_log.admin_id` 和 `admin_users.created_by` 必须可空且带 `ON DELETE SET NULL`。
+早期版本的库把 `admin_id` 建成了 `NOT NULL` + 无 `ON DELETE`，而 `CREATE TABLE IF NOT EXISTS`
+不会修正已存在的表。迁移里有可重复执行的 `ALTER` 补齐，重启服务让迁移跑一次即可。
+
+同理，`X-Admin-Token` 兼容身份写审计时 `id = 0`，在 `admin_users` 里没有对应行；落库前必须过
+`auditActorId()` 折成 `null`，否则也会撞这个外键。
+
+### 忘记默认管理员密码
+
+删除该行后重启服务，`AdminBootstrapService` 会重新创建 `admin / admin123`：
+
+```sql
+DELETE FROM admin_users WHERE username = 'admin';
+```
+
+只在开发/验证库这么做。正式库应改密码而不是删账号 —— 删账号会连带删掉他的会话，审计里的
+`admin_id` 会变成 `null`。
 
 ## 5. 搜索、播放和歌词
 
@@ -230,8 +337,10 @@ ORDER BY quota DESC, id;
 | 400/4005 | DTO、ParseIntPipe、query 参数 |
 | 400/4007 | 图片模型、提示词、URL、taskId |
 | 401/4010 | Authorization 是否缺失或过期 |
+| 401/4011 | 普通登录密码错；管理员登录失败或 2FA 票据过期 |
 | 401/4012 | 刷新令牌是否已轮换、撤销或过期 |
-| 401/4013 | `X-Admin-Token` |
+| 401/4013 | `X-Admin-Token`，或管理员会话无效 |
+| 403/4030 | 管理员角色不足，或当前 IP 不在白名单中 |
 | 404/4040 | 路径和全局 `/api/v1` 前缀 |
 | 404/4041 | Android/桌面版本、补丁或发布对象不存在 |
 | 404/4042 | 图片任务、图片 Key 或本地桌面对象不存在 |
@@ -387,5 +496,5 @@ codegraph status server --json
 codegraph query --path server --kind route --limit 200 --json ""
 ```
 
-再对照 [00-code-index.md](00-code-index.md) 的 89 条路由和 21 张表。不要通过 `grep` 猜测 Controller
+再对照 [00-code-index.md](00-code-index.md) 的 104 条路由和 24 张表。不要通过 `grep` 猜测 Controller
 是否已注册，也不要在未确认索引状态时直接修改契约文档。

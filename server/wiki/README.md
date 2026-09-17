@@ -8,7 +8,7 @@
 
 | 文档 | 核心内容 | 适用场景 |
 | --- | --- | --- |
-| [00-code-index.md](00-code-index.md) | CodeGraph 基准、模块地图、完整 89 条路由、21 张表、配置与同步规则 | 先确认源码当前形状、查路由或判断文档应该改在哪里 |
+| [00-code-index.md](00-code-index.md) | CodeGraph 基准、模块地图、完整 104 条路由、24 张表、配置与同步规则 | 先确认源码当前形状、查路由或判断文档应该改在哪里 |
 | [01-architecture.md](01-architecture.md) | 模块结构、请求链路、全局守卫与拦截器、静态资源处理 | 第一次接触项目、准备新增模块、需要理解请求链路时 |
 | [02-development.md](02-development.md) | 本地环境搭建、启动命令、热重载、调试、测试执行 | 搭建本地环境、运行、构建、调试和执行测试时 |
 | [03-api-contracts.md](03-api-contracts.md) | 响应信封、错误码、不能破坏的客户端契约、NDJSON 流 | 新增或修改接口、与客户端联调、处理错误码时 |
@@ -24,6 +24,7 @@
 | [08-native-crypto.md](08-native-crypto.md) | Kiwi Crypto 原生加密、签名验证、时间戳防重放 | 接口需要原生加密、认证、防重放或排查 Kiwi Crypto 时 |
 | [09-wukongim.md](09-wukongim.md) | 悟空 IM 接入、TCP/WebSocket 连接、凭据签发、频道管理 | 接入悟空 IM、配置端口、排查聊天连接或凭据问题时 |
 | [10-desktop-release.md](10-desktop-release.md) | Windows 模块清单、内容寻址上传、Courgette/bsdiff 差分、灰度与最低版本 | 构建、发布或排查桌面端更新时 |
+| [11-admin-auth.md](11-admin-auth.md) | 管理员账号、数据库会话、TOTP 2FA、角色权限、IP 白名单、审计与 LDAP/SSO | 维护管理后台登录、权限或对接企业目录时 |
 
 歌单接口的字段与同步语义见 [03-api-contracts.md](03-api-contracts.md) 的“云端歌单”章节，
 数据库表与并发顺序约束见 [04-database.md](04-database.md) 的 `playlists` 小节。需要确认“代码里到底有
@@ -74,7 +75,10 @@ copy .env.example .env
 # 编辑 .env，至少填写以下必需项：
 #   DATABASE_URL=postgres://postgres:密码@localhost:5432/music
 #   AUTH_SECRET=至少32位随机值
-#   ADMIN_TOKEN=管理后台令牌（可选，不填则管理接口拒绝访问）
+#   ADMIN_TOKEN=旧管理令牌（可选，只影响 /app/admin/* 与 /desktop/admin/*）
+#
+# 管理后台 /admin/ 用的是数据库管理员账号，不依赖 ADMIN_TOKEN：
+# 首次启动会自动创建 admin / admin123（super_admin），登录后请立即改密码。
 
 # 4. 启动开发服务器（自动建表 + 热重载）
 npm run dev
@@ -129,12 +133,19 @@ curl.exe "http://127.0.0.1:4500/api/v1/app/bootstrap?versionCode=1&sdk=34&device
 # 需要登录的接口（带 Authorization）
 curl.exe "http://127.0.0.1:4500/api/v1/auth/me" -H "Authorization: Bearer <访问令牌>"
 
-# 管理接口（带 X-Admin-Token）
+# 管理接口（带 X-Admin-Token，仅 /app/admin/* 与 /desktop/admin/* 认这把令牌）
 curl.exe "http://127.0.0.1:4500/api/v1/app/admin/releases?channel=release" -H "X-Admin-Token: <管理令牌>"
+
+# 管理后台登录（返回 Bearer 会话令牌，之后用 Authorization: Bearer <token>）
+curl.exe -X POST "http://127.0.0.1:4500/api/v1/admin/auth/login" `
+  -H "Content-Type: application/json" `
+  -d '{\"username\":\"admin\",\"password\":\"admin123\"}'
 
 # 桌面端更新检查（公开）
 curl.exe "http://127.0.0.1:4500/api/v1/desktop/bootstrap?channel=release&architecture=windows-x64&versionCode=1&deviceId=doc-check"
 ```
+
+管理后台的账号、2FA、角色和 LDAP 细节见 [11-admin-auth.md](11-admin-auth.md)。
 
 ## 📖 推荐阅读路径
 
@@ -173,6 +184,17 @@ curl.exe "http://127.0.0.1:4500/api/v1/desktop/bootstrap?channel=release&archite
 
 3. **[故障排查](07-troubleshooting.md)** 中的热更新失效诊断
    `bootstrap` 异常、APK 下载失败、补丁加载失败的排查步骤。
+
+### 维护管理后台
+
+1. **[管理后台认证](11-admin-auth.md)**
+   管理员账号与会话、TOTP 2FA 的两步流程、角色权限、IP 白名单、审计日志和 LDAP/SSO 回落规则。
+
+2. **[数据库](04-database.md)** 中的 `admin_users`、`admin_sessions`、`admin_audit_log`
+   三张表的字段语义，以及审计外键为什么必须是 `ON DELETE SET NULL`。
+
+3. **[故障排查](07-troubleshooting.md)** 中的管理后台登录排查
+   登录恒 401、2FA 验证过期、`X-Admin-Token` 兼容身份写审计报外键时的定位路径。
 
 ### 排查线上问题
 

@@ -18,6 +18,8 @@
 - ApiSweet `gpt-image-2` 任务创建、Key 配额与状态轮询。
 - 悟空 IM 会话凭据、联系人、会话/频道同步、撤回和已读代理。
 - 公告、后台用户管理、邮箱验证码和头像上传。
+- 管理后台账号、数据库会话、TOTP 双因素、角色权限、IP 白名单和操作审计。
+- LDAP/SSO 目录对接与角色映射（可选，未配置时只用本地管理员账号）。
 
 服务不负责：
 
@@ -45,6 +47,10 @@ flowchart TD
     App --> Desktop["DesktopReleaseModule"]
     App --> Im["ImModule"]
     App --> UserAdmin["UserAdminModule"]
+    App --> AdminAuth["AdminAuthModule"]
+    AdminAuth --> Ldap["LdapModule"]
+    AdminAuth --> Database
+    Ldap --> Database
     Music --> Upstream["UpstreamModule"]
     Shares --> Upstream
     Shares --> Release
@@ -64,6 +70,10 @@ flowchart TD
 
 `AppConfigModule`、`DatabaseModule` 和 `MailModule` 是全局模块。业务模块可以直接注入
 `AppConfigService`、`DatabaseService` 和 `MailService`，不需要重复导入。
+
+`AdminAuthModule` 与 `LdapModule` 互相依赖（LDAP 登录成功要同步管理员行，认证模块要用 LDAP
+校验口令），因此两边都用 `forwardRef()` 打破循环。它们**不是全局模块**：任何模块只要用到
+`AdminAuthGuard` 或 `RolesGuard`，都必须显式 `imports: [AdminAuthModule]`，否则启动即失败。
 
 ## 3. 源码职责
 
@@ -93,6 +103,9 @@ src/
 ├─ mail/
 ├─ shares/
 ├─ user-admin/
+├─ admin-auth/
+├─ ldap/
+├─ frontend/
 └─ upstream/
 ```
 
@@ -144,7 +157,11 @@ src/
 - `playlists/` 的所有顺序/完整替换操作在事务内锁定歌单，`source + songId` 是歌曲身份，展示字段只是快照。
 - `release/` 与 `desktop-release/` 各自拥有版本、文件和最低版本语义；桌面端使用内容寻址对象，不能复用 APK 文件名逻辑。
 - `im/` 只代理悟空 IM 的凭据和同步命令；聊天正文、频道游标不进入 PostgreSQL。
-- `announcement/`、`user-admin/` 和 `image-key-admin.controller.ts` 都使用管理令牌，不要误加普通访问令牌依赖。
+- `announcement/`、`user-admin/` 和 `image-key-admin.controller.ts` 都使用静态管理令牌，不要误加普通访问令牌依赖。
+- `admin-auth/` 拥有管理后台的身份与权限：账号、会话、2FA、角色守卫、IP 白名单和审计。它对外只暴露 `AdminAuthGuard` 和 `RolesGuard`，其它模块不应自己实现管理员鉴权。
+- `ldap/` 只做目录协议（Bind、Search、过滤器编解码）和角色映射，不直接签发会话；`authenticate()` 返回 `success`/`denied`/`skipped` 三态，由 `admin-auth/` 决定是否回落本地口令。
+
+管理后台的完整链路、2FA 两步流程和启动期硬约束见 [11-admin-auth.md](11-admin-auth.md)。
 
 ## 4. 普通请求链路
 
@@ -180,6 +197,10 @@ sequenceDiagram
 - SQL 只写在 Repository 或数据库迁移中。
 - 上游协议解析只写在对应 Client。
 - 不在构造函数中执行数据库查询；NestJS 实例化 Provider 时迁移可能尚未完成。
+- 守卫的依赖在**声明 Controller 的模块**里解析，不是提供守卫的模块。引用 `AdminAuthGuard` 或
+  `RolesGuard` 的模块必须自己 `imports: [AdminAuthModule]`，否则启动报 `UnknownDependenciesException`。
+- `@UseGuards` 挂在类上会作用于该 Controller 的**所有**方法。同一个控制器里既有公开方法又有
+  受保护方法时（例如 `admin/auth` 的 `login` 和 `me`），必须用方法级装饰器，不能图省事提到类上。
 
 ## 6. 状态与并发
 
@@ -217,6 +238,9 @@ sequenceDiagram
 ## 7. 架构修改检查表
 
 - 新路由是否默认鉴权，公开路由是否显式 `@Public()`？
+- 控制器里既有公开又有受保护方法时，是否用了方法级守卫而不是类级 `@UseGuards`？
+- 用到 `AdminAuthGuard` / `RolesGuard` 的模块是否导入了 `AdminAuthModule`？
+- 需要写表的初始化是否放在 `onApplicationBootstrap`，而不是 `main.ts` 或构造函数？
 - 是否误给流式接口套了成功信封？
 - 是否把上游 401 直接透传给客户端？
 - 是否跨网络请求持有数据库连接？
@@ -231,19 +255,27 @@ sequenceDiagram
 ```text
 读取 .env / 系统环境变量
   → validateEnvironment 校验端口、AUTH_SECRET、DATABASE_URL
-  → NestFactory 创建应用（关闭默认 body parser）
-  → 实例化 Module 和 Provider
-  → DatabaseService 等待 PostgreSQL
-  → 获取顾问锁并执行幂等 DDL
-  → 注册按路由分流的 JSON parser
-  → 注册全局前缀和 ValidationPipe
+  → NestFactory.create(AppModule)：实例化 Module 和 Provider（构造函数在这里跑）
+  → 挂载按路由分流的 JSON parser（普通 16KB、桌面清单 1MB、原始上传跳过）
+  → 挂载 /admin 与 /share 静态资源
+  → setGlobalPrefix("api/v1", exclude: ["health"])
+  → 注册全局 ValidationPipe
   → app.listen(PORT)
+      ├─ app.init()
+      │    ├─ onModuleInit：DatabaseService 等待 PostgreSQL → 顾问锁 → 幂等 DDL
+      │    └─ onApplicationBootstrap：AdminBootstrapService 创建默认管理员
+      └─ 端口开始接受连接
 ```
+
+关键点是 `main.ts` 的顶层代码、`onModuleInit`、`onApplicationBootstrap` 是三个不同的时间点：
+建表在 `onModuleInit`，所以 `main.ts` 里能跑代码时**表还不存在**。任何需要写表的初始化都必须
+放在 `onApplicationBootstrap`（默认管理员就是这么修的）。
 
 几个容易误判的点：
 
 - Provider 构造函数发生在数据库迁移之前，所以不能在构造函数查询表。
 - “Module dependencies initialized”不表示数据库已经就绪；要等“数据库已就绪”。
+- 默认管理员如果写在 `main.ts`，会早于迁移执行，必然报“关系 admin_users 不存在”。
 - 数据库连接重试全部失败时，服务会退出，不会继续提供残缺接口。
 - 端口只有在迁移完成后才开始监听，因此健康检查成功意味着表结构也已初始化。
 
@@ -268,6 +300,7 @@ sequenceDiagram
 | APK 文件目录 | 已登记的 APK/补丁文件 | Android 构建工程状态 |
 | `DESKTOP_RELEASE_DIR` | 按 sha256 命名的桌面模块和差分对象 | 桌面构建机临时目录 |
 | SMTP/Lsky/悟空 IM | 仅实时调用或签发凭据 | 邮件正文、头像原图、聊天消息正文 |
+| LDAP/SSO 目录 | 管理员行的同步副本（用户名、角色、显示名） | 目录口令、目录中其它用户和组的完整数据 |
 
 外部 URL 返回客户端前要确认：
 
