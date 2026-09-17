@@ -54,6 +54,39 @@ function resolveSharePlayerDir(): string | null {
   return candidates.find((dir) => existsSync(join(dir, "index.html"))) ?? null;
 }
 
+/**
+ * 管理后台的 Content-Security-Policy。
+ *
+ * 用 Express 中间件而不是 Nest 拦截器：`express.static` 在路由之前直接吐出
+ * HTML/JS，拦截器根本没机会运行，而 CSP 恰恰必须跟着 `index.html` 一起下发 ——
+ * 漏了它，攻击者只要能在页面里注入一个内联脚本，就能把 localStorage 里的
+ * 管理会话令牌读走。
+ *
+ * 各指令的取值都是被实际依赖倒推出来的，不要照抄模板：
+ * - `script-src 'self'`：没有内联脚本（主题预置脚本已外置），也没有 eval。
+ * - `style-src 'self' 'unsafe-inline'`：Element Plus 以行内样式注入主题变量与
+ *   组件样式，去掉这条整个后台会变成无样式页面。这是本策略唯一放宽的一项。
+ * - `img-src 'self' data: blob: https:`：头像来自外部图床（https），上传预览用
+ *   blob:/data:。
+ * - `connect-src 'self'`：前端只调用同源接口，没有第三方上报。
+ * - `frame-ancestors 'none'`：与已有的 `x-frame-options: DENY` 一致，防点击劫持。
+ *
+ * 只作用于 `/admin`：分享页是 Kotlin/Wasm，编译 WebAssembly 需要
+ * `wasm-unsafe-eval`，套用这份策略会直接把播放器打瘫。
+ */
+const ADMIN_CSP = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob: https:",
+  "font-src 'self' data:",
+  "connect-src 'self'",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+].join("; ");
+
 async function bootstrap(): Promise<void> {
   // 关掉内置 body parser，改为按路由挂载：安装包上传是 14MB+ 的原始字节流，
   // 一旦被 JSON 解析器接手，要么报 413，要么把整个包缓进内存。
@@ -75,6 +108,12 @@ async function bootstrap(): Promise<void> {
   // 因此不会遮住接口，也完全不用碰 setGlobalPrefix。
   const publicDir = resolvePublicDir();
   if (publicDir) {
+    // 必须挂在 expressStatic 之前：中间件按注册顺序执行，放在后面就只能覆盖
+    // 到回退的 index.html，真正的 JS/CSS 响应反而没有 CSP。
+    app.use("/admin", (_request: Request, response: Response, next: NextFunction) => {
+      response.setHeader("content-security-policy", ADMIN_CSP);
+      next();
+    });
     app.use("/admin", expressStatic(publicDir));
     app.getHttpAdapter().getInstance().get(
       /^\/admin(?:\/.*)?$/,

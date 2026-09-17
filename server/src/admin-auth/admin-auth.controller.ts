@@ -1,5 +1,5 @@
 import {
-  Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Patch, Post, Query, Req, UseGuards,
+  Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Patch, Post, Query, Req,
 } from "@nestjs/common";
 import type { Request } from "express";
 import { ApiErrors } from "../common/api.exception";
@@ -9,8 +9,8 @@ import {
   auditActorId, forwardedClientAddress, type AdminActor, type AdminAuthenticatedRequest,
 } from "../common/request.types";
 import { AdminAuthService } from "./admin-auth.service";
-import { AdminAuthGuard } from "./admin-auth.guard";
-import { RolesGuard } from "./roles.guard";
+import { AdminGuarded } from "./admin-guarded.decorator";
+import { AllowPendingPasswordChange } from "./allow-pending-password.decorator";
 import { RequireRole } from "./roles.decorator";
 import { ADMIN_ROLES, PRIVILEGED_READ_ROLES } from "./admin-roles";
 import { AdminUsersRepository, type AdminUserRecord } from "./admin-users.repository";
@@ -20,16 +20,6 @@ import { LdapService } from "../ldap/ldap.service";
 
 /** 本地创建的管理员用户名。允许点、下划线、连字符，避免出现难排查的怪名字。 */
 const USERNAME_PATTERN = /^[A-Za-z0-9._-]{3,64}$/;
-
-/**
- * 需要管理员会话的路由。
- *
- * **不能把 `@UseGuards` 挂在控制器类上** —— 类级守卫对 `login` 同样生效，
- * 而登录时用户手里还没有凭据，结果是所有登录请求先被自己的守卫 401 掉，
- * 整个后台没人能进。公开路由（login / totp-verify / logout）因此必须
- * 逐个方法标注，而不是靠类级默认值。
- */
-const AdminGuarded = () => UseGuards(AdminAuthGuard, RolesGuard);
 
 @Public()
 @Controller("admin/auth")
@@ -48,8 +38,8 @@ export class AdminAuthController {
    * 第一步：校验密码。
    *
    * 顺序是「先 LDAP，未命中再回落本地密码」。回落是刻意保留的 break-glass 通道：
-   * LDAP 配置错误或目录不可达时，本地超管账号仍能进后台救场；而 LDAP 明确
-   * 拒绝的账号（用户不存在、密码错、本地已禁用）不会走回落，直接 401。
+   * LDAP 配置错误或目录不可达时，本地超管账号仍能进后台救场；但**已被目录接管
+   * 的账号**在目录不可达时不允许回落，否则「目录判定已停用」在目录抖动时失效。
    *
    * 开了 TOTP 的账号这里只签发一张挑战票据，不直接发会话。
    */
@@ -65,9 +55,30 @@ export class AdminAuthController {
 
     if (!username || !password) throw ApiErrors.unauthorized(4011, "用户名或密码错误");
 
+    // 账号维度退避放在最前：LDAP 与本地两条路径都会被覆盖。只按 IP 限流挡不住
+    // 代理池，而且 LDAP 路径被无限猜还会触发企业目录侧的账号锁定策略。
+    // 用 4291 而不是 4290：与来源地址限流区分开，否则运维无法判断该换 IP 还是该等锁。
+    if (this.auth.isAdminLoginLocked(username)) {
+      throw ApiErrors.accountLocked();
+    }
+
     const ldapResult = await this.ldap.authenticate(username, password);
     if (ldapResult.outcome === "denied") {
+      this.auth.recordAdminLoginFailure(username);
       throw ApiErrors.unauthorized(4011, "用户名或密码错误");
+    }
+    if (ldapResult.outcome === "unavailable") {
+      // 目录已用用户 DN 绑定成功、只是后续同步失败。身份已经确认过了，
+      // 回落本地口令会让目录停用的账号借机登入，因此这里直接拒绝。
+      throw ApiErrors.upstream("目录认证服务暂时不可用，请稍后重试");
+    }
+    if (ldapResult.outcome === "skipped" && this.ldap.isConfigured) {
+      // 目录已配置却给不出结论（不可达，或目录里查无此人）。若该账号已被
+      // 目录接管，就拒绝本地口令回落 —— 这正是「离职账号靠旧哈希登录」的入口。
+      const local = await this.adminUsers.findByUsername(username);
+      if (local?.auth_source === "ldap") {
+        throw ApiErrors.serviceUnavailable(5031, "目录服务不可用，该账号不支持本地密码登录");
+      }
     }
 
     let admin: AdminActor;
@@ -80,9 +91,11 @@ export class AdminAuthController {
       // 用户名不存在时也跑一次等价 scrypt，否则响应时间会泄漏账号是否存在。
       if (!credentials) {
         this.auth.verifyAgainstNothing(password);
+        this.auth.recordAdminLoginFailure(username);
         throw ApiErrors.unauthorized(4011, "用户名或密码错误");
       }
       if (!this.auth.verifyPassword(password, credentials.password_salt, credentials.password_hash)) {
+        this.auth.recordAdminLoginFailure(username);
         throw ApiErrors.unauthorized(4011, "用户名或密码错误");
       }
       admin = {
@@ -90,8 +103,12 @@ export class AdminAuthController {
         username: credentials.username,
         role: credentials.role,
         display_name: credentials.display_name,
+        must_change_password: credentials.must_change_password,
       };
     }
+
+    // 口令已验证通过，清掉该账号的失败计数，避免正常用户被历史失败拖累。
+    this.auth.clearAdminLoginFailures(username);
 
     await this.assertIpAllowed(admin.id, ip);
 
@@ -115,7 +132,7 @@ export class AdminAuthController {
 
     return {
       token: sessionToken,
-      admin: { id: admin.id, username: admin.username, display_name: admin.display_name, role: admin.role },
+      admin: this.publicAdmin(admin),
     };
   }
 
@@ -177,14 +194,18 @@ export class AdminAuthController {
     }
   }
 
+  // 改密前仍放行：前端要靠它判断该不该显示强制改密页。
+  @AllowPendingPasswordChange()
   @AdminGuarded()
   @Get("me")
   async me(@Req() req: AdminAuthenticatedRequest) {
-    return this.requireActor(req);
+    return this.publicAdmin(this.requireActor(req));
   }
 
   // ==================== 本人密码与 2FA ====================
 
+  // 改密前仍放行：这是唯一能解除强制改密状态的接口，拦掉它会把管理员锁死在后台外。
+  @AllowPendingPasswordChange()
   @AdminGuarded()
   @RateLimit("auth:admin-password")
   @Post("change-password")
@@ -493,5 +514,26 @@ export class AdminAuthController {
    */
   private extractIp(req: Request): string {
     return forwardedClientAddress(req);
+  }
+
+  /**
+   * 对外暴露的管理员身份。
+   *
+   * 刻意逐字段挑选而不是直接把记录返回出去：`AdminCredentials` 里带着
+   * `password_hash` / `password_salt` / `totp_secret`，整个对象返回等于把
+   * 口令哈希和 2FA 密钥发给前端。
+   *
+   * `must_change_password` 转成布尔量给前端用，避免让客户端理解 0/1 约定。
+   */
+  private publicAdmin(admin: {
+    id: number; username: string; display_name: string; role: string; must_change_password: number;
+  }) {
+    return {
+      id: admin.id,
+      username: admin.username,
+      display_name: admin.display_name,
+      role: admin.role,
+      must_change_password: admin.must_change_password === 1,
+    };
   }
 }

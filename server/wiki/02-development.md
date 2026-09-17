@@ -35,7 +35,7 @@ psql -U postgres -c "CREATE DATABASE music"
 PORT=4500
 DATABASE_URL=postgres://postgres:密码@localhost:5432/music
 AUTH_SECRET=change-me-to-a-random-string-at-least-32-chars
-ADMIN_TOKEN=
+ADMIN_INITIAL_PASSWORD=
 APK_DIR=./data/apk
 DESKTOP_RELEASE_DIR=./data/desktop
 SHARE_PREVIEW_DIR=./data/share-preview
@@ -76,8 +76,9 @@ TOTP_ISSUER=桃桃音乐管理后台
 | --- | --- | --- | --- |
 | `PORT` | `4500` | 否 | 监听端口 |
 | `DATABASE_URL` | 无 | 是 | PostgreSQL 连接串 |
-| `AUTH_SECRET` | 开发兜底值 | 生产必需 | 生产环境至少 32 字符 |
-| `ADMIN_TOKEN` | 空 | `/app/admin/*`、`/desktop/admin/*` 必需 | `X-Admin-Token` 的校验值；留空只关闭这两组，管理后台登录不受影响 |
+| `AUTH_SECRET` | 无 | **是** | 至少 32 字符。没有开发兜底值，缺失或过短直接启动失败 |
+| `ADMIN_INITIAL_PASSWORD` | 空 | 否 | 默认超管初始口令，至少 12 字符；留空则随机生成并只打印一次。两种来源都强制首登改密 |
+| `CORS_ALLOWED_ORIGINS` | 空 | 否 | 跨域来源白名单；留空不下发任何 CORS 头 |
 | `APK_DIR` | `./data/apk` | 否 | Android APK 和补丁文件目录 |
 | `DESKTOP_RELEASE_DIR` | `./data/desktop` | 否 | Windows 内容寻址模块和差分目录 |
 | `SHARE_PREVIEW_DIR` | `./data/share-preview` | 否 | 分享试听缓存目录 |
@@ -116,7 +117,7 @@ ApiSweet API Key 存在 PostgreSQL `api_key` 表，不使用环境变量。
 # 开发模式，源码变更后自动重启
 npm run dev
 
-# 清理 dist、运行 tsc、复制生产 package.json
+# 完整生产构建（共 6 步，见 06-release-deployment.md）
 npm run build
 
 # 运行 dist/main.js
@@ -241,28 +242,42 @@ $env:DATABASE_URL="postgres://postgres:密码@localhost:5432/music_verify"
 $env:PORT="4720"
 $env:APK_DIR="./tmp/apk"
 $env:AUTH_SECRET="0123456789012345678901234567890123456789"
-$env:ADMIN_TOKEN="verify-token"
+$env:ADMIN_INITIAL_PASSWORD="verify-initial-123456"
+$env:NODE_ENV="test"; $env:EMAIL_VERIFICATION_TEST_CODE="123456"
+$env:IM_ENABLED="false"; $env:CORS_ALLOWED_ORIGINS="https://verify.example"
+npm run build:frontend   # /admin 下的 CSP 与主题脚本断言需要 dist/public
 npm run dev
 ```
+
+`IM_ENABLED` 必须显式设为 `false`（`.env` 里通常是 `true`），否则「未启用 IM 时会话入口返回
+503/5031」会变成 502/5020；`CORS_ALLOWED_ORIGINS` 要包含 `https://verify.example`，
+否则跨域白名单那条断言会失败。
+
+运行前还要清掉 `data/desktop` 与 `data/share-preview`：内容寻址存储在命中已有对象时会走
+「删除临时文件」的分支，上一轮留下的对象会让上传路径和首次运行时不同。
 
 另一个终端执行：
 
 ```powershell
-node tools/verify-contract.mjs http://127.0.0.1:4720 verify-token
+node tools/verify-contract.mjs http://127.0.0.1:4720
 ```
 
 以验证脚本的实际汇总数量为准，必须全部通过。
 
-验证实例首次启动时会自动创建默认管理员 `admin / admin123`（`super_admin`），管理后台认证的
-契约断言依赖它。注意验证库每次被 `reset-db.mjs` 清空后都要**重启服务**，让
-`AdminBootstrapService` 重新创建这个账号，否则相关断言会因为登不进去而失败。
+验证实例首次启动时会自动创建默认管理员 `admin`（`super_admin`），口令取自 `ADMIN_INITIAL_PASSWORD`
+（未设置则随机生成并只打印一次），并且带「首次登录必须改密」标记 —— 契约脚本的第一段就是
+用这个口令完成首登、改密、再用新口令重登，从而拿到后续断言要用的管理会话。
+
+注意验证库每次被 `reset-db.mjs` 清空后都要**重启服务**，让 `AdminBootstrapService` 重新创建
+这个账号，否则相关断言会因为登不进去而失败。脚本读的是**脚本自己环境**里的
+`ADMIN_INITIAL_PASSWORD`，必须与服务启动时给的值一致。
 
 ## 10. 提交前流程
 
 ```powershell
 cd server
 npm run build
-node tools/verify-contract.mjs http://127.0.0.1:4720 verify-token
+node tools/verify-contract.mjs http://127.0.0.1:4720
 git diff --check
 git status --short
 ```
@@ -371,10 +386,11 @@ npx tsc -p tsconfig.json --noEmit
 
 ```powershell
 # 1. 默认管理员是否建出来了（首次启动日志里应有一行「已创建默认管理员账号」）
+#    随机口令的部署要在这行 WARN 里把口令抄下来，它只打印一次
 # 2. 直接打登录接口，看返回的是 401 还是别的
 curl.exe -i -X POST "http://127.0.0.1:4500/api/v1/admin/auth/login" `
   -H "Content-Type: application/json" `
-  -d '{\"username\":\"admin\",\"password\":\"admin123\"}'
+  -d '{\"username\":\"admin\",\"password\":\"<初始口令>\"}'
 ```
 
 如果**所有**登录请求都是 401/4013，第一嫌疑是 `@UseGuards` 被挂到了控制器类上 —— 类级守卫

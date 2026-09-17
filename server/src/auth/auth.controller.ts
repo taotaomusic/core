@@ -5,6 +5,7 @@ import { ApiErrors } from "../common/api.exception";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
 import { Public } from "../common/decorators/public.decorator";
 import { RateLimit } from "../common/decorators/rate-limit.decorator";
+import { IMAGE_EXTENSION, IMAGE_MIME, sniffImageKind } from "../common/image-signature";
 import type { SessionUser } from "../common/request.types";
 import { AuthService } from "./auth.service";
 import { UsersRepository } from "./users.repository";
@@ -151,10 +152,17 @@ export class AuthController {
   @UseInterceptors(FileInterceptor("file", { limits: { fileSize: 5 * 1024 * 1024 } }))
   async uploadAvatar(@CurrentUser() user: SessionUser | undefined, @UploadedFile() file: Express.Multer.File) {
     const current = await this.requireProfile(user);
-    if (!file || !file.mimetype.startsWith("image/")) throw ApiErrors.badRequest(4000, "请选择图片文件");
+    // 按文件头判定格式，不信 `file.mimetype`：那是请求里的 Content-Type，
+    // 客户端改一个字节就能把任意文件声明成 image/png。
+    const kind = file ? sniffImageKind(file.buffer) : null;
+    if (!file || !kind) throw ApiErrors.badRequest(4000, "请选择 PNG / JPEG / GIF / WebP 图片");
     if (!this.config.lskyApiKey) throw ApiErrors.badRequest(4000, "头像上传服务未配置");
     const form = new FormData();
-    form.append("image", new Blob([file.buffer], { type: file.mimetype }), file.originalname || "avatar.jpg");
+    form.append(
+      "image",
+      new Blob([file.buffer], { type: IMAGE_MIME[kind] }),
+      file.originalname || `avatar.${IMAGE_EXTENSION[kind]}`,
+    );
     form.append("token", this.config.lskyApiKey);
     const response = await fetch(this.config.lskyUploadUrl, {
       method: "POST",
@@ -177,7 +185,10 @@ export class AuthController {
     if (!response.ok || payload.result !== "success" || !url) {
       throw ApiErrors.badRequest(4000, payload.message || "头像上传失败");
     }
-    return (await this.users.updateProfile(current.id, undefined, url))!;
+    // 这个地址会被写进用户资料、再由别人的客户端去请求，所以必须过一遍白名单，
+    // 不能因为「是上游返回的」就默认可信。
+    const storedUrl = this.requireStoredAvatarUrl(url);
+    return (await this.users.updateProfile(current.id, undefined, storedUrl))!;
   }
 
   /** 老账号补绑邮箱：仅允许当前尚未绑定邮箱的已登录用户使用。 */
@@ -280,5 +291,30 @@ export class AuthController {
       throw ApiErrors.badRequest(4000, "头像必须是 HTTPS 图片地址，且不超过 2048 个字符");
     }
     return avatarUrl;
+  }
+
+  /**
+   * 校验图床返回的头像地址。
+   *
+   * 与 [optionalAvatarUrl] 的区别在于来源：那个校验的是**用户填的**地址，这个校验
+   * 的是**上游响应里的**地址。后者看起来可信，其实不然 —— 图床被劫持、配置写错、
+   * 或者上游返回一个跳转后的第三方 CDN 地址，都会让任意 URL 落进 `avatar_url`，
+   * 之后每个渲染该用户头像的客户端都会去请求它。
+   *
+   * 基础要求是 https 且长度可控；配了 `LSKY_PUBLIC_HOSTS` 就再收紧到主机白名单。
+   */
+  private requireStoredAvatarUrl(raw: string): string {
+    const trimmed = raw.trim();
+    const parsed = (() => {
+      try { return new URL(trimmed); } catch { return null; }
+    })();
+    if (!parsed || parsed.protocol !== "https:" || trimmed.length > MAX_AVATAR_URL_LENGTH) {
+      throw ApiErrors.badRequest(4000, "头像上传接口返回了非法的图片地址");
+    }
+    const allowed = this.config.lskyPublicHosts;
+    if (allowed.length > 0 && !allowed.includes(parsed.host.toLowerCase())) {
+      throw ApiErrors.badRequest(4000, "头像上传接口返回了白名单之外的图片地址");
+    }
+    return trimmed;
   }
 }

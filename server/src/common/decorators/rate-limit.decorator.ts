@@ -6,6 +6,8 @@ export const RATE_LIMIT_METADATA_KEY = "taotao:rate-limit";
  * 限流分桶。
  *
  * - `auth:<scope>`：登录/注册，按来源地址 10 次 / 15 分钟
+ *   （`auth:admin-login` 例外：30 次 / 15 分钟，主防线是账号维度退避，
+ *   见 [RateLimitService.allowAdminLoginAttempt]）
  * - `email-verification`：发验证码，按来源地址 5 次 / 15 分钟
  * - `app`：客户端引导与安装包下载，按设备号 60 次 + 按来源地址 900 次 / 15 分钟
  * - `admin`：发布管理，按来源地址 60 次 / 15 分钟

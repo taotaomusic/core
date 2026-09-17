@@ -10,18 +10,22 @@ import type { AdminActor } from "../common/request.types";
 /**
  * LDAP 认证结果。
  *
- * 三种结果的差别是**要不要回落到本地密码校验**，所以不能简化成
+ * 四种结果的差别是**要不要回落到本地密码校验**，所以不能简化成
  * 「成功/失败」两态：
  *
  * - `success`：目录已确认身份，直接用这个本地账号签发会话
  * - `denied`：目录明确拒绝（口令错，或本地已禁用），**不再回落**
  * - `skipped`：未配置、目录不可达、或目录里没这个人 —— 交给本地密码校验。
  *   这条路径是配置写错/目录挂掉时的 break-glass 通道
+ * - `unavailable`：**目录已经用用户 DN 绑定成功**，但之后的取组/角色映射/
+ *   同步写库失败。身份已经确认过了，再回落本地口令等于让「目录判定已停用」
+ *   的账号靠残留的本地哈希登进来，因此这里**禁止回落**。
  */
 export type LdapAuthResult =
   | { outcome: "success"; admin: AdminActor }
   | { outcome: "denied"; message: string }
-  | { outcome: "skipped"; message: string };
+  | { outcome: "skipped"; message: string }
+  | { outcome: "unavailable"; message: string };
 
 /** 目录条目：DN 加上请求到的属性。 */
 export interface LdapEntry {
@@ -53,8 +57,9 @@ export class LdapService {
   /**
    * 用 LDAP 校验凭据并同步到本地 `admin_users`。
    *
-   * 所有异常都在这里收敛成 `skipped` —— 目录超时、TLS 握手失败之类的问题
-   * 不该让登录接口 500，也不该把本地超管一起挡在门外。
+   * 「目录不可达」的异常在这里收敛成 `skipped`（允许 break-glass 回落），
+   * 但**用户 DN 绑定成功之后**的失败一律收敛成 `unavailable` 并禁止回落 ——
+   * 详见 [LdapAuthResult]。
    */
   async authenticate(username: string, password: string): Promise<LdapAuthResult> {
     if (!this.config.isLdapConfigured) {
@@ -90,16 +95,27 @@ export class LdapService {
         return { outcome: "denied", message: "目录口令校验失败" };
       }
 
-      const groups = await this.getUserGroups(client, userDn);
-      const role = this.mapRole(groups);
-      const synced = await this.syncToLocal(username, role);
-      if (!synced) {
-        // 本地已禁用：目录放行也不算数，否则禁用等于没禁。
-        return { outcome: "denied", message: "该账号已被禁用" };
-      }
+      // 口令已在目录侧验证通过。**从这里开始绝不能再回落到本地口令**：
+      // 目录已经确认了身份，后面这些步骤失败属于服务端故障，不是「目录不可达」。
+      // 旧实现把它们一起兜进外层 catch 变成 skipped，等于让「目录已判定停用」
+      // 的账号在目录抖动时靠残留的本地哈希登进后台。
+      try {
+        const groups = await this.getUserGroups(client, userDn);
+        const role = this.mapRole(groups);
+        const synced = await this.syncToLocal(username, role);
+        if (!synced) {
+          // 本地已禁用：目录放行也不算数，否则禁用等于没禁。
+          return { outcome: "denied", message: "该账号已被禁用" };
+        }
 
-      this.logger.log(`LDAP 认证成功：${username} -> role=${role}`);
-      return { outcome: "success", admin: synced };
+        this.logger.log(`LDAP 认证成功：${username} -> role=${role}`);
+        return { outcome: "success", admin: synced };
+      } catch (error) {
+        this.logger.error(
+          `LDAP 已确认 ${username} 的身份，但后续取组或同步失败，本次不回落本地校验：${(error as Error).message}`,
+        );
+        return { outcome: "unavailable", message: "目录已确认身份但同步失败" };
+      }
     } catch (error) {
       this.logger.warn(`LDAP 认证异常，本次登录回落本地校验：${(error as Error).message}`);
       return { outcome: "skipped", message: "目录不可用" };
@@ -199,18 +215,27 @@ export class LdapService {
         await this.adminUsers.setRole(existing.id, role);
         this.logger.log(`LDAP 用户角色已更新：${username} ${existing.role} -> ${role}`);
       }
+      // 打上「已由目录接管」标记。这是存量 LDAP 账号补齐标记的唯一途径 ——
+      // 老数据存的是随机占位哈希，无法反推。标记之后，目录不可达时该账号
+      // 就不再允许回落本地口令。
+      if (existing.auth_source !== "ldap") {
+        await this.adminUsers.setAuthSource(existing.id, "ldap");
+        this.logger.log(`已将 ${username} 标记为 LDAP 接管账号`);
+      }
       return {
         id: existing.id,
         username: existing.username,
         display_name: existing.display_name,
         role,
+        // 目录账号不参与「首次登录强制改密」：它的口令在目录侧，本地没有可改的密码。
+        must_change_password: 0,
       };
     }
 
     // 目录用户不掌握本地密码，存一个随机占位哈希，杜绝「本地密码后门」。
     const placeholder = this.adminAuth.hashPassword(randomBytes(32).toString("hex"));
     const created = await this.adminUsers.create(
-      username, placeholder.hash, placeholder.salt, username, role, null, null,
+      username, placeholder.hash, placeholder.salt, username, role, null, null, false, "ldap",
     );
     this.logger.log(`LDAP 用户已同步到本地：${username} (role=${role})`);
     return {
@@ -218,7 +243,13 @@ export class LdapService {
       username: created.username,
       display_name: created.display_name,
       role: created.role,
+      must_change_password: 0,
     };
+  }
+
+  /** 是否配置了 LDAP。控制器据此决定「目录不可达」时要不要拒绝本地口令回落。 */
+  get isConfigured(): boolean {
+    return this.config.isLdapConfigured;
   }
 }
 

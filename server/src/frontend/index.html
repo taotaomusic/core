@@ -9,17 +9,14 @@
       html { background-color: #f5f7fa; }
       html.dark { background-color: #141414; color-scheme: dark; }
     </style>
-    <script>
-      // 在应用加载前同步执行，避免主题闪烁
-      const theme = localStorage.getItem('taotao_admin_theme');
-      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-      // 兼容 VueUse 默认写入 'auto' 的情况，或者用户之前存下的值
-      if (theme === 'dark' || theme === 'auto' || (!theme && prefersDark)) {
-        document.documentElement.classList.add('dark');
-      } else {
-        document.documentElement.classList.remove('dark');
-      }
-    </script>
+    <!--
+      主题预置脚本外置成独立文件（见 public/theme-bootstrap.js）。
+
+      它原本是内联的 <script>，但内联脚本会逼着 CSP 放开 script-src 'unsafe-inline'，
+      而那一条正好抵消了 CSP 对 XSS 的全部防护。外置之后服务端可以只允许 'self'。
+      必须保持同步阻塞（不加 defer/async），否则会晚于首屏渲染，暗色模式闪烁就回来了。
+    -->
+    <script src="/theme-bootstrap.js"></script>
   </head>
   <body>
     <div id="app"></div>

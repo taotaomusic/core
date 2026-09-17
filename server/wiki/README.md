@@ -74,11 +74,11 @@ npm install
 copy .env.example .env
 # 编辑 .env，至少填写以下必需项：
 #   DATABASE_URL=postgres://postgres:密码@localhost:5432/music
-#   AUTH_SECRET=至少32位随机值
-#   ADMIN_TOKEN=旧管理令牌（可选，只影响 /app/admin/* 与 /desktop/admin/*）
+#   AUTH_SECRET=至少32位随机值（必填，任何环境都不得留空或使用默认值）
 #
-# 管理后台 /admin/ 用的是数据库管理员账号，不依赖 ADMIN_TOKEN：
-# 首次启动会自动创建 admin / admin123（super_admin），登录后请立即改密码。
+# 管理后台 /admin/ 用的是数据库管理员账号：
+# 设了 ADMIN_INITIAL_PASSWORD（至少12位）就用它建 admin 账号，否则启动时随机生成一个
+# 并打印在日志里（只打印一次）。首次登录后会被强制改密。
 
 # 4. 启动开发服务器（自动建表 + 热重载）
 npm run dev
@@ -116,7 +116,8 @@ node tools/reset-db.mjs postgres://postgres:密码@localhost:5432/music_verify
 ```powershell
 # 服务是否正常
 curl.exe http://127.0.0.1:4500/health
-# 预期响应：{"status":"ok"}
+# 预期响应：{"code":0,"message":"success","data":{"status":"up"}}
+# 注意 /health 同样经过全局信封拦截器，status 的值是 up 而不是 ok。
 
 # 管理后台
 # 浏览器打开：http://localhost:4500/admin/
@@ -133,13 +134,13 @@ curl.exe "http://127.0.0.1:4500/api/v1/app/bootstrap?versionCode=1&sdk=34&device
 # 需要登录的接口（带 Authorization）
 curl.exe "http://127.0.0.1:4500/api/v1/auth/me" -H "Authorization: Bearer <访问令牌>"
 
-# 管理接口（带 X-Admin-Token，仅 /app/admin/* 与 /desktop/admin/* 认这把令牌）
-curl.exe "http://127.0.0.1:4500/api/v1/app/admin/releases?channel=release" -H "X-Admin-Token: <管理令牌>"
+# 管理接口（需要管理员会话；静态 X-Admin-Token 通道已移除）
+curl.exe "http://127.0.0.1:4500/api/v1/app/admin/releases?channel=release" -H "Authorization: Bearer <管理员会话令牌>"
 
 # 管理后台登录（返回 Bearer 会话令牌，之后用 Authorization: Bearer <token>）
 curl.exe -X POST "http://127.0.0.1:4500/api/v1/admin/auth/login" `
   -H "Content-Type: application/json" `
-  -d '{\"username\":\"admin\",\"password\":\"admin123\"}'
+  -d '{\"username\":\"admin\",\"password\":\"<管理员口令>\"}'
 
 # 桌面端更新检查（公开）
 curl.exe "http://127.0.0.1:4500/api/v1/desktop/bootstrap?channel=release&architecture=windows-x64&versionCode=1&deviceId=doc-check"
@@ -194,7 +195,7 @@ curl.exe "http://127.0.0.1:4500/api/v1/desktop/bootstrap?channel=release&archite
    三张表的字段语义，以及审计外键为什么必须是 `ON DELETE SET NULL`。
 
 3. **[故障排查](07-troubleshooting.md)** 中的管理后台登录排查
-   登录恒 401、2FA 验证过期、`X-Admin-Token` 兼容身份写审计报外键时的定位路径。
+   登录恒 401、2FA 验证过期、强制改密 403/4031、账号退避 429/4291 的定位路径。
 
 ### 排查线上问题
 

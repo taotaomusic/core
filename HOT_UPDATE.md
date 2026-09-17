@@ -225,7 +225,7 @@ function bucketOf(releaseId: number, subject: string): number {
 
 不做管理后台 —— 与项目现有「本地构建 + 手工交付」的节奏一致，也不引入新的鉴权面。
 
-> 落地时的偏移：当初设想的是本地脚本直连数据库，实际实现成了带 `X-Admin-Token` 的管理接口（见 `server/README.md` 的「热更新」一节），下面这几个脚本并不存在。
+> 落地时的偏移：当初设想的是本地脚本直连数据库，实际实现成了需要管理员会话（`Authorization: Bearer`）的管理接口（见 `server/README.md` 的「热更新」一节），下面这几个脚本并不存在。
 
 ```powershell
 # 1. 构建

@@ -1,10 +1,9 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Post, Query, Req, UseGuards } from "@nestjs/common";
+import { Body, Controller, Get, HttpCode, HttpStatus, Post, Query, Req } from "@nestjs/common";
 import { ApiErrors } from "../common/api.exception";
 import { Public } from "../common/decorators/public.decorator";
 import { RateLimit } from "../common/decorators/rate-limit.decorator";
 import type { AdminAuthenticatedRequest } from "../common/request.types";
-import { AdminAuthGuard } from "../admin-auth/admin-auth.guard";
-import { RolesGuard } from "../admin-auth/roles.guard";
+import { AdminGuarded } from "../admin-auth/admin-guarded.decorator";
 import { RequireRole } from "../admin-auth/roles.decorator";
 import { READ_ROLES, WRITE_ROLES } from "../admin-auth/admin-roles";
 import { AdminAuditService } from "../admin-auth/admin-audit.service";
@@ -18,10 +17,10 @@ import { DesktopMinVersionDto, DesktopRolloutDto } from "./dto/desktop-admin.dto
  * Windows 发布管理；与 Android 共享灰度策略与权限模型。
  *
  * 写操作（上传模块、提交清单、放量、抬下限）要求 `admin` 及以上，只读账号被拒。
- * 本控制器没有公开方法，守卫挂类上是安全的。
+ * 守卫逐个方法标注（`@AdminGuarded()`），不挂类上，避免将来新增公开路由时被
+ * 类级守卫静默拦下。详见 [AdminGuarded]。
  */
 @Public()
-@UseGuards(AdminAuthGuard, RolesGuard)
 @RateLimit("admin")
 @Controller("desktop/admin")
 export class DesktopReleaseAdminController {
@@ -33,6 +32,7 @@ export class DesktopReleaseAdminController {
     private readonly audit: AdminAuditService,
   ) {}
 
+  @AdminGuarded()
   @Get("releases")
   @RequireRole(...READ_ROLES)
   list(@Query("channel") channel?: string, @Query("architecture") architecture?: string) {
@@ -43,6 +43,7 @@ export class DesktopReleaseAdminController {
   }
 
   /** 先按 sha256 上传单个模块；已存在的内容重复上传是幂等的。 */
+  @AdminGuarded()
   @Post("artifacts")
   @RequireRole(...WRITE_ROLES)
   @HttpCode(HttpStatus.CREATED)
@@ -56,6 +57,7 @@ export class DesktopReleaseAdminController {
   }
 
   /** 全部模块上传后提交清单，服务端会同步预计算相邻版本差分。 */
+  @AdminGuarded()
   @Post("releases")
   @RequireRole(...WRITE_ROLES)
   @HttpCode(HttpStatus.CREATED)
@@ -74,6 +76,7 @@ export class DesktopReleaseAdminController {
     return published;
   }
 
+  @AdminGuarded()
   @Post("rollout")
   @RequireRole(...WRITE_ROLES)
   @HttpCode(HttpStatus.OK)
@@ -97,6 +100,7 @@ export class DesktopReleaseAdminController {
     return this.repository.findRelease(channel, architecture, body.versionCode);
   }
 
+  @AdminGuarded()
   @Post("min-version")
   @RequireRole(...WRITE_ROLES)
   @HttpCode(HttpStatus.OK)

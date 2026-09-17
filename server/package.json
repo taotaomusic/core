@@ -10,10 +10,15 @@
     "minify:server": "node tools/minify-server.mjs",
     "start": "node dist/main.js",
     "send-mail": "ts-node --project tools/tsconfig.json tools/send-outlook-mail.ts",
-    "verify": "node tools/verify-contract.mjs"
+    "verify": "node tools/verify-contract.mjs",
+    "verify:totp": "ts-node --project tools/tsconfig.json tools/verify-totp.ts"
   },
   "engines": {
     "node": ">=20"
+  },
+  "overrides": {
+    "multer": "^2.4.0",
+    "qs": "^6.16.0"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.0",
@@ -25,9 +30,8 @@
     "bsdiff-wasm": "^0.1.4",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.1",
-    "multer": "^2.2.0",
-    "nodemailer": "^9.0.5",
-    "speakeasy": "^2.0.0",
+    "multer": "^2.4.0",
+    "nodemailer": "^9.1.1",
     "pg": "^8.13.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1"
@@ -36,7 +40,6 @@
     "@types/express": "^5.0.0",
     "@types/multer": "^2.2.0",
     "@types/node": "^22.10.2",
-    "@types/speakeasy": "^2.0.10",
     "@types/pg": "^8.11.10",
     "@vitejs/plugin-vue": "^5.2.1",
     "element-plus": "^2.14.5",

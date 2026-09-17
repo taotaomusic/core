@@ -60,8 +60,8 @@ codegraph query --path server --kind route --limit 200 --json ""
 全局 `APP_GUARD` 只有 `AccessTokenGuard` 和 `RateLimitGuard` 两个。
 
 `AdminAuthGuard` 和 `RolesGuard` **不是全局守卫**，它们由 `AdminAuthModule` 提供。所有管理控制器
-（`/admin/auth/**`、`/app/admin/**`、`/desktop/admin/**`）都挂 `AdminAuthGuard`，它同时接受会话
-`Authorization: Bearer` 和兼容的 `X-Admin-Token`；`RolesGuard` 再按 `@RequireRole` 判角色，
+（`/admin/auth/**`、`/app/admin/**`、`/desktop/admin/**`）都挂 `AdminAuthGuard`，它只接受会话
+`Authorization: Bearer`（静态 `X-Admin-Token` 通道已移除）；`RolesGuard` 再按 `@RequireRole` 判角色，
 写操作还要注入 `AdminAuditService` 写审计。引用它们的模块必须自己
 `imports: [AdminAuthModule]`，否则启动时 `UnknownDependenciesException`。
 详见 [11-admin-auth.md](11-admin-auth.md)。
@@ -81,7 +81,7 @@ codegraph query --path server --kind route --limit 200 --json ""
   → 挂载按路由分流的 JSON parser（普通 16KB、桌面清单 1MB、原始上传跳过）
   → /api/v1 全局前缀（/health 例外）
   → 全局 ValidationPipe(transform=true)
-  → onApplicationBootstrap：AdminBootstrapService 创建默认管理员 admin/admin123
+  → onApplicationBootstrap：AdminBootstrapService 创建默认管理员 admin（随机或 ADMIN_INITIAL_PASSWORD 口令，强制首登改密）
   → app.listen(PORT)
 ```
 
@@ -140,9 +140,8 @@ POST /api/v1/desktop/admin/artifacts
 
 ### 管理后台认证（15）
 
-除 `login`、`totp-verify`、`logout` 外都挂 `AdminAuthGuard` + `RolesGuard`。会话用
-`Authorization: Bearer`，旧的 `X-Admin-Token` 仍兼容但身份不可写外键。细节见
-[11-admin-auth.md](11-admin-auth.md)。
+除 `login`、`totp-verify`、`logout` 外都挂 `@AdminGuarded()`（= `AdminAuthGuard` + `RolesGuard`）。
+会话统一用 `Authorization: Bearer`。细节见 [11-admin-auth.md](11-admin-auth.md)。
 
 - `POST /admin/auth/login`、`POST /admin/auth/totp-verify`、`POST /admin/auth/logout`：公开；登录时开了
   TOTP 的账号只拿到 `temp_token`，第二步必须出示它。
@@ -203,7 +202,7 @@ POST /api/v1/desktop/admin/artifacts
 | 用户资料与听歌历史（读） | 同上，`PRIVILEGED_READ_ROLES` | 同上；观察者看不到个人数据 |
 | 同上（写：发版、放量、改配置、公告、用户、密钥） | 同上，`WRITE_ROLES` | 同上；观察者被拒，写操作另写 `admin_audit_log` |
 | 管理后台登录、2FA、改密码 | `@Public()` 或已认证 | 每 IP 10 次/15 分钟；`admin-login`/`admin-totp`/`admin-password` 三个独立桶 |
-| 管理后台其它接口 | 管理员会话 `Authorization: Bearer`（兼容 `X-Admin-Token`） | 默认无独立桶；再按角色判 403/4030 |
+| 管理后台其它接口 | 管理员会话 `Authorization: Bearer` | 默认无独立桶；再按角色判 403/4030 |
 
 限流器是进程内滑动窗口，重启清空，多实例不共享。不能把它当成跨实例的安全配额。
 
@@ -240,8 +239,9 @@ admin_users                   admin_sessions            admin_audit_log
 | `PORT` | `4500` | HTTP 监听端口 |
 | `ENV_FILE` | `.env` | 指定其它 dotenv 文件路径；系统环境变量优先于文件 |
 | `DATABASE_URL` | 必需 | PostgreSQL 连接串 |
-| `AUTH_SECRET` | 开发兜底；生产至少 32 字符 | 访问令牌 HMAC |
-| `ADMIN_TOKEN` | 空 | 静态管理令牌；为空则 `/app/admin/*` 与 `/desktop/admin/*` 关闭，不影响管理后台登录 |
+| `AUTH_SECRET` | **必需，至少 32 字符** | 访问令牌 HMAC；没有开发兜底，缺失或过短直接启动失败 |
+| `ADMIN_INITIAL_PASSWORD` | 空 | 默认超管初始口令；留空则随机生成并只打印一次。至少 12 字符 |
+| `CORS_ALLOWED_ORIGINS` | 空 | 允许跨域的来源白名单；留空不下发任何 CORS 头 |
 | `APK_DIR` | `./data/apk` | Android APK/补丁文件 |
 | `DESKTOP_RELEASE_DIR` | `./data/desktop` | 桌面内容寻址文件和差分 |
 | `SHARE_PREVIEW_DIR` | `./data/share-preview` | 分享试听缓存 |

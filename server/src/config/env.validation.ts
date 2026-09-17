@@ -5,9 +5,16 @@
  * 现在集中到配置加载阶段，启动即失败而不是等到第一次签发令牌。
  */
 export function validateEnvironment(config: Record<string, unknown>): Record<string, unknown> {
+  // 这条校验**不能**被 NODE_ENV 门控。
+  //
+  // 历史实现写成「仅 NODE_ENV=production 时检查」，而部署流程从不设置该变量，
+  // 于是校验从未生效，缺失的 AUTH_SECRET 静默回退成源码里公开的固定串 ——
+  // 任何人可离线伪造任意用户的访问令牌。改为无条件要求，从根上消除这条旁路。
   const secret = String(config.AUTH_SECRET ?? "");
-  if (config.NODE_ENV === "production" && secret.length < 32) {
-    throw new Error("生产环境 AUTH_SECRET 至少需要 32 个字符");
+  if (secret.length < 32) {
+    throw new Error(
+      "AUTH_SECRET 至少需要 32 个字符（访问令牌的 HMAC 签名密钥），缺失或过短一律拒绝启动",
+    );
   }
   const port = Number(config.PORT ?? 4500);
   if (!Number.isInteger(port) || port <= 0 || port > 65535) {
@@ -26,6 +33,13 @@ export function validateEnvironment(config: Record<string, unknown>): Record<str
   const smtpPort = Number(config.SMTP_PORT ?? 587);
   if (!Number.isInteger(smtpPort) || smtpPort <= 0 || smtpPort > 65535) {
     throw new Error(`SMTP_PORT 不合法：${config.SMTP_PORT}`);
+  }
+
+  // 默认管理员的初始口令是 super_admin 的引导凭据，门槛比普通改密的 8 位更高。
+  // 留空表示「启动时随机生成」，是允许且推荐的默认行为。
+  const adminInitialPassword = String(config.ADMIN_INITIAL_PASSWORD ?? "");
+  if (adminInitialPassword && adminInitialPassword.length < 12) {
+    throw new Error("ADMIN_INITIAL_PASSWORD 至少需要 12 个字符，留空则自动随机生成");
   }
   const imEnabled = String(config.IM_ENABLED ?? "false").toLowerCase() === "true";
   if (imEnabled) {

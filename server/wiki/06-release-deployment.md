@@ -12,11 +12,16 @@ npm install
 npm run build
 ```
 
-构建脚本会：
+构建脚本（`package.json` 的 `build`）依次执行 6 步：
 
-1. 清理 `dist/`。
-2. 使用 `tsc -p tsconfig.json` 编译。
-3. 生成生产使用的 `dist/package.json`。
+1. `rimraf --glob dist/*` —— 清理 `dist/`。
+2. `tsc -p tsconfig.json` —— TypeScript 编译。
+3. `npm run minify:server` —— `tools/minify-server.mjs` 用 Terser 压缩 `dist/` 内的 JS。
+4. `node tools/copy-manifest.mjs` —— 生成生产使用的 `dist/package.json`。
+5. `npm run build:frontend` —— Vite 构建管理后台到 `dist/public`（`main.ts` 要在 `/admin` 提供该目录，**漏掉这一步会导致管理后台 404**）。
+6. `npm run build:web-player` —— `tools/build-web-player.mjs` 构建 Kotlin/Wasm 分享播放器。
+
+按 `npm run build` 执行即可完整走完 6 步；手工复刻时不要只做前 4 步。
 
 产物是完整 `dist/` 目录树，不是单文件。
 
@@ -43,8 +48,9 @@ node dist/main.js
 | 配置 | 要求 |
 | --- | --- |
 | `DATABASE_URL` | 明确指向正式 PostgreSQL，不能使用验证库 |
-| `AUTH_SECRET` | 至少 32 字符随机值 |
-| `ADMIN_TOKEN` | 非空且妥善保管；只保护 `/app/admin/*` 与 `/desktop/admin/*`，管理后台登录不走它 |
+| `AUTH_SECRET` | 至少 32 字符随机值。**没有开发兜底值**，缺失或过短会直接拒绝启动 |
+| `CORS_ALLOWED_ORIGINS` | 只在确有第三方网页要跨域读接口时才配置；默认留空即不下发任何 CORS 头 |
+| `ADMIN_INITIAL_PASSWORD` | 建议显式设置且足够强（至少 12 字符）；留空则随机生成并只在首次启动日志里打印一次。两种来源都强制首登改密 |
 | `TOTP_ISSUER` | 可选；管理员 2FA 在验证器里显示的名称 |
 | `TRUST_PROXY` | 只在可信反向代理之后设为 `1`；直接暴露公网时必须留空，否则 IP 白名单可被伪造 |
 | `LDAP_*` | 可选；对接企业目录时配置，`LDAP_TLS_REJECT_UNAUTHORIZED` 保持默认 `true` |
@@ -63,10 +69,18 @@ node dist/main.js
 
 ApiSweet Key 在数据库，不在生产 `.env`。
 
-**首次上线后必须立刻改掉默认管理员密码。** 服务第一次启动会自动创建 `admin / admin123`
-（`super_admin`），代码里没有强制首次改密的机制。登录 `/admin/` 后立即调用
-`POST /api/v1/admin/auth/change-password`，并给该账号开启 2FA。管理后台的账号体系见
-[11-admin-auth.md](11-admin-auth.md)。
+**默认管理员不再有硬编码口令，且首次登录被强制改密。** 服务第一次启动会创建 `admin`
+（`super_admin`）：口令取 `ADMIN_INITIAL_PASSWORD`，未设置时随机生成并在日志里以 `WARN`
+打印**一次**。该账号带 `must_change_password` 标记，改密前除 `me` 与 `change-password` 外
+所有管理接口一律 403/4031，前端会直接进入全屏改密页。
+
+上线检查清单：
+
+1. 启动日志里确认「已创建默认管理员账号」；用随机口令的部署要在这行 WARN 里把口令抄下来。
+2. 登录 `/admin/`，按提示完成首次改密。
+3. 立即给该账号开启 2FA，并按需配置 IP 白名单。
+
+管理后台的账号体系见 [11-admin-auth.md](11-admin-auth.md)。
 
 ## 4. 启动顺序
 
@@ -140,7 +154,7 @@ $apk = "androidApp\build\outputs\apk\release\androidApp-release.apk"
 $sha = (Get-FileHash $apk -Algorithm SHA256).Hash.ToLower()
 
 curl.exe -X POST "https://你的域名/api/v1/app/admin/releases?versionCode=版本号&versionName=版本名&note=更新说明&rollout=0&sha256=$sha" `
-  -H "X-Admin-Token: $env:ADMIN_TOKEN" `
+  -H "Authorization: Bearer $env:ADMIN_SESSION_TOKEN" `
   --data-binary "@$apk"
 ```
 
@@ -163,7 +177,7 @@ curl.exe -o NUL -w "%{http_code}`n" -H "Range: bytes=999999999-" "https://你的
 ```powershell
 curl.exe -X POST "https://你的域名/api/v1/app/admin/rollout" `
   -H "content-type: application/json" `
-  -H "X-Admin-Token: $env:ADMIN_TOKEN" `
+  -H "Authorization: Bearer $env:ADMIN_SESSION_TOKEN" `
   -d '{"versionCode":123,"percent":10}'
 ```
 
@@ -176,7 +190,7 @@ curl.exe -X POST "https://你的域名/api/v1/app/admin/rollout" `
 ```powershell
 curl.exe -X POST "https://你的域名/api/v1/app/admin/min-version" `
   -H "content-type: application/json" `
-  -H "X-Admin-Token: $env:ADMIN_TOKEN" `
+  -H "Authorization: Bearer $env:ADMIN_SESSION_TOKEN" `
   -d '{"versionCode":123}'
 ```
 

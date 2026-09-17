@@ -5,12 +5,21 @@
  * 业务失败时 code 非 0 且 HTTP 也是 4xx/5xx。错误文案统一从顶层 `message` 取 ——
  * 那是服务端刻意压平成字符串的（校验失败时 NestJS 原本给的是数组）。
  *
- * 认证方式：
- * - 新会话 token（>60字符的 base64url）→ Authorization: Bearer
- * - 旧版 ADMIN_TOKEN（<60字符）→ X-Admin-Token（向后兼容）
+ * 认证方式：只有登录后签发的会话令牌，走 `Authorization: Bearer`。
+ * 历史上还支持 `.env` 里的静态 `X-Admin-Token`，但它会绕过 2FA、IP 白名单、
+ * 会话撤销与审计归属，已整体移除。
  */
 
 const BASE = "/api/v1";
+
+/** 管理员公开身份。`must_change_password` 为真时前端必须先走强制改密。 */
+export interface AdminIdentity {
+  id: number;
+  username: string;
+  role: string;
+  display_name: string;
+  must_change_password?: boolean;
+}
 
 interface Envelope<T> {
   code: number;
@@ -32,12 +41,8 @@ async function unwrap<T>(response: Response): Promise<T> {
   return body.data;
 }
 
-/** 根据 token 类型自动选择认证方式 */
 function authHeaders(adminToken: string): Record<string, string> {
-  if (adminToken.length > 60) {
-    return { "authorization": `Bearer ${adminToken}` };
-  }
-  return { "X-Admin-Token": adminToken };
+  return { "authorization": `Bearer ${adminToken}` };
 }
 
 export function apiGet<T>(path: string, adminToken: string): Promise<T> {
@@ -114,7 +119,7 @@ export async function adminLogin(username: string, password: string) {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ username, password }),
   });
-  return unwrap<{ token?: string; admin?: { id: number; username: string; role: string; display_name: string }; requires_totp?: boolean; temp_token?: string; admin_id?: number }>(response);
+  return unwrap<{ token?: string; admin?: AdminIdentity; requires_totp?: boolean; temp_token?: string; admin_id?: number }>(response);
 }
 
 /** 管理员认证 —— TOTP 二次验证 */
@@ -126,7 +131,7 @@ export async function adminTotpVerify(tempToken: string, token: string) {
     // 这是把「密码已验证」这个事实带到第二步的唯一凭据。
     body: JSON.stringify({ temp_token: tempToken, token }),
   });
-  return unwrap<{ token: string; admin: { id: number; username: string; role: string; display_name: string } }>(response);
+  return unwrap<{ token: string; admin: AdminIdentity }>(response);
 }
 
 /** 管理员认证 —— 退出登录 */
@@ -142,5 +147,21 @@ export async function adminMe(token: string) {
   const response = await fetch(`${BASE}/admin/auth/me`, {
     headers: { "authorization": `Bearer ${token}` },
   });
-  return unwrap<{ id: number; username: string; role: string; display_name: string }>(response);
+  return unwrap<AdminIdentity>(response);
+}
+
+/**
+ * 管理员认证 —— 修改本人密码。
+ *
+ * 强制改密页与「主动改密」共用这一个接口。服务端改密成功后会顺手清掉
+ * `must_change_password` 标记并撤销其它会话（保留当前这条）。
+ */
+export async function adminChangePassword(token: string, oldPassword: string, newPassword: string) {
+  const response = await fetch(`${BASE}/admin/auth/change-password`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "authorization": `Bearer ${token}` },
+    body: JSON.stringify({ oldPassword, newPassword }),
+  });
+  if (response.status === 204) return;
+  await unwrap<unknown>(response);
 }

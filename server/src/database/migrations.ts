@@ -442,6 +442,27 @@ export async function runMigrations(pool: Pool): Promise<void> {
         created_by    integer REFERENCES admin_users(id) ON DELETE SET NULL
       );
 
+      -- 首次登录是否必须改密。
+      --
+      -- 只有「服务启动时自动创建的默认管理员」会置 1，存量账号与 LDAP 同步
+      -- 创建的账号都保持 0 —— 否则升级一次就会把所有管理员挡在改密页。
+      -- smallint 0/1 是本项目既有的布尔约定（与 totp_enabled 一致）。
+      ALTER TABLE admin_users
+        ADD COLUMN IF NOT EXISTS must_change_password smallint NOT NULL DEFAULT 0
+          CHECK (must_change_password IN (0, 1));
+
+      -- 认证来源：local（本地口令）/ ldap（由目录接管）。
+      --
+      -- 用途是「目录不可达时，已由 LDAP 接管的账号禁止回落本地口令」：
+      -- 否则目录判定某账号已停用/离职后，只要它在本地残留过口令哈希，
+      -- 目录一挂就能用旧口令登进来。
+      --
+      -- 存量 LDAP 账号无法从数据反推（它们存的是随机占位哈希），只能在
+      -- 下次成功 LDAP 登录时补齐标记 —— 这是一次性的迁移代价。
+      ALTER TABLE admin_users
+        ADD COLUMN IF NOT EXISTS auth_source text NOT NULL DEFAULT 'local'
+          CHECK (auth_source IN ('local', 'ldap'));
+
       -- 管理员会话
       CREATE TABLE IF NOT EXISTS admin_sessions (
         id            integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -459,8 +480,8 @@ export async function runMigrations(pool: Pool): Promise<void> {
       -- 操作审计日志。
       --
       -- admin_id 可空且 ON DELETE SET NULL：管理员被删除后，历史审计必须保留，
-      -- 只是变成「无归属」。可空还有一个用途 —— X-Admin-Token 兼容身份在
-      -- admin_users 里没有行，写具体 ID 会直接撞外键。
+      -- 只是变成「无归属」。可空也覆盖了「调用方没带出管理员身份」的边界情况，
+      -- 写具体 ID 时若目标行不存在会直接撞外键。
       CREATE TABLE IF NOT EXISTS admin_audit_log (
         id            integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
         admin_id      integer REFERENCES admin_users(id) ON DELETE SET NULL,

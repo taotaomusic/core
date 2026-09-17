@@ -8,8 +8,7 @@ import { AuditLogRepository } from "./audit-log.repository";
  * 管理端写操作的审计留痕。
  *
  * 包一层是为了让控制器里只写一行 `await this.audit.record(...)` —— 取操作人、取来源
- * 地址、取 UA 这三件事各有各的坑（`X-Admin-Token` 兼容身份的 `id` 是 0，在 `admin_users`
- * 里没有对应行，直接落库会撞外键；`X-Forwarded-For` 只有开启 `TRUST_PROXY` 时才可信），
+ * 地址、取 UA 这三件事各有各的坑（`X-Forwarded-For` 只有开启 `TRUST_PROXY` 时才可信），
  * 集中在这里才不会每个接口各错一遍。
  *
  * **只在操作成功之后调用**：控制器抛异常时这一行不会执行，所以失败的操作不留痕 ——

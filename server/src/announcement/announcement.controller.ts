@@ -1,12 +1,11 @@
 import {
-  Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Post, Req, UseGuards,
+  Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Post, Req,
 } from "@nestjs/common";
 import { ApiErrors } from "../common/api.exception";
 import { Public } from "../common/decorators/public.decorator";
 import { RateLimit } from "../common/decorators/rate-limit.decorator";
 import type { AdminAuthenticatedRequest } from "../common/request.types";
-import { AdminAuthGuard } from "../admin-auth/admin-auth.guard";
-import { RolesGuard } from "../admin-auth/roles.guard";
+import { AdminGuarded } from "../admin-auth/admin-guarded.decorator";
 import { RequireRole } from "../admin-auth/roles.decorator";
 import { READ_ROLES, WRITE_ROLES } from "../admin-auth/admin-roles";
 import { AdminAuditService } from "../admin-auth/admin-audit.service";
@@ -36,7 +35,7 @@ export class AnnouncementController {
   }
 
   @Public()
-  @UseGuards(AdminAuthGuard, RolesGuard)
+  @AdminGuarded()
   @RateLimit("admin")
   @Get("app/admin/announcements")
   @RequireRole(...READ_ROLES)
@@ -45,7 +44,7 @@ export class AnnouncementController {
   }
 
   @Public()
-  @UseGuards(AdminAuthGuard, RolesGuard)
+  @AdminGuarded()
   @RateLimit("admin")
   @Post("app/admin/announcements")
   @RequireRole(...WRITE_ROLES)
@@ -62,7 +61,7 @@ export class AnnouncementController {
   }
 
   @Public()
-  @UseGuards(AdminAuthGuard, RolesGuard)
+  @AdminGuarded()
   @RateLimit("admin")
   @Post("app/admin/announcements/:id")
   @RequireRole(...WRITE_ROLES)
@@ -87,7 +86,7 @@ export class AnnouncementController {
   }
 
   @Public()
-  @UseGuards(AdminAuthGuard, RolesGuard)
+  @AdminGuarded()
   @RateLimit("admin")
   @Post("app/admin/announcements/:id/enabled")
   @RequireRole(...WRITE_ROLES)
@@ -107,7 +106,7 @@ export class AnnouncementController {
   }
 
   @Public()
-  @UseGuards(AdminAuthGuard, RolesGuard)
+  @AdminGuarded()
   @RateLimit("admin")
   @Post("app/admin/announcements/:id/pinned")
   @RequireRole(...WRITE_ROLES)
@@ -127,7 +126,7 @@ export class AnnouncementController {
   }
 
   @Public()
-  @UseGuards(AdminAuthGuard, RolesGuard)
+  @AdminGuarded()
   @RateLimit("admin")
   @Delete("app/admin/announcements/:id")
   @RequireRole(...WRITE_ROLES)

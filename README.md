@@ -356,7 +356,8 @@ GET /api/v1/songs/{id}/lyrics?format=json
 
 **管理后台**：
 - 浏览器打开 `/admin/` 路径（如 `https://music.xydaigua.cn/admin/`），服务根路径不是后台入口
-- 首次进入用管理员账号密码登录（默认 `admin` / `admin123`，部署后请立刻改掉），会话令牌存在浏览器 localStorage
+- 首次进入用管理员账号密码登录，会话令牌存在浏览器 localStorage，有效期 24 小时
+- 首次部署由服务端创建 `admin` 账号：设了 `ADMIN_INITIAL_PASSWORD`（至少 12 位）就用它，否则随机生成并在启动日志里打印一次。**两种情况首次登录都会被强制改密**（403/4031）
 - 功能：发布列表与放量、补丁列表与放量、强制更新下限、公告管理、用户统计
 
 ### 💥 崩溃日志
@@ -456,8 +457,8 @@ npm install
 copy .env.example .env
 # 编辑 .env，填写：
 #   DATABASE_URL=postgres://postgres:密码@localhost:5432/music
-#   AUTH_SECRET=至少32位随机值
-#   ADMIN_TOKEN=管理后台令牌
+#   AUTH_SECRET=至少32位随机值（必填）
+#   ADMIN_INITIAL_PASSWORD=初始管理员口令，至少12位（可选，不填则启动时随机生成并打印一次）
 
 # 4. 启动开发服务器
 npm run dev
@@ -521,12 +522,14 @@ node tools/reset-db.mjs postgres://postgres:密码@localhost:5432/music_verify
 $env:DATABASE_URL="postgres://postgres:密码@localhost:5432/music_verify"
 $env:PORT="4720"; $env:APK_DIR="./tmp/apk"
 $env:AUTH_SECRET="0123456789012345678901234567890123456789"
-$env:ADMIN_TOKEN="verify-token"
+$env:ADMIN_INITIAL_PASSWORD="verify-initial-123456"
+$env:CORS_ALLOWED_ORIGINS="https://verify.example"
 $env:NODE_ENV="test"; $env:EMAIL_VERIFICATION_TEST_CODE="123456"
+$env:IM_ENABLED="false"
 npm run dev
 
 # 4. 另一个终端运行契约脚本（以脚本实际输出为准，须全绿）
-node tools/verify-contract.mjs http://127.0.0.1:4720 verify-token
+node tools/verify-contract.mjs http://127.0.0.1:4720
 ```
 
 **⚠️ 重要约定**：

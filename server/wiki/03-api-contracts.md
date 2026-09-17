@@ -8,8 +8,8 @@
 - 健康检查：`/health`，不带前缀。
 - 普通 JSON 请求体上限：16KB；桌面发布清单 `POST /desktop/admin/releases` 单独上限 1MB。
 - 普通接口默认需要 `Authorization: Bearer <accessToken>`。
-- 管理接口分两套：`/app/admin/**` 与 `/desktop/admin/**` 用 `X-Admin-Token`；
-  `/admin/auth/**` 用登录后签发的管理员会话 Bearer 令牌（兼容 `X-Admin-Token`）。
+- 管理接口（`/admin/auth/**`、`/app/admin/**`、`/desktop/admin/**`）统一用登录后签发的
+  管理员会话：`Authorization: Bearer <token>`。静态 `X-Admin-Token` 通道已整体移除。
 - 客户端判断成功的唯一依据是响应体 `code === 0`。
 
 ## 2. 响应信封
@@ -301,11 +301,11 @@ APK 下载必须支持：
 | `/search`、`/songs/**` | 必须 | 不使用 | 音乐业务接口 |
 | `/draw/**` | 必须 | 不使用 | 图片任务属于当前登录用户调用会话，但任务表当前不存 user_id |
 | `/app/bootstrap`、`/app/apk/**`、`/app/patch/**` | 不要求 | 不要求 | Android 热更新通道必须公开 |
-| `/app/admin/**` | 不使用 | 管理员会话或 `X-Admin-Token` | `AdminAuthGuard` + `RolesGuard`；读 `READ_ROLES`，写 `WRITE_ROLES`（观察者 403/4030），写操作另写审计。`/app/admin/users/**` 的**读**用 `PRIVILEGED_READ_ROLES`（返回 email 与听歌历史） |
+| `/app/admin/**` | 不使用 | 管理员会话 | `AdminAuthGuard` + `RolesGuard`；读 `READ_ROLES`，写 `WRITE_ROLES`（观察者 403/4030），写操作另写审计。`/app/admin/users/**` 的**读**用 `PRIVILEGED_READ_ROLES`（返回 email 与听歌历史） |
 | `/admin/auth/login`、`/totp-verify`、`/logout` | 不要求 | 不要求 | 显式公开；2FA 第二步额外要求 `temp_token` |
-| `/admin/auth/**`（其余） | 不使用 | 管理员会话或 `X-Admin-Token` | 由 AdminAuthGuard + RolesGuard 校验；角色不足为 403/4030 |
+| `/admin/auth/**`（其余） | 不使用 | 管理员会话 | 由 AdminAuthGuard + RolesGuard 校验；角色不足为 403/4030 |
 | `/desktop/bootstrap`、`/desktop/artifacts/**`、`/desktop/patches/**` | 不要求 | 不要求 | 桌面更新通道必须公开 |
-| `/desktop/admin/**` | 不使用 | 管理员会话或 `X-Admin-Token` | 与 Android 共用守卫与角色常量，但版本表分开 |
+| `/desktop/admin/**` | 不使用 | 管理员会话 | 与 Android 共用守卫与角色常量，但版本表分开 |
 | `/announcements`、`/public/shares/**` | 不要求 | 不使用 | 公开公告、分享元数据和试听 |
 | `/shares/songs` | 必须 | 不使用 | 创建短链 |
 | `/playback/**`、`/favorites/**`、`/playlists/**` | 必须 | 不使用 | 用户云端数据 |
@@ -381,7 +381,7 @@ Controller 不应返回 HTTP 200 加错误业务码；失败应同时使用正�
 
 - `GET /api/v1/announcements` 公开返回最多 20 条启用公告，置顶公告优先。
 - 后台 `GET/POST /api/v1/app/admin/announcements`、`POST /:id`、`POST /:id/enabled`、
-  `POST /:id/pinned`、`DELETE /:id` 只接受 `X-Admin-Token`。标题最多 80 个字符，正文最多
+  `POST /:id/pinned`、`DELETE /:id` 只接受管理员会话。标题最多 80 个字符，正文最多
   5,000 个字符；`enabled` 和 `pinned` 必须是 JSON boolean。
 - 同时只能有一条置顶公告，服务端用顾问锁串行化更新；不存在的公告返回 404/4043。
 
@@ -399,7 +399,8 @@ Controller 不应返回 HTTP 200 加错误业务码；失败应同时使用正�
 `durationSeconds`。同一会话重复上报只计算累计增长量。3 秒后才进入最近播放，单次有效播放阈值为
 `min(30 秒, durationSeconds * 50%)`。
 
-- `GET /playback/recent?limit=` 默认 50，最大 500，返回数组。
+- `GET /playback/recent?limit=` 默认 500，最大 500，返回数组。不传 `limit` 时会返回最多 500 首，
+  不要按「不传只返回 50 条」做内存或性能假设。
 - `GET /playback/recent/state` 返回 `clearedBefore`、`clearedAt`、`revision`、`marker`。
 - `GET /playback/stats` 返回累计歌曲数、播放次数和听歌毫秒数。
 - `DELETE /playback/recent?marker=<uuid>` 推进清空代际；相同 marker 重试始终返回第一次结果，
@@ -498,8 +499,8 @@ Content-Type: application/json
 - 角色不足是 403/4030，不是 401。
 - 会话令牌只存 SHA-256 哈希，有效期 24 小时；响应里出现的明文令牌只此一次。
 
-会话令牌后续放在 `Authorization: Bearer`，旧的 `X-Admin-Token` 仍然可用但**不能**用于写外键的
-操作。完整链路、LDAP 回落规则和启动期硬约束见 [11-admin-auth.md](11-admin-auth.md)。
+管理接口只认 `Authorization: Bearer`。完整链路、登录失败退避、强制首登改密、LDAP 回落规则和
+启动期硬约束见 [11-admin-auth.md](11-admin-auth.md)。
 
 ### 当前限流桶
 

@@ -1,10 +1,9 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Post, Query, Req, UseGuards } from "@nestjs/common";
+import { Body, Controller, Get, HttpCode, HttpStatus, Post, Query, Req } from "@nestjs/common";
 import { ApiErrors } from "../common/api.exception";
 import { Public } from "../common/decorators/public.decorator";
 import { RateLimit } from "../common/decorators/rate-limit.decorator";
 import type { AdminAuthenticatedRequest } from "../common/request.types";
-import { AdminAuthGuard } from "../admin-auth/admin-auth.guard";
-import { RolesGuard } from "../admin-auth/roles.guard";
+import { AdminGuarded } from "../admin-auth/admin-guarded.decorator";
 import { RequireRole } from "../admin-auth/roles.decorator";
 import { READ_ROLES, WRITE_ROLES } from "../admin-auth/admin-roles";
 import { AdminAuditService } from "../admin-auth/admin-audit.service";
@@ -33,10 +32,11 @@ const ALL_VERSIONS = 2_147_483_647;
  *
  * 再叠一层 [RolesGuard]：放量、抬下限、改远端配置都是会影响线上客户端的写操作，
  * 只读账号（`viewer`）不能做。读接口保持三种角色都能看。
- * 本控制器没有公开方法，所以守卫挂在类上不会误伤（见 11-admin-auth.md 的类级守卫陷阱）。
+ *
+ * 守卫**逐个方法**标注（`@AdminGuarded()`），不挂类上：类级守卫会连同未来的
+ * 公开路由一起拦下，且漏加一个公开路由就会静默失效。详见 [AdminGuarded]。
  */
 @Public()
-@UseGuards(AdminAuthGuard, RolesGuard)
 @RateLimit("admin")
 @Controller("app/admin")
 export class ReleaseAdminController {
@@ -48,6 +48,7 @@ export class ReleaseAdminController {
     private readonly audit: AdminAuditService,
   ) {}
 
+  @AdminGuarded()
   @Get("releases")
   @RequireRole(...READ_ROLES)
   list(@Query("channel") channel?: string) {
@@ -62,6 +63,7 @@ export class ReleaseAdminController {
    * 构建结束时那个文件里的值已经比刚产出的 APK 大 1，登记错了客户端会陷入
    * 「提示更新 → 装完还提示」的死循环。
    */
+  @AdminGuarded()
   @Post("releases")
   @RequireRole(...WRITE_ROLES)
   @HttpCode(HttpStatus.CREATED)
@@ -111,6 +113,7 @@ export class ReleaseAdminController {
     return this.releases.findRelease(channel, versionCode);
   }
 
+  @AdminGuarded()
   @Post("rollout")
   @RequireRole(...WRITE_ROLES)
   @HttpCode(HttpStatus.OK)
@@ -139,6 +142,7 @@ export class ReleaseAdminController {
    * 守卫：必须已存在放量 100% 且不低于该下限的发布，否则被判定为强制更新的客户端
    * 会被拦在门外却拿不到升级包。这里从接口层面堵住这条变砖路径。
    */
+  @AdminGuarded()
   @Post("min-version")
   @RequireRole(...WRITE_ROLES)
   @HttpCode(HttpStatus.OK)
@@ -164,12 +168,14 @@ export class ReleaseAdminController {
     };
   }
 
+  @AdminGuarded()
   @Get("config")
   @RequireRole(...READ_ROLES)
   listConfig() {
     return this.releases.listConfig(ALL_VERSIONS);
   }
 
+  @AdminGuarded()
   @Get("patches")
   @RequireRole(...READ_ROLES)
   listPatches(@Query("channel") channel?: string) {
@@ -185,6 +191,7 @@ export class ReleaseAdminController {
    *
    * 与安装包一样默认不放量：先登记，自己验过再逐步放开。
    */
+  @AdminGuarded()
   @Post("patches")
   @RequireRole(...WRITE_ROLES)
   @HttpCode(HttpStatus.CREATED)
@@ -242,6 +249,7 @@ export class ReleaseAdminController {
     return this.releases.findPatch(channel, targetVersionCode, patchVersion);
   }
 
+  @AdminGuarded()
   @Post("patch-rollout")
   @RequireRole(...WRITE_ROLES)
   @HttpCode(HttpStatus.OK)
@@ -269,6 +277,7 @@ export class ReleaseAdminController {
     return this.releases.findPatch(channel, body.targetVersionCode, body.patchVersion);
   }
 
+  @AdminGuarded()
   @Post("config")
   @RequireRole(...WRITE_ROLES)
   @HttpCode(HttpStatus.OK)

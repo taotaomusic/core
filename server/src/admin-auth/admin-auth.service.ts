@@ -1,10 +1,11 @@
 import { Injectable } from "@nestjs/common";
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
-import * as speakeasy from "speakeasy";
 import { AppConfigService } from "../config/app-config.service";
+import { generateTotpSecret, verifyTotpCode } from "./totp";
 import { AdminUsersRepository } from "./admin-users.repository";
 import { AdminSessionsRepository } from "./admin-sessions.repository";
 import { AuditLogRepository } from "./audit-log.repository";
+import type { AdminActor } from "../common/request.types";
 
 const SESSION_LIFETIME_MS = 24 * 60 * 60 * 1000; // 24小时
 
@@ -29,6 +30,33 @@ export class AdminAuthService {
    * —— 和 [RateLimitService] 一样，不跨实例共享。
    */
   private readonly totpChallenges = new Map<string, { adminId: number; expiresAt: number }>();
+
+  /**
+   * 管理端登录失败的账号维度计数与退避。
+   *
+   * 只按 IP 限流挡不住代理池：攻击者换 IP 就能对已知的 `admin` 账号做无限
+   * 口令猜测；对 LDAP 路径更糟，还可能触发企业目录侧的账号锁定策略，把
+   * 「猜密码」升级成对目录的拒绝服务。所以再加一层以账号为键的退避。
+   *
+   * `failures` 与 `lockouts` 必须分开记：前者是「本轮还能试几次」，退避期一过
+   * 就清零，否则正常管理员在第一次被锁之后打错一个字就又挨 5 分钟；后者是
+   * 「历史上被锁过几轮」，只增不减，用来把退避时长逐轮翻倍。
+   *
+   * 与 [RateLimitService]、2FA 票据一样是**进程内 Map**：重启即清空、不跨
+   * 实例共享。多实例部署需要迁到共享存储，详见 wiki 的「单实例假设」。
+   */
+  private readonly adminLoginFailures = new Map<string, {
+    failures: number;
+    lockouts: number;
+    lockedUntil: number;
+  }>();
+
+  /** 连续失败达到这个次数才开始退避。 */
+  private static readonly LOGIN_FAILURE_THRESHOLD = 5;
+  /** 首轮退避时长；之后每多一轮翻倍。 */
+  private static readonly LOGIN_BASE_LOCK_MS = 5 * 60_000;
+  /** 退避时长上限，避免指数增长到事实上永久锁定。 */
+  private static readonly LOGIN_MAX_LOCK_MS = 30 * 60_000;
 
   constructor(
     private readonly config: AppConfigService,
@@ -67,12 +95,18 @@ export class AdminAuthService {
     return token;
   }
 
-  async validateSession(token: string): Promise<{ id: number; username: string; role: string; display_name: string } | undefined> {
+  async validateSession(token: string): Promise<AdminActor | undefined> {
     const session = await this.sessions.findActive(this.hashToken(token));
     if (!session) return undefined;
     const admin = await this.adminUsers.findById(session.admin_id);
     if (!admin || admin.disabled_at) return undefined;
-    return { id: admin.id, username: admin.username, role: admin.role, display_name: admin.display_name };
+    return {
+      id: admin.id,
+      username: admin.username,
+      role: admin.role,
+      display_name: admin.display_name,
+      must_change_password: admin.must_change_password,
+    };
   }
 
   async destroySession(token: string): Promise<void> {
@@ -87,6 +121,67 @@ export class AdminAuthService {
    */
   async revokeOtherSessions(adminId: number, currentToken: string): Promise<void> {
     await this.sessions.revokeAllExcept(adminId, this.hashToken(currentToken));
+  }
+
+  // ==================== 登录失败退避 ====================
+
+  /**
+   * 账号维度退避的归一化键。
+   *
+   * 统一转小写并去空白，否则 `Admin` / `admin ` 会被当成两个不同的账号，
+   * 各拿一份失败额度，退避形同虚设。
+   */
+  private loginFailureKey(username: string): string {
+    return username.trim().toLowerCase();
+  }
+
+  /**
+   * 该账号是否仍在退避期内。
+   *
+   * 退避期一过就**只清 `failures`、保留 `lockouts`**：清掉 failures 让正常
+   * 管理员重新拿到完整的尝试额度，保留 lockouts 让反复失败的账号下一轮锁得
+   * 更久。反过来（两个都清）会让指数升级永远停在第一档；只清 lockedUntil
+   * 不清 failures 则会让「被锁过之后打错一次就再锁 5 分钟」，对正常人也过于苛刻。
+   */
+  isAdminLoginLocked(username: string): boolean {
+    const key = this.loginFailureKey(username);
+    const entry = this.adminLoginFailures.get(key);
+    if (!entry) return false;
+    if (entry.lockedUntil > Date.now()) return true;
+    // 注意：`lockedUntil` 为 0 表示「还没到过阈值」，此时**绝不能**删条目 ——
+    // 那等于每次登录都把失败计数清零，阈值永远达不到，退避形同虚设。
+    if (entry.lockedUntil > 0) {
+      entry.lockedUntil = 0;
+      entry.failures = 0;
+    }
+    return false;
+  }
+
+  /**
+   * 记录一次登录失败，达到阈值后按轮次指数延长退避。
+   *
+   * 第 1 轮 5 分钟，第 2 轮 10 分钟，第 3 轮 20 分钟，之后封顶 30 分钟。
+   */
+  recordAdminLoginFailure(username: string): void {
+    const key = this.loginFailureKey(username);
+    const entry = this.adminLoginFailures.get(key)
+      ?? { failures: 0, lockouts: 0, lockedUntil: 0 };
+    entry.failures += 1;
+    const threshold = AdminAuthService.LOGIN_FAILURE_THRESHOLD;
+    if (entry.failures >= threshold) {
+      entry.lockouts += 1;
+      const lockMs = Math.min(
+        AdminAuthService.LOGIN_MAX_LOCK_MS,
+        AdminAuthService.LOGIN_BASE_LOCK_MS * 2 ** (entry.lockouts - 1),
+      );
+      entry.lockedUntil = Date.now() + lockMs;
+    }
+    this.adminLoginFailures.set(key, entry);
+  }
+
+  /** 登录成功后清零该账号的失败计数。 */
+  clearAdminLoginFailures(username: string): void {
+    this.adminLoginFailures.delete(this.loginFailureKey(username));
   }
 
   // ==================== 2FA 挑战票据 ====================
@@ -127,24 +222,18 @@ export class AdminAuthService {
     }
   }
 
+  /**
+   * 生成新的 TOTP 密钥与 otpauth URL。
+   *
+   * 实现在 `./totp`，不再依赖已停止维护的 `speakeasy`。库里已存的 base32
+   * 密钥仍由同一套解码逻辑校验，无需迁移数据。
+   */
   generateTotpSecret(username: string): { secret: string; otpauthUrl: string } {
-    const secret = speakeasy.generateSecret({ name: `${this.config.totpIssuer} (${username})`, length: 20 });
-    return { secret: secret.base32, otpauthUrl: secret.otpauth_url! };
+    return generateTotpSecret(this.config.totpIssuer, username);
   }
 
   verifyTotp(secret: string, token: string): boolean {
-    // 先挡掉长度不对的输入，避免把任意字符串喂给校验器。
-    if (!/^\d{6}$/.test(token)) return false;
-    return speakeasy.totp.verify({ secret, encoding: "base32", token, window: 1 });
-  }
-
-  /** 向后兼容：验证 .env 中的 ADMIN_TOKEN */
-  verifyLegacyToken(provided: string): boolean {
-    const expected = this.config.adminToken;
-    if (!expected) return false;
-    const a = createHash("sha256").update(provided).digest();
-    const b = createHash("sha256").update(expected).digest();
-    return timingSafeEqual(a, b);
+    return verifyTotpCode(secret, token);
   }
 
   async logAction(adminId: number | null, action: string, targetType: string | null, targetId: string | null,

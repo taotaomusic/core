@@ -85,7 +85,6 @@ src/
 ├─ common/
 │  ├─ decorators/
 │  ├─ filters/
-│  ├─ guards/
 │  ├─ interceptors/
 │  └─ rate-limit/
 ├─ config/
@@ -157,10 +156,13 @@ src/
 - `playlists/` 的所有顺序/完整替换操作在事务内锁定歌单，`source + songId` 是歌曲身份，展示字段只是快照。
 - `release/` 与 `desktop-release/` 各自拥有版本、文件和最低版本语义；桌面端使用内容寻址对象，不能复用 APK 文件名逻辑。
 - `im/` 只代理悟空 IM 的凭据和同步命令；聊天正文、频道游标不进入 PostgreSQL。
-- 下面 5 个控制器都挂 `AdminAuthGuard` + `RolesGuard`（管理员会话或 `X-Admin-Token`），不要误加普通访问令牌依赖：
-  `announcement.controller.ts`（方法级，只保护 `/app/admin/*` 那几个方法，公开的 `GET /announcements` 不能加）、
+- 下面 5 个控制器都挂 `@AdminGuarded()`（= `AdminAuthGuard` + `RolesGuard`，只认管理员会话
+  `Authorization: Bearer`），不要误加普通访问令牌依赖：
+  `announcement.controller.ts`（只保护 `/app/admin/*` 那几个方法，公开的 `GET /announcements` 不能加）、
   `release/release-admin.controller.ts`、`desktop-release/desktop-release-admin.controller.ts`、
-  `user-admin/user-admin.controller.ts`、`image-generation/image-key-admin.controller.ts`（后四个是类级）。
+  `user-admin/user-admin.controller.ts`、`image-generation/image-key-admin.controller.ts`。
+  **五个控制器一律逐方法挂，没有例外**：类级 `@UseGuards` 会在将来新增公开路由时静默拦下它，
+  且漏标一个方法就等于那条路由裸奔。见 `admin-auth/admin-guarded.decorator.ts`。
   写操作标 `@RequireRole(...WRITE_ROLES)` 并调 `AdminAuditService` 留痕；读操作标 `@RequireRole(...READ_ROLES)`，
   **但返回个人数据的读接口要用 `PRIVILEGED_READ_ROLES`** —— 目前是 `user-admin` 的两个读接口
   （`email` 与逐首歌的听歌历史），观察者看不到。改这类接口要同时改 `App.vue` 的页签可见性。

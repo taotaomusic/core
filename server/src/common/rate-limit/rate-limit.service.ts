@@ -27,6 +27,19 @@ export class RateLimitService {
     return this.allow(`auth:${scope}:${address}`, 10, 15 * 60_000);
   }
 
+  /**
+   * 管理端登录：按来源地址 30 次 / 15 分钟。
+   *
+   * 比普通登录宽，是因为**管理端登录的主防线已经换成账号维度的退避**
+   * （连续失败 5 次即锁，见 [AdminAuthService]）。这里剩下的职责只是给
+   * 「同一个出口地址轮着猜很多不同账号」设一个上界，而不是限制单个管理员
+   * 的登录次数 —— 办公室、机房普遍共用一个 NAT 出口，按 10 次收紧会让
+   * 第二个人登录就被拦下，运维会误判成密码错误。
+   */
+  allowAdminLoginAttempt(address: string): boolean {
+    return this.allow(`auth:admin-login:${address}`, 30, 15 * 60_000);
+  }
+
   /** 验证码邮件是有成本资源，单个来源地址每 15 分钟最多 5 次。 */
   allowEmailVerification(address: string): boolean {
     return this.allow(`email-verification:${address}`, 5, 15 * 60_000);

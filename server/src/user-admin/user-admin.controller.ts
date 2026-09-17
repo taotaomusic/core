@@ -1,12 +1,11 @@
 import {
-  Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Post, Query, Req, UseGuards,
+  Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Post, Query, Req,
 } from "@nestjs/common";
 import { ApiErrors } from "../common/api.exception";
 import { Public } from "../common/decorators/public.decorator";
 import { RateLimit } from "../common/decorators/rate-limit.decorator";
 import type { AdminAuthenticatedRequest } from "../common/request.types";
-import { AdminAuthGuard } from "../admin-auth/admin-auth.guard";
-import { RolesGuard } from "../admin-auth/roles.guard";
+import { AdminGuarded } from "../admin-auth/admin-guarded.decorator";
 import { RequireRole } from "../admin-auth/roles.decorator";
 import { PRIVILEGED_READ_ROLES, WRITE_ROLES } from "../admin-auth/admin-roles";
 import { AdminAuditService } from "../admin-auth/admin-audit.service";
@@ -26,9 +25,10 @@ const MAX_HISTORY_LIMIT = 200;
  * `PRIVILEGED_READ_ROLES` 而不是业务接口的 `READ_ROLES`。
  *
  * 前端的「用户与统计」页签同样对观察者隐藏，两边保持一致。
+ *
+ * 守卫逐个方法标注（`@AdminGuarded()`），不挂类上。详见 [AdminGuarded]。
  */
 @Public()
-@UseGuards(AdminAuthGuard, RolesGuard)
 @RateLimit("admin")
 @Controller("app/admin/users")
 export class UserAdminController {
@@ -37,12 +37,14 @@ export class UserAdminController {
     private readonly audit: AdminAuditService,
   ) {}
 
+  @AdminGuarded()
   @Get()
   @RequireRole(...PRIVILEGED_READ_ROLES)
   list(@Query("query") query?: string, @Query("limit") limit?: string, @Query("offset") offset?: string) {
     return this.users.list((query ?? "").trim().slice(0, 80), this.pageSize(limit), this.offset(offset));
   }
 
+  @AdminGuarded()
   @Get(":id/playback")
   @RequireRole(...PRIVILEGED_READ_ROLES)
   async playback(@Param("id") id: string, @Query("limit") limit?: string) {
@@ -51,6 +53,7 @@ export class UserAdminController {
     return detail;
   }
 
+  @AdminGuarded()
   @Post(":id/disabled")
   @RequireRole(...WRITE_ROLES)
   async setDisabled(
@@ -68,6 +71,7 @@ export class UserAdminController {
     return changed;
   }
 
+  @AdminGuarded()
   @Delete(":id")
   @RequireRole(...WRITE_ROLES)
   @HttpCode(HttpStatus.NO_CONTENT)

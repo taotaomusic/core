@@ -7,8 +7,9 @@ import { ROLES_KEY } from "./roles.decorator";
 /**
  * 管理员角色守卫。
  *
- * 必须排在 [AdminAuthGuard] 之后（`@UseGuards(AdminAuthGuard, RolesGuard)`）：
- * 它只读 `request.adminUser` 做判断，自己不解析凭据。
+ * 必须排在 [AdminAuthGuard] 之后 —— 用 `@AdminGuarded()` 时这个顺序已经内置：
+ * 它只读 `request.adminUser` 做判断，自己不解析凭据。排反了会让所有角色校验
+ * 退化成「无身份」而一律拒绝。
  *
  * 没标注 `@RequireRole` 的路由一律放行 —— 默认拒绝会让所有历史路由立刻 403，
  * 而本模块的写操作本来就逐个标了角色。

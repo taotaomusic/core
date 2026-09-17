@@ -1,12 +1,11 @@
 import {
-  Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Post, Req, UseGuards,
+  Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Post, Req,
 } from "@nestjs/common";
 import { ApiErrors } from "../common/api.exception";
 import { Public } from "../common/decorators/public.decorator";
 import { RateLimit } from "../common/decorators/rate-limit.decorator";
 import type { AdminAuthenticatedRequest } from "../common/request.types";
-import { AdminAuthGuard } from "../admin-auth/admin-auth.guard";
-import { RolesGuard } from "../admin-auth/roles.guard";
+import { AdminGuarded } from "../admin-auth/admin-guarded.decorator";
 import { RequireRole } from "../admin-auth/roles.decorator";
 import { READ_ROLES, WRITE_ROLES } from "../admin-auth/admin-roles";
 import { AdminAuditService } from "../admin-auth/admin-audit.service";
@@ -19,9 +18,10 @@ const IMAGE_API_CHANNEL = "GPTIMAGE2";
  *
  * 密钥是花钱的东西：导入和删除都要求 `admin` 及以上，并留审计。审计里
  * **只记 Key 的标识与额度，绝不记明文** —— 明文只写服务端数据库，从不回传。
+ *
+ * 守卫逐个方法标注（`@AdminGuarded()`），不挂类上。详见 [AdminGuarded]。
  */
 @Public()
-@UseGuards(AdminAuthGuard, RolesGuard)
 @RateLimit("admin")
 @Controller("app/admin/image-keys")
 export class ImageKeyAdminController {
@@ -30,6 +30,7 @@ export class ImageKeyAdminController {
     private readonly audit: AdminAuditService,
   ) {}
 
+  @AdminGuarded()
   @Get()
   @RequireRole(...READ_ROLES)
   listKeys() {
@@ -37,6 +38,7 @@ export class ImageKeyAdminController {
   }
 
   /** 导入或更新 Key 的可用次数；明文只写服务端数据库，从不回传。 */
+  @AdminGuarded()
   @Post()
   @RequireRole(...WRITE_ROLES)
   async importKey(@Req() request: AdminAuthenticatedRequest, @Body() body: Record<string, unknown>) {
@@ -56,6 +58,7 @@ export class ImageKeyAdminController {
     return imported;
   }
 
+  @AdminGuarded()
   @Delete(":id")
   @RequireRole(...WRITE_ROLES)
   @HttpCode(HttpStatus.NO_CONTENT)

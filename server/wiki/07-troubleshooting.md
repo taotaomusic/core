@@ -162,19 +162,31 @@ AS "songId"
 ### 登录成功但发布/公告/用户页面报 401
 
 先确认**不是**守卫问题：所有管理控制器（`/app/admin/**`、`/desktop/admin/**`、`/admin/auth/**`）
-挂的都是同一个 `AdminAuthGuard`，它同时接受会话 Bearer 和 `X-Admin-Token`，所以登录后的会话令牌
-可以直接操作发布和公告页面，不需要另外填 `ADMIN_TOKEN`。
+挂的都是同一个 `AdminAuthGuard`，它只接受 `Authorization: Bearer <会话令牌>`，登录后直接就能
+操作发布和公告页面。
 
 如果确实报 401，检查：
 
 - 会话是否已过期（24 小时）或已被 `revokeOtherSessions` 撤销（改密码会踢掉其它设备）。
-- 前端 `api.ts` 的 `authHeaders()` 按**令牌长度**选头部：大于 60 走 Bearer，否则走
-  `X-Admin-Token`。会话令牌约 64 字符，正常走 Bearer；如果这里的分支判断被改坏，就会把会话
-  令牌当 `X-Admin-Token` 发出去，从而 401。
+- 请求头是否是 `Authorization: Bearer <token>`。**静态 `X-Admin-Token` 通道已整体移除**，
+  带这个头一律 401/4013。
 
-> **`AdminTokenGuard` 已经删掉了。** `common/guards/admin-token.guard.ts` 曾经有一个只认
-> `X-Admin-Token` 的守卫，但它**没有任何引用**，是纯死代码，本轮已删除。历史文档把它写成
+> **`AdminTokenGuard` 早已删除。** `common/guards/admin-token.guard.ts` 曾经有一个只认
+> `X-Admin-Token` 的守卫，但它**没有任何引用**，是纯死代码。历史文档把它写成
 > “发布接口的守卫”是错的，照着它排查会走偏。
+
+### 管理员登录返回 403/4031
+
+「首次登录必须先修改初始密码」。默认管理员（以及任何由超管重置过密码的账号）带
+`must_change_password` 标记，改密前除 `me` 与 `change-password` 外所有管理接口都会被拒。
+先调 `POST /api/v1/admin/auth/change-password` 完成改密，或者用超管在
+`PATCH /api/v1/admin/auth/users/:id` 里重置该账号的口令。
+
+### 管理员登录返回 429/4291
+
+该**账号**被登录失败退避锁定了：连续失败 5 次触发，首次锁 5 分钟，之后每轮翻倍、30 分钟封顶。
+换 IP 没有用（这正是它和 4290 的区别，4290 才是来源地址限流）。等待退避期过去，或由超管在
+`PATCH /api/v1/admin/auth/users/:id` 里重置口令。注意退避状态是**进程内 Map**，重启服务即清空。
 
 ### 管理员接口返回 403/4030
 
@@ -205,8 +217,8 @@ AS "songId"
 - `record()` 的调用是否真的被 `await` 了。没 await 的话请求返回后异步写入可能被进程回收掉。
 - 该模块是否 `imports: [AdminAuthModule]`（`AdminAuditService` 由它导出）。
 
-`admin_id` 为 `null` 是正常的：那表示操作来自 `X-Admin-Token` 兼容身份（`id = 0` 折成 `null`），
-或者该管理员后来被删除了（外键 `ON DELETE SET NULL`）。
+`admin_id` 为 `null` 是正常的：那表示该管理员后来被删除了（外键 `ON DELETE SET NULL`），
+历史审计必须保留为「无归属」。这是当前唯一会产生无归属记录的原因。
 
 ### 白名单里明明有我的 IP 却还是 403
 
@@ -224,12 +236,13 @@ AS "songId"
 早期版本的库把 `admin_id` 建成了 `NOT NULL` + 无 `ON DELETE`，而 `CREATE TABLE IF NOT EXISTS`
 不会修正已存在的表。迁移里有可重复执行的 `ALTER` 补齐，重启服务让迁移跑一次即可。
 
-同理，`X-Admin-Token` 兼容身份写审计时 `id = 0`，在 `admin_users` 里没有对应行；落库前必须过
-`auditActorId()` 折成 `null`，否则也会撞这个外键。
+另外，落库前统一过 `auditActorId()`：身份缺失或 `id` 不是正整数时折成 `null`，不让非法值
+撞这个外键。
 
 ### 忘记默认管理员密码
 
-删除该行后重启服务，`AdminBootstrapService` 会重新创建 `admin / admin123`：
+删除该行后重启服务，`AdminBootstrapService` 会重新创建 `admin`，口令取
+`ADMIN_INITIAL_PASSWORD`（未设置则随机生成并在日志里打印一次），并重新带上强制改密标记：
 
 ```sql
 DELETE FROM admin_users WHERE username = 'admin';
@@ -358,7 +371,7 @@ ORDER BY quota DESC, id;
 - `DATABASE_URL` 完整连接串。
 - 用户密码。
 - 访问令牌和刷新令牌。
-- `ADMIN_TOKEN`。
+- 管理后台会话令牌（`ADMIN_SESSION_TOKEN` / `localStorage.taotao_admin_token`）。
 
 允许输出：
 
@@ -378,7 +391,7 @@ ORDER BY quota DESC, id;
 | 401/4010 | Authorization 是否缺失或过期 |
 | 401/4011 | 普通登录密码错；管理员登录失败或 2FA 票据过期 |
 | 401/4012 | 刷新令牌是否已轮换、撤销或过期 |
-| 401/4013 | 管理员会话与 `X-Admin-Token` 都不被接受（凭据缺失、过期、或 `ADMIN_TOKEN` 未配置） |
+| 401/4013 | 管理员会话不被接受（`Authorization: Bearer` 缺失、过期、已撤销，或用了已移除的 `X-Admin-Token`） |
 | 403/4030 | 管理员角色不足，或当前 IP 不在白名单中 |
 | 404/4040 | 路径和全局 `/api/v1` 前缀 |
 | 404/4041 | Android/桌面版本、补丁或发布对象不存在 |

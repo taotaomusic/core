@@ -1,7 +1,15 @@
 <template>
   <el-config-provider :locale="zhCn">
+    <!-- 首次登录必须改密：优先于后台界面，也优先于登录页 -->
+    <ForcePasswordChange
+      v-if="token && mustChangePassword"
+      :token="token"
+      @changed="onPasswordChanged"
+      @logout="forgetToken"
+    />
+
     <!-- 未登录：显示登录页 -->
-    <AdminLogin v-if="askToken" @login="onLogin" />
+    <AdminLogin v-else-if="askToken" @login="onLogin" />
 
     <!-- 已登录：显示管理界面 -->
     <div v-else class="shell">
@@ -99,7 +107,8 @@ import zhCn from "element-plus/es/locale/lang/zh-cn";
 import { Check, Upload, Connection, Bell, User, Key, Setting, Lock, Moon, Sunny, SwitchButton, Monitor } from '@element-plus/icons-vue'
 import { useDark, useToggle } from '@vueuse/core'
 import AdminLogin from "./components/AdminLogin.vue";
-import { adminLogout } from "./api";
+import ForcePasswordChange from "./components/ForcePasswordChange.vue";
+import { adminLogout, adminMe, type AdminIdentity } from "./api";
 
 // 标签页使用异步组件：用户未打开的管理模块不进入首屏主包。
 const ReleaseManager = defineAsyncComponent(() => import("./components/ReleaseManager.vue"));
@@ -117,7 +126,14 @@ const STORAGE_KEY = "taotao_admin_token";
 const tab = ref("releases");
 const token = ref("");
 const askToken = ref(false);
-const adminInfo = ref<{ id: number; username: string; role: string; display_name: string } | null>(null);
+const adminInfo = ref<AdminIdentity | null>(null);
+/**
+ * 账号仍在「首次登录必须改密」状态。
+ *
+ * 服务端在改密前会把其它管理接口一律拒成 403/4031，所以这里必须拦住界面，
+ * 否则用户会看到一堆报错的页签而不是一个明确的改密入口。
+ */
+const mustChangePassword = ref(false);
 
 // 响应式状态
 const isMobile = ref(false);
@@ -139,16 +155,15 @@ onMounted(() => {
   const stored = localStorage.getItem(STORAGE_KEY);
   if (stored) {
     token.value = stored;
-    // 尝试验证 token 有效性
-    import("./api").then(({ adminMe }) => {
-      adminMe(stored).then(info => {
-        adminInfo.value = info;
-      }).catch(() => {
-        // token 无效，清除并显示登录页
-        localStorage.removeItem(STORAGE_KEY);
-        token.value = "";
-        askToken.value = true;
-      });
+    // 尝试验证 token 有效性；同时取出强制改密标记，刷新页面后仍能停在改密页。
+    adminMe(stored).then(info => {
+      adminInfo.value = info;
+      mustChangePassword.value = info.must_change_password === true;
+    }).catch(() => {
+      // token 无效，清除并显示登录页
+      localStorage.removeItem(STORAGE_KEY);
+      token.value = "";
+      askToken.value = true;
     });
   } else {
     askToken.value = true;
@@ -162,9 +177,10 @@ onUnmounted(() => {
   window.removeEventListener('resize', checkMobile);
 });
 
-function onLogin(data: { token: string; admin: { id: number; username: string; role: string; display_name: string } }) {
+function onLogin(data: { token: string; admin: AdminIdentity }) {
   token.value = data.token;
   adminInfo.value = data.admin;
+  mustChangePassword.value = data.admin.must_change_password === true;
   localStorage.setItem(STORAGE_KEY, data.token);
   askToken.value = false;
   // 页签可见性随角色变化（用户与统计、管理员、审计日志）。上一个会话停在这些页签上时，
@@ -172,11 +188,29 @@ function onLogin(data: { token: string; admin: { id: number; username: string; r
   tab.value = "releases";
 }
 
+/**
+ * 强制改密完成。
+ *
+ * 重新拉一次 `me` 而不是直接把标记置 false：改密成功后服务端会撤销其它会话、
+ * 保留当前这条，重新确认一次能顺带验证当前会话仍然有效。
+ */
+async function onPasswordChanged() {
+  try {
+    const info = await adminMe(token.value);
+    adminInfo.value = info;
+    mustChangePassword.value = info.must_change_password === true;
+  } catch {
+    // 会话在改密过程中失效（例如被别处撤销）：退回登录页重新来一次。
+    await forgetToken();
+  }
+}
+
 async function forgetToken() {
   try { await adminLogout(token.value); } catch { /* 忽略 */ }
   localStorage.removeItem(STORAGE_KEY);
   token.value = "";
   adminInfo.value = null;
+  mustChangePassword.value = false;
   askToken.value = true;
   tab.value = "releases";
 }

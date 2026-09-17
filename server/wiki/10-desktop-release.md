@@ -2,7 +2,7 @@
 
 [返回文档中心](README.md)
 
-桌面发布由 `src/desktop-release/` 实现，与 Android `src/release/` 分开保存版本记录和最低支持版本。两者共享 `AdminAuthGuard`（管理员会话或 `X-Admin-Token`）、灰度哈希和 `app_config`，但 **不能共用 versionCode 表或最低版本字段**。当前默认架构是 `windows-x64`。
+桌面发布由 `src/desktop-release/` 实现，与 Android `src/release/` 分开保存版本记录和最低支持版本。两者共享 `AdminAuthGuard`（只接受管理员会话 `Authorization: Bearer`）、灰度哈希和 `app_config`，但 **不能共用 versionCode 表或最低版本字段**。当前默认架构是 `windows-x64`。
 
 ## 1. 发布对象
 
@@ -40,8 +40,8 @@
 
 ## 2. 接口与鉴权
 
-路径均需加 `/api/v1`，后台接口挂 `AdminAuthGuard`（管理员会话 Bearer 或兼容的 `X-Admin-Token`），
-并受管理 IP 限流（60 次/15 分钟）。
+路径均需加 `/api/v1`，后台接口挂 `AdminAuthGuard`（**只接受管理员会话 `Authorization: Bearer <token>`**），
+并受管理 IP 限流（60 次/15 分钟）。静态 `X-Admin-Token` 兼容通道已整体移除。
 
 | 方法 | 路径 | 请求体/参数 | 说明 |
 | --- | --- | --- | --- |
@@ -103,6 +103,17 @@
 
 ## 4. 推荐发布顺序
 
+下面所有 `curl.exe` 示例都用 `$env:ADMIN_SESSION_TOKEN` 承载管理员会话。它的取法是先登录一次，把返回的 `data.token` 存进环境变量：
+
+```powershell
+$login = curl.exe -s -X POST "https://你的域名/api/v1/admin/auth/login" `
+  -H "content-type: application/json" `
+  -d '{"username":"admin","password":"<你的管理员口令>"}' | ConvertFrom-Json
+$env:ADMIN_SESSION_TOKEN = $login.data.token   # 若账号开了 2FA，需再走一步 totp-verify
+```
+
+会话有效期 24 小时，过期后重新登录即可。**默认口令首次登录会被要求先改密码**（此时除 `/me` 与改密接口外一律 403/4031）。
+
 ### 4.1 计算清单
 
 在桌面构建机生成每个模块的大小和 sha256，清单中只放相对路径：
@@ -125,7 +136,7 @@ $origin = "https://你的域名"
 $sha = (Get-FileHash "C:\build\taotao-desktop\app\taotao.exe" -Algorithm SHA256).Hash.ToLower()
 
 curl.exe -X POST "$origin/api/v1/desktop/admin/artifacts?sha256=$sha" `
-  -H "X-Admin-Token: $env:ADMIN_TOKEN" `
+  -H "Authorization: Bearer $env:ADMIN_SESSION_TOKEN" `
   --data-binary "@C:\build\taotao-desktop\app\taotao.exe"
 ```
 
@@ -137,7 +148,7 @@ curl.exe -X POST "$origin/api/v1/desktop/admin/artifacts?sha256=$sha" `
 $manifest = Get-Content .\desktop-release.json -Raw
 Invoke-RestMethod -Method Post `
   -Uri "$origin/api/v1/desktop/admin/releases" `
-  -Headers @{ "X-Admin-Token" = $env:ADMIN_TOKEN } `
+  -Headers @{ "Authorization" = "Bearer $env:ADMIN_SESSION_TOKEN" } `
   -ContentType "application/json" `
   -Body $manifest
 ```
@@ -157,16 +168,16 @@ Invoke-RestMethod -Method Post `
 ```powershell
 # 查看版本
 curl.exe "$origin/api/v1/desktop/admin/releases?channel=release&architecture=windows-x64" `
-  -H "X-Admin-Token: $env:ADMIN_TOKEN"
+  -H "Authorization: Bearer $env:ADMIN_SESSION_TOKEN"
 
 # 先放 10%
 curl.exe -X POST "$origin/api/v1/desktop/admin/rollout" `
-  -H "X-Admin-Token: $env:ADMIN_TOKEN" -H "content-type: application/json" `
+  -H "Authorization: Bearer $env:ADMIN_SESSION_TOKEN" -H "content-type: application/json" `
   -d '{"channel":"release","architecture":"windows-x64","versionCode":120,"percent":10,"enabled":true}'
 
 # 确认稳定后放满 100%
 curl.exe -X POST "$origin/api/v1/desktop/admin/rollout" `
-  -H "X-Admin-Token: $env:ADMIN_TOKEN" -H "content-type: application/json" `
+  -H "Authorization: Bearer $env:ADMIN_SESSION_TOKEN" -H "content-type: application/json" `
   -d '{"channel":"release","architecture":"windows-x64","versionCode":120,"percent":100}'
 ```
 
@@ -184,7 +195,7 @@ curl.exe -X POST "$origin/api/v1/desktop/admin/rollout" `
 
 ```powershell
 curl.exe -X POST "$origin/api/v1/desktop/admin/min-version" `
-  -H "X-Admin-Token: $env:ADMIN_TOKEN" -H "content-type: application/json" `
+  -H "Authorization: Bearer $env:ADMIN_SESSION_TOKEN" -H "content-type: application/json" `
   -d '{"channel":"release","architecture":"windows-x64","versionCode":120}'
 ```
 
@@ -210,7 +221,9 @@ curl.exe -X POST "$origin/api/v1/desktop/admin/min-version" `
 | 404/4041 | 桌面版本、模块或差分不存在 | channel、architecture、versionCode、sha256 |
 | 404/4042 | 数据库有记录但本地对象缺失 | `DESKTOP_RELEASE_DIR` 权限和磁盘 |
 | 409/4091 | 灰度/最低版本守卫失败 | 是否已有模块清单和 100% 全量版本 |
-| 401/4013 | 管理令牌无效 | `X-Admin-Token` 与服务端配置 |
+| 401/4013 | 管理员会话无效 | `Authorization: Bearer` 是否缺失、过期、已撤销 |
+| 403/4031 | 会话有效但需先改密码 | 默认口令登录后未完成强制改密 |
+| 403/4030 | 角色不足 | 当前账号是否为 `viewer` 只读角色 |
 | 502/5020 | 发布记录或外部差分处理失败 | PostgreSQL、磁盘和差分工具日志 |
 | 503/5032 | 桌面发布记录读写失败 | 数据库连接、迁移和事务日志 |
 

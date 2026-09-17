@@ -14,10 +14,9 @@ export class AuditLogRepository {
   /**
    * 写一条审计记录。
    *
-   * `adminId` 允许为 `null`：`X-Admin-Token` 兼容身份（[AdminAuthGuard] 里
-   * `id = 0`）在 `admin_users` 里没有对应行，写 0 会撞外键。这类操作按
-   * 「无归属管理员」记录，但同样留痕。管理员被删除后，其历史记录也会
-   * 因外键 `ON DELETE SET NULL` 变成无归属，而不是被连带删除。
+   * `adminId` 允许为 `null`：管理员被删除后，其历史记录会因外键
+   * `ON DELETE SET NULL` 变成「无归属」，而不是被连带删除。写入前统一经
+   * `auditActorId()` 收敛，确保不会把非法 id 落库撞外键。
    */
   async log(adminId: number | null, action: string, targetType: string | null, targetId: string | null,
             detail: string | null, ip: string, userAgent: string): Promise<void> {

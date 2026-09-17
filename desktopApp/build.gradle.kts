@@ -215,8 +215,13 @@ val packageDesktopUpdateBundle by tasks.registering(Sync::class) {
 }
 
 /**
- * 上传流程使用环境变量 DESKTOP_RELEASE_BASE_URL / ADMIN_TOKEN。
+ * 上传流程使用环境变量 DESKTOP_RELEASE_BASE_URL / ADMIN_SESSION_TOKEN。
  * 先逐个上传内容寻址对象，再提交清单；重复上传相同 sha256 是幂等的。
+ *
+ * ADMIN_SESSION_TOKEN 是**管理后台登录后签发的会话令牌**，不是静态密钥：
+ * 打开管理后台 → 登录 → 从浏览器 DevTools 的
+ * `localStorage.getItem("taotao_admin_token")` 取出，作为环境变量传入。
+ * 会话 24 小时过期，过期后重新登录取一次即可。
  */
 val publishDesktopRelease by tasks.registering {
     group = "publishing"
@@ -224,9 +229,9 @@ val publishDesktopRelease by tasks.registering {
     dependsOn(tasks.named("generateDesktopManifest"))
     doLast {
         val base = (System.getenv("DESKTOP_RELEASE_BASE_URL") ?: "").trimEnd('/')
-        val token = System.getenv("ADMIN_TOKEN") ?: ""
+        val token = System.getenv("ADMIN_SESSION_TOKEN") ?: ""
         require(base.startsWith("http")) { "需要设置 DESKTOP_RELEASE_BASE_URL" }
-        require(token.isNotBlank()) { "需要设置 ADMIN_TOKEN" }
+        require(token.isNotBlank()) { "需要设置 ADMIN_SESSION_TOKEN（管理后台登录后的会话令牌）" }
         val manifestFile = layout.buildDirectory.file("desktop-update/manifest.json").get().asFile
         @Suppress("UNCHECKED_CAST")
         val manifest = groovy.json.JsonSlurper().parse(manifestFile) as Map<String, Any>
@@ -239,14 +244,14 @@ val publishDesktopRelease by tasks.registering {
                 commandLine(
                     "curl.exe", "--fail-with-body", "-sS", "-X", "POST",
                     "$base/api/v1/desktop/admin/artifacts?sha256=$sha",
-                    "-H", "X-Admin-Token: $token", "--data-binary", "@${file.absolutePath}",
+                    "-H", "Authorization: Bearer $token", "--data-binary", "@${file.absolutePath}",
                 )
             }
         }
         exec {
             commandLine(
                 "curl.exe", "--fail-with-body", "-sS", "-X", "POST",
-                "$base/api/v1/desktop/admin/releases", "-H", "X-Admin-Token: $token",
+                "$base/api/v1/desktop/admin/releases", "-H", "Authorization: Bearer $token",
                 "-H", "content-type: application/json", "--data-binary", "@${manifestFile.absolutePath}",
             )
         }

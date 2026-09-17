@@ -257,12 +257,12 @@ CREATE TABLE admin_audit_log (
 );
 ```
 
-`admin_id` **可空**是刻意的，有两个原因：
+`admin_id` **可空**是刻意的：管理员被删除后历史审计必须保留，只是变成“无归属”。写成
+`NOT NULL` 且无 `ON DELETE` 动作时，删除管理员会直接撞外键报 23503。
 
-1. 管理员被删除后历史审计必须保留，只是变成“无归属”。写成 `NOT NULL` 且无 `ON DELETE` 动作
-   时，删除管理员会直接撞外键报 23503。
-2. `X-Admin-Token` 兼容路径合成的身份 `id = 0` 在 `admin_users` 里没有对应行，写具体 ID 同样
-   撞外键。落库前必须过 `auditActorId()`，把 `id = 0` 折成 `null`。
+落库前仍统一过 `auditActorId()`：它现在的职责是**防御性收敛** —— 身份缺失或 `id` 不是正整数时
+一律写 `null`，不让非法值撞外键。（历史上的另一个原因「`X-Admin-Token` 兼容身份 `id = 0`」
+随该通道移除而消失。）
 
 早期版本这两张表建成了 `NOT NULL` + 无 `ON DELETE` 的外键，`CREATE TABLE IF NOT EXISTS`
 **不会**修正已存在的表定义。迁移里因此显式补了可重复执行的修正：

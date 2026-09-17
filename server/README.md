@@ -94,23 +94,29 @@ src/
 
 ### 管理后台
 
-浏览器打开 `http://localhost:4500/admin/`。首次进入会跳转到登录页，使用管理员用户名密码登录。服务启动时会自动创建默认超级管理员账号 `admin / admin123`（请尽快修改密码）。
+浏览器打开 `http://localhost:4500/admin/`。首次进入会跳转到登录页。服务启动时会自动创建默认超级管理员账号 `admin`：
+
+- 设置了 `ADMIN_INITIAL_PASSWORD`（至少 12 字符）时，初始口令取该值，日志只提示「口令取自环境变量」，不打印明文。
+- 未设置时启动阶段随机生成一个 32 字节口令，并在日志里以 `WARN` 打印**一次**。
+
+两种情况下该账号都带「首次登录必须改密」标记：改密前除 `/admin/auth/me` 与
+`/admin/auth/change-password` 外，所有管理接口一律 403/4031。前端会直接进入全屏改密页，
+没有跳过入口。
 
 管理后台支持企业级认证体系：
 - **多管理员账号**：独立于普通 users 表，支持 super_admin / admin / viewer 三种角色
-- **双因素认证 (2FA)**：基于 TOTP 的动态码验证，可选启用
+- **双因素认证 (2FA)**：基于 TOTP 的动态码验证，可选启用（自实现，不依赖已停维护的 speakeasy）
 - **操作审计日志**：全量记录管理员操作，支持按操作类型筛选
 - **IP 白名单**：可选的网络层访问控制
+- **登录失败退避**：同一账号连续失败 5 次即锁定，5 → 10 → 20 → 30 分钟逐轮翻倍
 - **LDAP/SSO 集成**：可选的企业目录对接，支持组到角色的映射
 
 后台入口固定在 `/admin/`，服务根路径留给未来网页版；Android 发布、补丁、公告、用户统计、AI 密钥和系统设置通过 `/api/v1/app/admin/*`，Windows 桌面发布通过独立的 `/api/v1/desktop/admin/*`，管理员管理通过 `/api/v1/admin/auth/*`。
 
-认证方式支持两种（向后兼容），**两种对以上所有管理接口都有效**：
-- 新会话：`Authorization: Bearer <token>`（通过 `/api/v1/admin/auth/login` 获取，24 小时有效）
-- 旧版令牌：`X-Admin-Token: <token>`（.env 中的 ADMIN_TOKEN，仍可使用）
-
-它们由同一个 `AdminAuthGuard` 处理：先试 Bearer，失败再退回 `X-Admin-Token`。所以登录后台后
-直接就能操作发布、公告和用户页面，不需要另外填 `ADMIN_TOKEN`。
+管理接口**只认一种凭据**：`Authorization: Bearer <token>`（通过 `/api/v1/admin/auth/login` 获取，
+24 小时有效）。历史上的静态 `X-Admin-Token` / `ADMIN_TOKEN` 通道已整体移除 —— 它同时绕过 2FA、
+IP 白名单、会话撤销与审计归属。脚本化调用请从后台登录后取出会话令牌（浏览器
+`localStorage.taotao_admin_token`），或用环境变量 `ADMIN_SESSION_TOKEN`。
 
 `/app/admin/*` 与 `/desktop/admin/*` 的**写操作**要求 `admin` 及以上角色，观察者（`viewer`）
 只能读、写会拿到 403/4030；所有写操作都会记一条审计（`admin_audit_log`）。
@@ -177,7 +183,7 @@ npm run dev:frontend      # 独立开发服务器（5173），API 代理到本�
 | `PORT` | 监听端口，默认 `4500` |
 | `DATABASE_URL` | PostgreSQL 连接串，如 `postgres://postgres:密码@localhost:5432/music`。**没有默认值**，缺失或不是 `postgres://` 开头会启动即失败 |
 | `AUTH_SECRET` | 访问令牌签名密钥，生产环境必须为至少 32 位随机值（启动时校验） |
-| `ADMIN_TOKEN` | 静态管理令牌（`X-Admin-Token` 的校验值）。留空只关闭这条兼容路径，管理员账号密码登录不受影响 |
+| `ADMIN_INITIAL_PASSWORD` | 默认超级管理员的初始口令。留空则启动时随机生成并只打印一次；设置时至少 12 字符。两种情况下该账号首次登录都必须改密 |
 | `APK_DIR` | APK 存放目录，默认 `./data/apk` |
 | `DESKTOP_RELEASE_DIR` | Windows 模块和差分对象目录，默认 `./data/desktop` |
 | `SHARE_PREVIEW_DIR` | 分享试听缓存目录，默认 `./data/share-preview` |
@@ -189,6 +195,8 @@ npm run dev:frontend      # 独立开发服务器（5173），API 代理到本�
 | `ENV_FILE` | 指定 `.env` 的其它路径 |
 | `APISWEET_BASE_URL` | 图片生成服务地址，默认 `https://apisweet.com` |
 | `LSKY_UPLOAD_URL` / `LSKY_API_KEY` | 头像图床地址和服务端 Key |
+| `LSKY_PUBLIC_HOSTS` | 可选：允许写入头像地址的图床主机白名单（逗号分隔）。留空只要求 https 且格式合法 |
+| `CORS_ALLOWED_ORIGINS` | 可选：允许跨域读取接口响应的来源白名单（逗号分隔）。**留空即不下发任何 CORS 头**；音视频流与搜索接口有各自的通配 `*`，不受影响 |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASSWORD` / `SMTP_FROM` | 注册验证码邮件 SMTP 配置；五项均需设置 |
 | `IM_ENABLED` / `IM_INTERNAL_API_BASE_URL` / `IM_EXTERNAL_GATEWAY_URL` / `IM_API_TOKEN` / `IM_SESSION_LIFETIME_SECONDS` | 悟空 IM 开关、内网 HTTP API、TCP Gateway、服务端 Token 和会话周期 |
 | `TOTP_ISSUER` | 2FA TOTP 发行者名称，默认 `桃桃音乐管理后台` |
@@ -200,9 +208,11 @@ npm run dev:frontend      # 独立开发服务器（5173），API 代理到本�
 | `LDAP_TIMEOUT_MS` | LDAP 连接与单次操作的超时，默认 `10000` |
 | `TRUST_PROXY` | 是否采信 `X-Forwarded-For` 作为客户端地址，默认**关闭**。只有确实部署在可信反向代理之后才设 `1` |
 
-> **LDAP 登录的回落规则**：目录明确拒绝（口令错、本地已禁用）时不回落，直接 401；
-> 未配置、目录不可达、或目录里查不到该用户时回落到本地密码校验 —— 这条路径是
-> 配置写错或目录挂掉时的 break-glass 通道，默认超管 `admin` 因此始终可用。
+> **LDAP 登录的回落规则**：目录明确拒绝（口令错、已被禁用）时不回落，直接 401；
+> 目录已用用户 DN 绑定成功但后续同步失败时返回 502，同样不回落；未配置、目录不可达、
+> 或目录里查不到该用户时回落到本地密码校验 —— 这条路径是配置写错或目录挂掉时的
+> break-glass 通道，默认超管 `admin` 因此始终可用。**例外**：账号的 `auth_source = 'ldap'`
+> （已被目录接管）时，即使目录不可达也不回落本地口令，否则「目录里已停用」在抖动时会失效。
 
 > **IP 白名单与 `TRUST_PROXY`**：白名单按 TCP 对端地址判断。`X-Forwarded-For` 是
 > 客户端可随手伪造的头，未开启 `TRUST_PROXY` 时一律忽略 —— 否则任何人加一个请求头
@@ -227,9 +237,9 @@ npm run dev:frontend      # 独立开发服务器（5173），API 代理到本�
 ### 公告
 
 - `GET /api/v1/announcements`：公开读取最新 20 条已发布公告，置顶公告始终排在最前。
-- 管理端使用 `GET/POST /api/v1/app/admin/announcements` 读取、发布公告；`POST /api/v1/app/admin/announcements/{id}` 编辑，`POST /api/v1/app/admin/announcements/{id}/enabled` 上下线，`POST /api/v1/app/admin/announcements/{id}/pinned` 置顶/取消置顶，`DELETE /api/v1/app/admin/announcements/{id}` 删除。均需管理员会话或 `X-Admin-Token`。
+- 管理端使用 `GET/POST /api/v1/app/admin/announcements` 读取、发布公告；`POST /api/v1/app/admin/announcements/{id}` 编辑，`POST /api/v1/app/admin/announcements/{id}/enabled` 上下线，`POST /api/v1/app/admin/announcements/{id}/pinned` 置顶/取消置顶，`DELETE /api/v1/app/admin/announcements/{id}` 删除。均需管理员会话。
 
-### 管理端用户（需要管理员会话或 `X-Admin-Token`）
+### 管理端用户（需要管理员会话）
 
 - `GET /api/v1/app/admin/users`：按用户名、昵称或邮箱搜索用户，并返回听歌汇总。
 - `GET /api/v1/app/admin/users/{id}/playback`：读取该用户的统计与最近播放明细。
@@ -453,7 +463,7 @@ ON CONFLICT (channel, key) DO UPDATE SET quota = excluded.quota;
 
 - `GET /api/v1/app/apk/{versionCode}`：下载安装包，支持 Range（206 / `Content-Range`），越界返回 416，`ETag` 为 APK 的 sha256。
 
-发布管理（需要管理员会话 `Authorization: Bearer`，或兼容的请求头 `X-Admin-Token`）：
+发布管理（需要管理员会话 `Authorization: Bearer`）：
 
 - `GET /api/v1/app/admin/releases?channel=release`
 - `POST /api/v1/app/admin/releases?versionCode=&versionName=&note=&rollout=&minSdk=&sha256=`
@@ -462,7 +472,7 @@ ON CONFLICT (channel, key) DO UPDATE SET quota = excluded.quota;
 
   ```powershell
   curl.exe -X POST "https://music.xydaigua.cn/api/v1/app/admin/releases?versionCode=54&versionName=1.0.53&note=修复闪退&rollout=0" `
-    -H "X-Admin-Token: $env:ADMIN_TOKEN" `
+    -H "Authorization: Bearer $env:ADMIN_SESSION_TOKEN" `
     --data-binary "@androidApp/build/outputs/apk/release/androidApp-release.apk"
   ```
 
@@ -506,14 +516,38 @@ node tools/reset-db.mjs postgres://postgres:密码@localhost:5432/music_verify
 
 $env:DATABASE_URL="postgres://postgres:密码@localhost:5432/music_verify"
 $env:PORT="4720"; $env:APK_DIR="./tmp/apk"
-$env:AUTH_SECRET="0123456789012345678901234567890123456789"; $env:ADMIN_TOKEN="verify-token"
+$env:AUTH_SECRET="0123456789012345678901234567890123456789"; $env:ADMIN_INITIAL_PASSWORD="verify-initial-123456"
 $env:NODE_ENV="test"; $env:EMAIL_VERIFICATION_TEST_CODE="123456"
+$env:IM_ENABLED="false"; $env:CORS_ALLOWED_ORIGINS="https://verify.example"
+npm run build:frontend   # /admin 下的 CSP 与主题脚本断言需要 dist/public
 npm run dev
 # 另一个终端
-node tools/verify-contract.mjs http://127.0.0.1:4720 verify-token
+node tools/verify-contract.mjs http://127.0.0.1:4720
 ```
 
-以脚本实际输出为准，所有契约必须全绿。脚本会核对状态码、业务码、信封形状、NDJSON 行格式、字段类型（`data.id` 必须是 number、`songId` 必须是字符串、`createdAt` / `configVersion` / `apkSize` 必须是 number）、纯文本歌词、Range 行为，以及「无效令牌访问 bootstrap 仍返回 200」这类红线。
+启动环境的四个必填项，缺一个就会有成片断言失败：
+
+- `ADMIN_INITIAL_PASSWORD` 必须与脚本读到的**同一个值**：脚本要用它完成默认管理员的首次登录与
+  强制改密，拿不到管理会话后面所有管理端断言会连锁失败。
+- `IM_ENABLED=false` 必须显式设置（`.env` 里通常是 `true`），否则「未启用 IM 时会话入口返回
+  503/5031」会变成 502/5020。
+- `CORS_ALLOWED_ORIGINS` 要包含 `https://verify.example`，否则「白名单来源回显自身 Origin」
+  会失败（默认不下发任何 CORS 头，失败恰好证明这一点）。
+- `EMAIL_VERIFICATION_TEST_CODE` 要同时给**脚本自己**的环境，脚本会读它做断言。
+
+另外两个容易踩的坑：**每次运行前必须重置验证库**（版本/rollout 类断言依赖空库），以及
+**桌面发布与试听缓存目录要清空**（`data/desktop`、`data/share-preview`）。内容寻址存储在命中
+已有对象时会走「删除临时文件」的分支，上一轮留下的对象会让上传路径和首次运行时不同。
+
+以脚本实际输出为准，所有契约必须全绿（当前为 **213 项**）。脚本会核对状态码、业务码、信封形状、
+NDJSON 行格式、字段类型（`data.id` 必须是 number、`songId` 必须是字符串、`createdAt` /
+`configVersion` / `apkSize` 必须是 number）、纯文本歌词、Range 行为，以及「无效令牌访问
+bootstrap 仍返回 200」这类红线。
+
+管理端部分另有三组断言：**强制改密与 Bearer 会话准备**（初始口令登录 → 4031 拦截 → 改密 204 →
+新口令重登 → 旧口令失效）、**39 条管理路由逐条无凭据探测**（全部 401/4013，漏标
+`@AdminGuarded()` 即裸奔）、**账号退避 429/4291**（与来源地址限流的 4290 区分开，否则断言会
+因 IP 限流先命中而变成假阳性）。
 
 后面三组分别覆盖：PostgreSQL 迁移的四条硬规矩（并发注册、并发刷新同一令牌、停用版本不可下载、灰度分桶稳定）；搜索拆分后的新契约（60 首的耗时、`X-Accel-Buffering`、`favorited` / `vip` / `mid` 字段、批量收藏查询、`/link` 给的是上游直链、请求不存在的档位会降级、`/info` 过滤掉不存在的档位）；以及参数健壮性（`page=abc` 不会拼出 `page=NaN`、`quality=` 空串回落到 10 而不是 0）。
 
@@ -531,7 +565,7 @@ node tools/verify-contract.mjs http://127.0.0.1:4720 verify-token
 - `POST /desktop/admin/rollout` 分阶段放量，只有存在完整模块且 100% 放量的版本才能抬高 `min-version`。
 
 完整清单校验、发布命令、差分选择和错误码见 [wiki/10-desktop-release.md](wiki/10-desktop-release.md)。桌面后台不属于
-`/app/admin/*`，但用的是同一个 `AdminAuthGuard`（管理员会话或 `X-Admin-Token`）。
+`/app/admin/*`，但用的是同一个 `AdminAuthGuard`（只认管理员会话）。
 
 ### 悟空 IM
 

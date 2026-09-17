@@ -7,11 +7,12 @@
 //   node tools/reset-db.mjs postgres://postgres:密码@localhost:5432/music_verify
 //   $env:DATABASE_URL="postgres://postgres:密码@localhost:5432/music_verify"
 //   $env:PORT=4720; $env:APK_DIR="./tmp/apk"
-//   $env:AUTH_SECRET="0123456789012345678901234567890123456789"; $env:ADMIN_TOKEN="verify-token"
+//   $env:AUTH_SECRET="0123456789012345678901234567890123456789"
+//   $env:ADMIN_INITIAL_PASSWORD="verify-initial-123456"
 //   $env:NODE_ENV="test"; $env:EMAIL_VERIFICATION_TEST_CODE="123456"
 //   $env:IM_ENABLED="false"
 //   npm run dev
-//   node tools/verify-contract.mjs http://127.0.0.1:4720 verify-token
+//   node tools/verify-contract.mjs http://127.0.0.1:4720
 //
 // 两个容易踩的坑：
 //   * IM_ENABLED 必须显式设为 false。.env 里通常是 true，服务会继承它，
@@ -19,11 +20,30 @@
 //   * 每次运行前必须重置验证库。版本/rollout 类的断言依赖空库，
 //     上一轮留下的 release 记录会让「rollout=0 不下发」失败。
 //   * EMAIL_VERIFICATION_TEST_CODE 要同时给**脚本自己**的环境，脚本会读它做断言。
-//   全绿应为「通过 155 项，失败 0 项」。
+//   * ADMIN_INITIAL_PASSWORD 必须与服务启动时的环境一致：脚本要用它完成
+//     默认管理员的首次登录与强制改密，才能拿到后续断言要用的管理会话。
+//   * CORS_ALLOWED_ORIGINS 必须包含 https://verify.example，否则「白名单来源
+//     回显自身 Origin」一条会失败（默认不下发任何 CORS 头，失败即证明这一点）。
+//   * dist/public 必须先构建（npm run build:frontend），否则 /admin 下的 CSP
+//     与主题脚本断言拿不到 200。
+//   全绿应为「通过 213 项，失败 0 项」。检查项数量随脚本版本变化，以实际输出为准。
 import { createHash, randomBytes } from "node:crypto";
 
 const base = (process.argv[2] ?? "http://127.0.0.1:4720").replace(/\/+$/, "");
-const adminToken = process.argv[3] ?? "verify-token";
+
+/**
+ * 默认管理员的初始口令，与服务启动环境共用同一个变量。
+ *
+ * 服务端不再有写死的默认口令；契约验证必须显式提供，否则拿不到管理会话，
+ * 后面所有管理端断言都会连锁失败。
+ */
+const initialAdminPassword = process.env.ADMIN_INITIAL_PASSWORD ?? "";
+
+/** 强制改密后使用的新口令。 */
+const NEW_ADMIN_PASSWORD = "verify-admin-pass-12345";
+
+/** 管理端会话令牌。由下面的「管理端会话准备」段落填充。 */
+let adminSession = "";
 
 let passed = 0;
 let failed = 0;
@@ -53,6 +73,201 @@ async function main() {
   const missingBody = await missing.json();
   check("未匹配路由 404 且 code 4040", missing.status === 404 && missingBody.code === 4040, JSON.stringify(missingBody));
   check("错误体的 message 是字符串", typeof missingBody.message === "string", typeof missingBody.message);
+
+  // ==================== 管理端会话准备 ====================
+  //
+  // 必须在所有管理端断言之前完成：管理接口只接受登录后签发的会话令牌
+  // （静态 X-Admin-Token 已整体移除），而默认管理员启动时被标记为
+  // 「首次登录必须改密」，改密前除 me / change-password 外一律 403/4031。
+  // 所以这里先走完整链路：初始口令登录 → 验证拦截 → 改密 → 新口令重登。
+  section("管理端会话准备：强制改密与 Bearer 会话");
+
+  if (!initialAdminPassword) {
+    throw new Error("必须设置 ADMIN_INITIAL_PASSWORD（需与服务启动环境一致）");
+  }
+
+  const bootstrapLogin = await postJson("/api/v1/admin/auth/login", {
+    username: "admin", password: initialAdminPassword,
+  });
+  const pendingToken = bootstrapLogin.body.data?.token;
+  check(
+    "默认管理员用初始口令登录成功，且标记为必须改密",
+    bootstrapLogin.status === 200 && typeof pendingToken === "string"
+      && bootstrapLogin.body.data?.admin?.must_change_password === true,
+    `${bootstrapLogin.status} ${JSON.stringify(bootstrapLogin.body).slice(0, 160)}`,
+  );
+
+  const pendingBlocked = await fetch(`${base}/api/v1/admin/auth/users`, {
+    headers: { authorization: `Bearer ${pendingToken}` },
+  });
+  const pendingBlockedBody = await pendingBlocked.json();
+  check(
+    "改密前访问其它管理接口 403 且 code 4031",
+    pendingBlocked.status === 403 && pendingBlockedBody.code === 4031,
+    `${pendingBlocked.status} ${JSON.stringify(pendingBlockedBody).slice(0, 160)}`,
+  );
+
+  const changedPassword = await fetch(`${base}/api/v1/admin/auth/change-password`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${pendingToken}` },
+    body: JSON.stringify({ oldPassword: initialAdminPassword, newPassword: NEW_ADMIN_PASSWORD }),
+  });
+  check("强制改密成功（204）", changedPassword.status === 204, `实际 ${changedPassword.status}`);
+
+  const relogin = await postJson("/api/v1/admin/auth/login", {
+    username: "admin", password: NEW_ADMIN_PASSWORD,
+  });
+  adminSession = relogin.body.data?.token ?? "";
+  check(
+    "新口令登录成功且不再要求改密",
+    relogin.status === 200 && typeof adminSession === "string" && adminSession.length > 0
+      && relogin.body.data?.admin?.must_change_password === false,
+    `${relogin.status} ${JSON.stringify(relogin.body).slice(0, 160)}`,
+  );
+
+  const stalePassword = await postJson("/api/v1/admin/auth/login", {
+    username: "admin", password: initialAdminPassword,
+  });
+  check(
+    "初始口令改密后失效（401/4011）",
+    stalePassword.status === 401 && stalePassword.body.code === 4011,
+    `${stalePassword.status} ${JSON.stringify(stalePassword.body).slice(0, 160)}`,
+  );
+
+  // ==================== 管理路由逐条无凭据探测 ====================
+  //
+  // 管理端授权全靠 `@AdminGuarded()` 这一个装饰器。它是**白名单式**的：漏标一条
+  // 路由，那条路由就变成裸奔（既不校验会话也不校验角色），而且 TypeScript 不会报错、
+  // 启动也不会失败 —— 只能靠枚举来兜底。
+  //
+  // 期望 401/4013 而不是 401/4010：4013 说明 [AdminAuthGuard] 确实跑了。
+  // 若某天有人把 `@Public()` 从控制器上摘掉，全局访问令牌守卫会抢先返回 4010，
+  // 这条断言同样会失败，等于顺带看住了 `@Public()`。
+  section("管理路由逐条无凭据探测（漏标 @AdminGuarded 即裸奔）");
+  const guardedAdminRoutes = [
+    // admin/auth —— 公开路由（login / totp-verify / logout）刻意不在表内
+    ["GET", "/api/v1/admin/auth/me"],
+    ["POST", "/api/v1/admin/auth/change-password"],
+    ["POST", "/api/v1/admin/auth/totp-enable"],
+    ["POST", "/api/v1/admin/auth/totp-confirm"],
+    ["POST", "/api/v1/admin/auth/totp-disable"],
+    ["GET", "/api/v1/admin/auth/users"],
+    ["POST", "/api/v1/admin/auth/users"],
+    ["PATCH", "/api/v1/admin/auth/users/1"],
+    ["DELETE", "/api/v1/admin/auth/users/1"],
+    ["GET", "/api/v1/admin/auth/audit-log"],
+    ["GET", "/api/v1/admin/auth/ip-whitelist/1"],
+    ["POST", "/api/v1/admin/auth/ip-whitelist/1"],
+    // app/admin —— 发布管理
+    ["GET", "/api/v1/app/admin/releases"],
+    ["POST", "/api/v1/app/admin/releases"],
+    ["POST", "/api/v1/app/admin/rollout"],
+    ["POST", "/api/v1/app/admin/min-version"],
+    ["GET", "/api/v1/app/admin/config"],
+    ["GET", "/api/v1/app/admin/patches"],
+    ["POST", "/api/v1/app/admin/patches"],
+    ["POST", "/api/v1/app/admin/patch-rollout"],
+    ["POST", "/api/v1/app/admin/config"],
+    // desktop/admin —— Windows 发布管理
+    ["GET", "/api/v1/desktop/admin/releases"],
+    ["POST", "/api/v1/desktop/admin/artifacts"],
+    ["POST", "/api/v1/desktop/admin/releases"],
+    ["POST", "/api/v1/desktop/admin/rollout"],
+    ["POST", "/api/v1/desktop/admin/min-version"],
+    // app/admin/users —— 用户隐私数据
+    ["GET", "/api/v1/app/admin/users"],
+    ["GET", "/api/v1/app/admin/users/1/playback"],
+    ["POST", "/api/v1/app/admin/users/1/disabled"],
+    ["DELETE", "/api/v1/app/admin/users/1"],
+    // app/admin/image-keys
+    ["GET", "/api/v1/app/admin/image-keys"],
+    ["POST", "/api/v1/app/admin/image-keys"],
+    ["DELETE", "/api/v1/app/admin/image-keys/1"],
+    // app/admin/announcements
+    ["GET", "/api/v1/app/admin/announcements"],
+    ["POST", "/api/v1/app/admin/announcements"],
+    ["POST", "/api/v1/app/admin/announcements/1"],
+    ["POST", "/api/v1/app/admin/announcements/1/enabled"],
+    ["POST", "/api/v1/app/admin/announcements/1/pinned"],
+    ["DELETE", "/api/v1/app/admin/announcements/1"],
+  ];
+  for (const [method, path] of guardedAdminRoutes) {
+    const response = await fetch(`${base}${path}`, { method });
+    const body = await response.json().catch(() => ({}));
+    check(
+      `无凭据 ${method} ${path} 被拒 401/4013`,
+      response.status === 401 && body.code === 4013,
+      `${response.status} ${JSON.stringify(body).slice(0, 120)}`,
+    );
+  }
+
+  // 公开路由不能被顺手锁死：这几条没有会话也必须能到达处理器。
+  // 断言的是「不是 401/4013」，因为入参不合法本来就会 400。
+  const publicAdminRoutes = [
+    ["POST", "/api/v1/admin/auth/login"],
+    ["POST", "/api/v1/admin/auth/totp-verify"],
+    ["POST", "/api/v1/admin/auth/logout"],
+    ["GET", "/api/v1/app/announcements"],
+  ];
+  for (const [method, path] of publicAdminRoutes) {
+    const response = await fetch(`${base}${path}`, { method });
+    check(
+      `公开路由 ${method} ${path} 未被管理员守卫拦截`,
+      !(response.status === 401 && (await response.json()).code === 4013),
+      `实际 ${response.status}`,
+    );
+  }
+
+  // ==================== 安全响应头与跨域 ====================
+  //
+  // 这两项都是「不配置就等于没有」的控制：CSP 漏了没人会发现，CORS 写通配
+  // 也不会报错，只能靠断言盯住。
+  //
+  // 白名单断言要求服务启动时设置 `CORS_ALLOWED_ORIGINS=https://verify.example`；
+  // 没设置时下面的「命中白名单」一条会失败，这本身也是对的 —— 它证明默认
+  // 不下发任何 CORS 头。
+  section("安全响应头与跨域");
+  const adminPage = await fetch(`${base}/admin/`);
+  const csp = adminPage.headers.get("content-security-policy") ?? "";
+  check(
+    "管理后台下发 CSP 且 script-src 只允许 'self'",
+    adminPage.status === 200 && /script-src 'self'(;|$)/.test(csp) && !/script-src[^;]*unsafe-inline/.test(csp),
+    `HTTP ${adminPage.status}，CSP=${csp || "(缺失)"}`,
+  );
+  check(
+    "CSP 禁止被 iframe 嵌套（frame-ancestors none）",
+    /frame-ancestors 'none'/.test(csp),
+    csp || "(缺失)",
+  );
+  const themeBootstrap = await fetch(`${base}/admin/theme-bootstrap.js`);
+  check(
+    "主题预置脚本已外置且可加载（否则暗色模式会闪烁）",
+    themeBootstrap.status === 200 && (themeBootstrap.headers.get("content-type") ?? "").includes("javascript"),
+    `HTTP ${themeBootstrap.status} ${themeBootstrap.headers.get("content-type")}`,
+  );
+
+  const bootstrapPath = "/api/v1/app/bootstrap?versionCode=1&sdk=36&deviceId=verify-cors";
+  const foreignOrigin = await fetch(`${base}${bootstrapPath}`, {
+    headers: { origin: "https://evil.example" },
+  });
+  check(
+    "非白名单来源不下发 access-control-allow-origin",
+    foreignOrigin.headers.get("access-control-allow-origin") === null,
+    `实际 ${foreignOrigin.headers.get("access-control-allow-origin")}`,
+  );
+  check(
+    "响应声明 Vary: Origin（避免缓存把 A 站的响应喂给 B 站）",
+    /\borigin\b/i.test(foreignOrigin.headers.get("vary") ?? ""),
+    `实际 ${foreignOrigin.headers.get("vary")}`,
+  );
+  const allowedOrigin = await fetch(`${base}${bootstrapPath}`, {
+    headers: { origin: "https://verify.example" },
+  });
+  check(
+    "白名单来源回显自身 Origin（而不是通配 *）",
+    allowedOrigin.headers.get("access-control-allow-origin") === "https://verify.example",
+    `实际 ${allowedOrigin.headers.get("access-control-allow-origin")}`,
+  );
 
   section("鉴权：注册 / 登录 / 刷新 / 注销");
   const username = `verify_${randomBytes(4).toString("hex")}`;
@@ -97,6 +312,52 @@ async function main() {
   check("旧刷新令牌已被轮换失效", replay.status === 401 && replay.body.code === 4012, JSON.stringify(replay.body));
 
   const token = rotated.body.data.accessToken;
+
+  // 头像上传：格式判定必须看文件头，不能信请求里的 Content-Type。
+  // 验证环境没配 LSKY_API_KEY，所以「魔数正确」的那条会停在「服务未配置」——
+  // 这正好把两条路径区分开：假图片在格式判定就被拒，真图片才走到图床调用。
+  section("头像上传：按文件头判定格式");
+  const notAnImage = await fetch(`${base}/api/v1/auth/avatar`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}` },
+    body: (() => {
+      const form = new FormData();
+      // 声明成 image/png，内容却是纯文本 —— 只校验 mimetype 的实现会放行。
+      form.append("file", new Blob([Buffer.from("this is definitely not a png")], { type: "image/png" }), "fake.png");
+      return form;
+    })(),
+  });
+  const notAnImageBody = await notAnImage.json();
+  check(
+    "伪装成 image/png 的文本被拒 400 且 code 4000",
+    notAnImage.status === 400 && notAnImageBody.code === 4000,
+    `${notAnImage.status} ${JSON.stringify(notAnImageBody)}`,
+  );
+  check(
+    "拒绝原因是格式判定而不是其它前置条件",
+    String(notAnImageBody.message ?? "").includes("PNG"),
+    String(notAnImageBody.message ?? ""),
+  );
+  const realPngHeader = await fetch(`${base}/api/v1/auth/avatar`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}` },
+    body: (() => {
+      const form = new FormData();
+      // 只有 PNG 魔数，没有完整像素数据。魔数校验过关后才会走到图床调用。
+      const png = Buffer.concat([
+        Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+        Buffer.alloc(32),
+      ]);
+      form.append("file", new Blob([png], { type: "application/octet-stream" }), "real.png");
+      return form;
+    })(),
+  });
+  const realPngHeaderBody = await realPngHeader.json();
+  check(
+    "PNG 魔数通过格式判定（即使 Content-Type 声明成 octet-stream）",
+    realPngHeader.status === 400 && String(realPngHeaderBody.message ?? "").includes("未配置"),
+    `${realPngHeader.status} ${JSON.stringify(realPngHeaderBody)}`,
+  );
 
   section("鉴权门禁");
   const noToken = await fetch(`${base}/api/v1/favorites`);
@@ -359,24 +620,24 @@ async function main() {
   check("versionCode 非法 400 且 code 4005", badVersion.status === 400 && (await badVersion.json()).code === 4005);
 
   section("热更新：发布管理");
-  const noAdmin = await fetch(`${base}/api/v1/app/admin/releases`, { headers: { "x-admin-token": "wrong" } });
-  check("错误管理令牌 401 且 code 4013", noAdmin.status === 401 && (await noAdmin.json()).code === 4013, `实际 ${noAdmin.status}`);
-  const releases = await (await fetch(`${base}/api/v1/app/admin/releases`, { headers: { "x-admin-token": adminToken } })).json();
+  const noAdmin = await fetch(`${base}/api/v1/app/admin/releases`, { headers: { authorization: "Bearer wrong" } });
+  check("错误管理会话令牌 401 且 code 4013", noAdmin.status === 401 && (await noAdmin.json()).code === 4013, `实际 ${noAdmin.status}`);
+  const releases = await (await fetch(`${base}/api/v1/app/admin/releases`, { headers: { authorization: `Bearer ${adminSession}` } })).json();
   check("正确管理令牌可列出发布", releases.code === 0 && Array.isArray(releases.data), JSON.stringify(releases).slice(0, 120));
 
   const guard = await fetch(`${base}/api/v1/app/admin/min-version`, {
     method: "POST",
-    headers: { "content-type": "application/json", "x-admin-token": adminToken },
+    headers: { "content-type": "application/json", authorization: `Bearer ${adminSession}` },
     body: JSON.stringify({ versionCode: 999999 }),
   });
   check("缺少全量版本时抬高下限被拒（409 / code 4091）", guard.status === 409 && (await guard.json()).code === 4091, `实际 ${guard.status}`);
 
   section("Windows 模块化发布");
   const noDesktopAdmin = await fetch(`${base}/api/v1/desktop/admin/releases`, {
-    headers: { "x-admin-token": "wrong" },
+    headers: { authorization: "Bearer wrong" },
   });
   check(
-    "Windows 管理接口错误令牌仍返回 4013",
+    "Windows 管理接口无有效凭据仍返回 4013",
     noDesktopAdmin.status === 401 && (await noDesktopAdmin.json()).code === 4013,
     `实际 ${noDesktopAdmin.status}`,
   );
@@ -384,7 +645,7 @@ async function main() {
   const moduleSha = createHash("sha256").update(moduleBytes).digest("hex");
   const uploadedModule = await fetch(`${base}/api/v1/desktop/admin/artifacts?sha256=${moduleSha}`, {
     method: "POST",
-    headers: { "x-admin-token": adminToken },
+    headers: { authorization: `Bearer ${adminSession}` },
     body: moduleBytes,
   });
   check("内容寻址模块上传成功", uploadedModule.status === 201, `实际 ${uploadedModule.status}`);
@@ -400,7 +661,7 @@ async function main() {
   };
   const publishedDesktop = await fetch(`${base}/api/v1/desktop/admin/releases`, {
     method: "POST",
-    headers: { "content-type": "application/json", "x-admin-token": adminToken },
+    headers: { "content-type": "application/json", authorization: `Bearer ${adminSession}` },
     body: JSON.stringify(desktopManifest),
   });
   check("Windows 清单登记成功", publishedDesktop.status === 201, `实际 ${publishedDesktop.status}`);
@@ -411,7 +672,7 @@ async function main() {
 
   await fetch(`${base}/api/v1/desktop/admin/rollout`, {
     method: "POST",
-    headers: { "content-type": "application/json", "x-admin-token": adminToken },
+    headers: { "content-type": "application/json", authorization: `Bearer ${adminSession}` },
     body: JSON.stringify({ versionCode: 999101, architecture: "windows-x64", percent: 100 }),
   });
   const offeredDesktopResponse = await fetch(
@@ -441,13 +702,13 @@ async function main() {
   const nextModuleSha = createHash("sha256").update(nextModuleBytes).digest("hex");
   const uploadedNextModule = await fetch(`${base}/api/v1/desktop/admin/artifacts?sha256=${nextModuleSha}`, {
     method: "POST",
-    headers: { "x-admin-token": adminToken },
+    headers: { authorization: `Bearer ${adminSession}` },
     body: nextModuleBytes,
   });
   check("Windows 第二版模块上传成功", uploadedNextModule.status === 201, `实际 ${uploadedNextModule.status}`);
   const nextDesktop = await fetch(`${base}/api/v1/desktop/admin/releases`, {
     method: "POST",
-    headers: { "content-type": "application/json", "x-admin-token": adminToken },
+    headers: { "content-type": "application/json", authorization: `Bearer ${adminSession}` },
     body: JSON.stringify({
       ...desktopManifest,
       versionCode: 999102,
@@ -474,7 +735,7 @@ async function main() {
   );
   const desktopGuard = await fetch(`${base}/api/v1/desktop/admin/min-version`, {
     method: "POST",
-    headers: { "content-type": "application/json", "x-admin-token": adminToken },
+    headers: { "content-type": "application/json", authorization: `Bearer ${adminSession}` },
     body: JSON.stringify({ versionCode: 999999, architecture: "windows-x64" }),
   });
   check(
@@ -489,7 +750,7 @@ async function main() {
 
   // ① listConfig 的「所有版本」哨兵曾是 Number.MAX_SAFE_INTEGER，
   //    与 int4 的 min_version_code 比较会让 PG 直接报 22003。
-  const adminConfig = await fetch(`${base}/api/v1/app/admin/config`, { headers: { "x-admin-token": adminToken } });
+  const adminConfig = await fetch(`${base}/api/v1/app/admin/config`, { headers: { authorization: `Bearer ${adminSession}` } });
   const adminConfigBody = await adminConfig.json();
   check(
     "管理端列配置 200（哨兵不能超出 int4 范围）",
@@ -499,7 +760,7 @@ async function main() {
 
   const wroteConfig = await fetch(`${base}/api/v1/app/admin/config`, {
     method: "POST",
-    headers: { "content-type": "application/json", "x-admin-token": adminToken },
+    headers: { "content-type": "application/json", authorization: `Bearer ${adminSession}` },
     body: JSON.stringify({ key: "verify.flag", value: "on", minVersionCode: 1 }),
   });
   check("写入配置项 200", wroteConfig.status === 200, `实际 ${wroteConfig.status}`);
@@ -581,7 +842,7 @@ async function main() {
   const placeholderApk = Buffer.from("PKtaotao-verify-placeholder");
   const disabled = await fetch(
     `${base}/api/v1/app/admin/releases?versionCode=999001&versionName=9.9.1&enabled=false`,
-    { method: "POST", headers: { "x-admin-token": adminToken }, body: placeholderApk },
+    { method: "POST", headers: { authorization: `Bearer ${adminSession}` }, body: placeholderApk },
   );
   check("登记一个 enabled=false 的版本", disabled.status === 201, `实际 ${disabled.status}`);
   const disabledDownload = await fetch(`${base}/api/v1/app/apk/999001`);
@@ -591,7 +852,7 @@ async function main() {
   //    rollout=0 也会被下发。
   await fetch(`${base}/api/v1/app/admin/releases?versionCode=999002&versionName=9.9.2&rollout=0`, {
     method: "POST",
-    headers: { "x-admin-token": adminToken },
+    headers: { authorization: `Bearer ${adminSession}` },
     body: placeholderApk,
   });
   const notRolledOut = await (
@@ -601,7 +862,7 @@ async function main() {
 
   await fetch(`${base}/api/v1/app/admin/rollout`, {
     method: "POST",
-    headers: { "content-type": "application/json", "x-admin-token": adminToken },
+    headers: { "content-type": "application/json", authorization: `Bearer ${adminSession}` },
     body: JSON.stringify({ versionCode: 999002, percent: 100 }),
   });
   const offered = await Promise.all([
@@ -727,7 +988,7 @@ async function main() {
 
   await fetch(`${base}/api/v1/app/admin/releases?versionCode=999910&versionName=9.9.10&rollout=0`, {
     method: "POST",
-    headers: { "x-admin-token": adminToken },
+    headers: { authorization: `Bearer ${adminSession}` },
     body: fakeApk,
   });
   await fetch(`${base}/health`);
@@ -735,7 +996,7 @@ async function main() {
 
   await fetch(`${base}/api/v1/app/admin/rollout`, {
     method: "POST",
-    headers: { "content-type": "application/json", "x-admin-token": adminToken },
+    headers: { "content-type": "application/json", authorization: `Bearer ${adminSession}` },
     body: JSON.stringify({ versionCode: 999910, percent: 50 }),
   });
   await fetch(`${base}/health`);
@@ -743,7 +1004,7 @@ async function main() {
 
   await fetch(`${base}/api/v1/app/admin/rollout`, {
     method: "POST",
-    headers: { "content-type": "application/json", "x-admin-token": adminToken },
+    headers: { "content-type": "application/json", authorization: `Bearer ${adminSession}` },
     body: JSON.stringify({ versionCode: 999910, percent: 100 }),
   });
   await fetch(`${base}/health`);
@@ -759,7 +1020,7 @@ async function main() {
 
   await fetch(`${base}/api/v1/app/admin/rollout`, {
     method: "POST",
-    headers: { "content-type": "application/json", "x-admin-token": adminToken },
+    headers: { "content-type": "application/json", authorization: `Bearer ${adminSession}` },
     body: JSON.stringify({ versionCode: 999910, percent: 0, enabled: false }),
   });
   await fetch(`${base}/health`);
@@ -787,7 +1048,6 @@ async function main() {
   section("管理后台认证：账号 / 角色 / 2FA / 审计");
 
   const bearer = (token) => ({ "content-type": "application/json", authorization: `Bearer ${token}` });
-  const legacyHeaders = { "content-type": "application/json", "x-admin-token": adminToken };
 
   const anonymousAdmin = await fetch(`${base}/api/v1/admin/auth/me`);
   const anonymousAdminBody = await anonymousAdmin.json();
@@ -804,13 +1064,11 @@ async function main() {
     `${wrongAdminPassword.status} ${JSON.stringify(wrongAdminPassword.body)}`,
   );
 
-  // 服务启动时会 bootstrap 出默认超管 admin / admin123。
-  const adminLogin = await postJson("/api/v1/admin/auth/login", { username: "admin", password: "admin123" });
-  const adminSession = adminLogin.body.data?.token;
+  // 管理会话已在上面的「管理端会话准备」段落取得（含强制改密流程）。
   check(
     "管理员登录返回会话 token 与 super_admin 身份",
-    adminLogin.status === 200 && typeof adminSession === "string" && adminLogin.body.data?.admin?.role === "super_admin",
-    `${adminLogin.status} ${JSON.stringify(adminLogin.body).slice(0, 160)}`,
+    typeof adminSession === "string" && adminSession.length > 0,
+    `会话长度 ${adminSession.length}`,
   );
 
   const adminMe = await fetch(`${base}/api/v1/admin/auth/me`, { headers: { authorization: `Bearer ${adminSession}` } });
@@ -854,13 +1112,15 @@ async function main() {
     `${totpForgedTicket.status} ${JSON.stringify(totpForgedTicket.body)}`,
   );
 
-  // 兼容路径仍然可用（发布接口的运维脚本还在用 X-Admin-Token）。
-  const legacyMe = await fetch(`${base}/api/v1/admin/auth/me`, { headers: { "x-admin-token": adminToken } });
-  const legacyMeBody = await legacyMe.json();
+  // 静态 X-Admin-Token 兼容通道已整体移除：它曾同时绕过 2FA、IP 白名单、
+  // 会话撤销与审计归属，且合成固定的 super_admin 身份。这里改为断言它确实失效。
+  const legacyHeaderRejected = await fetch(`${base}/api/v1/admin/auth/me`, {
+    headers: { "x-admin-token": "verify-token" },
+  });
   check(
-    "X-Admin-Token 兼容身份仍可访问 /admin/auth/me",
-    legacyMe.status === 200 && legacyMeBody.data?.username === "legacy_admin",
-    `${legacyMe.status} ${JSON.stringify(legacyMeBody).slice(0, 160)}`,
+    "已移除的 X-Admin-Token 通道不再被接受（401/4013）",
+    legacyHeaderRejected.status === 401 && (await legacyHeaderRejected.json()).code === 4013,
+    `实际 ${legacyHeaderRejected.status}`,
   );
 
   // IP 白名单不能被 X-Forwarded-For 伪造：把白名单设成一个非本机地址，
@@ -868,7 +1128,7 @@ async function main() {
   const whitelistSet = await fetch(`${base}/api/v1/admin/auth/ip-whitelist/1`, {
     method: "POST", headers: bearer(adminSession), body: JSON.stringify({ whitelist: "10.99.99.99" }),
   });
-  const spoofedLogin = await postJson("/api/v1/admin/auth/login", { username: "admin", password: "admin123" });
+  const spoofedLogin = await postJson("/api/v1/admin/auth/login", { username: "admin", password: NEW_ADMIN_PASSWORD });
   check(
     "伪造 X-Forwarded-For 无法绕过 IP 白名单（403/4030）",
     whitelistSet.status === 204 && spoofedLogin.status === 403 && spoofedLogin.body.code === 4030,
@@ -1040,17 +1300,64 @@ async function main() {
     JSON.stringify(auditRow ?? auditAfterWriteBody).slice(0, 200),
   );
 
-  // 兼容身份（X-Admin-Token，在 admin_users 里没有对应行）也要能写业务接口并留审计，
-  // 否则 RELEASE.md 里那套「只带静态令牌发版」的流程会当场断掉。
-  const legacyAnnouncement = await fetch(`${base}/api/v1/app/admin/announcements`, {
-    method: "POST", headers: legacyHeaders,
-    body: JSON.stringify({ title: "契约验证兼容身份公告", content: "兼容身份" }),
+  // 账号维度退避：只按 IP 限流挡不住代理池 —— 换 IP 就能对已知的 admin 账号
+  // 无限猜口令，对 LDAP 路径还会打爆企业目录的账号锁定策略。
+  //
+  // 断言的是 **4291** 而不是 4290：两者同为 429，但 4291 专属于账号退避。
+  // 如果只断言「429」或「4290」，来源地址限流会先一步命中，让这条用例在
+  // 账号退避完全没生效时也照样变绿 —— 那就成了假阳性。
+  //
+  // 用临时账号测，**绝不能拿主 admin 账号试**，那会把后面所有断言一起锁死。
+  const lockTargetName = `lock_${randomBytes(3).toString("hex")}`;
+  const lockTargetCreated = await fetch(`${base}/api/v1/admin/auth/users`, {
+    method: "POST", headers: bearer(adminSession),
+    body: JSON.stringify({
+      username: lockTargetName, password: "pass123456", role: "viewer", displayName: "退避验证",
+    }),
+  });
+  const lockTargetId = (await lockTargetCreated.json()).data?.id;
+  let lastLockStatus = 0;
+  let lastLockCode = 0;
+  for (let attempt = 0; attempt < 7; attempt++) {
+    const response = await postJson("/api/v1/admin/auth/login", {
+      username: lockTargetName, password: "definitely-wrong",
+    });
+    lastLockStatus = response.status;
+    lastLockCode = response.body.code;
+    if (lastLockCode === 4291) break;
+  }
+  check(
+    "连续失败达到阈值后账号被退避（429/4291）",
+    lastLockStatus === 429 && lastLockCode === 4291,
+    `${lastLockStatus} ${lastLockCode}`,
+  );
+
+  // 退避只针对账号：换回**正确**口令也不该立刻放行（否则退避形同虚设），
+  // 但**其它账号**必须完全不受影响 —— 这正是不能用全局锁的原因。
+  const lockedTargetCorrectPassword = await postJson("/api/v1/admin/auth/login", {
+    username: lockTargetName, password: "pass123456",
   });
   check(
-    "兼容身份可发布公告（201）",
-    legacyAnnouncement.status === 201,
-    `${legacyAnnouncement.status} ${(await legacyAnnouncement.text()).slice(0, 160)}`,
+    "被退避的账号即使口令正确也仍然被拒（429/4291）",
+    lockedTargetCorrectPassword.status === 429 && lockedTargetCorrectPassword.body.code === 4291,
+    `${lockedTargetCorrectPassword.status} ${JSON.stringify(lockedTargetCorrectPassword.body).slice(0, 120)}`,
   );
+
+  const unaffectedLogin = await postJson("/api/v1/admin/auth/login", {
+    username: "admin", password: NEW_ADMIN_PASSWORD,
+  });
+  check(
+    "退避只作用于目标账号，其它账号不受影响",
+    unaffectedLogin.status === 200,
+    `${unaffectedLogin.status} ${JSON.stringify(unaffectedLogin.body).slice(0, 160)}`,
+  );
+
+  // 清掉本段造出来的退避账号，别让它留在管理员列表里影响后续断言。
+  if (lockTargetId) {
+    await fetch(`${base}/api/v1/admin/auth/users/${lockTargetId}`, {
+      method: "DELETE", headers: bearer(adminSession),
+    });
+  }
 
   // 清掉本段造出来的账号，别影响后面的断言（删账号会级联清掉它的会话）。
   if (adminRoleId) {
@@ -1071,19 +1378,9 @@ async function main() {
     `${patched.status} ${JSON.stringify(patchedBody).slice(0, 160)}`,
   );
 
-  // 兼容身份（admin_users 里没有对应行）写审计不能因为外键报 500。
-  const legacyPatch = await fetch(`${base}/api/v1/admin/auth/users/${createdAdminId}`, {
-    method: "PATCH", headers: legacyHeaders, body: JSON.stringify({ display_name: "契约验证兼容身份改名" }),
-  });
-  check(
-    "兼容身份写审计不撞外键（PATCH 返回 200）",
-    legacyPatch.status === 200,
-    `${legacyPatch.status} ${JSON.stringify(await legacyPatch.json()).slice(0, 160)}`,
-  );
-
   // 最后一个可用超管不能被降级/禁用，否则后台再没人能创建管理员。
   const disableLastSuperAdmin = await fetch(`${base}/api/v1/admin/auth/users/1`, {
-    method: "PATCH", headers: legacyHeaders, body: JSON.stringify({ disabled: true }),
+    method: "PATCH", headers: bearer(adminSession), body: JSON.stringify({ disabled: true }),
   });
   const disableLastSuperAdminBody = await disableLastSuperAdmin.json();
   check(
@@ -1102,7 +1399,8 @@ async function main() {
     `${deletedAdmin.status} ${(await deletedAdmin.text()).slice(0, 160)}`,
   );
 
-  console.log(`\n通过 ${passed} 项，失败 ${failed} 项`);  process.exitCode = failed === 0 ? 0 : 1;
+  console.log(`\n通过 ${passed} 项，失败 ${failed} 项`);
+  process.exitCode = failed === 0 ? 0 : 1;
 }
 
 async function postJson(path, body) {

@@ -19,11 +19,14 @@ export class AppConfigService {
    */
   readonly databaseUrl: string;
 
-  /** 访问令牌的 HMAC 签名密钥。生产环境的长度校验在配置加载阶段完成。 */
+  /**
+   * 访问令牌的 HMAC 签名密钥。
+   *
+   * **没有兜底值**：缺失或短于 32 字符会在配置加载阶段直接启动失败
+   * （见 `env.validation.ts`）。这里只做类型收敛，绝不静默降级成某个
+   * 源码里写死的字符串 —— 那等于把令牌伪造能力公开。
+   */
   readonly authSecret: string;
-
-  /** 发布管理接口的静态令牌，通过请求头 `X-Admin-Token` 校验；留空则整组管理接口关闭。 */
-  readonly adminToken: string;
 
   readonly apkDirectory: string;
   /** Windows 模块、清单差分和原生更新工具的内容寻址存储目录。 */
@@ -54,6 +57,27 @@ export class AppConfigService {
   /** 兰空图床上传配置，仅服务端使用，绝不下发客户端。 */
   readonly lskyUploadUrl: string;
   readonly lskyApiKey: string;
+  /**
+   * 允许写入 `avatar_url` 的图床主机白名单（小写，可带端口）。
+   *
+   * 头像地址是**由上游响应决定**的，不是用户填的，所以更要校验：图床被劫持或
+   * 配置写错时，返回的可能是任意域名的 URL，落库后就会出现在别人客户端的
+   * 头像请求里（等于把每个用户的 IP 送给第三方）。留空表示只做「必须是 https
+   * 且能解析成合法 URL」的基础校验。
+   */
+  readonly lskyPublicHosts: string[];
+
+  /**
+   * 允许跨域读取接口响应的来源白名单（形如 `https://a.example`）。
+   *
+   * **留空表示不下发任何 CORS 响应头**，这是有意的默认值：管理后台与分享页
+   * 都由本服务同源托管，第一方场景根本不需要 CORS；而通配 `*` 会让任意站点
+   * 在用户浏览器里读取公开接口的响应。只有确实存在第三方网页调用时才逐条加入。
+   *
+   * 注意：音视频流与搜索接口有自己的路由级 `*`（见 stream.service / search.service），
+   * 那是给原生播放器与分享页跨域拉流用的，不受本白名单约束。
+   */
+  readonly corsAllowedOrigins: string[];
 
   /** 注册验证码邮件的 SMTP 配置；缺失时注册会保持关闭，不能绕过邮箱验证。 */
   readonly smtpHost: string;
@@ -79,6 +103,14 @@ export class AppConfigService {
 
   /** 管理员 2FA TOTP 的发行者名称 */
   readonly totpIssuer: string;
+
+  /**
+   * 默认超级管理员的初始口令。
+   *
+   * 留空时启动阶段会随机生成一个并只在日志里打印一次。无论哪种来源，
+   * 该账号首次登录都必须改密。长度下限由 `env.validation.ts` 把关。
+   */
+  readonly adminInitialPassword: string;
 
   /** LDAP/SSO 配置（可选） */
   readonly ldapUrl: string;
@@ -128,8 +160,7 @@ export class AppConfigService {
   constructor(config: ConfigService) {
     this.port = Number(config.get("PORT") ?? 4500);
     this.databaseUrl = String(config.get("DATABASE_URL") ?? "");
-    this.authSecret = String(config.get("AUTH_SECRET") ?? "taotao-development-secret-change-me");
-    this.adminToken = String(config.get("ADMIN_TOKEN") ?? "");
+    this.authSecret = String(config.get("AUTH_SECRET") ?? "");
     this.apkDirectory = resolve(String(config.get("APK_DIR") ?? "./data/apk"));
     this.desktopReleaseDirectory = resolve(String(config.get("DESKTOP_RELEASE_DIR") ?? "./data/desktop"));
     this.sharePreviewDirectory = resolve(String(config.get("SHARE_PREVIEW_DIR") ?? "./data/share-preview"));
@@ -145,6 +176,8 @@ export class AppConfigService {
     );
     this.lskyUploadUrl = String(config.get("LSKY_UPLOAD_URL") ?? "https://img.kiwiyyds.cn/api/index.php");
     this.lskyApiKey = String(config.get("LSKY_API_KEY") ?? "");
+    this.lskyPublicHosts = splitCommaList(config.get("LSKY_PUBLIC_HOSTS"));
+    this.corsAllowedOrigins = splitCommaList(config.get("CORS_ALLOWED_ORIGINS"));
     this.smtpHost = String(config.get("SMTP_HOST") ?? "");
     this.smtpPort = Number(config.get("SMTP_PORT") ?? 587);
     this.smtpUser = String(config.get("SMTP_USER") ?? "");
@@ -160,6 +193,7 @@ export class AppConfigService {
     this.imSessionLifetimeSeconds = Number(config.get("IM_SESSION_LIFETIME_SECONDS") ?? 900);
     this.emailVerificationTestCode = String(config.get("EMAIL_VERIFICATION_TEST_CODE") ?? "") || null;
     this.totpIssuer = String(config.get("TOTP_ISSUER") ?? "桃桃音乐管理后台");
+    this.adminInitialPassword = String(config.get("ADMIN_INITIAL_PASSWORD") ?? "");
     this.ldapUrl = String(config.get("LDAP_URL") ?? "");
     this.ldapBindDn = String(config.get("LDAP_BIND_DN") ?? "");
     this.ldapBindPassword = String(config.get("LDAP_BIND_PASSWORD") ?? "");
@@ -207,4 +241,17 @@ export class AppConfigService {
   get isSmtpConfigured(): boolean {
     return !!this.smtpHost && !!this.smtpUser && !!this.smtpPassword && !!this.smtpFrom;
   }
+}
+
+/**
+ * 解析逗号分隔的配置项。
+ *
+ * 统一转小写并去掉空白项，让 `a.com, B.com` 与 `a.com,b.com` 等价 —— 主机名
+ * 大小写不敏感，配置文件里写成大写不该导致白名单静默失效。
+ */
+function splitCommaList(raw: unknown): string[] {
+  return String(raw ?? "")
+    .split(",")
+    .map((item) => item.trim().toLowerCase())
+    .filter((item) => item.length > 0);
 }

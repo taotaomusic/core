@@ -47,6 +47,7 @@ export class RateLimitGuard implements CanActivate {
       return this.rateLimit.allowAppRequest(address, deviceId);
     }
     if (bucket === "email-verification") return this.rateLimit.allowEmailVerification(address);
+    if (bucket === "auth:admin-login") return this.rateLimit.allowAdminLoginAttempt(address);
     return this.rateLimit.allowAuthAttempt(bucket.slice("auth:".length), address);
   }
 }

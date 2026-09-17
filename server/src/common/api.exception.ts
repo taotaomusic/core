@@ -26,6 +26,16 @@ export const ApiErrors = {
   tooManyRequests: () =>
     new ApiException(HttpStatus.TOO_MANY_REQUESTS, 4290, "请求过于频繁，请稍后再试"),
   /**
+   * 账号维度的登录退避。
+   *
+   * 与 [tooManyRequests] 同为 429，但业务码刻意区分（4291 vs 4290）：两者是
+   * **互相独立的两道控制** —— 4290 是来源地址限流，换个 IP 或等窗口过去就恢复；
+   * 4291 是账号被锁，换 IP 无用、必须等退避时间走完或由超管重置。运维和客户端
+   * 都需要能分辨「网络太频繁」和「这个账号被锁了」，共用一个码就永远分不清。
+   */
+  accountLocked: () =>
+    new ApiException(HttpStatus.TOO_MANY_REQUESTS, 4291, "该账号连续登录失败次数过多，请稍后再试"),
+  /**
    * 上游或内部故障。
    *
    * 刻意用 502 而不是 4xx：客户端把 4xx 当作「凭据被拒绝」，

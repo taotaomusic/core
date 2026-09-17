@@ -7,7 +7,8 @@ export type AdminUserRecord = {
   id: number; username: string; display_name: string; email: string | null;
   role: string; totp_enabled: number; ip_whitelist: string | null;
   last_login_at: number | null; last_login_ip: string | null;
-  disabled_at: number | null; created_at: string; created_by: number | null;
+  disabled_at: number | null; must_change_password: number; auth_source: string;
+  created_at: string; created_by: number | null;
 };
 
 export type AdminCredentials = AdminUserRecord & {
@@ -22,7 +23,8 @@ export class AdminUsersRepository {
     return this.database.first<AdminCredentials>(
       `SELECT id, username, password_hash, password_salt, display_name, email, role,
               totp_secret, totp_enabled, ip_whitelist, last_login_at, last_login_ip,
-              disabled_at, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS created_at,
+              disabled_at, must_change_password, auth_source,
+              to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS created_at,
               created_by
        FROM admin_users WHERE username = $1 AND disabled_at IS NULL`,
       [username],
@@ -39,7 +41,8 @@ export class AdminUsersRepository {
     return this.database.first<AdminCredentials>(
       `SELECT id, username, password_hash, password_salt, display_name, email, role,
               totp_secret, totp_enabled, ip_whitelist, last_login_at, last_login_ip,
-              disabled_at, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS created_at,
+              disabled_at, must_change_password, auth_source,
+              to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS created_at,
               created_by
        FROM admin_users WHERE username = $1`,
       [username],
@@ -57,7 +60,7 @@ export class AdminUsersRepository {
   findById(id: number): Promise<AdminUserRecord | undefined> {
     return this.database.first<AdminUserRecord>(
       `SELECT id, username, display_name, email, role, totp_enabled, ip_whitelist,
-              last_login_at, last_login_ip, disabled_at,
+              last_login_at, last_login_ip, disabled_at, must_change_password, auth_source,
               to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS created_at,
               created_by
        FROM admin_users WHERE id = $1`,
@@ -76,29 +79,55 @@ export class AdminUsersRepository {
     return this.database.first<AdminCredentials>(
       `SELECT id, username, password_hash, password_salt, display_name, email, role,
               totp_secret, totp_enabled, ip_whitelist, last_login_at, last_login_ip,
-              disabled_at, to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS created_at,
+              disabled_at, must_change_password, auth_source,
+              to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS created_at,
               created_by
        FROM admin_users WHERE id = $1`,
       [id],
     );
   }
 
+  /**
+   * 新建管理员。
+   *
+   * `mustChangePassword` 与 `authSource` 都放在参数表**尾部**并带默认值，
+   * 这样 LDAP 同步与后台创建管理员的调用点不需要跟着改。
+   */
   async create(username: string, passwordHash: string, passwordSalt: string,
                displayName: string, role: string, createdBy: number | null,
-               email: string | null = null): Promise<AdminUserRecord> {
+               email: string | null = null, mustChangePassword = false,
+               authSource = "local"): Promise<AdminUserRecord> {
     try {
       return (await this.database.first<AdminUserRecord>(
-        `INSERT INTO admin_users (username, password_hash, password_salt, display_name, role, created_by, email)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
+        `INSERT INTO admin_users
+           (username, password_hash, password_salt, display_name, role, created_by, email,
+            must_change_password, auth_source)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          RETURNING id, username, display_name, email, role, totp_enabled, ip_whitelist,
-                   last_login_at, last_login_ip, disabled_at,
+                   last_login_at, last_login_ip, disabled_at, must_change_password, auth_source,
                    to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS created_at, created_by`,
-        [username, passwordHash, passwordSalt, displayName, role, createdBy, email],
+        [
+          username, passwordHash, passwordSalt, displayName, role, createdBy, email,
+          mustChangePassword ? 1 : 0, authSource,
+        ],
       ))!;
     } catch (error) {
       if (isUniqueViolation(error)) throw ApiErrors.conflict(4090, "管理员用户名已存在");
       throw error;
     }
+  }
+
+  /**
+   * 标记某个账号已由 LDAP 接管。
+   *
+   * 只在当前不是 ldap 时才写，避免每次登录都做一次无意义的 UPDATE。
+   * 这是存量 LDAP 账号补齐标记的唯一途径。
+   */
+  async setAuthSource(id: number, authSource: string): Promise<void> {
+    await this.database.run(
+      `UPDATE admin_users SET auth_source = $2 WHERE id = $1 AND auth_source <> $2`,
+      [id, authSource],
+    );
   }
 
   async updateLastLogin(id: number, ip: string): Promise<void> {
@@ -166,9 +195,18 @@ export class AdminUsersRepository {
     );
   }
 
+  /**
+   * 改密。
+   *
+   * 顺手把 `must_change_password` 清零，且和口令写在**同一条** UPDATE 里：
+   * 拆成两步的话，中间失败会留下「口令已换、却仍被要求改密」的账号，
+   * 管理员会以为自己改了个假密码。这是清标记的唯一入口。
+   */
   async updatePassword(id: number, passwordHash: string, passwordSalt: string): Promise<void> {
     await this.database.run(
-      `UPDATE admin_users SET password_hash = $2, password_salt = $3 WHERE id = $1`,
+      `UPDATE admin_users
+         SET password_hash = $2, password_salt = $3, must_change_password = 0
+       WHERE id = $1`,
       [id, passwordHash, passwordSalt],
     );
   }
@@ -180,7 +218,7 @@ export class AdminUsersRepository {
   async list(): Promise<AdminUserRecord[]> {
     return this.database.all<AdminUserRecord>(
       `SELECT id, username, display_name, email, role, totp_enabled, ip_whitelist,
-              last_login_at, last_login_ip, disabled_at,
+              last_login_at, last_login_ip, disabled_at, must_change_password, auth_source,
               to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS created_at, created_by
        FROM admin_users ORDER BY id`,
     );

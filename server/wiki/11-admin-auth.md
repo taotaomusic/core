@@ -7,56 +7,64 @@ IP 白名单、操作审计和 LDAP/SSO 对接。代码位于 `src/admin-auth/` 
 
 普通用户的注册登录见 [03-api-contracts.md](03-api-contracts.md) 的“认证接口”一节；本文只讲**管理端**。
 
-## 1. 和旧管理令牌的关系
+## 1. 唯一的凭据：管理员会话
 
-后台历史上只有一把静态令牌 `ADMIN_TOKEN`，客户端通过 `X-Admin-Token` 携带。现在有两套并存的凭据：
+后台只有一种管理凭据：
 
 | 凭据 | 头部 | 用途 | 是否可写外键 |
 | --- | --- | --- | --- |
-| 管理员会话 | `Authorization: Bearer <token>` | 管理后台登录后签发，可审计到具体人 | 是 |
-| 静态管理令牌 | `X-Admin-Token: <ADMIN_TOKEN>` | 存量运维脚本、契约验证脚本 | **否** |
+| 管理员会话 | `Authorization: Bearer <token>` | 登录后签发，可审计到具体人、可撤销、可 2FA | 是 |
 
-`AdminAuthGuard` 先尝试 Bearer 会话，失败再退回 `X-Admin-Token`。两条路都失败才抛 401/4013。
+**`X-Admin-Token` 静态兼容通道已整体移除**，`ADMIN_TOKEN` 环境变量、`AppConfigService.adminToken`
+字段、`AdminAuthGuard` 里的兼容分支、前端 `api.ts` 里按令牌长度选头部的逻辑，全部不再存在。
 
-**这两种凭据对所有管理接口都有效**，包括 `/api/v1/app/admin/**`（发布、补丁、公告、用户、图片 Key）
-和 `/api/v1/desktop/admin/**`。它们用的是同一个 `AdminAuthGuard`，所以管理后台登录后直接就能操作
-这些页面，不需要另外填 `ADMIN_TOKEN`。
+移除的理由是它同时绕过了四道控制，而且合成的是固定的 `super_admin` 身份：
 
-`X-Admin-Token` 兼容路径合成出来的身份是 `id = 0` 的 `legacy_admin`，它在 `admin_users` 表里
-**没有对应行**。任何写外键的落库都必须先过 `auditActorId()`，把 `id = 0` 折成 `null`，否则直接撞
-外键报 23503。`admin_audit_log.admin_id` 因此是可空列（见 [04-database.md](04-database.md)）。
+- **绕过 2FA** —— 静态令牌直接换到全权限，TOTP 形同虚设。
+- **绕过 IP 白名单** —— 白名单只在会话路径上校验。
+- **绕过会话撤销** —— 改密码、禁用账号都撤不掉这把钥匙，只能改环境变量并重启。
+- **绕过审计归属** —— 它合成的身份 `id = 0` 在 `admin_users` 里没有对应行，所有操作都记成
+  「无归属」，出了事查不到人。
 
-`ADMIN_TOKEN` 留空时兼容路径整条关闭，但 Bearer 会话不受影响 —— 也就是说，管理后台和上述所有
-管理接口都不依赖 `ADMIN_TOKEN` 是否配置。
+现在所有管理接口（`/api/v1/admin/auth/**`、`/api/v1/app/admin/**`、`/api/v1/desktop/admin/**`）
+都只认登录后签发的会话令牌，用的是同一个 `AdminAuthGuard`。
 
-> **`AdminTokenGuard` 已删除。** `common/guards/admin-token.guard.ts` 曾经只认 `X-Admin-Token`
+> **`AdminTokenGuard` 早已删除。** `common/guards/admin-token.guard.ts` 曾经只认 `X-Admin-Token`
 > 且在 `ADMIN_TOKEN` 为空时一律拒绝，但全项目没有任何 `@UseGuards` 或模块引用它，是纯死代码。
 > 历史文档把它写成“发布接口的守卫”是错的；实际生效的一律是 `AdminAuthGuard`。要判断某个守卫是否
 > 生效，`grep` 它在 `@UseGuards` 里的实际引用，不要靠文件名或旧文档推断。
 
-兼容身份的**角色固定为 `super_admin`**（在 `AdminAuthGuard` 里合成），所以它天然通过所有
-`@RequireRole` 校验。这一点是有意为之：存量运维脚本和契约验证脚本都只带静态令牌，收紧权限时
-不能把它们一起锁死。
+### 桌面发布脚本怎么拿凭据
 
-前端 `api.ts` 的 `authHeaders()` 用**令牌长度**决定头部：长度大于 60 走 `Authorization: Bearer`，
-否则走 `X-Admin-Token`。会话令牌是 48 字节 base64url（约 64 字符），因此走 Bearer；短的手工
-`ADMIN_TOKEN` 走兼容头。这个判断很脆（换个长度就会走错分支），但当前两套凭据都能用，所以不会
-暴露成故障。
+`desktopApp/build.gradle.kts` 的 `publishDesktopRelease` 任务原先带静态令牌，现在读环境变量
+`ADMIN_SESSION_TOKEN`，并以 `Authorization: Bearer` 发送。取法是在管理后台登录一次，从浏览器
+`localStorage.taotao_admin_token` 里取出会话令牌 —— 它 24 小时过期，正好适合一次发布操作。
+
+### 数据库里为什么还允许 `admin_id` 为空
+
+`admin_audit_log.admin_id` 仍是可空列、仍是 `ON DELETE SET NULL`：管理员被删除后，他的历史审计
+记录必须保留为「无归属」，而不是被连带删掉。`auditActorId()` 仍保留，作用从「把兼容身份的
+`id = 0` 折成 `null`」变成**防御性收敛** —— 身份缺失或 `id` 不是正整数时一律写 `null`，
+不让非法值撞外键。
 
 ## 2. 登录链路
 
 ```mermaid
 flowchart TD
-    Start["POST /admin/auth/login"] --> Rate["限流 auth:admin-login（每 IP 10 次/15 分钟）"]
-    Rate --> Ldap{"LDAP 已配置?"}
+    Start["POST /admin/auth/login"] --> Rate["限流 auth:admin-login（每 IP 30 次/15 分钟）"]
+    Rate --> Lock{"该账号在退避期内?"}
+    Lock -->|是| Locked["429/4291 账号已锁定"]
+    Lock -->|否| Ldap{"LDAP 已配置?"}
     Ldap -->|是| LdapAuth["目录绑定 + 用户搜索"]
     Ldap -->|否| Local
-    LdapAuth -->|denied| Deny["401/4011，不回落到本地"]
+    LdapAuth -->|denied| Deny["401/4011，记失败，不回落到本地"]
+    LdapAuth -->|unavailable| Upstream["502/5020，记失败，禁止回落"]
     LdapAuth -->|success| Ip
-    LdapAuth -->|skipped 目录不可用/用户不存在| Local["本地 admin_users 校验 scrypt"]
-    Local -->|用户名不存在| Decoy["跑等价 scrypt 后 401/4011"]
+    LdapAuth -->|skipped 且账号 auth_source=ldap| Upstream503["503/5031，禁止回落"]
+    LdapAuth -->|skipped 其它情况| Local["本地 admin_users 校验 scrypt"]
+    Local -->|用户名不存在| Decoy["跑等价 scrypt 后记失败，401/4011"]
     Local -->|密码错| Deny
-    Local -->|通过| Ip["IP 白名单校验"]
+    Local -->|通过| Clear["清零失败计数"] --> Ip["IP 白名单校验"]
     Ip -->|不在白名单| Forbid["403/4030"]
     Ip --> Totp{"本地账号开了 TOTP?"}
     Totp -->|是| Challenge["返回 requires_totp + temp_token"]
@@ -69,14 +77,46 @@ flowchart TD
 
 - **LDAP `denied` 不回落本地。** 目录明确说“这个人密码错”或“这个人被禁用”时，再去本地
   撞一次密码等于给攻击者多一次机会，也会让被禁用的人靠同名本地账号复活。
-- **LDAP `skipped` 才回落。** 目录不可达、没配 LDAP、目录里没这个人，都回落到本地密码。
-  这样 LDAP 配错或目录宕机时，本地超管还能进后台救场。
+- **LDAP `unavailable` 一律拒绝，不回落。** 这个状态表示**目录已经用用户 DN 绑定成功**，
+  只是之后的取组/角色映射/同步失败 —— 身份其实已经确认过了。此时回落到本地口令，正好给
+  「目录里已停用、但本地还留着旧哈希」的账号开了一条后门。
+- **`skipped` 只在账号未被目录接管时才回落。** 目录不可达、没配 LDAP、目录里没这个人，都回落到
+  本地密码，这样 LDAP 配错或目录宕机时本地超管还能进后台救场。但账号的 `auth_source = 'ldap'`
+  时不允许回落，否则「目录判定已停用」在目录抖动时失效。
 - **用户名不存在也要跑 scrypt。** `verifyAgainstNothing()` 用假盐消耗与“用户存在但密码错”
   等价的计算量，否则响应时间差一个数量级，等于把管理员用户名送出去。
 - **LDAP 账号不叠加本地 TOTP。** 目录已经承担了第二因子，再叠一层会让 LDAP 用户登不进来。
 - **开了 TOTP 只发挑战票据，不发会话。** 见下一节。
+- **账号维度退避先于一切。** 见下面的「登录失败退避」小节。
 
 密码错误统一返回 401/4011 且提示都是“用户名或密码错误”，不区分账号是否存在。
+
+### 登录失败退避
+
+`auth:admin-login` 的 IP 限流挡不住代理池 —— 换一个出口地址就能对已知的 `admin` 账号继续猜。
+所以再加一层**以账号为键**的退避，实现在 `AdminAuthService`（不是 `RateLimitService`，因为它只在
+`AppModule` 的 providers 里且未导出，控制器注入不到）：
+
+| 项 | 值 |
+| --- | --- |
+| 触发阈值 | 连续失败 5 次 |
+| 第 1 轮退避 | 5 分钟 |
+| 升级方式 | 每多一轮翻倍：5 → 10 → 20 → 30 分钟封顶 |
+| 错误码 | **429/4291**（`ApiErrors.accountLocked()`） |
+| 计数清零 | 登录成功时整条清除 |
+
+两条容易写错的细节：
+
+- **`failures` 与 `lockouts` 必须分开记。** 退避期一过只清 `failures`（让正常管理员重新拿到完整
+  额度），保留 `lockouts`（让反复失败的账号下一轮锁更久）。如果退避期一到就把整条记录删掉，
+  指数升级永远停在第一档；如果只清 `lockedUntil` 不清 `failures`，被锁过一次之后打错一个字
+  就再挨 5 分钟，对正常人也过于苛刻。
+- **`lockedUntil` 为 0 表示「还没到阈值」，此时绝不能删条目。** 早期实现把「不在退避期」等同于
+  「清理历史计数」，结果是每次登录都清零，阈值永远达不到 —— 退避看起来实现了，实际完全没生效。
+
+**4291 与 4290 必须分开。** 4290 是来源地址限流（换 IP 或等窗口过去就恢复），4291 是账号被锁
+（换 IP 无用，必须等退避走完）。共用一个码的话，运维和客户端都分不清该换网络还是该等锁，
+契约脚本也写不出有意义的断言 —— 它会在账号退避完全没生效时因为 IP 限流先命中而变绿。
 
 ## 3. 双因素认证（TOTP）
 
@@ -103,8 +143,14 @@ flowchart TD
   账号不能靠旧票据拿到会话。
 - 请求体里如果带了 `admin_id`，必须与票据绑定的 `admin_id` 一致，防止拿别人的票据试探。
 
-动态码必须是 6 位纯数字（`/^\d{6}$/` 前置拦截），`speakeasy` 校验窗口为 `window: 1`（前后各
-一个时间片），TOTP 发行者名称由 `TOTP_ISSUER` 配置，默认“桃桃音乐管理后台”。
+动态码必须是 6 位纯数字（`/^\d{6}$/` 前置拦截），校验窗口为 `window: 1`（前后各一个时间片），
+TOTP 发行者名称由 `TOTP_ISSUER` 配置，默认“桃桃音乐管理后台”。
+
+> **TOTP 算法是自实现的，不再依赖 `speakeasy`。** 实现位于 `src/admin-auth/totp.ts`
+> （`base32Encode` / `base32Decode` / `hotp` / `totp` / `verifyTotpCode` / `generateTotpSecret`），
+> 移除依赖是因为 `speakeasy@^2` 已停止维护，而它正好是校验第二因子的那段代码。
+> 库里已存的 base32 密钥无需迁移：解码逻辑与 RFC 4648 一致，`otpauth://` URL 的格式也保持不变。
+> 用 `npm run verify:totp` 校验（RFC 4226 附录 D + RFC 6238 附录 B 向量、窗口边界，36 项）。
 
 管理接口：
 
@@ -234,15 +280,15 @@ await this.audit.record(request, "release.rollout", "release", `${channel}#${bod
 });
 ```
 
-它统一处理两件事：把兼容身份的 `id = 0` 转成 `null`（否则撞 `admin_users` 外键），以及
+它统一处理两件事：把非法/缺失的操作人 id 收敛成 `null`（不让它撞 `admin_users` 外键），以及
 只在 `TRUST_PROXY` 开启时才采信 `X-Forwarded-For`。**只在操作成功之后调用** —— 控制器
 抛异常时这行不会执行，审计记的是「发生了什么」，不是「尝试了什么」。
 
 图片 Key 的审计只记 `maskedKey`，明文连审计表也不落。
 
 `GET /admin/auth/audit-log` 支持 `adminId`、`action`、`limit` 查询参数，按时间倒序返回。
-`admin_id` 为 `null` 表示这条记录来自 `X-Admin-Token` 兼容身份，或者原管理员已被删除
-（外键是 `ON DELETE SET NULL`，历史审计必须保留）。
+`admin_id` 为 `null` 表示**原管理员已被删除**（外键是 `ON DELETE SET NULL`，历史审计必须保留），
+这是当前唯一会产生无归属记录的原因。
 
 **审计写入失败不能把主流程带崩。** 登录、改密码这些操作先完成业务动作再写日志；日志表故障时
 应该只影响审计完整性，不应该让管理员登不进来。
@@ -272,16 +318,21 @@ await this.audit.record(request, "release.rollout", "release", `${channel}#${bod
 `logout` 虽然不带守卫，但会尝试解析 `Authorization: Bearer` 并撤销对应会话；没有凭据时直接
 返回 204，不做任何事 —— 这样退出接口本身不会把用户卡在登录页。
 
-限流分三个独立桶，都是**每 IP 10 次/15 分钟**，互不挤占：
+限流分三个独立桶：
 
-| 桶 | 挂载点 |
-| --- | --- |
-| `auth:admin-login` | `POST /admin/auth/login` |
-| `auth:admin-totp` | `POST /admin/auth/totp-verify`、`totp-enable`、`totp-confirm`、`totp-disable` |
-| `auth:admin-password` | `POST /admin/auth/change-password` |
+| 桶 | 挂载点 | 额度 |
+| --- | --- | --- |
+| `auth:admin-login` | `POST /admin/auth/login` | **每 IP 30 次/15 分钟** |
+| `auth:admin-totp` | `POST /admin/auth/totp-verify`、`totp-enable`、`totp-confirm`、`totp-disable` | 每 IP 10 次/15 分钟 |
+| `auth:admin-password` | `POST /admin/auth/change-password` | 每 IP 10 次/15 分钟 |
 
 第一步和第二步分桶，避免密码尝试次数挤占动态码尝试次数；改密码单独一桶，是因为它需要提交当前
 密码，同样属于可爆破的凭据校验入口。
+
+`auth:admin-login` 比另外两个宽（30 而非 10），是因为**登录的主防线已经换成账号维度的退避**
+（连续失败 5 次即锁，见上文）。IP 桶剩下的职责只是给「同一个出口地址轮着猜很多不同账号」设上界，
+而不是限制单个管理员的登录次数 —— 办公室、机房普遍共用一个 NAT 出口，按 10 次收紧会让第二个人
+登录就被拦下，运维会误判成密码错误。实现见 `RateLimitService.allowAdminLoginAttempt()`。
 
 ### 业务管理接口
 
@@ -295,19 +346,20 @@ await this.audit.record(request, "release.rollout", "release", `${channel}#${bod
 | 图片 Key | `/app/admin/image-keys` | `READ_ROLES` | `WRITE_ROLES` |
 | 用户 | `/app/admin/users` | `PRIVILEGED_READ_ROLES` | `WRITE_ROLES` |
 
-守卫的挂法两种都有，取决于控制器里有没有公开方法：
+**守卫一律逐个方法挂，任何控制器都不例外。** 早期文档把守卫的挂法分成两类（「全是管理接口的
+控制器挂类上、含公开路由的逐个方法挂」），这个区分已经废弃：类级守卫在「将来给这个控制器加一个
+公开路由」时会静默出错，而维护者不会记得去改类级装饰器。统一用 `@AdminGuarded()` 之后，
+「这个路由受不受保护」在方法上一眼可见。
 
-- `ReleaseAdminController`、`DesktopReleaseAdminController`、`UserAdminController`、
-  `ImageKeyAdminController` 全是管理接口，守卫挂**类上**：`@UseGuards(AdminAuthGuard, RolesGuard)`。
-- `AnnouncementController` 同时有公开的 `GET /announcements`（客户端首页要用），所以守卫
-  **只能逐个方法挂**。类级守卫会连公开接口一起保护，客户端首页直接 401 —— 这就是
-  `admin-auth.controller.ts` 里 `login` 踩过的同一个坑。
+`AnnouncementController` 同时有公开的 `GET /announcements`（客户端首页要用），它是最早被迫
+逐个方法挂的那个；现在其余四个控制器也统一成同样的写法。
 
 ## 8. 数据模型
 
 三张表，详见 [04-database.md](04-database.md) 的同名小节：
 
-- `admin_users`：账号、scrypt 口令、角色、TOTP 密钥、IP 白名单、登录痕迹、禁用时间。
+- `admin_users`：账号、scrypt 口令、角色、TOTP 密钥、IP 白名单、登录痕迹、禁用时间，以及
+  `must_change_password`（首次登录必须改密）与 `auth_source`（`local` / `ldap`）。
 - `admin_sessions`：会话 token 的 SHA-256 哈希、过期时间、撤销时间、登录 IP 和 UA。
 - `admin_audit_log`：操作审计，`admin_id` 可空且 `ON DELETE SET NULL`。
 
@@ -317,10 +369,14 @@ await this.audit.record(request, "release.rollout", "release", `${channel}#${bod
 改密码会撤销该管理员的**其它**会话，保留当前这条：接口返回 204，前端不会跳登录页，把本人
 踢下线体验很差；但放着其它设备不管又不安全。
 
-## 9. 启动期三个硬约束
+`auth_source` 有两个作用：一是登录时判断「这个账号是否已被目录接管」（决定目录不可用时能不能
+回落本地口令），二是把 LDAP 同步进来的账号与本地账号区分开。`LdapService.syncToLocal()`
+在首次同步时写入 `'ldap'`，存量账号在下一次登录时补齐标记。
 
-这三条都不是类型错误，`tsc` 和静态审计都发现不了，只有真正把服务跑起来才会暴露。它们曾经
-同时存在，导致整个后台无法登录。
+## 9. 启动期四个硬约束
+
+这四条都不是类型错误，`tsc` 和静态审计都发现不了，只有真正把服务跑起来才会暴露。前三条曾经
+同时存在，导致整个后台无法登录；第四条是后来补的强制改密链路。
 
 ### 9.1 不能把 `@UseGuards` 挂在控制器类上
 
@@ -330,14 +386,16 @@ await this.audit.record(request, "release.rollout", "release", `${channel}#${bod
 @Controller("admin/auth")
 export class AdminAuthController {}
 
-// 正确：方法级装饰器工厂
-const AdminGuarded = () => UseGuards(AdminAuthGuard, RolesGuard);
+// 正确：共享的方法级装饰器（src/admin-auth/admin-guarded.decorator.ts）
+@AdminGuarded()
+@Post("login")
 ```
 
 登录时用户手里还没有凭据，类级守卫会让**所有**登录请求先被自己的守卫 401 掉，表现为
 `/admin/auth/login` 恒返回 401/4013，谁也进不去。
 
-新增受保护方法时用 `@AdminGuarded()`，不要图省事把它挪到类上。
+新增受保护方法时用 `@AdminGuarded()`，不要图省事把它挪到类上。装饰器本身也**只能**挂在方法上
+—— `admin-guarded.decorator.ts` 的注释里写明了理由，改动它之前先读一遍。
 
 ### 9.2 用到 `AdminAuthGuard` 的模块必须导入 `AdminAuthModule`
 
@@ -360,10 +418,38 @@ UnknownDependenciesException: Nest can't resolve dependencies of the AdminAuthGu
 `DatabaseService` 的迁移跑在 `onModuleInit`，而 `main.ts` 里的代码在两个钩子**之前**执行。
 把默认管理员创建写在 `main.ts`，会先撞“关系 admin_users 不存在”。
 
-`AdminBootstrapService` 实现 `OnApplicationBootstrap`，在迁移完成后才创建
-`admin / admin123`（`super_admin`）。找不到该用户名才创建，已存在则跳过，所以重启幂等。
+`AdminBootstrapService` 实现 `OnApplicationBootstrap`，在迁移完成后才创建 `admin`（`super_admin`）。
+找不到该用户名才创建，已存在则跳过，所以重启幂等。
 
-首次登录后应立即改密码；默认口令是硬编码的，代码里没有强制首次改密的机制。
+### 9.4 默认管理员不再有硬编码口令，首次登录强制改密
+
+`admin/admin123` 是公开的默认凭据 —— 任何一次「部署完忘了改密码」都等于把后台挂在公网上。
+现在初始口令有两个来源，二选一：
+
+| `ADMIN_INITIAL_PASSWORD` | 初始口令 | 日志行为 |
+| --- | --- | --- |
+| 已设置（至少 12 字符，否则启动失败） | 取该值 | `LOG` 只写「口令取自环境变量」，**不打印明文** |
+| 未设置 | `randomBytes(32).toString("base64url")` | `WARN` 打印一次明文，并提示设置环境变量 |
+
+无论哪种来源，创建的账号都带 `must_change_password = 1`。`AdminAuthGuard` 据此拦截：
+该标志为 1 时，除标了 `@AllowPendingPasswordChange()` 的 `me` 与 `change-password` 外，
+**一律 403/4031**「首次登录必须先修改初始密码」。
+
+几个必须保持的点：
+
+- **拦截放在守卫里，不放在控制器辅助函数里。** 业务控制器只通过 `audit.record(request, ...)`
+  使用 `request.adminUser`，不调用任何控制器内的取身份方法 —— 只有放守卫里才能覆盖全部当前与
+  未来的管理路由。
+- **改密的放行必须显式标注。** `@AllowPendingPasswordChange()` 是白名单，默认拒绝。
+  新增「待改密状态下也要能用」的接口时才会去标它。
+- **`updatePassword()` 顺带清标志，且在一条 SQL 里完成。** 分两步写会出现「密码已改但标志还在」
+  的中间态，用户改完密码仍然被 4031 挡在门外，只能靠重启或手工改库救。
+- **前端 `ForcePasswordChange.vue` 是独立全屏组件**，在 `App.vue` 里优先于后台主体渲染。
+  登录响应里的 `must_change_password` 为 `true` 时直接进入它，不给出任何绕过入口。
+
+`me` 与 `change-password` 的响应都用 `publicAdmin()` 收敛成
+`{ id, username, display_name, role, must_change_password }`，不要把 `AdminUserRecord`
+整条丢出去 —— 那会带上 `password_hash` 与 `totp_secret`。
 
 ## 10. 前端管理后台
 
@@ -371,33 +457,69 @@ Vue 管理后台在 `src/frontend/`，构建产物输出到 `dist/public`，由 
 
 - `AdminLogin.vue`：两步登录。第一步失败清空凭据；第二步 `temp_token` 失效时清空票据并退回
   第一步，而不是停在动态码输入框反复失败。
+- `ForcePasswordChange.vue`：`must_change_password` 为真时的全屏强制改密页，在 `App.vue`
+  里优先于后台主体渲染，没有跳过入口。
 - `AdminUserManager.vue`、`AuditLogViewer.vue`、`IpWhitelistManager.vue` 都调用
   `/admin/auth/**` 下的路径。改后端路由时必须同步这三处，否则页面表现为 404/4040。
 
 注意 `IpWhitelistManager.vue` 当前没有任何页面引用它，是孤儿组件。
 
+`api.ts` 的 `authHeaders()` 现在**恒定返回 `Authorization: Bearer`**，不再按令牌长度猜头部
+（那个判断随兼容通道一起删掉了）。`adminChangePassword()` 是给强制改密页用的。
+
+### 安全响应头
+
+`/admin` 下的所有响应（含 `express.static` 直接吐出的 JS/CSS）都带 CSP，由 `main.ts` 的
+Express 中间件下发，**必须挂在 `expressStatic` 之前**：
+
+```text
+default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
+img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self';
+object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
+```
+
+- 用中间件而不是 Nest 拦截器：静态资源在路由之前就被 `express.static` 吐出去了，拦截器根本
+  没机会运行，而 CSP 必须跟着 `index.html` 一起下发。
+- `style-src` 是本策略唯一放宽的一项（Element Plus 以行内样式注入主题变量），`script-src`
+  保持严格 —— 因此**主题预置脚本已外置**成 `src/frontend/public/theme-bootstrap.js`。
+  它必须是同步阻塞脚本（不加 `defer`/`async`），否则会晚于首屏渲染，暗色模式闪烁会回来。
+- 只作用于 `/admin`：分享页是 Kotlin/Wasm，编译 WebAssembly 需要 `wasm-unsafe-eval`，
+  套用这份策略会直接把播放器打瘫。
+
 ## 11. 验证
 
-管理后台认证的契约断言在 `tools/verify-contract.mjs` 的“管理后台认证：账号 / 角色 / 2FA / 审计”
-一节，覆盖：匿名 401/4013、密码错 4011、超管登录、`/me`、管理员列表、审计日志、缺/伪造
-`temp_token` 均 4011、`X-Admin-Token` 兼容、伪造 `X-Forwarded-For` 被白名单拒、创建管理员 201、
-viewer 读列表 403/4030、viewer 提权 403/4030、`PATCH` 局部更新、兼容身份写审计不报外键、
-不能禁用最后一个超管 400/4000、删除管理员 204。
+管理后台认证的契约断言在 `tools/verify-contract.mjs`，相关段落有四个：
 
-紧接着的“业务管理接口：角色校验与审计”一节验证授权与审计的落地：viewer 对
-发布放量、Windows 放量、禁用用户、发布公告、导入图片 Key 五个写接口一律 403/4030；
-发布、Windows 发布、公告、图片 Key 四个域的读接口对 viewer 返回 200（不能顺手把只读账号锁死）；
-**用户列表与听歌历史对 viewer 返回 403/4030，对 `admin` 返回 200/404**（个人数据不放给观察者，
-但也不能收紧成管理员不可用）；`admin` 角色能发布公告；该公告在 `admin_audit_log` 里查得到且
-`admin_id` 记的是发布者本人；`X-Admin-Token` 兼容身份同样能发布并留痕。
+1. **「管理端会话准备：强制改密与 Bearer 会话」**（必须在所有管理端断言之前跑）：用
+   `ADMIN_INITIAL_PASSWORD` 首次登录 → 断言 `must_change_password === true` → 断言改密前访问
+   其它管理接口是 403/4031 → 改密 204 → 新口令重登成功且不再要求改密 → 初始口令失效 4011。
+2. **「管理路由逐条无凭据探测」**：枚举全部 39 条受保护管理路由，逐条断言无凭据时返回
+   **401/4013**；再断言 4 条公开路由不会被管理员守卫拦下。期望 4013 而不是 4010 是有意的：
+   4013 说明 `AdminAuthGuard` 确实跑了，若有人把 `@Public()` 摘掉，全局访问令牌守卫会抢先
+   返回 4010，断言同样会失败。
+3. **「管理后台认证：账号 / 角色 / 2FA / 审计」**：匿名 4013、密码错 4011、超管登录、`/me`、
+   管理员列表、审计日志、缺/伪造 `temp_token` 均 4011、**已移除的 `X-Admin-Token` 通道不再被
+   接受**、伪造 `X-Forwarded-For` 被白名单拒、创建管理员 201、viewer 读列表 403/4030、
+   viewer 提权 403/4030、`PATCH` 局部更新、**账号退避 429/4291 且不影响其它账号**、
+   不能禁用最后一个超管 400/4000、删除管理员 204。
+4. **「业务管理接口：角色校验与审计」**：viewer 对发布放量、Windows 放量、禁用用户、发布公告、
+   导入图片 Key 五个写接口一律 403/4030；发布、Windows 发布、公告、图片 Key 四个域的读接口对
+   viewer 返回 200（不能顺手把只读账号锁死）；**用户列表与听歌历史对 viewer 返回 403/4030，
+   对 `admin` 返回 200/404**；`admin` 角色能发布公告；该公告在 `admin_audit_log` 里查得到且
+   `admin_id` 记的是发布者本人。
+
+另有「安全响应头与跨域」一节断言 CSP 与 CORS，以及「头像上传：按文件头判定格式」一节断言
+上传的魔数校验（见 [03-api-contracts.md](03-api-contracts.md)）。
 
 运行方式和数据库准备见 [00-code-index.md](00-code-index.md) 与 [02-development.md](02-development.md)。
-契约脚本是有状态的，必须“重置验证库 → 重启服务 → 单次运行”。
+契约脚本是有状态的，必须“重置验证库 → 重启服务 → 单次运行”，并且启动时必须显式给
+`ADMIN_INITIAL_PASSWORD`（否则拿不到管理会话，后面所有管理端断言会连锁失败）。
 
 ## 12. 已知限制
 
-- 默认口令 `admin/admin123` 硬编码，没有强制首次改密。
 - `temp_token` 存进程内存，多实例部署时第二步可能落到没有票据的那个实例上。
+- 登录失败退避也是**进程内 Map**：多实例部署时攻击者可以在实例之间分摊失败次数。
+  与限流、2FA 票据同属「单实例假设」，见 [01-architecture.md](01-architecture.md)。
 - IP 白名单只支持精确匹配，不支持 CIDR，也不归一化 IPv4-mapped 地址。
 - `admin_users.email` 列在界面上没有编辑入口（后端已支持）。
 - 前端的写按钮没有按角色隐藏：观察者打开发布、公告、设置页仍能看到按钮，点了才会收到 403。
@@ -406,4 +528,5 @@ viewer 读列表 403/4030、viewer 提权 403/4030、`PATCH` 局部更新、兼�
 - 审计写入与业务操作不在同一个事务里：先做业务、后写日志。日志表故障时接口会报错，
   但业务动作已经生效，客户端重试可能造成重复操作。
 - `admin_audit_log` 没有留存或归档策略，19 个写操作持续写入，表只增不减。
-- 前端 `api.ts` 用令牌长度（> 60）判断走 Bearer 还是 `X-Admin-Token`，是脆弱的隐式约定。
+- 退避只按账号计数，不按「账号 + 来源地址」：同一 NAT 出口下的其它管理员不受影响，
+  但一个被锁的账号会让所有试图登录它的人一起等 —— 这是有意的取舍（防止换 IP 绕过）。

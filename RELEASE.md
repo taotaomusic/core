@@ -21,11 +21,22 @@
 
 ### 两种操作方式:管理后台 或 curl
 
-下面所有发布动作都有两条路。**日常用管理后台**(浏览器打开 `https://music.xydaigua.cn/admin/`,注意入口固定在 `/admin/`,服务根路径留给未来的网页版),它把三件事做成了界面:发布列表与放量、补丁列表与放量、强制更新下限。首次进入用**管理员账号密码登录**(默认 `admin` / `admin123`,首次部署后请立刻改掉),登录后拿到的会话令牌存在浏览器 localStorage,有效期 24 小时。
+下面所有发布动作都有两条路。**日常用管理后台**(浏览器打开 `https://music.xydaigua.cn/admin/`,注意入口固定在 `/admin/`,服务根路径留给未来的网页版),它把三件事做成了界面:发布列表与放量、补丁列表与放量、强制更新下限。首次进入用**管理员账号密码登录**,登录后拿到的会话令牌存在浏览器 localStorage,有效期 24 小时。
 
-管理后台登录后直接就能操作发布和公告接口 —— 这些接口用的是同一个 `AdminAuthGuard`,会话 Bearer 和旧的 `X-Admin-Token` 都接受,不需要另外填 `ADMIN_TOKEN`。账号、2FA、角色和 LDAP 见 [server/wiki/11-admin-auth.md](server/wiki/11-admin-auth.md)。
+管理后台登录后直接就能操作发布和公告接口 —— 这些接口用的是同一个 `AdminAuthGuard`,只认管理员会话。账号、2FA、角色、强制改密和 LDAP 见 [server/wiki/11-admin-auth.md](server/wiki/11-admin-auth.md)。
 
 本文档保留 curl 版本,因为它们是**唯一能写进脚本、也唯一能在后台挂掉时兜底**的口径。两者打的是同一批接口。
+
+**curl 版本先取一个管理员会话。** 历史上这里用的是静态 `ADMIN_TOKEN`,该通道**已整体移除**(它固定 `super_admin`,同时绕过 2FA、IP 白名单、会话撤销和审计归属)。现在统一改为登录换会话:
+
+```powershell
+$login = curl.exe -s -X POST "https://music.xydaigua.cn/api/v1/admin/auth/login" `
+  -H "content-type: application/json" `
+  -d '{"username":"admin","password":"<管理员口令>"}' | ConvertFrom-Json
+$env:ADMIN_SESSION_TOKEN = $login.data.token
+```
+
+下面所有 `curl.exe` 都用 `-H "Authorization: Bearer $env:ADMIN_SESSION_TOKEN"`。会话 24 小时过期,过期后重新登录即可。若账号开了 2FA,登录会返回 `temp_token` 而不是会话,需要再走一步 `POST /api/v1/admin/auth/totp-verify`。
 
 后台的实现要点见 [server/README.md](server/README.md#管理后台) —— 有一条不能踩的:静态资源靠 express 中间件在路由之前拦截,**绝不能改 `setGlobalPrefix` 的 `exclude`** 去让前端路由生效。
 
@@ -56,7 +67,7 @@ node -e "const d=require('./androidApp/build/outputs/apk/release/output-metadata
 
 ```powershell
 curl.exe -X POST "https://music.xydaigua.cn/api/v1/app/admin/rollout" `
-  -H "content-type: application/json" -H "X-Admin-Token: $env:ADMIN_TOKEN" `
+  -H "content-type: application/json" -H "Authorization: Bearer $env:ADMIN_SESSION_TOKEN" `
   -d '{"versionCode":<被污染的版本>,"percent":0,"enabled":false}'
 ```
 
@@ -89,7 +100,7 @@ $vc, $vn = $meta.Split(' ')
 $sha = (Get-FileHash $apk -Algorithm SHA256).Hash.ToLower()
 
 curl.exe -X POST "https://music.xydaigua.cn/api/v1/app/admin/releases?versionCode=$vc&versionName=$vn&note=修复内容&rollout=0&sha256=$sha" `
-  -H "X-Admin-Token: $env:ADMIN_TOKEN" --data-binary "@$apk"
+  -H "Authorization: Bearer $env:ADMIN_SESSION_TOKEN" --data-binary "@$apk"
 ```
 
 **一定要传 `sha256`。** 服务端会边写盘边算哈希并与之比对,不一致直接拒绝(4006)。不传就等于放弃了这道校验,坏包会一路发到用户手上。
@@ -110,7 +121,7 @@ curl.exe -o NUL -w "%{http_code}`n" -H "Range: bytes=99999999-" "https://music.x
 
 ```powershell
 curl.exe -X POST "https://music.xydaigua.cn/api/v1/app/admin/rollout" `
-  -H "content-type: application/json" -H "X-Admin-Token: $env:ADMIN_TOKEN" `
+  -H "content-type: application/json" -H "Authorization: Bearer $env:ADMIN_SESSION_TOKEN" `
   -d "{\"versionCode\":$vc,\"percent\":10}"
 ```
 
@@ -138,7 +149,7 @@ curl.exe "https://music.xydaigua.cn/api/v1/app/bootstrap?versionCode=<上一个�
 
 ```powershell
 curl.exe -X POST "https://music.xydaigua.cn/api/v1/app/admin/min-version" `
-  -H "content-type: application/json" -H "X-Admin-Token: $env:ADMIN_TOKEN" `
+  -H "content-type: application/json" -H "Authorization: Bearer $env:ADMIN_SESSION_TOKEN" `
   -d '{"versionCode":63}'
 ```
 
@@ -196,11 +207,11 @@ $patch = "patch\build\patch\patch-1.apk"
 $sha = (Get-FileHash $patch -Algorithm SHA256).Hash.ToLower()
 
 curl.exe -X POST "https://music.xydaigua.cn/api/v1/app/admin/patches?targetVersionCode=71&patchVersion=1&note=修复内容&rollout=0&sha256=$sha" `
-  -H "X-Admin-Token: $env:ADMIN_TOKEN" --data-binary "@$patch"
+  -H "Authorization: Bearer $env:ADMIN_SESSION_TOKEN" --data-binary "@$patch"
 
 # 自测通过后放量
 curl.exe -X POST "https://music.xydaigua.cn/api/v1/app/admin/patch-rollout" `
-  -H "content-type: application/json" -H "X-Admin-Token: $env:ADMIN_TOKEN" `
+  -H "content-type: application/json" -H "Authorization: Bearer $env:ADMIN_SESSION_TOKEN" `
   -d '{"targetVersionCode":71,"patchVersion":1,"percent":10}'
 ```
 
@@ -208,7 +219,7 @@ curl.exe -X POST "https://music.xydaigua.cn/api/v1/app/admin/patch-rollout" `
 
 ```powershell
 curl.exe -X POST "https://music.xydaigua.cn/api/v1/app/admin/patch-rollout" `
-  -H "content-type: application/json" -H "X-Admin-Token: $env:ADMIN_TOKEN" `
+  -H "content-type: application/json" -H "Authorization: Bearer $env:ADMIN_SESSION_TOKEN" `
   -d '{"targetVersionCode":71,"patchVersion":1,"percent":0,"enabled":false}'
 ```
 
@@ -336,7 +347,7 @@ Windows 客户端按 `current/` 模块目录发布。稳定启动器负责启动
 
 ```powershell
 $env:DESKTOP_RELEASE_BASE_URL = "https://music.xydaigua.cn"
-$env:ADMIN_TOKEN = "<管理令牌>"
+$env:ADMIN_SESSION_TOKEN = "<管理员会话令牌，取法见第一节>"
 .\gradlew.bat :desktopApp:publishDesktopRelease
 ```
 

@@ -9,10 +9,17 @@ export type AuthenticatedRequest = Request & { user?: SessionUser };
 /**
  * 管理员身份。
  *
- * `id` 为 0 是 `X-Admin-Token` 兼容路径的合成身份，在 `admin_users` 里
- * **没有对应行** —— 任何要落库引用它的地方都必须先过 [auditActorId]。
+ * `must_change_password` 为 1 表示该账号仍在「首次登录必须改密」状态：
+ * [AdminAuthGuard] 会据此拦掉除 `me` / `change-password` / `logout`
+ * 之外的全部管理接口。
  */
-export type AdminActor = { id: number; username: string; role: string; display_name: string };
+export type AdminActor = {
+  id: number;
+  username: string;
+  role: string;
+  display_name: string;
+  must_change_password: number;
+};
 
 /** 经过 [AdminAuthGuard] 的请求。 */
 export type AdminAuthenticatedRequest = Request & { adminUser?: AdminActor };
@@ -20,8 +27,9 @@ export type AdminAuthenticatedRequest = Request & { adminUser?: AdminActor };
 /**
  * 把请求上的管理员身份转成可以写进外键列的 ID。
  *
- * 兼容身份的 0 在 `admin_users` 里不存在，直接写会撞外键；审计表虽然已改成
- * 可空，但 `created_by` 之类的地方仍需显式区分「无归属」和「某个 ID」。
+ * 防御性收敛：身份缺失或 id 不是正整数时折成 `null`，而不是把 0 或
+ * `undefined` 写进外键列（`admin_audit_log.admin_id` 是 `ON DELETE SET NULL`
+ * 的可空列，`null` 表示「无归属」是合法且有意义的取值）。
  */
 export function auditActorId(admin: AdminActor | undefined): number | null {
   if (!admin || !admin.id) return null;
