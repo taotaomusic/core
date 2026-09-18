@@ -39,3 +39,4 @@ artifacts/*
 !artifacts/mine-shortcuts-favorites-sync/**
 !artifacts/playback-history-playlist/
 !artifacts/playback-history-playlist/**
+server/bodian/index.ts

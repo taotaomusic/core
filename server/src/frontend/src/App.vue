@@ -11,7 +11,23 @@
     <!-- 未登录：显示登录页 -->
     <AdminLogin v-else-if="askToken" @login="onLogin" />
 
-    <!-- 已登录：显示管理界面 -->
+    <!--
+      本地有令牌、但身份（角色）还没确认：先停在加载态。
+
+      页签可见性依赖 `adminInfo.role`，而它来自异步的 `adminMe`。如果这段时间直接渲染
+      管理界面，标签栏会先按「角色未知」画一遍，等请求回来再把「管理员」「审计日志」
+      插进去 —— 表现为页签凭空弹出、后面的页签整体右移。观察者账号更糟：角色未知时
+      `undefined !== 'viewer'` 成立，会先闪出「用户与统计」「审计日志」再消失。
+      宁可多等一个请求，也不要让标签栏画两遍。
+    -->
+    <div v-else-if="booting" class="boot-screen">
+      <div class="boot-card">
+        <el-icon class="boot-spinner"><Loading /></el-icon>
+        <p>正在确认管理员身份…</p>
+      </div>
+    </div>
+
+    <!-- 已登录且身份已确认：显示管理界面 -->
     <div v-else class="shell">
       <header class="topbar">
         <div class="brand">
@@ -76,7 +92,7 @@
               </template>
               <SupporterKeyManager :admin-token="token" />
             </el-tab-pane>
-            <el-tab-pane v-if="adminInfo?.role === 'super_admin'" name="admin-users" lazy>
+            <el-tab-pane v-if="isSuperAdmin" name="admin-users" lazy>
               <template #label>
                 <div class="tab-label"><el-icon><User /></el-icon> <span v-show="!isMobile || tab === 'admin-users'">管理员</span></div>
               </template>
@@ -102,9 +118,9 @@
 </template>
 
 <script setup lang="ts">
-import { defineAsyncComponent, ref, onMounted, onUnmounted, watch } from "vue";
+import { computed, defineAsyncComponent, ref, onMounted, onUnmounted, watch } from "vue";
 import zhCn from "element-plus/es/locale/lang/zh-cn";
-import { Check, Upload, Connection, Bell, User, Key, Setting, Lock, Moon, Sunny, SwitchButton, Monitor } from '@element-plus/icons-vue'
+import { Check, Upload, Connection, Bell, User, Key, Setting, Lock, Moon, Sunny, SwitchButton, Monitor, Loading } from '@element-plus/icons-vue'
 import { useDark, useToggle } from '@vueuse/core'
 import AdminLogin from "./components/AdminLogin.vue";
 import ForcePasswordChange from "./components/ForcePasswordChange.vue";
@@ -135,6 +151,26 @@ const adminInfo = ref<AdminIdentity | null>(null);
  */
 const mustChangePassword = ref(false);
 
+/**
+ * 正在用本地令牌确认身份。
+ *
+ * 为真时既不渲染登录页也不渲染管理界面，避免标签栏先画一遍「角色未知」的版本。
+ * 见模板中 `booting` 分支的说明。
+ */
+const booting = ref(false);
+
+/**
+ * 角色判定集中在这里，不要在模板里散写 `adminInfo?.role === ...`。
+ *
+ * `adminInfo` 为 null 时 `adminInfo?.role !== 'viewer'` 求值为 `undefined !== 'viewer'`，
+ * 结果是 true —— 角色未知会被当成「不是观察者」，两个受限页签会先亮一下再消失。
+ * 这里显式要求角色已确认，未确认一律按最低权限处理。
+ */
+const role = computed(() => adminInfo.value?.role ?? "");
+const isSuperAdmin = computed(() => role.value === "super_admin");
+/** 个人数据类页签（用户与统计、审计日志）：观察者不可见，与后端 PRIVILEGED_READ_ROLES 对齐。 */
+const canViewPersonalData = computed(() => role.value !== "" && role.value !== "viewer");
+
 // 响应式状态
 const isMobile = ref(false);
 
@@ -155,6 +191,8 @@ onMounted(() => {
   const stored = localStorage.getItem(STORAGE_KEY);
   if (stored) {
     token.value = stored;
+    // 先停在加载态：角色要等 adminMe 回来才知道，此时渲染管理界面会让页签画两遍。
+    booting.value = true;
     // 尝试验证 token 有效性；同时取出强制改密标记，刷新页面后仍能停在改密页。
     adminMe(stored).then(info => {
       adminInfo.value = info;
@@ -164,6 +202,9 @@ onMounted(() => {
       localStorage.removeItem(STORAGE_KEY);
       token.value = "";
       askToken.value = true;
+    }).finally(() => {
+      // 成功或失败都要收尾，否则校验失败时会卡在加载页上。
+      booting.value = false;
     });
   } else {
     askToken.value = true;
@@ -211,6 +252,7 @@ async function forgetToken() {
   token.value = "";
   adminInfo.value = null;
   mustChangePassword.value = false;
+  booting.value = false;
   askToken.value = true;
   tab.value = "releases";
 }
@@ -276,6 +318,38 @@ body {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
+}
+
+/* 身份确认中的过渡页。保持与登录页一致的居中卡片观感，避免出现无样式的白屏。 */
+.boot-screen {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-color);
+}
+
+.boot-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.boot-card p {
+  margin: 0;
+  font-size: 14px;
+}
+
+.boot-spinner {
+  font-size: 28px;
+  color: var(--primary-color);
+  animation: boot-spin 1s linear infinite;
+}
+
+@keyframes boot-spin {
+  to { transform: rotate(360deg); }
 }
 
 .topbar {
