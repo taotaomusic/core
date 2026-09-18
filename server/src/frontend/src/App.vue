@@ -80,13 +80,13 @@
               <template #label>
                 <div class="tab-label"><el-icon><User /></el-icon> <span v-show="!isMobile || tab === 'admin-users'">管理员</span></div>
               </template>
-              <AdminUserManager :token="token" />
+              <AdminUserManager :admin-token="token" />
             </el-tab-pane>
             <el-tab-pane v-if="adminInfo?.role !== 'viewer'" name="audit-log" lazy>
               <template #label>
                 <div class="tab-label"><el-icon><Connection /></el-icon> <span v-show="!isMobile || tab === 'audit-log'">审计日志</span></div>
               </template>
-              <AuditLogViewer :token="token" />
+              <AuditLogViewer :admin-token="token" />
             </el-tab-pane>
             <el-tab-pane name="settings" lazy>
               <template #label>
