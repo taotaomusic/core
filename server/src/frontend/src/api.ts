@@ -41,20 +41,31 @@ async function unwrap<T>(response: Response): Promise<T> {
   return body.data;
 }
 
+/**
+ * 拼装鉴权头。
+ *
+ * 令牌缺失时**直接抛错**，绝不拼出 `Bearer undefined`。那种请求会被服务端判成
+ * 无效会话，前端只看到一句「管理员认证失败」，真正的原因被完全掩盖 ——
+ * 这个坑踩过一次：`AuditLogViewer` / `AdminUserManager` 收到的是 `:token`
+ * 而不是 `:admin-token`，`props.adminToken` 恒为 undefined，两个页签稳定 401。
+ */
 function authHeaders(adminToken: string): Record<string, string> {
+  if (!adminToken) throw new Error("缺少管理员令牌，请重新登录");
   return { "authorization": `Bearer ${adminToken}` };
 }
 
-export function apiGet<T>(path: string, adminToken: string): Promise<T> {
-  return fetch(`${BASE}${path}`, { headers: authHeaders(adminToken) }).then(unwrap<T>);
+export async function apiGet<T>(path: string, adminToken: string): Promise<T> {
+  const headers = authHeaders(adminToken);
+  return unwrap<T>(await fetch(`${BASE}${path}`, { headers }));
 }
 
-export function apiPostJson<T>(path: string, adminToken: string, payload: unknown): Promise<T> {
-  return fetch(`${BASE}${path}`, {
+export async function apiPostJson<T>(path: string, adminToken: string, payload: unknown): Promise<T> {
+  const headers = { "content-type": "application/json", ...authHeaders(adminToken) };
+  return unwrap<T>(await fetch(`${BASE}${path}`, {
     method: "POST",
-    headers: { "content-type": "application/json", ...authHeaders(adminToken) },
+    headers,
     body: JSON.stringify(payload),
-  }).then(unwrap<T>);
+  }));
 }
 
 /** 管理端删除资源。204 无响应体，因此不能走 JSON 信封解包。 */
@@ -70,12 +81,13 @@ export async function apiDelete(path: string, adminToken: string): Promise<void>
  * 服务端对这两条上传路由**绕开了 JSON 解析器**（见 main.ts 的 RAW_BODY_PATHS），
  * 所以这里必须直接发 ArrayBuffer，不能用 FormData 也不能 base64。
  */
-export function apiPostBytes<T>(path: string, adminToken: string, bytes: ArrayBuffer): Promise<T> {
-  return fetch(`${BASE}${path}`, {
+export async function apiPostBytes<T>(path: string, adminToken: string, bytes: ArrayBuffer): Promise<T> {
+  const headers = { "content-type": "application/octet-stream", ...authHeaders(adminToken) };
+  return unwrap<T>(await fetch(`${BASE}${path}`, {
     method: "POST",
-    headers: { "content-type": "application/octet-stream", ...authHeaders(adminToken) },
+    headers,
     body: bytes,
-  }).then(unwrap<T>);
+  }));
 }
 
 /** 不带鉴权的公开接口（bootstrap 刻意允许无令牌访问）。 */
@@ -104,12 +116,13 @@ export function formatTime(milliseconds: number): string {
 }
 
 /** PATCH 请求（不走 JSON 信封解包，返回原始响应） */
-export function apiPatch<T>(path: string, adminToken: string, payload: unknown): Promise<T> {
-  return fetch(`${BASE}${path}`, {
+export async function apiPatch<T>(path: string, adminToken: string, payload: unknown): Promise<T> {
+  const headers = { "content-type": "application/json", ...authHeaders(adminToken) };
+  return unwrap<T>(await fetch(`${BASE}${path}`, {
     method: "PATCH",
-    headers: { "content-type": "application/json", ...authHeaders(adminToken) },
+    headers,
     body: JSON.stringify(payload),
-  }).then(unwrap<T>);
+  }));
 }
 
 /** 管理员认证 —— 登录（用户名密码） */
