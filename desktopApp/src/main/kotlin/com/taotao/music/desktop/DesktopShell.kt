@@ -25,7 +25,6 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
@@ -102,11 +101,9 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.taotao.music.model.AudioQuality
 import com.taotao.music.model.Lyric
 import com.taotao.music.model.LyricWord
@@ -119,12 +116,81 @@ import com.taotao.music.playerui.SharedContentState
 import com.taotao.music.playerui.SharedContentStateType
 import com.taotao.music.playerui.SharedMiniPlayer
 import com.taotao.music.playerui.SharedSongRow
+import com.taotao.music.playerui.theme.TaotaoElevation
+import com.taotao.music.playerui.theme.TaotaoShapes
+import com.taotao.music.playerui.theme.TaotaoSizes
+import com.taotao.music.playerui.theme.TaotaoSpacing
+import com.taotao.music.playerui.theme.TaotaoStroke
+import com.taotao.music.playerui.theme.TaotaoTypeScale
 import com.taotao.music.model.labelOfQuality
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
 private data class NavItem(val page: DesktopPage, val label: String, val icon: androidx.compose.ui.graphics.vector.ImageVector)
+
+// ---- 本文件私有的页面 / 组件尺寸 ----
+//
+// 这些值描述「这一屏占多宽」「这一块多大」，换一屏或换一个组件就不成立，
+// 所以**不进 player-ui 的 TaotaoSizes 刻度** —— 那个对象只收三端复用的元素固有尺寸。
+// 判据与安卓端一致：能跨端复用的进 token，页面自己的布局常量在文件内命名。
+
+/** 左侧导航栏宽度。 */
+private val SidebarWidth = 232.dp
+
+/** 侧边栏迷你播放器里音量条的宽度。 */
+private val SidebarVolumeSliderWidth = 104.dp
+
+/** 搜索按钮高度。比 Material 默认按钮更高，为了与左侧输入框齐平。 */
+private val SearchButtonHeight = 56.dp
+
+/** 「开始发现音乐」卡片里的圆形图标底衬。 */
+private val DiscoverIconCircleSize = 52.dp
+
+/** 搜索历史 chip 上删除按钮的触达区。 */
+private val ChipRemoveButtonSize = 20.dp
+
+/** 「加载更多」按钮里进度条的宽度。 */
+private val LoadMoreProgressWidth = 60.dp
+
+/**
+ * 最近播放列表里，元信息文字相对行首的缩进。
+ *
+ * 必须与 [SharedSongRow] 的「行内边距 + 封面 + 文字列起点」对齐，否则这行小字
+ * 不会落在歌曲标题下方。**故意写成推导式而不是 84** —— 封面尺寸一改就自动跟上。
+ */
+private val RecentMetaIndent =
+    TaotaoSpacing.listItemHorizontal + TaotaoSizes.artworkRow + TaotaoSpacing.listItemHorizontal + TaotaoSpacing.sm
+
+/** 播放页左栏的宽度范围。 */
+private val NowPlayingColumnMinWidth = 330.dp
+private val NowPlayingColumnMaxWidth = 430.dp
+
+/** 音量百分比标签的固定宽度，避免数值位数变化时滑块左右抖动。 */
+private val VolumePercentLabelWidth = 38.dp
+
+/** 歌词面板上下留白：让首尾行也能滚到视口中央。 */
+private val LyricPaneVerticalPadding = 90.dp
+
+/**
+ * 歌词行的行高，**所有行必须一致** —— 否则换句时 LazyColumn 整列会跳动。
+ * 取 [TaotaoTypeScale.sectionTitle] 的 26sp，与安卓端 `LyricPanel` 同一口径。
+ */
+private val LyricLineHeight = TaotaoTypeScale.sectionTitle.lineHeight
+
+/** 歌词当前行 / 非当前行的字号，同样取自 token 刻度。 */
+private val LyricActiveFontSize = TaotaoTypeScale.sectionTitle.fontSize
+private val LyricIdleFontSize = TaotaoTypeScale.body.fontSize
+
+/** 播放队列抽屉宽度。 */
+private val QueuePanelWidth = 380.dp
+
+/** 队列序号列的固定宽度，避免序号到两位数时整行右移。 */
+private val QueueIndexWidth = 24.dp
+
+/** 队列行内上移 / 下移 / 移除按钮的触达区。 */
+private val QueueActionButtonSize = 28.dp
+
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -266,7 +332,7 @@ internal fun DesktopShell(
                             Text(
                                 text = "定时停止 · ${formatSleepTimerRemaining(sleepTimerRemainingMs)}${if (playing) "" else " · 暂停计时"}",
                                 color = Coral,
-                                fontSize = 11.sp,
+                                style = MaterialTheme.typography.labelSmall,
                             )
                         }
                     },
@@ -280,7 +346,7 @@ internal fun DesktopShell(
                         Slider(
                             value = volume.coerceIn(0f, 1f),
                             onValueChange = onVolumeChange,
-                            modifier = Modifier.width(104.dp),
+                            modifier = Modifier.width(SidebarVolumeSliderWidth),
                         )
                         IconButton(onClick = onOpenQueue) {
                             Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = "播放队列")
@@ -291,36 +357,36 @@ internal fun DesktopShell(
         },
     ) { padding ->
         Row(Modifier.fillMaxSize().padding(padding)) {
-            Surface(Modifier.width(232.dp).fillMaxHeight(), color = MaterialTheme.colorScheme.surface) {
-                Column(Modifier.fillMaxSize().padding(horizontal = 14.dp, vertical = 18.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 8.dp)) {
-                        Box(Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(Coral), contentAlignment = Alignment.Center) { Icon(Icons.Default.MusicNote, null, tint = Color.White) }
-                        Column(Modifier.padding(start = 10.dp)) {
-                            Text("桃桃音乐", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                            Text("Windows", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
+            Surface(Modifier.width(SidebarWidth).fillMaxHeight(), color = MaterialTheme.colorScheme.surface) {
+                Column(Modifier.fillMaxSize().padding(horizontal = TaotaoSpacing.md, vertical = TaotaoSpacing.lg)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = TaotaoSpacing.xs)) {
+                        Box(Modifier.size(BrandMarkSize).clip(TaotaoShapes.medium).background(Coral), contentAlignment = Alignment.Center) { Icon(Icons.Default.MusicNote, null, tint = Color.White) }
+                        Column(Modifier.padding(start = TaotaoSpacing.sm)) {
+                            Text("桃桃音乐", fontWeight = FontWeight.Bold, style = TaotaoTypeScale.sectionTitle)
+                            Text("Windows", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
                         }
                     }
-                    Spacer(Modifier.height(28.dp))
+                    Spacer(Modifier.height(TaotaoSpacing.xxl))
                     navItems.forEach { item ->
                         NavigationItem(item, selected = page == item.page, onClick = { onPageChange(item.page) })
                     }
                     Spacer(Modifier.weight(1f))
                     if (currentSong != null) {
-                        Text("正在播放", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 8.dp).clip(RoundedCornerShape(12.dp)).clickable(onClick = onOpenPlayer).padding(6.dp)) {
+                        Text("正在播放", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(horizontal = TaotaoSpacing.sm, vertical = TaotaoSpacing.xs))
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = TaotaoSpacing.xs).clip(TaotaoShapes.medium).clickable(onClick = onOpenPlayer).padding(TaotaoSpacing.xs)) {
                             AlbumCover(currentSong, size = 38)
-                            Column(Modifier.padding(start = 8.dp).weight(1f)) {
-                                Text(currentSong.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                Text(currentSong.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Column(Modifier.padding(start = TaotaoSpacing.xs).weight(1f)) {
+                                Text(currentSong.title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
+                                Text(currentSong.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         }
                     }
-                    Spacer(Modifier.height(12.dp))
-                    TextButton(onClick = onSignOut, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Default.Logout, null, modifier = Modifier.size(16.dp)); Spacer(Modifier.width(6.dp)); Text("退出账号") }
+                    Spacer(Modifier.height(TaotaoSpacing.sm))
+                    TextButton(onClick = onSignOut, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Default.Logout, null, modifier = Modifier.size(TaotaoSizes.iconXs)); Spacer(Modifier.width(TaotaoSpacing.xs)); Text("退出账号") }
                     TextButton(onClick = onExit, modifier = Modifier.fillMaxWidth()) { Text("退出应用") }
                 }
             }
-            Divider(Modifier.fillMaxHeight().width(1.dp))
+            Divider(Modifier.fillMaxHeight().width(TaotaoStroke.thin))
             Box(Modifier.weight(1f).fillMaxHeight()) {
                 if (showPlayer && currentSong != null) {
                     PlayerDetail(
@@ -482,8 +548,8 @@ internal fun DesktopShell(
                     )
                 }
                 message?.let { text ->
-                    Surface(Modifier.align(Alignment.BottomCenter).padding(bottom = 14.dp), color = MaterialTheme.colorScheme.inverseSurface, shape = RoundedCornerShape(10.dp)) {
-                        Text(text, color = MaterialTheme.colorScheme.inverseOnSurface, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp))
+                    Surface(Modifier.align(Alignment.BottomCenter).padding(bottom = TaotaoSpacing.md), color = MaterialTheme.colorScheme.inverseSurface, shape = TaotaoShapes.small) {
+                        Text(text, color = MaterialTheme.colorScheme.inverseOnSurface, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = TaotaoSpacing.md, vertical = TaotaoSpacing.sm))
                     }
                 }
                 downloadTarget?.let { song ->
@@ -492,23 +558,23 @@ internal fun DesktopShell(
                         onDismissRequest = onDismissDownloadQuality,
                         title = { Text("下载音质") },
                         text = {
-                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Column(verticalArrangement = Arrangement.spacedBy(TaotaoSpacing.xxs)) {
                                 Text(song.title, fontWeight = FontWeight.Bold)
                                 if (downloadQualityLoading) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
-                                        androidx.compose.material3.CircularProgressIndicator(Modifier.size(18.dp), color = Coral)
-                                        Text("正在查询可用音质…", fontSize = 12.sp, modifier = Modifier.padding(start = 8.dp))
+                                        androidx.compose.material3.CircularProgressIndicator(Modifier.size(TaotaoSizes.progressInline), color = Coral)
+                                        Text("正在查询可用音质…", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(start = TaotaoSpacing.xs))
                                     }
                                 } else {
                                     downloadQualityError?.let { error ->
-                                        Text(error, color = Coral, fontSize = 12.sp)
+                                        Text(error, color = Coral, style = MaterialTheme.typography.bodySmall)
                                         TextButton(
                                             onClick = { onRetryDownloadQuality(song) },
                                             enabled = !downloadQualityLoading,
                                         ) { Text("重试查询") }
                                     }
                                     if (choices.isEmpty() && downloadQualityError == null) {
-                                        Text("暂无可用音质", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+                                        Text("暂无可用音质", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
                                     }
                                     choices.forEach { option ->
                                         TextButton(
@@ -517,7 +583,7 @@ internal fun DesktopShell(
                                         ) {
                                             Column(Modifier.fillMaxWidth()) {
                                                 Text(option.label.ifBlank { labelOfQuality(option.quality) })
-                                                if (option.size > 0L) Text(formatBytes(option.size), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                                if (option.size > 0L) Text(formatBytes(option.size), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                             }
                                         }
                                     }
@@ -536,11 +602,11 @@ internal fun DesktopShell(
 private fun NavigationItem(item: NavItem, selected: Boolean, onClick: () -> Unit) {
     val background = if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent
     val foreground = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(background).clickable(onClick = onClick).padding(horizontal = 12.dp, vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) {
-        Icon(item.icon, item.label, tint = foreground, modifier = Modifier.size(19.dp))
-        Text(item.label, color = foreground, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal, modifier = Modifier.padding(start = 12.dp))
+    Row(Modifier.fillMaxWidth().clip(TaotaoShapes.button).background(background).clickable(onClick = onClick).padding(horizontal = TaotaoSpacing.sm, vertical = TaotaoSpacing.sm), verticalAlignment = Alignment.CenterVertically) {
+        Icon(item.icon, item.label, tint = foreground, modifier = Modifier.size(TaotaoSizes.iconSm))
+        Text(item.label, color = foreground, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal, modifier = Modifier.padding(start = TaotaoSpacing.sm))
     }
-    Spacer(Modifier.height(4.dp))
+    Spacer(Modifier.height(TaotaoSpacing.xxs))
 }
 
 @Composable
@@ -573,17 +639,17 @@ private fun MusicPage(
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 34.dp, vertical = 26.dp),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = TaotaoSpacing.xxl, vertical = TaotaoSpacing.xl),
     ) {
         item {
             Row(verticalAlignment = Alignment.Bottom) {
                 Column(Modifier.weight(1f)) {
-                    Text("音乐", fontSize = 30.sp, fontWeight = FontWeight.Bold)
-                    Text("搜索、播放和管理你的音乐库", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
+                    Text("音乐", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+                    Text("搜索、播放和管理你的音乐库", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = TaotaoSpacing.xxs))
                 }
-                if (currentSong != null) Text("${results.size} 首搜索结果", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+                if (currentSong != null) Text("${results.size} 首搜索结果", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
             }
-            Spacer(Modifier.height(22.dp))
+            Spacer(Modifier.height(TaotaoSpacing.xl))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 OutlinedTextField(
                     value = query,
@@ -594,12 +660,12 @@ private fun MusicPage(
                     leadingIcon = { Icon(Icons.Default.Search, "搜索") },
                     trailingIcon = { if (query.isNotBlank()) IconButton(onClick = onSearch) { Icon(Icons.Default.ChevronRight, "开始搜索") } },
                 )
-                Spacer(Modifier.width(10.dp))
-                Button(onClick = onSearch, enabled = query.isNotBlank() && !searching, modifier = Modifier.height(56.dp)) {
-                    Icon(Icons.Default.Search, null, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("搜索")
+                Spacer(Modifier.width(TaotaoSpacing.sm))
+                Button(onClick = onSearch, enabled = query.isNotBlank() && !searching, modifier = Modifier.height(SearchButtonHeight)) {
+                    Icon(Icons.Default.Search, null, modifier = Modifier.size(TaotaoSizes.iconSm)); Spacer(Modifier.width(TaotaoSpacing.xs)); Text("搜索")
                 }
             }
-            Row(Modifier.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(Modifier.padding(top = TaotaoSpacing.sm), horizontalArrangement = Arrangement.spacedBy(TaotaoSpacing.xs)) {
                 SourceChip("全部音源", "all", source, onSourceChange)
                 SourceChip("QQ 音乐", "tencent", source, onSourceChange)
                 SourceChip("网易云", "netease", source, onSourceChange)
@@ -607,28 +673,28 @@ private fun MusicPage(
         }
         if (results.isEmpty() && !searching && error == null) {
             item {
-                Card(Modifier.fillMaxWidth().padding(top = 24.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
-                    Row(Modifier.padding(22.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Box(Modifier.size(52.dp).clip(CircleShape).background(Coral), contentAlignment = Alignment.Center) { Icon(Icons.Default.LibraryMusic, null, tint = Color.White, modifier = Modifier.size(27.dp)) }
-                        Column(Modifier.padding(start = 16.dp)) {
-                            Text("开始发现音乐", fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                            Text("搜索结果支持在线播放、收藏、下载和同步歌词", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
+                Card(Modifier.fillMaxWidth().padding(top = TaotaoSpacing.xl), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
+                    Row(Modifier.padding(TaotaoSpacing.xl), verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.size(DiscoverIconCircleSize).clip(CircleShape).background(Coral), contentAlignment = Alignment.Center) { Icon(Icons.Default.LibraryMusic, null, tint = Color.White, modifier = Modifier.size(TaotaoSizes.iconLg)) }
+                        Column(Modifier.padding(start = TaotaoSpacing.md)) {
+                            Text("开始发现音乐", style = TaotaoTypeScale.sectionTitle, fontWeight = FontWeight.Bold)
+                            Text("搜索结果支持在线播放、收藏、下载和同步歌词", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = TaotaoSpacing.xxs))
                         }
                     }
                 }
                 if (searchHistory.isNotEmpty()) {
-                    Row(Modifier.fillMaxWidth().padding(top = 22.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Row(Modifier.fillMaxWidth().padding(top = TaotaoSpacing.xl, bottom = TaotaoSpacing.xxs), verticalAlignment = Alignment.CenterVertically) {
                         Text("最近搜索", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                        TextButton(onClick = onHistoryClear) { Icon(Icons.Default.DeleteOutline, null, modifier = Modifier.size(15.dp)); Spacer(Modifier.width(4.dp)); Text("清空") }
+                        TextButton(onClick = onHistoryClear) { Icon(Icons.Default.DeleteOutline, null, modifier = Modifier.size(TaotaoSizes.iconXs)); Spacer(Modifier.width(TaotaoSpacing.xxs)); Text("清空") }
                     }
-                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(TaotaoSpacing.xs)) {
                         searchHistory.forEach { value ->
                             InputChip(
                                 selected = false,
                                 onClick = { onHistorySearch(value) },
                                 label = { Text(value) },
                                 trailingIcon = {
-                                    IconButton(onClick = { onHistoryRemove(value) }, modifier = Modifier.size(20.dp)) { Icon(Icons.Default.Close, "删除 $value", modifier = Modifier.size(14.dp)) }
+                                    IconButton(onClick = { onHistoryRemove(value) }, modifier = Modifier.size(ChipRemoveButtonSize)) { Icon(Icons.Default.Close, "删除 $value", modifier = Modifier.size(TaotaoSizes.iconXs)) }
                                 },
                             )
                         }
@@ -637,7 +703,7 @@ private fun MusicPage(
             }
         } else {
             item {
-                Text(if (searching && results.isEmpty()) "正在搜索…" else if (total > 0) "搜索结果 · 共 $total 首" else "搜索结果", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 24.dp, bottom = 8.dp))
+                Text(if (searching && results.isEmpty()) "正在搜索…" else if (total > 0) "搜索结果 · 共 $total 首" else "搜索结果", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = TaotaoSpacing.xl, bottom = TaotaoSpacing.xs))
                 if (searching && results.isEmpty()) LinearProgressIndicator(Modifier.fillMaxWidth(), color = Coral)
                 if (error != null && results.isEmpty()) {
                     SharedContentState(
@@ -646,7 +712,7 @@ private fun MusicPage(
                         description = error,
                     )
                 } else {
-                    error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(vertical = 12.dp)) }
+                    error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(vertical = TaotaoSpacing.sm)) }
                 }
             }
             itemsIndexed(results, key = { _, song -> DesktopStorage.songKey(song) }) { index, song ->
@@ -666,8 +732,8 @@ private fun MusicPage(
             }
             if (hasMore) {
                 item {
-                    OutlinedButton(onClick = onLoadMore, enabled = !searching, modifier = Modifier.fillMaxWidth().wrapContentWidth(Alignment.CenterHorizontally).padding(vertical = 16.dp)) {
-                        if (searching) LinearProgressIndicator(Modifier.width(60.dp), color = Coral) else Text("加载更多")
+                    OutlinedButton(onClick = onLoadMore, enabled = !searching, modifier = Modifier.fillMaxWidth().wrapContentWidth(Alignment.CenterHorizontally).padding(vertical = TaotaoSpacing.md)) {
+                        if (searching) LinearProgressIndicator(Modifier.width(LoadMoreProgressWidth), color = Coral) else Text("加载更多")
                     }
                 }
             }
@@ -704,17 +770,17 @@ private fun DesktopSongRow(
         onClick = onClick,
         supportingContent = {
             if (downloadBusy) {
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(top = 5.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(top = TaotaoSpacing.xxs)) {
                     downloadProgress?.fraction?.let { fraction ->
-                        LinearProgressIndicator(progress = { fraction }, modifier = Modifier.weight(1f).height(3.dp), color = Coral)
-                    } ?: LinearProgressIndicator(modifier = Modifier.weight(1f).height(3.dp), color = Coral)
+                        LinearProgressIndicator(progress = { fraction }, modifier = Modifier.weight(1f).height(TaotaoStroke.thick), color = Coral)
+                    } ?: LinearProgressIndicator(modifier = Modifier.weight(1f).height(TaotaoStroke.thick), color = Coral)
                     Text(
                         downloadProgress?.let { progress ->
                             if (progress.totalBytes > 0L) "${((progress.fraction ?: 0f) * 100).toInt()}%" else formatBytes(progress.completedBytes)
                         } ?: "下载中…",
-                        fontSize = 10.sp,
+                        style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(start = 7.dp),
+                        modifier = Modifier.padding(start = TaotaoSpacing.xs),
                     )
                 }
             }
@@ -741,7 +807,7 @@ private fun DesktopSongRow(
 
 @Composable
 private fun Badge(text: String, color: Color, modifier: Modifier = Modifier) {
-    Text(text, color = color, fontSize = 10.sp, fontWeight = FontWeight.Bold, modifier = modifier.clip(RoundedCornerShape(4.dp)).background(color.copy(alpha = 0.13f)).padding(horizontal = 4.dp, vertical = 2.dp))
+    Text(text, color = color, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, modifier = modifier.clip(TaotaoShapes.badge).background(color.copy(alpha = 0.13f)).padding(horizontal = TaotaoSpacing.xxs, vertical = TaotaoSpacing.tightVertical))
 }
 
 @Composable
@@ -763,12 +829,12 @@ private fun LibraryPage(
     onNext: (Song) -> Unit,
     onDelete: ((Song) -> Unit)? = null,
 ) {
-    Column(Modifier.fillMaxSize().padding(horizontal = 34.dp, vertical = 26.dp)) {
+    Column(Modifier.fillMaxSize().padding(horizontal = TaotaoSpacing.xxl, vertical = TaotaoSpacing.xl)) {
         PageHeading(title, subtitle)
         if (songs.isEmpty()) {
             EmptyState(emptyTitle, emptyDescription, Modifier.weight(1f))
         } else {
-            LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(TaotaoSpacing.xs)) {
                 itemsIndexed(songs, key = { _, song -> DesktopStorage.songKey(song) }) { index, song ->
                     DesktopSongRow(
                         song = song,
@@ -783,7 +849,7 @@ private fun LibraryPage(
                         onDownload = onDownload?.let { callback -> { callback(song) } },
                         onNext = { onNext(song) },
                     )
-                    if (onDelete != null) TextButton(onClick = { onDelete(song) }, modifier = Modifier.align(Alignment.End)) { Icon(Icons.Default.DeleteOutline, null, modifier = Modifier.size(15.dp)); Spacer(Modifier.width(4.dp)); Text("删除本地文件") }
+                    if (onDelete != null) TextButton(onClick = { onDelete(song) }, modifier = Modifier.align(Alignment.End)) { Icon(Icons.Default.DeleteOutline, null, modifier = Modifier.size(TaotaoSizes.iconXs)); Spacer(Modifier.width(TaotaoSpacing.xxs)); Text("删除本地文件") }
                 }
             }
         }
@@ -806,17 +872,17 @@ private fun HistoryPage(
     onClear: () -> Unit,
 ) {
     var confirmClear by remember { mutableStateOf(false) }
-    Column(Modifier.fillMaxSize().padding(horizontal = 34.dp, vertical = 26.dp)) {
+    Column(Modifier.fillMaxSize().padding(horizontal = TaotaoSpacing.xxl, vertical = TaotaoSpacing.xl)) {
         Row(verticalAlignment = Alignment.Top) {
             Box(Modifier.weight(1f)) { PageHeading("最近播放", "${entries.size} 首歌曲 · 本地即时记录，登录后同步云端") }
             OutlinedButton(onClick = { confirmClear = true }, enabled = entries.isNotEmpty()) {
-                Icon(Icons.Default.DeleteOutline, null, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(5.dp))
+                Icon(Icons.Default.DeleteOutline, null, modifier = Modifier.size(TaotaoSizes.iconXs))
+                Spacer(Modifier.width(TaotaoSpacing.xxs))
                 Text("清空记录")
             }
         }
         if (entries.isEmpty()) EmptyState("还没有播放记录", "播放过的歌曲会显示在这里", Modifier.weight(1f))
-        else LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        else LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(TaotaoSpacing.xs)) {
             itemsIndexed(entries, key = { _, entry -> DesktopStorage.songKey(entry.song) }) { index, entry ->
                 DesktopSongRow(
                     song = entry.song,
@@ -831,7 +897,7 @@ private fun HistoryPage(
                     onDownload = onDownload?.let { callback -> { callback(entry.song) } },
                     onNext = { onNext(entry.song) },
                 )
-                Text("${formatDate(entry.playedAt)} · 播放 ${entry.playCount} 次 · 听过 ${formatListenMs(entry.totalListenedMs)}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, modifier = Modifier.padding(start = 84.dp, bottom = 5.dp))
+                Text("${formatDate(entry.playedAt)} · 播放 ${entry.playCount} 次 · 听过 ${formatListenMs(entry.totalListenedMs)}", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(start = RecentMetaIndent, bottom = TaotaoSpacing.xxs))
             }
         }
     }
@@ -848,9 +914,9 @@ private fun HistoryPage(
 
 @Composable
 private fun PageHeading(title: String, subtitle: String) {
-    Column(Modifier.padding(bottom = 20.dp)) {
-        Text(title, fontSize = 30.sp, fontWeight = FontWeight.Bold)
-        Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
+    Column(Modifier.padding(bottom = TaotaoSpacing.lg)) {
+        Text(title, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+        Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = TaotaoSpacing.xxs))
     }
 }
 
@@ -904,16 +970,16 @@ private fun PlayerDetail(
     val selectableQualityValues = AudioQuality.entries.map(AudioQuality::value).toSet()
     // 音质查询成功但只返回 Windows 不支持的容器时保持为空，避免把必然失败的档位伪装成可选项。
     val selectableQualities = qualityOptions.filter { it.quality in selectableQualityValues }
-    Column(Modifier.fillMaxSize().padding(horizontal = 34.dp, vertical = 20.dp)) {
+    Column(Modifier.fillMaxSize().padding(horizontal = TaotaoSpacing.xxl, vertical = TaotaoSpacing.lg)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "返回") }
-            Text("正在播放", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            Text("正在播放", style = TaotaoTypeScale.sectionTitle, fontWeight = FontWeight.Bold)
             Spacer(Modifier.weight(1f))
             IconButton(onClick = onQueue) { Icon(Icons.AutoMirrored.Filled.QueueMusic, "播放队列") }
         }
-        Row(Modifier.fillMaxSize().padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(38.dp)) {
-            Column(Modifier.widthIn(min = 330.dp, max = 430.dp).fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally) {
-                Spacer(Modifier.height(24.dp))
+        Row(Modifier.fillMaxSize().padding(top = TaotaoSpacing.sm), horizontalArrangement = Arrangement.spacedBy(TaotaoSpacing.xxxl)) {
+            Column(Modifier.widthIn(min = NowPlayingColumnMinWidth, max = NowPlayingColumnMaxWidth).fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally) {
+                Spacer(Modifier.height(TaotaoSpacing.xl))
                 AlbumCover(song, size = 300)
                 PlayerWideLayout(
                     state = PlayerUiState(
@@ -939,7 +1005,7 @@ private fun PlayerDetail(
                     positionLabel = formatTime(positionMs),
                     durationLabel = formatTime(durationMs).takeIf { durationMs > 0 } ?: "--:--",
                     titleTrailingContent = {
-                        if (song.vip) Badge("VIP", Coral, Modifier.padding(start = 8.dp))
+                        if (song.vip) Badge("VIP", Coral, Modifier.padding(start = TaotaoSpacing.xs))
                     },
                     headerActions = {
                         IconButton(onClick = onShare) {
@@ -949,10 +1015,10 @@ private fun PlayerDetail(
                             Icon(if (favorited) Icons.Default.Favorite else Icons.Default.FavoriteBorder, if (favorited) "取消收藏" else "收藏", tint = if (favorited) Coral else MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     },
-                    modifier = Modifier.padding(top = 22.dp),
+                    modifier = Modifier.padding(top = TaotaoSpacing.xl),
                 )
                 Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 34.dp, vertical = 4.dp),
+                    Modifier.fillMaxWidth().padding(horizontal = TaotaoSpacing.xxl, vertical = TaotaoSpacing.xxs),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     IconButton(onClick = { onVolumeChange(if (volume > 0f) 0f else 1f) }) {
@@ -963,12 +1029,12 @@ private fun PlayerDetail(
                         onValueChange = onVolumeChange,
                         modifier = Modifier.weight(1f),
                     )
-                    Text("${(volume * 100).toInt()}%", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.width(38.dp), textAlign = TextAlign.End)
+                    Text("${(volume * 100).toInt()}%", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.width(VolumePercentLabelWidth), textAlign = TextAlign.End)
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(TaotaoSpacing.xs)) {
                     OutlinedButton(onClick = onDownload, enabled = song.hasRemoteIdentity() && !downloaded) {
-                        Icon(if (downloaded) Icons.Default.Check else Icons.Default.Download, if (downloaded) "已下载" else "下载", modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(5.dp))
+                        Icon(if (downloaded) Icons.Default.Check else Icons.Default.Download, if (downloaded) "已下载" else "下载", modifier = Modifier.size(TaotaoSizes.iconXs))
+                        Spacer(Modifier.width(TaotaoSpacing.xxs))
                         Text(if (downloaded) "已下载" else "下载")
                     }
                     Box {
@@ -979,7 +1045,7 @@ private fun PlayerDetail(
                                     text = {
                                         Column {
                                             Text(option.label.ifBlank { labelOfQuality(option.quality) })
-                                            if (option.size > 0) Text(formatBytes(option.size), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                            if (option.size > 0) Text(formatBytes(option.size), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                         }
                                     },
                                     leadingIcon = { if (option.quality == playbackQuality.value) Icon(Icons.Default.Check, "当前音质") },
@@ -992,35 +1058,35 @@ private fun PlayerDetail(
                 if (sleepTimerRemainingMs > 0L) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(top = 10.dp),
+                        modifier = Modifier.padding(top = TaotaoSpacing.sm),
                     ) {
-                        Icon(Icons.Default.Timer, "定时播放", tint = Coral, modifier = Modifier.size(17.dp))
+                        Icon(Icons.Default.Timer, "定时播放", tint = Coral, modifier = Modifier.size(TaotaoSizes.iconSm))
                         Text(
                             "定时停止 · ${formatSleepTimerRemaining(sleepTimerRemainingMs)}${if (playing) "" else " · 暂停计时"}",
                             color = Coral,
-                            fontSize = 12.sp,
-                            modifier = Modifier.padding(start = 6.dp),
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(start = TaotaoSpacing.xs),
                         )
                         TextButton(onClick = onCancelSleepTimer) {
-                            Icon(Icons.Default.TimerOff, "取消定时播放", modifier = Modifier.size(15.dp))
-                            Spacer(Modifier.width(4.dp))
+                            Icon(Icons.Default.TimerOff, "取消定时播放", modifier = Modifier.size(TaotaoSizes.iconXs))
+                            Spacer(Modifier.width(TaotaoSpacing.xxs))
                             Text("取消")
                         }
                     }
                 }
-                qualityOptionsError?.let { Text(it, color = Coral, fontSize = 11.sp, modifier = Modifier.padding(top = 5.dp)) }
+                qualityOptionsError?.let { Text(it, color = Coral, style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(top = TaotaoSpacing.xxs)) }
             }
             Column(Modifier.weight(1f).fillMaxHeight()) {
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 10.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = TaotaoSpacing.sm)) {
                     Column(Modifier.weight(1f)) {
-                        Text("歌词", fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                        Text(if (lyric.hasWords) "逐字同步" else if (lyric.synced) "逐行同步" else "纯文本", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.padding(top = 3.dp))
+                        Text("歌词", style = TaotaoTypeScale.sectionTitle, fontWeight = FontWeight.Bold)
+                        Text(if (lyric.hasWords) "逐字同步" else if (lyric.synced) "逐行同步" else "纯文本", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = TaotaoSpacing.xxs))
                     }
-                    if (lyricLoading) Text("加载中…", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
-                    lyricError?.let { Text(it, color = Coral, fontSize = 12.sp) }
+                    if (lyricLoading) Text("加载中…", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                    lyricError?.let { Text(it, color = Coral, style = MaterialTheme.typography.bodySmall) }
                 }
-                Surface(Modifier.fillMaxSize().clip(RoundedCornerShape(16.dp)), color = MaterialTheme.colorScheme.surface) {
-                    DesktopLyricPane(lyric, positionMs, onLyricSeek, Modifier.fillMaxSize().padding(horizontal = 28.dp))
+                Surface(Modifier.fillMaxSize().clip(TaotaoShapes.card), color = MaterialTheme.colorScheme.surface) {
+                    DesktopLyricPane(lyric, positionMs, onLyricSeek, Modifier.fillMaxSize().padding(horizontal = TaotaoSpacing.xxl))
                 }
             }
         }
@@ -1042,14 +1108,14 @@ private fun DesktopLyricPane(lyric: Lyric, positionMs: Int, onSeek: (Int) -> Uni
             listState.animateScrollToItem(current, scrollOffset = -80)
         }
     }
-    LazyColumn(state = listState, modifier = modifier, contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 90.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+    LazyColumn(state = listState, modifier = modifier, contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = LyricPaneVerticalPadding), verticalArrangement = Arrangement.spacedBy(TaotaoSpacing.md)) {
         itemsIndexed(lyric.lines, key = { index, line -> "${line.timeMs}-$index" }) { index, line ->
             val active = lyric.synced && index == current
             val rowModifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(8.dp))
+                .clip(TaotaoShapes.small)
                 .clickable(enabled = lyric.synced) { onSeek(line.timeMs) }
-                .padding(horizontal = 8.dp, vertical = 4.dp)
+                .padding(horizontal = TaotaoSpacing.xs, vertical = TaotaoSpacing.xxs)
             if (active && line.words.isNotEmpty()) {
                 DesktopKaraokeLine(
                     words = line.words,
@@ -1059,8 +1125,8 @@ private fun DesktopLyricPane(lyric: Lyric, positionMs: Int, onSeek: (Int) -> Uni
             } else {
                 Text(
                     text = line.text,
-                    fontSize = if (active) 19.sp else 16.sp,
-                    lineHeight = 26.sp,
+                    fontSize = if (active) LyricActiveFontSize else LyricIdleFontSize,
+                    lineHeight = LyricLineHeight,
                     fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
                     color = if (active) Coral else MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
@@ -1082,12 +1148,9 @@ private fun DesktopKaraokeLine(
     val sung = MaterialTheme.colorScheme.primary
     val unsung = MaterialTheme.colorScheme.onSurfaceVariant
     val positionMs by positionMsState
-    val style = TextStyle(
-        fontSize = 19.sp,
-        lineHeight = 26.sp,
-        fontWeight = FontWeight.Bold,
-        textAlign = TextAlign.Center,
-    )
+    // 18sp / 26sp / Bold 正好是 TaotaoTypeScale.sectionTitle，只覆盖对齐方式：
+    // 字号、行高、字重都跟着 token 走，不再各写一遍。
+    val style = TaotaoTypeScale.sectionTitle.copy(textAlign = TextAlign.Center)
     FlowRow(
         modifier = modifier,
         horizontalArrangement = Arrangement.Center,
@@ -1133,23 +1196,23 @@ private fun QueuePanel(
     onKeepCurrent: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Surface(modifier.fillMaxHeight().width(380.dp), color = MaterialTheme.colorScheme.surface, shadowElevation = 12.dp) {
-        Column(Modifier.fillMaxSize().padding(20.dp)) {
+    Surface(modifier.fillMaxHeight().width(QueuePanelWidth), color = MaterialTheme.colorScheme.surface, shadowElevation = TaotaoElevation.overlay) {
+        Column(Modifier.fillMaxSize().padding(TaotaoSpacing.lg)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) { Text("播放队列", fontSize = 21.sp, fontWeight = FontWeight.Bold); Text("${queue.size} 首歌曲", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp) }
+                Column(Modifier.weight(1f)) { Text("播放队列", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold); Text("${queue.size} 首歌曲", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall) }
                 TextButton(onClick = onKeepCurrent, enabled = queue.size > 1) { Text("只留当前") }
                 IconButton(onClick = onClose) { Icon(Icons.Default.ChevronRight, "关闭队列") }
             }
-            Divider(Modifier.padding(vertical = 8.dp))
-            LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Divider(Modifier.padding(vertical = TaotaoSpacing.xs))
+            LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(TaotaoSpacing.xs)) {
                 itemsIndexed(queue, key = { index, song -> "${DesktopStorage.songKey(song)}-$index" }) { index, song ->
-                    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(if (index == currentIndex) MaterialTheme.colorScheme.primaryContainer else Color.Transparent).clickable { onPlay(index) }.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text("${index + 1}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.width(24.dp), textAlign = TextAlign.Center)
+                    Row(Modifier.fillMaxWidth().clip(TaotaoShapes.button).background(if (index == currentIndex) MaterialTheme.colorScheme.primaryContainer else Color.Transparent).clickable { onPlay(index) }.padding(TaotaoSpacing.xs), verticalAlignment = Alignment.CenterVertically) {
+                        Text("${index + 1}", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall, modifier = Modifier.width(QueueIndexWidth), textAlign = TextAlign.Center)
                         AlbumCover(song, size = 38)
-                        Column(Modifier.weight(1f).padding(start = 9.dp)) { Text(song.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = if (index == currentIndex) FontWeight.Bold else FontWeight.Normal); Text(song.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                        if (index > 0) IconButton(onClick = { onMove(index, index - 1) }, modifier = Modifier.size(28.dp)) { Icon(Icons.Default.ArrowUpward, "上移", modifier = Modifier.size(15.dp)) }
-                        if (index < queue.lastIndex) IconButton(onClick = { onMove(index, index + 1) }, modifier = Modifier.size(28.dp)) { Icon(Icons.Default.ArrowDownward, "下移", modifier = Modifier.size(15.dp)) }
-                        IconButton(onClick = { onRemove(index) }, enabled = index != currentIndex, modifier = Modifier.size(28.dp)) { Icon(Icons.Default.DeleteOutline, "移除", modifier = Modifier.size(17.dp)) }
+                        Column(Modifier.weight(1f).padding(start = TaotaoSpacing.xs)) { Text(song.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = if (index == currentIndex) FontWeight.Bold else FontWeight.Normal); Text(song.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                        if (index > 0) IconButton(onClick = { onMove(index, index - 1) }, modifier = Modifier.size(QueueActionButtonSize)) { Icon(Icons.Default.ArrowUpward, "上移", modifier = Modifier.size(TaotaoSizes.iconXs)) }
+                        if (index < queue.lastIndex) IconButton(onClick = { onMove(index, index + 1) }, modifier = Modifier.size(QueueActionButtonSize)) { Icon(Icons.Default.ArrowDownward, "下移", modifier = Modifier.size(TaotaoSizes.iconXs)) }
+                        IconButton(onClick = { onRemove(index) }, enabled = index != currentIndex, modifier = Modifier.size(QueueActionButtonSize)) { Icon(Icons.Default.DeleteOutline, "移除", modifier = Modifier.size(TaotaoSizes.iconSm)) }
                     }
                 }
             }
@@ -1170,7 +1233,7 @@ private fun SettingsPage(
     onConfigureSleepTimer: (Long) -> Unit,
     onCancelSleepTimer: () -> Unit,
 ) {
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 34.dp, vertical = 26.dp)) {
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = TaotaoSpacing.xxl, vertical = TaotaoSpacing.xl)) {
         PageHeading("设置", "Windows 端音乐体验偏好")
         SettingSection("播放") {
             QualitySetting("默认播放音质", "支持标准、HQ、无损、Hi-Res 与臻品母带", playbackQuality, onPlaybackQuality)
@@ -1184,37 +1247,37 @@ private fun SettingsPage(
                 onCancel = onCancelSleepTimer,
             )
         }
-        Spacer(Modifier.height(18.dp))
+        Spacer(Modifier.height(TaotaoSpacing.lg))
         SettingSection("外观") {
-            Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxWidth().padding(TaotaoSpacing.md), verticalAlignment = Alignment.CenterVertically) {
                 Icon(if (darkTheme) Icons.Default.DarkMode else Icons.Default.LightMode, null, tint = Coral)
-                Column(Modifier.weight(1f).padding(start = 12.dp)) { Text("深色主题", fontWeight = FontWeight.Bold); Text(if (darkTheme) "当前使用深色主题" else "当前使用浅色主题", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                Column(Modifier.weight(1f).padding(start = TaotaoSpacing.sm)) { Text("深色主题", fontWeight = FontWeight.Bold); Text(if (darkTheme) "当前使用深色主题" else "当前使用浅色主题", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 FilterChip(selected = darkTheme, onClick = onToggleTheme, label = { Text(if (darkTheme) "深色" else "浅色") })
             }
         }
-        Spacer(Modifier.height(18.dp))
+        Spacer(Modifier.height(TaotaoSpacing.lg))
         SettingSection("关于") {
-            Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Default.Info, null, tint = Coral); Column(Modifier.padding(start = 12.dp)) { Text("桃桃音乐 Windows", fontWeight = FontWeight.Bold); Text("音乐功能优先版本 · AI 与 IM 暂未接入", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) } }
+            Row(Modifier.fillMaxWidth().padding(TaotaoSpacing.md), verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Default.Info, null, tint = Coral); Column(Modifier.padding(start = TaotaoSpacing.sm)) { Text("桃桃音乐 Windows", fontWeight = FontWeight.Bold); Text("音乐功能优先版本 · AI 与 IM 暂未接入", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) } }
         }
     }
 }
 
 @Composable
 private fun SettingSection(title: String, content: @Composable () -> Unit) {
-    Text(title, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Coral, modifier = Modifier.padding(bottom = 7.dp))
-    Surface(Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.surface, shape = RoundedCornerShape(12.dp)) { Column { content() } }
+    Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = Coral, modifier = Modifier.padding(bottom = TaotaoSpacing.xs))
+    Surface(Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.surface, shape = TaotaoShapes.card) { Column { content() } }
 }
 
 @Composable
-private fun SettingDivider() = Divider(Modifier.padding(horizontal = 14.dp))
+private fun SettingDivider() = Divider(Modifier.padding(horizontal = TaotaoSpacing.md))
 
 @Composable
 private fun QualitySetting(title: String, subtitle: String, selected: AudioQuality, onSelected: (AudioQuality) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
-    Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f)) { Text(title, fontWeight = FontWeight.Bold); Text(subtitle, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+    Row(Modifier.fillMaxWidth().padding(TaotaoSpacing.md), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) { Text(title, fontWeight = FontWeight.Bold); Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         Box {
-            FilterChip(selected = false, onClick = { expanded = true }, label = { Text(selected.label) }, leadingIcon = { Icon(Icons.Default.Settings, null, modifier = Modifier.size(16.dp)) })
+            FilterChip(selected = false, onClick = { expanded = true }, label = { Text(selected.label) }, leadingIcon = { Icon(Icons.Default.Settings, null, modifier = Modifier.size(TaotaoSizes.iconXs)) })
             DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
                 AudioQuality.entries.forEach { quality -> DropdownMenuItem(text = { Text(quality.label) }, onClick = { expanded = false; onSelected(quality) }) }
             }
@@ -1232,29 +1295,29 @@ private fun SleepTimerSetting(
     var customDialog by remember { mutableStateOf(false) }
     var customMinutes by remember { mutableStateOf("") }
     val active = remainingMs > 0L
-    Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(Modifier.fillMaxWidth().padding(TaotaoSpacing.md), verticalArrangement = Arrangement.spacedBy(TaotaoSpacing.xs)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(if (active) Icons.Default.Timer else Icons.Default.TimerOff, "定时播放", tint = Coral)
-            Column(Modifier.weight(1f).padding(start = 12.dp)) {
+            Column(Modifier.weight(1f).padding(start = TaotaoSpacing.sm)) {
                 Text("定时停止", fontWeight = FontWeight.Bold)
                 Text(
                     if (active) "${if (playing) "播放中" else "已暂停计时"} · ${formatSleepTimerRemaining(remainingMs)} 后停止当前歌曲，不会自动播放下一首"
                     else "播放一段时间后自动停止当前歌曲",
-                    fontSize = 12.sp,
+                    style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             if (active) {
                 TextButton(onClick = onCancel) {
-                    Icon(Icons.Default.TimerOff, "取消定时播放", modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(4.dp))
+                    Icon(Icons.Default.TimerOff, "取消定时播放", modifier = Modifier.size(TaotaoSizes.iconXs))
+                    Spacer(Modifier.width(TaotaoSpacing.xxs))
                     Text("取消")
                 }
             }
         }
         Row(
             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(TaotaoSpacing.xs),
         ) {
             SLEEP_TIMER_PRESET_MINUTES.forEach { minutes ->
                 FilterChip(

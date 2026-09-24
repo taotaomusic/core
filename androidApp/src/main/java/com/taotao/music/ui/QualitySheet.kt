@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.MaterialTheme
@@ -25,11 +24,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.animation.animateColorAsState
 import com.taotao.music.model.AudioQuality
 import com.taotao.music.model.labelOfQuality
+import com.taotao.music.playerui.theme.TaotaoShapes
+import com.taotao.music.playerui.theme.TaotaoSizes
+import com.taotao.music.playerui.theme.TaotaoSpacing
+import com.taotao.music.playerui.theme.TaotaoTypeScale
 
 /**
  * 一个可选档位。
@@ -73,19 +74,36 @@ fun QualitySheet(
         containerColor = MaterialTheme.colorScheme.surface,
         contentColor = MaterialTheme.colorScheme.onSurface,
     ) {
-        Column(Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, bottom = 28.dp)) {
-            Text(title, color = MaterialTheme.colorScheme.onSurface, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        Column(
+            Modifier.fillMaxWidth()
+                .padding(horizontal = TaotaoSpacing.screenHorizontal)
+                .padding(bottom = TaotaoSpacing.xl),
+        ) {
+            Text(title, color = MaterialTheme.colorScheme.onSurface, style = TaotaoTypeScale.sectionTitle)
             if (!note.isNullOrBlank()) {
-                Text(note, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+                Text(
+                    note,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = TaotaoSpacing.xxs),
+                )
             }
             if (loading) {
                 Row(
-                    Modifier.fillMaxWidth().padding(vertical = 28.dp),
+                    Modifier.fillMaxWidth().padding(vertical = TaotaoSpacing.xl),
                     horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    CircularProgressIndicator(Modifier.size(22.dp), color = MaterialTheme.colorScheme.primary)
-                    Text("正在查可用音质…", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp, modifier = Modifier.padding(start = 10.dp))
+                    CircularProgressIndicator(
+                        Modifier.size(TaotaoSizes.progressInline),
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Text(
+                        "正在查可用音质…",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(start = TaotaoSpacing.xs),
+                    )
                 }
                 return@Column
             }
@@ -115,10 +133,10 @@ private fun QualityRow(choice: QualityChoice, checked: Boolean, onClick: () -> U
     )
     Row(
         Modifier.fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(TaotaoShapes.medium)
             .background(backgroundColor)
             .clickable(enabled = choice.available, onClick = onClick)
-            .padding(vertical = 13.dp, horizontal = 12.dp),
+            .padding(TaotaoSpacing.sm),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
@@ -133,7 +151,12 @@ private fun QualityRow(choice: QualityChoice, checked: Boolean, onClick: () -> U
                 else -> null
             }
             if (detail != null) {
-                Text(detail, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp))
+                Text(
+                    detail,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = TaotaoSpacing.tightVertical),
+                )
             }
         }
         if (checked) Icon(Icons.Default.Check, "已选择", tint = MaterialTheme.colorScheme.primary)
@@ -158,16 +181,15 @@ fun formatBytes(bytes: Long): String = when {
 fun QualityChip(quality: Int, modifier: Modifier = Modifier, local: Boolean = false, onClick: (() -> Unit)? = null) {
     Box(
         modifier
-            .clip(RoundedCornerShape(8.dp))
+            .clip(TaotaoShapes.badge)
             .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f))
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
-            .padding(horizontal = 10.dp, vertical = 5.dp),
+            .padding(horizontal = TaotaoSpacing.xs, vertical = TaotaoSpacing.xxs),
     ) {
         Text(
             if (local) "已下载 · ${labelOfQuality(quality)}" else labelOfQuality(quality),
             color = MaterialTheme.colorScheme.primary,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Medium,
+            style = TaotaoTypeScale.label,
         )
     }
 }

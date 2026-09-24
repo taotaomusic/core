@@ -19,8 +19,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import com.taotao.music.playerui.theme.TaotaoSpacing
 
 /** 常用定时选项；需要更长时间时可在下方输入 1-1440 分钟。 */
 private val SleepTimerOptionsMinutes = listOf(15, 30, 45, 60, 90, 120)
@@ -47,7 +46,7 @@ fun SleepTimerDialog(
         text = {
             Column(
                 modifier = Modifier.verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(2.dp),
+                verticalArrangement = Arrangement.spacedBy(TaotaoSpacing.tightVertical),
             ) {
                 Text(
                     if (active) {
@@ -56,8 +55,8 @@ fun SleepTimerDialog(
                         "仅在播放时计时，暂停会保留剩余时间。"
                     },
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontSize = 13.sp,
-                    modifier = Modifier.padding(bottom = 4.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(bottom = TaotaoSpacing.xxs),
                 )
                 SleepTimerOptionsMinutes.forEach { minutes ->
                     TextButton(
@@ -75,7 +74,7 @@ fun SleepTimerDialog(
                     label = { Text("自定义分钟数（1-1440）") },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                    modifier = Modifier.fillMaxWidth().padding(top = TaotaoSpacing.xxs),
                 )
                 TextButton(
                     onClick = { customValue?.let(onSet) },

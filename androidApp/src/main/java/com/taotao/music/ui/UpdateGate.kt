@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.SystemUpdate
@@ -26,13 +25,36 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import com.taotao.music.playerui.theme.TaotaoShapes
+import com.taotao.music.playerui.theme.TaotaoSpacing
 import com.taotao.music.update.UpdateStage
 import com.taotao.music.update.UpdateStatus
+
+/**
+ * 强制更新页顶部图标的尺寸。
+ *
+ * 刻意不进 TaotaoSizes：它是**这一屏的构图决定**
+ *（全屏居中，图标要够大才不显空），而不是会在别处复用的组件尺寸。
+ */
+private val UpdateHeroIconSize = 64.dp
+
+/**
+ * 更新说明正文的最大高度。
+ *
+ * 超出后转为滚动，避免一段很长的更新日志把下方按钮挤出屏幕。
+ */
+private val UpdateNoteMaxHeight = 220.dp
+
+/**
+ * 可选更新弹窗里说明正文的最大高度。
+ *
+ * 比 [UpdateNoteMaxHeight] 更宽松，这是**有意的不统一**：
+ * 全屏页的按钮固定在说明下方，说明一高就会把按钮顶出屏幕；
+ * 弹窗里说明与按钮在同一个滚动区内，说明占高不会挤走按钮，所以可以给得松一些。
+ */
+private val OptionalUpdateNoteMaxHeight = 300.dp
 
 /**
  * 强制更新拦截页。
@@ -48,33 +70,44 @@ fun ForceUpdatePage(status: UpdateStatus, onDownload: () -> Unit, onInstall: () 
         contentColor = MaterialTheme.colorScheme.onBackground,
     ) {
         Column(
-            modifier = Modifier.fillMaxSize().padding(30.dp),
+            modifier = Modifier.fillMaxSize().padding(TaotaoSpacing.xxl),
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Icon(Icons.Default.SystemUpdate, "更新", tint = TaotaoCoral, modifier = Modifier.height(64.dp))
-            Spacer(Modifier.height(20.dp))
+            Icon(
+                Icons.Default.SystemUpdate,
+                "更新",
+                tint = TaotaoCoral,
+                modifier = Modifier.height(UpdateHeroIconSize),
+            )
+            Spacer(Modifier.height(TaotaoSpacing.lg))
             Text(
                 "需要更新后继续使用",
                 color = MaterialTheme.colorScheme.onBackground,
-                fontSize = 22.sp,
-                fontWeight = FontWeight.Bold,
+                style = MaterialTheme.typography.titleLarge,
                 textAlign = TextAlign.Center,
             )
             status.release?.let { release ->
-                Spacer(Modifier.height(10.dp))
-                Text("新版本 ${release.versionName}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
+                Spacer(Modifier.height(TaotaoSpacing.xs))
+                Text("新版本 ${release.versionName}", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
                 if (release.releaseNote.isNotBlank()) {
-                    Spacer(Modifier.height(18.dp))
+                    Spacer(Modifier.height(TaotaoSpacing.md))
                     Column(
-                        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.surface)
-                            .heightIn(max = 220.dp).verticalScroll(rememberScrollState()).padding(16.dp),
+                        Modifier.fillMaxWidth().clip(TaotaoShapes.card)
+                            .background(MaterialTheme.colorScheme.surface)
+                            .heightIn(max = UpdateNoteMaxHeight)
+                            .verticalScroll(rememberScrollState())
+                            .padding(TaotaoSpacing.md),
                     ) {
-                        Text(release.releaseNote, color = MaterialTheme.colorScheme.onSurface, lineHeight = 22.sp, fontSize = 14.sp)
+                        Text(
+                            release.releaseNote,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
                     }
                 }
             }
-            Spacer(Modifier.height(26.dp))
+            Spacer(Modifier.height(TaotaoSpacing.xl))
             UpdateActionArea(status, onDownload = onDownload, onInstall = onInstall, onRetry = onRetry)
         }
     }
@@ -93,13 +126,13 @@ fun OptionalUpdateDialog(
         onDismissRequest = { if (status.stage != UpdateStage.DOWNLOADING) onDismiss() },
         title = { Text("发现新版本 ${status.release?.versionName ?: ""}") },
         text = {
-            Column(Modifier.heightIn(max = 300.dp).verticalScroll(rememberScrollState())) {
+            Column(Modifier.heightIn(max = OptionalUpdateNoteMaxHeight).verticalScroll(rememberScrollState())) {
                 Text(
                     status.release?.releaseNote?.takeIf { it.isNotBlank() } ?: "建议更新到最新版本。",
                     color = MaterialTheme.colorScheme.onSurface,
-                    lineHeight = 22.sp,
+                    style = MaterialTheme.typography.bodyMedium,
                 )
-                Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.height(TaotaoSpacing.md))
                 UpdateActionArea(status, onDownload = onDownload, onInstall = onInstall, onRetry = onRetry)
             }
         },
@@ -121,15 +154,19 @@ private fun UpdateActionArea(status: UpdateStatus, onDownload: () -> Unit, onIns
                 modifier = Modifier.fillMaxWidth(),
                 color = TaotaoCoral,
             )
-            Spacer(Modifier.height(10.dp))
-            Text("正在下载 ${status.progressPercent}%", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+            Spacer(Modifier.height(TaotaoSpacing.xs))
+            Text(
+                "正在下载 ${status.progressPercent}%",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall,
+            )
         }
 
         UpdateStage.READY -> Button(onClick = onInstall, modifier = Modifier.fillMaxWidth()) { Text("立即安装") }
 
         UpdateStage.FAILED -> {
-            Text(status.error ?: "更新失败", color = TaotaoCoral, fontSize = 13.sp)
-            Spacer(Modifier.height(10.dp))
+            Text(status.error ?: "更新失败", color = TaotaoCoral, style = MaterialTheme.typography.bodySmall)
+            Spacer(Modifier.height(TaotaoSpacing.xs))
             Button(onClick = onRetry, modifier = Modifier.fillMaxWidth()) { Text("重试") }
         }
 

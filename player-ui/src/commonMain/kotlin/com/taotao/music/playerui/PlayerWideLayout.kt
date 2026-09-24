@@ -4,7 +4,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
+import com.taotao.music.playerui.theme.TaotaoSpacing
 
 /** 桌面端宽屏布局，左右分栏。 */
 @Composable
@@ -38,8 +38,8 @@ fun PlayerWideLayout(
         )
     } else {
         Row(
-            modifier = modifier.fillMaxWidth().padding(32.dp),
-            horizontalArrangement = Arrangement.spacedBy(48.dp),
+            modifier = modifier.fillMaxWidth().padding(TaotaoSpacing.xxl),
+            horizontalArrangement = Arrangement.spacedBy(TaotaoSpacing.xxxl),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {

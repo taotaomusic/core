@@ -24,7 +24,9 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.dp
+import com.taotao.music.playerui.theme.TaotaoSizes
+import com.taotao.music.playerui.theme.TaotaoSpacing
+import com.taotao.music.playerui.theme.TaotaoStroke
 
 /** 内容区域在加载、空数据和失败时使用的统一状态类型。 */
 enum class SharedContentStateType {
@@ -37,6 +39,9 @@ enum class SharedContentStateType {
  * 三端共用的内容状态视图。
  *
  * 文案和重试、新建等操作由页面传入，公共层只负责稳定的视觉层级和无障碍播报。
+ *
+ * 间距走 [TaotaoSpacing]：此前这里的 14dp / 6dp 与其他页面的 12dp / 8dp 不成体系，
+ * 空态在同一应用里上下留白不一致。
  */
 @Composable
 fun SharedContentState(
@@ -49,7 +54,7 @@ fun SharedContentState(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 32.dp, vertical = 36.dp)
+            .padding(horizontal = TaotaoSpacing.xxl, vertical = TaotaoSpacing.xxl)
             .semantics { liveRegion = LiveRegionMode.Polite },
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
@@ -57,9 +62,9 @@ fun SharedContentState(
         when (type) {
             SharedContentStateType.LOADING -> {
                 CircularProgressIndicator(
-                    modifier = Modifier.size(36.dp),
+                    modifier = Modifier.size(TaotaoSizes.stateIcon),
                     color = MaterialTheme.colorScheme.primary,
-                    strokeWidth = 3.dp,
+                    strokeWidth = TaotaoStroke.thick,
                 )
             }
 
@@ -68,7 +73,7 @@ fun SharedContentState(
                     imageVector = Icons.Default.MusicNote,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(44.dp),
+                    modifier = Modifier.size(TaotaoSizes.stateIcon),
                 )
             }
 
@@ -77,12 +82,12 @@ fun SharedContentState(
                     imageVector = Icons.Default.ErrorOutline,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.size(44.dp),
+                    modifier = Modifier.size(TaotaoSizes.stateIcon),
                 )
             }
         }
 
-        Spacer(Modifier.height(14.dp))
+        Spacer(Modifier.height(TaotaoSpacing.md))
         Text(
             text = title,
             color = if (type == SharedContentStateType.ERROR) {
@@ -95,7 +100,7 @@ fun SharedContentState(
             textAlign = TextAlign.Center,
         )
         if (!description.isNullOrBlank()) {
-            Spacer(Modifier.height(6.dp))
+            Spacer(Modifier.height(TaotaoSpacing.xs))
             Text(
                 text = description,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -104,9 +109,9 @@ fun SharedContentState(
             )
         }
         if (actionContent != null) {
-            Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(TaotaoSpacing.md))
             Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(TaotaoSpacing.xs),
                 verticalAlignment = Alignment.CenterVertically,
                 content = actionContent,
             )

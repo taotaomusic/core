@@ -12,14 +12,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -27,11 +24,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.taotao.music.data.AppearanceMode
-import com.taotao.music.model.AudioQuality
 import com.taotao.music.data.TencentMusicApi
+import com.taotao.music.model.AudioQuality
+import com.taotao.music.playerui.SharedBackButton
+import com.taotao.music.playerui.SharedCard
+import com.taotao.music.playerui.SharedSectionHeader
+import com.taotao.music.playerui.SharedSectionLevel
+import com.taotao.music.playerui.theme.TaotaoShapes
+import com.taotao.music.playerui.theme.TaotaoSpacing
 
 /**
  * 设置页。
@@ -39,6 +40,8 @@ import com.taotao.music.data.TencentMusicApi
  * 播放与下载的音质分开设置：流量敏感的是播放，下载一次的体积反而愿意换更好的音质，
  * 所以两者的默认值本来就不该一样。
  *
+ * 标题与卡片统一走 `player-ui` 的 [SharedSectionHeader] / [SharedCard]，
+ * 间距与圆角走 `TaotaoSpacing` / `TaotaoShapes`。
  */
 @Composable
 fun SettingsPage(
@@ -55,13 +58,18 @@ fun SettingsPage(
     onPickAppearance: (AppearanceMode) -> Unit,
     onBack: () -> Unit,
 ) {
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp)) {
-        Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") }
-            Text("设置", fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 4.dp))
-        }
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+            .padding(horizontal = TaotaoSpacing.screenHorizontal),
+    ) {
+        // 与收藏、历史等列表页共用同一个页面标题组件，此前这里写的是 20sp、列表页是 26sp。
+        SharedSectionHeader(
+            title = "设置",
+            level = SharedSectionLevel.PAGE,
+            leading = { SharedBackButton(onBack) },
+        )
 
-        CardWithTitle("账号", Modifier.fillMaxWidth().padding(top = 12.dp), titleColor = MaterialTheme.colorScheme.primary) {
+        SharedCard(title = "账号", modifier = Modifier.padding(top = TaotaoSpacing.sm)) {
             SettingRow(
                 title = "个人资料",
                 value = if (profileLoading) "读取中" else "管理",
@@ -71,12 +79,11 @@ fun SettingsPage(
             )
         }
 
-        CardWithTitle(
-            "音质",
-            Modifier.fillMaxWidth().padding(top = 12.dp),
-            titleColor = MaterialTheme.colorScheme.primary,
-        ) {
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp), modifier = Modifier.padding(bottom = 8.dp)) {
+        SharedCard(title = "音质", modifier = Modifier.padding(top = TaotaoSpacing.sm)) {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(TaotaoSpacing.xxs),
+                modifier = Modifier.padding(bottom = TaotaoSpacing.xs),
+            ) {
                 SettingRow(
                     title = "播放音质",
                     value = playbackQuality.label,
@@ -92,11 +99,7 @@ fun SettingsPage(
             }
         }
 
-        CardWithTitle(
-            "播放",
-            Modifier.fillMaxWidth().padding(top = 12.dp),
-            titleColor = MaterialTheme.colorScheme.primary,
-        ) {
+        SharedCard(title = "播放", modifier = Modifier.padding(top = TaotaoSpacing.sm)) {
             SettingRow(
                 title = "定时播放",
                 value = if (sleepTimerRemainingMs > 0L) {
@@ -112,22 +115,18 @@ fun SettingsPage(
         Text(
             "选中的音质若某首歌没有，服务端会自动降到最接近的可用档位，播放页会显示实际音质。",
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            fontSize = 12.sp,
-            modifier = Modifier.padding(top = 14.dp),
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(top = TaotaoSpacing.sm),
         )
 
-        CardWithTitle(
-            "外观",
-            Modifier.fillMaxWidth().padding(top = 14.dp),
-            titleColor = MaterialTheme.colorScheme.primary,
-        ) {
-            Column(Modifier.padding(bottom = 8.dp)) {
+        SharedCard(title = "外观", modifier = Modifier.padding(top = TaotaoSpacing.sm)) {
+            Column(Modifier.padding(bottom = TaotaoSpacing.xs)) {
                 AppearanceMode.entries.forEach { mode ->
                     Row(
                         Modifier.fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
+                            .clip(TaotaoShapes.button)
                             .clickable { onPickAppearance(mode) }
-                            .padding(horizontal = 12.dp, vertical = 13.dp),
+                            .padding(horizontal = TaotaoSpacing.sm, vertical = TaotaoSpacing.sm),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(mode.label, modifier = Modifier.weight(1f))
@@ -136,7 +135,7 @@ fun SettingsPage(
                 }
             }
         }
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(TaotaoSpacing.xl))
     }
 }
 
@@ -150,24 +149,34 @@ private fun SettingRow(
 ) {
     Row(
         Modifier.fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(TaotaoShapes.button)
             .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 12.dp),
+            .padding(horizontal = TaotaoSpacing.sm, vertical = TaotaoSpacing.sm),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         leadingIcon?.let {
-            Box(Modifier.padding(end = 12.dp)) { it() }
+            Box(Modifier.padding(end = TaotaoSpacing.sm)) { it() }
         }
         Column(Modifier.weight(1f)) {
             Text(title, fontWeight = FontWeight.Medium)
-            Text(description, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.padding(top = 3.dp))
+            Text(
+                description,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(top = TaotaoSpacing.xxs),
+            )
         }
         Box(
-            Modifier.clip(RoundedCornerShape(8.dp))
+            Modifier.clip(TaotaoShapes.small)
                 .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f))
-                .padding(horizontal = 10.dp, vertical = 5.dp),
+                .padding(horizontal = TaotaoSpacing.xs, vertical = TaotaoSpacing.xxs),
         ) {
-            Text(value, color = MaterialTheme.colorScheme.primary, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+            Text(
+                value,
+                color = MaterialTheme.colorScheme.primary,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Medium,
+            )
         }
     }
 }

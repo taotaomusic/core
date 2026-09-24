@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material3.Button
@@ -39,7 +38,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -55,6 +53,10 @@ import com.taotao.music.playerui.PlayerUiState
 import com.taotao.music.playerui.SharedContentState
 import com.taotao.music.playerui.SharedContentStateType
 import com.taotao.music.playerui.TaotaoPlayerTheme
+import com.taotao.music.playerui.theme.TaotaoShapes
+import com.taotao.music.playerui.theme.TaotaoSizes
+import com.taotao.music.playerui.theme.TaotaoSpacing
+import com.taotao.music.playerui.theme.TaotaoTypography
 import kotlinx.browser.document
 import kotlinx.browser.window
 import kotlinx.coroutines.await
@@ -67,6 +69,27 @@ import org.khronos.webgl.Int8Array
 import taotaomusic.webapp.generated.resources.Res
 import taotaomusic.webapp.generated.resources.noto_sans_sc_regular
 
+/**
+ * 分享页封面尺寸：窄屏与宽屏两档。
+ *
+ * 刻意不进 TaotaoSizes：分享页是「一整屏只有一张封面」的页面，
+ * 封面必须比列表和播放页都大，这是这一屏的构图决定。
+ */
+private val ArtworkSizeCompact = 248.dp
+private val ArtworkSizeWide = 300.dp
+
+/** 窄屏断点：宽度低于它时封面取紧凑档。 */
+private val CompactWidthBreakpoint = 520.dp
+
+/** 正文最大宽度。再宽下去单行文字会超过舒适阅读长度。 */
+private val ShareContentMaxWidth = 480.dp
+
+/** 「下载完整版」按钮的固定高度。 */
+private val DownloadButtonHeight = 52.dp
+
+/** 封面缺失时那颗 ♫ 占位符的字号：要撑满整个圆形底衬。 */
+private val FallbackGlyphSize = 96.sp
+
 @OptIn(ExperimentalComposeUiApi::class)
 fun main() {
     ComposeViewport(document.body!!) {
@@ -74,7 +97,9 @@ fun main() {
         val webFontFamily = FontFamily(Font(Res.font.noto_sans_sc_regular))
         TaotaoPlayerTheme(
             darkTheme = dark,
-            typography = Typography().withFontFamily(webFontFamily),
+            // 用项目排版 token 而不是 Material 默认值，否则 Web 端字号会与 Android / Windows 分叉。
+            // withFontFamily 负责把内置中文字体盖到 token 的字号/行距/字重之上。
+            typography = TaotaoTypography.withFontFamily(webFontFamily),
         ) {
             SharePlayerApp()
         }
@@ -164,25 +189,25 @@ private fun SharePlayerPage(share: ShareSong) {
     )
 
     BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        val artworkSize = if (maxWidth < 520.dp) 248.dp else 300.dp
+        val artworkSize = if (maxWidth < CompactWidthBreakpoint) ArtworkSizeCompact else ArtworkSizeWide
         Column(
             modifier = Modifier
-                .widthIn(max = 480.dp)
+                .widthIn(max = ShareContentMaxWidth)
                 .fillMaxWidth()
-                .padding(horizontal = 28.dp, vertical = 24.dp),
+                .padding(TaotaoSpacing.xl),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Text(
                 text = "桃桃音乐",
                 color = MaterialTheme.colorScheme.primary,
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold,
+                // 18sp / Bold 正是 titleLarge 档位，改走 token 而不是写字面量。
+                style = MaterialTheme.typography.titleLarge,
             )
-            Spacer(Modifier.height(24.dp))
+            Spacer(Modifier.height(TaotaoSpacing.xl))
             PlayerArtworkSlot(size = artworkSize) {
                 RemoteArtwork(share.song.coverUri, Color(share.song.color))
             }
-            Spacer(Modifier.height(24.dp))
+            Spacer(Modifier.height(TaotaoSpacing.xl))
             PlayerCompactLayout(
                 state = state,
                 actions = PlayerActions(
@@ -194,22 +219,23 @@ private fun SharePlayerPage(share: ShareSong) {
                 durationLabel = formatTime(audioState.durationMs),
                 capabilities = PlayerCapabilities(showPreviousNext = false, showRepeat = false),
             )
-            Spacer(Modifier.height(24.dp))
+            Spacer(Modifier.height(TaotaoSpacing.xl))
             Button(
                 onClick = { window.location.href = share.appDownloadUrl },
-                modifier = Modifier.fillMaxWidth().height(52.dp),
-                shape = RoundedCornerShape(8.dp),
+                modifier = Modifier.fillMaxWidth().height(DownloadButtonHeight),
+                // 8dp 不在圆角刻度里（刻度是 6/10/14/20/28），对齐到 small。
+                shape = TaotaoShapes.small,
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
             ) {
-                Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(20.dp))
-                Text("下载桃桃音乐，完整播放", modifier = Modifier.padding(start = 8.dp))
+                Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(TaotaoSizes.iconSm))
+                Text("下载桃桃音乐，完整播放", modifier = Modifier.padding(start = TaotaoSpacing.xs))
             }
             Text(
-                text = "最低音质 · 最多 60 秒试听",
+                text = "标准音质 · 最多 60 秒试听",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontSize = 12.sp,
+                style = MaterialTheme.typography.bodySmall,
                 textAlign = TextAlign.Center,
-                modifier = Modifier.padding(top = 12.dp),
+                modifier = Modifier.padding(top = TaotaoSpacing.sm),
             )
         }
     }
@@ -234,7 +260,7 @@ private fun RemoteArtwork(url: String?, fallbackColor: Color) {
             modifier = Modifier.fillMaxSize().background(fallbackColor, CircleShape),
             contentAlignment = Alignment.Center,
         ) {
-            Text("♫", color = Color.White, fontSize = 96.sp)
+            Text("♫", color = Color.White, fontSize = FallbackGlyphSize)
         }
     }
 }

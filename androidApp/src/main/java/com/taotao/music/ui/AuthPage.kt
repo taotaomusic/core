@@ -19,7 +19,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -56,8 +55,11 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.taotao.music.data.TencentMusicApi
+import com.taotao.music.playerui.theme.TaotaoShapes
+import com.taotao.music.playerui.theme.TaotaoSizes
+import com.taotao.music.playerui.theme.TaotaoSpacing
+import com.taotao.music.playerui.theme.TaotaoStroke
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -68,6 +70,14 @@ private val USERNAME_PATTERN = Regex("^[\\w\\u4e00-\\u9fa5]{3,32}$")
 
 /** 用户名上限，同时用于限制输入长度，避免输入完才提示超长。 */
 private const val MAX_USERNAME_LENGTH = 32
+
+/**
+ * 主按钮的固定高度。
+ *
+ * 刻意不进 [TaotaoSizes]：它是这一屏的布局决定（切到加载态时按钮不能变矮，
+ * 否则整个表单会跟着跳），而不是一个会在别处复用的组件尺寸。
+ */
+private val AuthButtonHeight = 52.dp
 
 /** 服务端要求的最短密码长度。 */
 private const val MIN_PASSWORD_LENGTH = 6
@@ -133,24 +143,25 @@ fun AuthPage(
                     // 系统栏与输入法都会遮挡内容，配合滚动保证小屏弹出键盘后按钮仍可点。
                     .safeDrawingPadding()
                     .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 26.dp),
+                    .padding(horizontal = TaotaoSpacing.screenHorizontal),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Spacer(Modifier.height(56.dp))
+                Spacer(Modifier.height(TaotaoSpacing.xxxl))
                 // 品牌标识复用列表和播放页的圆形封面组件，保持视觉语言统一。
-                AlbumArt(TaotaoCoral, 88.dp, 44.sp)
-                Spacer(Modifier.height(20.dp))
-                Text("桃桃音乐", fontSize = 27.sp, fontWeight = FontWeight.Bold)
+                AlbumArt(TaotaoCoral, TaotaoSizes.artworkBrand)
+                Spacer(Modifier.height(TaotaoSpacing.lg))
+                Text("桃桃音乐", style = MaterialTheme.typography.headlineMedium)
                 Text(
                     if (registerMode) "注册后即可收藏和离线下载" else "登录后同步你的收藏与下载",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontSize = 14.sp,
+                    style = MaterialTheme.typography.bodyMedium,
                     textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(top = 8.dp),
+                    modifier = Modifier.padding(top = TaotaoSpacing.xs),
                 )
-                Spacer(Modifier.height(30.dp))
+                Spacer(Modifier.height(TaotaoSpacing.xxl))
                 Column(
-                    Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp)).background(MaterialTheme.colorScheme.surface).padding(20.dp),
+                    Modifier.fillMaxWidth().clip(TaotaoShapes.card).background(MaterialTheme.colorScheme.surface)
+                        .padding(TaotaoSpacing.lg),
                 ) {
                     OutlinedTextField(
                         value = username,
@@ -164,12 +175,12 @@ fun AuthPage(
                         isError = usernameError != null,
                         supportingText = { Text(usernameError ?: "支持中英文、数字和下划线") },
                         modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(14.dp),
+                        shape = TaotaoShapes.medium,
                         singleLine = true,
                         enabled = !loading,
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
                     )
-                    Spacer(Modifier.height(10.dp))
+                    Spacer(Modifier.height(TaotaoSpacing.xs))
                     OutlinedTextField(
                         value = password,
                         onValueChange = { password = it; message = null },
@@ -186,7 +197,7 @@ fun AuthPage(
                         isError = passwordError != null,
                         supportingText = { Text(passwordError ?: "至少 $MIN_PASSWORD_LENGTH 位") },
                         modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(14.dp),
+                        shape = TaotaoShapes.medium,
                         singleLine = true,
                         enabled = !loading,
                         visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
@@ -224,7 +235,7 @@ fun AuthPage(
                             },
                     ) {
                         Column {
-                            Spacer(Modifier.height(10.dp))
+                            Spacer(Modifier.height(TaotaoSpacing.xs))
                             OutlinedTextField(
                                 value = confirmPassword,
                                 onValueChange = { confirmPassword = it; message = null },
@@ -233,14 +244,14 @@ fun AuthPage(
                                 isError = confirmError != null,
                                 supportingText = { Text(confirmError ?: "再次输入以确认") },
                                 modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(14.dp),
+                                shape = TaotaoShapes.medium,
                                 singleLine = true,
                                 enabled = !loading,
                                 visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
                                 keyboardActions = KeyboardActions(onDone = { submit() }),
                             )
-                            Spacer(Modifier.height(10.dp))
+                            Spacer(Modifier.height(TaotaoSpacing.xs))
                             OutlinedTextField(
                                 value = email,
                                 onValueChange = { email = it.trim(); message = null },
@@ -249,12 +260,12 @@ fun AuthPage(
                                 isError = emailError != null,
                                 supportingText = { Text(emailError ?: "$SUPPORTED_EMAIL_HINT，用于验证账号与找回凭据") },
                                 modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(14.dp),
+                                shape = TaotaoShapes.medium,
                                 singleLine = true,
                                 enabled = !loading,
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = ImeAction.Next),
                             )
-                            Spacer(Modifier.height(10.dp))
+                            Spacer(Modifier.height(TaotaoSpacing.xs))
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 OutlinedTextField(
                                     value = verificationCode,
@@ -264,7 +275,7 @@ fun AuthPage(
                                     isError = verificationError != null,
                                     supportingText = { Text(verificationError ?: "验证码有效期 10 分钟") },
                                     modifier = Modifier.weight(1f),
-                                    shape = RoundedCornerShape(14.dp),
+                                    shape = TaotaoShapes.medium,
                                     singleLine = true,
                                     enabled = !loading,
                                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
@@ -288,23 +299,27 @@ fun AuthPage(
                     }
                 }
                 message?.let { AuthErrorBanner(it) }
-                Spacer(Modifier.height(20.dp))
+                Spacer(Modifier.height(TaotaoSpacing.lg))
                 Button(
                     onClick = ::submit,
                     enabled = canSubmit,
                     // 固定高度，切换到加载态时按钮不会变矮。
-                    modifier = Modifier.fillMaxWidth().height(52.dp),
-                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.fillMaxWidth().height(AuthButtonHeight),
+                    shape = TaotaoShapes.button,
                 ) {
                     if (loading) {
                         CircularProgressIndicator(
-                            modifier = Modifier.size(20.dp),
-                            strokeWidth = 2.dp,
+                            modifier = Modifier.size(TaotaoSizes.progressInline),
+                            strokeWidth = TaotaoStroke.medium,
                             // 默认取主色，与珊瑚红按钮同色会看不见，这里改用按钮前景色。
                             color = MaterialTheme.colorScheme.onPrimary,
                         )
                     } else {
-                        Text(if (registerMode) "注册并登录" else "登录", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                        Text(
+                            if (registerMode) "注册并登录" else "登录",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                        )
                     }
                 }
                 TextButton(
@@ -317,8 +332,8 @@ fun AuthPage(
                         verificationCode = ""
                         message = null
                     },
-                ) { Text(if (registerMode) "已有账号？返回登录" else "还没有账号？立即注册", fontSize = 14.sp) }
-                Spacer(Modifier.height(28.dp))
+                ) { Text(if (registerMode) "已有账号？返回登录" else "还没有账号？立即注册", style = MaterialTheme.typography.bodyMedium) }
+                Spacer(Modifier.height(TaotaoSpacing.xl))
             }
         }
     }
@@ -330,24 +345,24 @@ private fun AuthErrorBanner(text: String) {
     Row(
         Modifier
             .fillMaxWidth()
-            .padding(top = 14.dp)
-            .clip(RoundedCornerShape(14.dp))
+            .padding(top = TaotaoSpacing.md)
+            .clip(TaotaoShapes.medium)
             .background(MaterialTheme.colorScheme.errorContainer)
-            .padding(horizontal = 14.dp, vertical = 12.dp),
+            .padding(horizontal = TaotaoSpacing.sm, vertical = TaotaoSpacing.sm),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
             Icons.Default.ErrorOutline,
             null,
             tint = MaterialTheme.colorScheme.onErrorContainer,
-            modifier = Modifier.size(18.dp),
+            modifier = Modifier.size(TaotaoSizes.iconSm),
         )
         // 占满剩余宽度，较长的服务端文案换行显示而不是被裁掉。
         Text(
             text,
             color = MaterialTheme.colorScheme.onErrorContainer,
-            fontSize = 13.sp,
-            modifier = Modifier.weight(1f).padding(start = 10.dp),
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.weight(1f).padding(start = TaotaoSpacing.xs),
         )
     }
 }

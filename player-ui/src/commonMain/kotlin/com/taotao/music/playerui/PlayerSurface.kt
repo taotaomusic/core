@@ -15,28 +15,49 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.taotao.music.model.Song
-import com.taotao.music.playerui.theme.AppleStyleTheme
 import com.taotao.music.playerui.theme.ApplePlayButton
 import com.taotao.music.playerui.theme.AppleStyleSlider
+import com.taotao.music.playerui.theme.TaotaoElevation
+import com.taotao.music.playerui.theme.TaotaoSizes
+import com.taotao.music.playerui.theme.TaotaoSpacing
+import com.taotao.music.playerui.theme.taotaoShadowColors
 
-/** 公共封面插槽；图片加载仍由 Android、Windows 和 Web 分别实现。 */
+/**
+ * 公共封面插槽；图片加载仍由 Android、Windows 和 Web 分别实现。
+ *
+ * [shape] **同时作用于阴影和裁切，必须与 [content] 实际画出的形状一致**。
+ *
+ * 此前这里固定用 `TaotaoShapes.artwork`（20dp 圆角矩形）投影，而封面内容画的是圆形，
+ * 于是圆形封面背后会露出一圈**直角矩形的阴影带**，看起来像一块方块鬼影。
+ * 截图实测：矩形阴影比圆形封面每边多出约 30dp，四个角最明显。
+ * 所以默认值改成 [CircleShape] —— 封面在三个平台上本来就是圆的。
+ *
+ * 阴影颜色随亮暗主题走：此前这里写死 `Color.Black.copy(alpha = 0.5f)`，
+ * 而 [SharedMiniPlayer] 用的是 0.1f，同一套界面里两处阴影相差 5 倍。
+ */
 @Composable
 fun PlayerArtworkSlot(
     size: Dp,
+    modifier: Modifier = Modifier,
+    shape: Shape = CircleShape,
     content: @Composable () -> Unit,
 ) {
+    val shadow = taotaoShadowColors()
     Box(
-        modifier = Modifier
+        modifier = modifier
             .size(size)
-            .shadow(24.dp, AppleStyleTheme.ArtworkShape, ambientColor = Color.Black.copy(alpha = 0.5f), spotColor = Color.Black.copy(alpha = 0.5f))
-            .clip(AppleStyleTheme.ArtworkShape),
+            .shadow(
+                elevation = TaotaoElevation.overlay,
+                shape = shape,
+                ambientColor = shadow.ambient,
+                spotColor = shadow.spot,
+            )
+            .clip(shape),
         contentAlignment = Alignment.Center,
     ) {
         content()
@@ -64,7 +85,7 @@ fun PlayerSongHeader(
             titleTrailingContent?.invoke(this)
         }
         Row(
-            modifier = Modifier.padding(top = 4.dp),
+            modifier = Modifier.padding(top = TaotaoSpacing.xxs),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
@@ -102,9 +123,9 @@ fun PlayerPlaybackDetails(
     controlLeadingContent: (@Composable () -> Unit)? = null,
     controlTrailingContent: (@Composable () -> Unit)? = null,
 ) {
-    Column(modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+    Column(modifier = modifier.fillMaxWidth().padding(horizontal = TaotaoSpacing.md)) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp),
+            modifier = Modifier.fillMaxWidth().padding(bottom = TaotaoSpacing.xl),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             PlayerSongHeader(
@@ -114,7 +135,7 @@ fun PlayerPlaybackDetails(
                 metadataTrailingContent = metadataTrailingContent,
             )
             if (headerActions != null) {
-                Row(modifier = Modifier.padding(start = 16.dp)) {
+                Row(modifier = Modifier.padding(start = TaotaoSpacing.md)) {
                     headerActions()
                 }
             }
@@ -128,25 +149,23 @@ fun PlayerPlaybackDetails(
                 onSeekFinished = actions.onSeekFinished,
             )
             Row(
-                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                modifier = Modifier.fillMaxWidth().padding(top = TaotaoSpacing.xxs),
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Text(
                     text = positionLabel,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium
+                    style = MaterialTheme.typography.labelMedium,
                 )
                 Text(
                     text = durationLabel,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium
+                    style = MaterialTheme.typography.labelMedium,
                 )
             }
         }
 
-        Spacer(Modifier.height(32.dp))
+        Spacer(Modifier.height(TaotaoSpacing.xxl))
 
         PlayerTransportControls(
             state = state,
@@ -211,13 +230,13 @@ fun PlayerTransportControls(
                     } else {
                         MaterialTheme.colorScheme.primary
                     },
-                    modifier = Modifier.size(24.dp),
+                    modifier = Modifier.size(TaotaoSizes.iconMd),
                 )
             }
         }
         if (capabilities.showPreviousNext) {
             IconButton(onClick = { actions.onPrevious?.invoke() }) {
-                Icon(Icons.Default.SkipPrevious, "上一首", modifier = Modifier.size(36.dp))
+                Icon(Icons.Default.SkipPrevious, "上一首", modifier = Modifier.size(TaotaoSizes.iconButton))
             }
         }
         ApplePlayButton(
@@ -225,19 +244,19 @@ fun PlayerTransportControls(
             onClick = actions.onTogglePlaying,
             playIcon = Icons.Default.PlayArrow,
             pauseIcon = Icons.Default.Pause,
-            modifier = Modifier.padding(horizontal = 8.dp),
+            modifier = Modifier.padding(horizontal = TaotaoSpacing.xs),
             enabled = !state.isBuffering,
         )
         if (capabilities.showPreviousNext) {
             IconButton(onClick = { actions.onNext?.invoke() }) {
-                Icon(Icons.Default.SkipNext, "下一首", modifier = Modifier.size(36.dp))
+                Icon(Icons.Default.SkipNext, "下一首", modifier = Modifier.size(TaotaoSizes.iconButton))
             }
         }
         trailingContent?.invoke()
     }
 
     if (state.isBuffering) {
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(TaotaoSpacing.md))
         LinearProgressIndicator(Modifier.fillMaxWidth().clip(CircleShape))
     }
     state.errorMessage?.let { message ->
@@ -245,7 +264,7 @@ fun PlayerTransportControls(
             text = message,
             color = MaterialTheme.colorScheme.error,
             style = MaterialTheme.typography.bodySmall,
-            modifier = Modifier.padding(top = 8.dp),
+            modifier = Modifier.padding(top = TaotaoSpacing.xs),
         )
     }
 }

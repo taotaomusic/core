@@ -21,7 +21,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
+import com.taotao.music.playerui.theme.TaotaoElevation
 
 /** 平台导航项；共享布局不解释页面含义，只负责一致的视觉和选中反馈。 */
 @Immutable
@@ -60,7 +60,7 @@ fun SharedMainLayout(
                 }
                 NavigationBar(
                     containerColor = Color.Transparent,
-                    tonalElevation = 0.dp,
+                    tonalElevation = TaotaoElevation.flat,
                     windowInsets = WindowInsets.navigationBars,
                 ) {
                     navigationItems.forEach { item ->

@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -35,10 +34,11 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.taotao.music.model.Lyric
 import com.taotao.music.model.LyricWord
+import com.taotao.music.playerui.theme.TaotaoShapes
+import com.taotao.music.playerui.theme.TaotaoSpacing
+import com.taotao.music.playerui.theme.TaotaoTypeScale
 
 /** 用户手动滚动后暂停自动跟随的时长，避免刚滑到别处就被拽回去。 */
 private const val ManualScrollGraceMs = 2_500L
@@ -59,8 +59,15 @@ fun LyricPane(
     if (lyric.isEmpty) {
         Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("♪", fontSize = 40.sp, color = LyricDim)
-                Text("暂无歌词", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp, modifier = Modifier.padding(top = 10.dp))
+                // 装饰性音符：走 hero 档（40sp）。它不表达文字层级，所以不新增字号档位，
+                // 而是复用同为 40sp 的首屏主标题档。
+                Text("♪", style = TaotaoTypeScale.hero, color = LyricDim)
+                Text(
+                    "暂无歌词",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(top = TaotaoSpacing.xs),
+                )
             }
         }
         return
@@ -97,7 +104,7 @@ fun LyricPane(
             state = listState,
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(top = halfHeight, bottom = halfHeight),
-            verticalArrangement = Arrangement.spacedBy(20.dp),
+            verticalArrangement = Arrangement.spacedBy(TaotaoSpacing.lg),
         ) {
             itemsIndexed(lyric.lines) { index, line ->
                 val active = lyric.synced && index == currentIndex
@@ -163,11 +170,14 @@ private fun CurrentKaraokeLyricRow(
     )
 }
 
-/** 当前行只改变颜色和字重；字号与行高保持固定，防止 LazyColumn 在换句时跳动。 */
-private fun lyricTextStyle(active: Boolean, centered: Boolean) = TextStyle(
-    fontSize = 18.sp,
+/**
+ * 当前行只改变颜色和字重；字号与行高保持固定，防止 LazyColumn 在换句时跳动。
+ *
+ * 18sp / 26sp 正好是 [TaotaoTypeScale.sectionTitle]，所以直接基于它 `copy`：
+ * 只覆盖字重与对齐，字号、行高、字距都跟着 token 走，不再各写一遍。
+ */
+private fun lyricTextStyle(active: Boolean, centered: Boolean) = TaotaoTypeScale.sectionTitle.copy(
     fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
-    lineHeight = 26.sp,
     textAlign = if (centered) TextAlign.Center else TextAlign.Start,
 )
 
@@ -177,7 +187,7 @@ private fun lyricRowModifier(
     onSeek: (Int) -> Unit,
 ): Modifier = Modifier
     .fillMaxWidth()
-    .clip(RoundedCornerShape(10.dp))
+    .clip(TaotaoShapes.small)
     .then(
         if (seekEnabled) {
             Modifier.clickable(onClickLabel = "跳转到此句") { onSeek(timeMs) }
@@ -185,7 +195,7 @@ private fun lyricRowModifier(
             Modifier
         },
     )
-    .padding(horizontal = 8.dp, vertical = 2.dp)
+    .padding(horizontal = TaotaoSpacing.xs, vertical = TaotaoSpacing.tightVertical)
 
 /**
  * 逐字高亮的当前行。

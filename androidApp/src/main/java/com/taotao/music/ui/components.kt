@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
 import androidx.compose.material.icons.filled.DeleteOutline
@@ -54,19 +53,21 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.taotao.music.model.Song
 import com.taotao.music.playerui.SharedContentState
 import com.taotao.music.playerui.SharedContentStateType
 import com.taotao.music.playerui.SharedSongRow
-import com.taotao.music.playerui.theme.AppleStyleTheme
+import com.taotao.music.playerui.theme.TaotaoShapes
+import com.taotao.music.playerui.theme.TaotaoSizes
+import com.taotao.music.playerui.theme.TaotaoSpacing
 
 /**
  * 全局复用的视觉组件。
@@ -79,15 +80,29 @@ import com.taotao.music.playerui.theme.AppleStyleTheme
  * 专辑封面：有图用图，没图退回带音符的色块。
  *
  * 图片加淡入：不加的话图片是"啪"一下出现的，列表滚动时一片闪烁。
+ *
+ * ## 尺寸只从 [TaotaoSizes] 取
+ *
+ * 引入 token 之前，这个组件在四个调用点用了 **42 / 48 / 52 dp** 表示同一个语义角色
+ * （列表行封面），另有 88 / 112 dp 两档，占位音符也跟着各写一个字号。
+ * 现在尺寸收敛为 [TaotaoSizes.artworkRow] / [artworkGrid][TaotaoSizes.artworkGrid] /
+ * [artworkHero][TaotaoSizes.artworkHero] 三档，音符按封面等比推算。
+ *
+ * 形状按尺寸自动判定：大于一个列表行封面就当作大封面（圆形），否则用
+ * [TaotaoShapes.artwork] 圆角矩形。调用点需要覆盖时显式传 [shape]
+ * （例如 [SongRow] 要求封面与行内其它元素对齐）。
  */
 @Composable
 fun AlbumArt(
     color: Color,
     size: Dp,
-    iconSize: TextUnit,
     imageUri: String? = null,
-    shape: Shape = if (size > 80.dp) CircleShape else RoundedCornerShape(24.dp),
+    shape: Shape = if (size > TaotaoSizes.artworkRow) CircleShape else TaotaoShapes.artwork,
+    /** 占位音符的字号。留空则按封面尺寸的一半推算，超大封面可显式覆盖。 */
+    iconSize: TextUnit? = null,
 ) {
+    // 音符随封面等比缩放，不再让每个调用点各写一个字号。
+    val glyph = iconSize ?: with(LocalDensity.current) { (size * 0.5f).toSp() }
     if (!imageUri.isNullOrBlank()) {
         AsyncImage(
             model = ImageRequest.Builder(LocalContext.current)
@@ -99,7 +114,7 @@ fun AlbumArt(
         )
     } else {
         Box(Modifier.size(size).clip(shape).background(color), contentAlignment = Alignment.Center) {
-            Text("♫", color = Color.White, fontSize = iconSize)
+            Text("♫", color = Color.White, fontSize = glyph)
         }
     }
 }
@@ -137,20 +152,19 @@ fun SongRow(
         artworkContent = {
             AlbumArt(
                 color = Color(song.color),
-                size = 52.dp,
-                iconSize = 24.sp,
+                size = TaotaoSizes.artworkRow,
                 imageUri = song.coverUri,
-                shape = AppleStyleTheme.ButtonShape,
+                shape = TaotaoShapes.button,
             )
         },
         onClick = onClick,
         modifier = modifier,
         trailingContent = {
             if (dragHandle != null) {
-                dragHandle(Modifier.size(36.dp))
+                dragHandle(Modifier.size(TaotaoSizes.iconButton))
             } else {
                 Box {
-                    IconButton(onClick = { showActions = true }, modifier = Modifier.size(36.dp)) {
+                    IconButton(onClick = { showActions = true }, modifier = Modifier.size(TaotaoSizes.iconButton)) {
                         Icon(Icons.Default.MoreVert, "更多操作", tint = MaterialTheme.colorScheme.primary)
                     }
                     DropdownMenu(
@@ -254,7 +268,7 @@ fun FavoriteButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
-    size: Dp = 24.dp,
+    size: Dp = TaotaoSizes.iconMd,
 ) {
     // 收藏是高频操作，使用低回弹弹簧提供反馈，不能留下明显拖尾。
     val reduceMotion = LocalReduceMotion.current
@@ -268,7 +282,8 @@ fun FavoriteButton(
         animationSpec = taotaoTween(AnimationDurations.MICRO),
         label = "收藏着色",
     )
-    IconButton(onClick = onClick, enabled = enabled, modifier = modifier.size(size + 16.dp)) {
+    // 图标外扩 16dp 作为触达余量，保证不小于 Material 建议的最小点击区。
+    IconButton(onClick = onClick, enabled = enabled, modifier = modifier.size(size + TaotaoSpacing.md)) {
         Icon(
             if (favorited) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
             if (favorited) "取消收藏" else "收藏",
@@ -294,11 +309,12 @@ fun PlayPauseIcon(isPlaying: Boolean, modifier: Modifier = Modifier, tint: Color
 fun VipBadge(modifier: Modifier = Modifier) {
     Box(
         modifier
-            .clip(RoundedCornerShape(4.dp))
+            .clip(TaotaoShapes.badge)
             .background(TaotaoCoral.copy(alpha = 0.14f))
-            .padding(horizontal = 4.dp, vertical = 1.dp),
+            // 纵向只留 1dp：徽标高度应当由行高决定，再撑开就会把整行顶高。
+            .padding(horizontal = TaotaoSpacing.xxs, vertical = TaotaoSpacing.tightVertical),
     ) {
-        Text("VIP", color = TaotaoCoral, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+        Text("VIP", color = TaotaoCoral, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
     }
 }
 
@@ -314,7 +330,7 @@ fun MusicSearchBar(
     onFocus: () -> Unit = {},
     focusRequester: FocusRequester? = null,
 ) {
-    Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().padding(bottom = TaotaoSpacing.xs), verticalAlignment = Alignment.CenterVertically) {
         OutlinedTextField(
             value = keyword,
             onValueChange = onKeywordChanged,
@@ -329,45 +345,44 @@ fun MusicSearchBar(
     }
 }
 
+/**
+ * 骨架屏占位条的尺寸。
+ *
+ * 刻意不进 [TaotaoSizes]：骨架只表达"这里将出现一行"，它跟随真实行的尺寸，
+ * 而不是反过来定义尺寸刻度。放进刻度反而会让「48dp 到底是封面还是占位块」失去答案。
+ */
+private val SkeletonTitleWidth = 150.dp
+private val SkeletonTitleHeight = 16.dp
+private val SkeletonSubtitleWidth = 90.dp
+private val SkeletonSubtitleHeight = 12.dp
+
 /** 搜索中的骨架屏占位。 */
 @Composable
 fun SearchSkeletonList() {
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(top = 18.dp)) {
+    Column(
+        verticalArrangement = Arrangement.spacedBy(TaotaoSpacing.sm),
+        modifier = Modifier.padding(top = TaotaoSpacing.md),
+    ) {
         repeat(6) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(48.dp).clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceVariant))
-                Column(Modifier.padding(start = 13.dp)) {
-                    Box(Modifier.width(150.dp).height(16.dp).clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.surfaceVariant))
-                    Spacer(Modifier.height(8.dp))
-                    Box(Modifier.width(90.dp).height(12.dp).clip(RoundedCornerShape(6.dp)).background(MaterialTheme.colorScheme.surfaceVariant))
+                // 圆角与尺寸都跟真实歌曲行一致，避免加载完成时方块跳一下。
+                Box(
+                    Modifier.size(TaotaoSizes.artworkRow).clip(TaotaoShapes.button)
+                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                )
+                Column(Modifier.padding(start = TaotaoSpacing.sm)) {
+                    Box(
+                        Modifier.width(SkeletonTitleWidth).height(SkeletonTitleHeight)
+                            .clip(TaotaoShapes.small).background(MaterialTheme.colorScheme.surfaceVariant),
+                    )
+                    Spacer(Modifier.height(TaotaoSpacing.xs))
+                    Box(
+                        Modifier.width(SkeletonSubtitleWidth).height(SkeletonSubtitleHeight)
+                            .clip(TaotaoShapes.extraSmall).background(MaterialTheme.colorScheme.surfaceVariant),
+                    )
                 }
             }
         }
-    }
-}
-
-/** 页面标题区域：统一标题样式和间距。 */
-@Composable
-fun PageTitle(title: String, subtitle: String? = null, modifier: Modifier = Modifier) {
-    Column(modifier = modifier.padding(vertical = 16.dp)) {
-        Text(title, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-        if (!subtitle.isNullOrBlank()) Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
-    }
-}
-
-/** 带标题的圆角卡片。 */
-@Composable
-fun CardWithTitle(
-    title: String,
-    modifier: Modifier = Modifier,
-    titleColor: Color = TaotaoCoral,
-    content: @Composable () -> Unit,
-) {
-    Column(modifier = modifier.clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.surface)) {
-        Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(title, fontSize = 18.sp, fontWeight = FontWeight.Bold, color = titleColor)
-        }
-        content()
     }
 }
 
@@ -382,15 +397,24 @@ fun EmptyStateView(title: String = "暂无数据", description: String? = null, 
     )
 }
 
+/**
+ * 分页指示器的圆点尺寸。
+ *
+ * 选中态外径比常态大 2dp，靠这个差值制造「选中被放大」的观感；
+ * 放大倍数由两者相除得出，改尺寸时不必再去同步一个写死的 `8f / 6f`。
+ */
+private val PagerDotActiveSize = 8.dp
+private val PagerDotIdleSize = 6.dp
+
 /** 分页指示器：几页就几个点，当前页用主色实心。选中用缩放而不是改布局尺寸。 */
 @Composable
 fun PagerDots(current: Int, total: Int, modifier: Modifier = Modifier) {
     val reduceMotion = LocalReduceMotion.current
-    Row(modifier, horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(modifier, horizontalArrangement = Arrangement.spacedBy(TaotaoSpacing.xs), verticalAlignment = Alignment.CenterVertically) {
         repeat(total) { index ->
             val selected = index == current
             val scale by animateFloatAsState(
-                targetValue = if (selected) 8f / 6f else 1f,
+                targetValue = if (selected) PagerDotActiveSize.value / PagerDotIdleSize.value else 1f,
                 animationSpec = if (reduceMotion) snap() else taotaoSpring(),
                 label = "分页点缩放",
             )
@@ -403,10 +427,10 @@ fun PagerDots(current: Int, total: Int, modifier: Modifier = Modifier) {
                 animationSpec = taotaoTween(AnimationDurations.MICRO),
                 label = "分页点着色",
             )
-            Box(Modifier.size(8.dp), contentAlignment = Alignment.Center) {
+            Box(Modifier.size(PagerDotActiveSize), contentAlignment = Alignment.Center) {
                 Box(
                     Modifier
-                        .size(6.dp)
+                        .size(PagerDotIdleSize)
                         .graphicsLayer {
                             scaleX = scale
                             scaleY = scale

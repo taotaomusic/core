@@ -13,7 +13,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -34,9 +33,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.core.content.ContextCompat
 import coil.compose.AsyncImage
@@ -45,6 +41,11 @@ import com.taotao.music.data.AiChatStore
 import com.taotao.music.data.SavedAiChatMessage
 import com.taotao.music.data.SavedAiConversation
 import com.taotao.music.data.TencentMusicApi
+import com.taotao.music.playerui.theme.TaotaoShapes
+import com.taotao.music.playerui.theme.TaotaoSizes
+import com.taotao.music.playerui.theme.TaotaoSpacing
+import com.taotao.music.playerui.theme.TaotaoStroke
+import com.taotao.music.playerui.theme.TaotaoTypeScale
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CancellationException
@@ -190,16 +191,20 @@ fun AiStudioPage(
             )
         },
     ) {
-    Column(Modifier.fillMaxSize().padding(horizontal = 18.dp)) {
-        Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+    Column(Modifier.fillMaxSize().padding(horizontal = TaotaoSpacing.md)) {
+        Row(Modifier.fillMaxWidth().padding(vertical = TaotaoSpacing.sm), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = { scope.launch { drawerState.open() } }) { Icon(Icons.Default.Menu, "打开会话列表") }
-            Column(Modifier.weight(1f).padding(start = 8.dp)) {
-                Text(selected.title, fontSize = 20.sp, fontWeight = FontWeight.Bold, maxLines = 1)
-                Text("GPT Image 创作对话", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+            Column(Modifier.weight(1f).padding(start = TaotaoSpacing.xs)) {
+                Text(selected.title, style = TaotaoTypeScale.subtitle, maxLines = 1)
+                Text(
+                    "GPT Image 创作对话",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
             IconButton(onClick = ::startNewConversation) { Icon(Icons.Default.Add, "新建对话", tint = MaterialTheme.colorScheme.primary) }
         }
-        LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(TaotaoSpacing.sm)) {
             itemsIndexed(messages) { _, message ->
                 AiChatBubble(
                     message = message,
@@ -237,34 +242,37 @@ fun AiStudioPage(
                 }
             }
         }
-        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(top = TaotaoSpacing.xs), horizontalArrangement = Arrangement.spacedBy(TaotaoSpacing.xs)) {
             AiOptionPicker("模型", model.title, AiModel.entries.toList(), { it.title }) { model = it }
             AiOptionPicker("比例", ratio, listOf("1:1", "3:4", "9:16", "16:9"), { it }) { ratio = it }
             AiOptionPicker("尺寸", imageSize, listOf("1K", "2K", "4K"), { it }) { imageSize = it }
             AiOptionPicker("质量", quality.label, AiQuality.entries.toList(), { it.label }) { quality = it }
             AiOptionPicker("思考", thinking, listOf("快速", "标准", "深入"), { it }) { thinking = it }
         }
-        Row(Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(value = draft, onValueChange = { draft = it }, placeholder = { Text(if (signedIn) "描述你想创作的画面…" else "登录后可开始对话") }, modifier = Modifier.weight(1f), minLines = 1, maxLines = 4, enabled = signedIn && !submitting, shape = RoundedCornerShape(22.dp))
+        Row(
+            Modifier.fillMaxWidth().padding(top = TaotaoSpacing.xxs, bottom = TaotaoSpacing.sm),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedTextField(value = draft, onValueChange = { draft = it }, placeholder = { Text(if (signedIn) "描述你想创作的画面…" else "登录后可开始对话") }, modifier = Modifier.weight(1f), minLines = 1, maxLines = 4, enabled = signedIn && !submitting, shape = TaotaoShapes.large)
             IconButton(onClick = {
                 val prompt = draft.trim(); if (prompt.isBlank()) return@IconButton
                 replaceSelected(messages + AiChatMessage(AiChatRole.USER, prompt) + AiChatMessage(AiChatRole.ASSISTANT, "正在提交创作请求…"), prompt.take(16))
                 draft = ""; onGenerate(model.apiName, prompt, ratio, imageSize, quality.apiName, thinking)
-            }, enabled = signedIn && draft.isNotBlank() && !submitting, modifier = Modifier.padding(start = 8.dp).background(MaterialTheme.colorScheme.primary, RoundedCornerShape(18.dp))) { Icon(Icons.Default.Send, "发送", tint = MaterialTheme.colorScheme.onPrimary) }
+            }, enabled = signedIn && draft.isNotBlank() && !submitting, modifier = Modifier.padding(start = TaotaoSpacing.xs).background(MaterialTheme.colorScheme.primary, TaotaoShapes.large)) { Icon(Icons.Default.Send, "发送", tint = MaterialTheme.colorScheme.onPrimary) }
         }
         saveMessage?.let { text ->
             Text(
                 text,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontSize = 12.sp,
-                modifier = Modifier.padding(start = 12.dp, bottom = 4.dp),
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(start = TaotaoSpacing.sm, bottom = TaotaoSpacing.xxs),
             )
         }
     }
     previewImageUrl?.let { imageUrl ->
         Dialog(onDismissRequest = { previewImageUrl = null }) {
-            Surface(shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.surface) {
-                Column(Modifier.padding(12.dp)) {
+            Surface(shape = TaotaoShapes.extraLarge, color = MaterialTheme.colorScheme.surface) {
+                Column(Modifier.padding(TaotaoSpacing.sm)) {
                     AsyncImage(imageUrl, "AI 图片预览", Modifier.fillMaxWidth())
                     TextButton(
                         onClick = { requestSave(imageUrl) },
@@ -291,32 +299,37 @@ private fun AiConversationDrawer(
 ) {
     var keyword by remember { mutableStateOf("") }
     ModalDrawerSheet(drawerContainerColor = MaterialTheme.colorScheme.surface) {
-        Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-            Row(Modifier.fillMaxWidth().padding(top = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("对话", Modifier.weight(1f), fontSize = 24.sp, fontWeight = FontWeight.Bold)
+        Column(Modifier.fillMaxSize().padding(horizontal = TaotaoSpacing.md)) {
+            Row(Modifier.fillMaxWidth().padding(top = TaotaoSpacing.md), verticalAlignment = Alignment.CenterVertically) {
+                Text("对话", Modifier.weight(1f), style = MaterialTheme.typography.headlineSmall)
                 FilledTonalButton(onClick = onNew) { Icon(Icons.Default.Add, null); Text(" 新对话") }
             }
             OutlinedTextField(
                 value = keyword,
                 onValueChange = { keyword = it },
                 placeholder = { Text("搜索对话内容") },
-                modifier = Modifier.fillMaxWidth().padding(vertical = 14.dp),
+                modifier = Modifier.fillMaxWidth().padding(vertical = TaotaoSpacing.sm),
                 singleLine = true,
             )
             val filtered = conversations.filter { conversation ->
                 keyword.isBlank() || conversation.title.contains(keyword, true) || conversation.messages.any { it.text.contains(keyword, true) }
             }.sortedWith(compareByDescending<SavedAiConversation> { it.pinned }.thenByDescending { it.id })
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.weight(1f)) {
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(TaotaoSpacing.xxs), modifier = Modifier.weight(1f)) {
                 itemsIndexed(filtered, key = { _, item -> item.id }) { _, conversation ->
                     var menu by remember(conversation.id) { mutableStateOf(false) }
                     Row(
                         Modifier.fillMaxWidth()
-                            .background(if (conversation.id == selectedId) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface, RoundedCornerShape(12.dp))
-                            .padding(start = 12.dp, top = 7.dp, bottom = 7.dp, end = 4.dp),
+                            .background(if (conversation.id == selectedId) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface, TaotaoShapes.medium)
+                            .padding(
+                                start = TaotaoSpacing.sm,
+                                top = TaotaoSpacing.xs,
+                                bottom = TaotaoSpacing.xs,
+                                end = TaotaoSpacing.xxs,
+                            ),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(conversation.title, Modifier.weight(1f).clickable { onSelect(conversation.id) }, maxLines = 1, color = if (conversation.id == selectedId) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurface)
-                        if (conversation.pinned) Icon(Icons.Default.PushPin, "已置顶", Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
+                        if (conversation.pinned) Icon(Icons.Default.PushPin, "已置顶", Modifier.size(TaotaoSizes.iconXs), tint = MaterialTheme.colorScheme.primary)
                         Box {
                             IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, "更多") }
                             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }, containerColor = MaterialTheme.colorScheme.surface) {
@@ -327,7 +340,12 @@ private fun AiConversationDrawer(
                     }
                 }
             }
-            Text("本地保存 ${conversations.size} 个对话", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, modifier = Modifier.padding(vertical = 14.dp))
+            Text(
+                "本地保存 ${conversations.size} 个对话",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(vertical = TaotaoSpacing.sm),
+            )
         }
     }
 }
@@ -349,12 +367,12 @@ private fun AiChatBubble(
 ) {
     val mine = message.role == AiChatRole.USER
     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start) {
-        Column(Modifier.fillMaxWidth(if (mine) 0.78f else 0.88f).background(if (mine) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(20.dp)).padding(14.dp)) {
+        Column(Modifier.fillMaxWidth(if (mine) 0.78f else 0.88f).background(if (mine) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant, TaotaoShapes.card).padding(TaotaoSpacing.sm)) {
             Text(message.text, color = if (mine) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant)
             if (message.progress > 0 && message.imageUrl == null && message.error == null) {
-                Row(Modifier.padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                    Text(" ${message.progress.coerceIn(0, 100)}%", Modifier.padding(start = 8.dp))
+                Row(Modifier.padding(top = TaotaoSpacing.xs), verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(Modifier.size(TaotaoSizes.iconXs), strokeWidth = TaotaoStroke.medium)
+                    Text(" ${message.progress.coerceIn(0, 100)}%", Modifier.padding(start = TaotaoSpacing.xs))
                 }
             }
             message.imageUrl?.let { imageUrl ->
@@ -374,8 +392,8 @@ private fun AiChatBubble(
                             imageUrl,
                             "AI 生成图片，点击预览",
                             Modifier.fillMaxWidth()
-                                .padding(top = 10.dp)
-                                .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(14.dp))
+                                .padding(top = TaotaoSpacing.xs)
+                                .background(MaterialTheme.colorScheme.surface, TaotaoShapes.medium)
                                 .clickable { onPreview(imageUrl) },
                         )
                         TextButton(onClick = { onSave(imageUrl) }) {
@@ -385,7 +403,7 @@ private fun AiChatBubble(
                     }
                 }
             }
-            message.error?.let { Text(it, Modifier.padding(top = 8.dp), color = MaterialTheme.colorScheme.error) }
+            message.error?.let { Text(it, Modifier.padding(top = TaotaoSpacing.xs), color = MaterialTheme.colorScheme.error) }
         }
     }
 }

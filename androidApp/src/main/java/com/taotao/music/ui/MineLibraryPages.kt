@@ -4,40 +4,29 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.slideInVertically
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.taotao.music.data.PlaybackHistoryEntry
 import com.taotao.music.model.Song
+import com.taotao.music.playerui.SharedBackButton
+import com.taotao.music.playerui.SharedSectionHeader
+import com.taotao.music.playerui.SharedSectionLevel
+import com.taotao.music.playerui.theme.TaotaoSpacing
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -66,8 +55,13 @@ fun MusicLibraryPage(
     error: String? = null,
     onRetry: (() -> Unit)? = null,
 ) {
-    Column(Modifier.fillMaxSize().padding(horizontal = 22.dp)) {
-        LibraryPageHeader(title = title, subtitle = subtitle, onBack = onBack)
+    Column(Modifier.fillMaxSize().padding(horizontal = TaotaoSpacing.screenHorizontal)) {
+        SharedSectionHeader(
+            title = title,
+            subtitle = subtitle,
+            level = SharedSectionLevel.PAGE,
+            leading = { SharedBackButton(onBack) },
+        )
         if (loading && songs.isEmpty()) {
             Column(
                 modifier = Modifier.fillMaxSize(),
@@ -78,7 +72,7 @@ fun MusicLibraryPage(
                 Text(
                     "正在读取账号收藏",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 14.dp),
+                    modifier = Modifier.padding(top = TaotaoSpacing.md),
                 )
             }
         } else if (songs.isEmpty()) {
@@ -95,7 +89,7 @@ fun MusicLibraryPage(
         } else {
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(TaotaoSpacing.xs),
             ) {
                 itemsIndexed(songs, key = { _, song -> librarySongKey(song) }) { index, song ->
                     SongListItem(
@@ -113,7 +107,7 @@ fun MusicLibraryPage(
                         onClick = { onSongClick(index) },
                     )
                 }
-                item { Spacer(Modifier.height(18.dp)) }
+                item { Spacer(Modifier.height(TaotaoSpacing.md)) }
             }
         }
     }
@@ -131,14 +125,18 @@ fun PlaybackHistoryPage(
     onToggleFavorite: (Song) -> Unit,
     onClear: () -> Unit,
 ) {
-    Column(Modifier.fillMaxSize().padding(horizontal = 22.dp)) {
-        LibraryPageHeader(
+    Column(Modifier.fillMaxSize().padding(horizontal = TaotaoSpacing.screenHorizontal)) {
+        val clearAction: (@Composable () -> Unit)? = if (history.isEmpty()) {
+            null
+        } else {
+            { TextButton(onClick = onClear) { Text("清空") } }
+        }
+        SharedSectionHeader(
             title = "最近播放",
             subtitle = if (history.isEmpty()) "还没有听过歌曲" else "共 ${history.size} 首 · 最近播放优先",
-            onBack = onBack,
-            action = if (history.isEmpty()) null else {
-                { TextButton(onClick = onClear) { Text("清空") } }
-            },
+            level = SharedSectionLevel.PAGE,
+            leading = { SharedBackButton(onBack) },
+            trailing = clearAction,
         )
         if (history.isEmpty()) {
             LibraryEmptyState(
@@ -147,7 +145,7 @@ fun PlaybackHistoryPage(
                 modifier = Modifier.weight(1f),
             )
         } else {
-            LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(TaotaoSpacing.xs)) {
                 itemsIndexed(history, key = { _, entry -> librarySongKey(entry.song) }) { index, entry ->
                     SongRow(
                         song = entry.song,
@@ -163,7 +161,7 @@ fun PlaybackHistoryPage(
                             ?.let { callback -> { callback(entry.song) } },
                     )
                 }
-                item { Spacer(Modifier.height(18.dp)) }
+                item { Spacer(Modifier.height(TaotaoSpacing.md)) }
             }
         }
     }
@@ -186,27 +184,6 @@ private fun LibraryEmptyState(title: String, description: String?, modifier: Mod
         modifier = modifier,
     ) {
         EmptyStateView(title = title, description = description)
-    }
-}
-
-@Composable
-private fun LibraryPageHeader(
-    title: String,
-    subtitle: String,
-    onBack: () -> Unit,
-    action: (@Composable () -> Unit)? = null,
-) {
-    Row(
-        // 列表页的标题只承担导航和摘要；过大的上下留白会把第一首歌推得太远。
-        Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") }
-        Column(Modifier.weight(1f).padding(start = 4.dp)) {
-            Text(title, fontSize = 26.sp, fontWeight = FontWeight.Bold)
-            Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
-        }
-        action?.invoke()
     }
 }
 
@@ -233,16 +210,6 @@ private fun formatHistoryTime(timestamp: Long): String {
     }
     return SimpleDateFormat(pattern, Locale.SIMPLIFIED_CHINESE).format(Date(timestamp))
 }
-
-
-
-
-
-
-
-
-
-
 
 
 

@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.CloudOff
@@ -85,7 +84,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import com.taotao.music.model.AudioQuality
@@ -95,6 +93,12 @@ import com.taotao.music.model.Song
 import com.taotao.music.model.labelOfQuality
 import com.taotao.music.playerui.PlayerCoral
 import com.taotao.music.playerui.TaotaoPlayerTheme
+import com.taotao.music.playerui.theme.TaotaoElevation
+import com.taotao.music.playerui.theme.TaotaoShapes
+import com.taotao.music.playerui.theme.TaotaoSizes
+import com.taotao.music.playerui.theme.TaotaoSpacing
+import com.taotao.music.playerui.theme.TaotaoStroke
+import com.taotao.music.playerui.theme.TaotaoTypeScale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
@@ -120,6 +124,21 @@ private const val MAX_PLAYBACK_REVISION_RETRIES = 3
 internal const val SLEEP_TIMER_MINUTE_MS = 60_000L
 internal const val SLEEP_TIMER_MAX_MINUTES = 24 * 60
 internal val SLEEP_TIMER_PRESET_MINUTES = listOf(5, 10, 15, 30, 60, 90)
+
+/**
+ * 品牌标识（珊瑚色方块 + 音符）的边长。
+ *
+ * 侧边栏与登录卡片上是同一个视觉元素，所以只定义一次；
+ * 两者原先分别是 40 / 42，收敛到 40。
+ */
+internal val BrandMarkSize = 40.dp
+
+/** 登录卡片的固定宽度。 */
+private val LoginCardWidth = 430.dp
+
+/** 登录 / 注册按钮高度。 */
+private val LoginButtonHeight = 46.dp
+
 private val desktopSelectableQualityValues = AudioQuality.entries.map(AudioQuality::value).toSet()
 
 /** 将定时播放输入限制在一个可控范围，避免误输入造成超长后台任务。 */
@@ -913,9 +932,14 @@ private fun DesktopMusicApp(
         player.stop()
         playing = false
         durationMs = 0
-        val normalizedQueue = songs.ifEmpty { listOf(song) }
+        // 不可播的歌（酷我上拿不到播放地址的正版曲）不进队列：它们带着永不过期的占位地址，
+        // 留着只会在播到那一首时失败。被点中的那首必然可播（列表行已禁用点击），
+        // 用 `== song` 保底留下它，否则下面按 song 定位会落空。
+        val normalizedQueue = songs.ifEmpty { listOf(song) }.filter { it.playable || it == song }
         queue = normalizedQueue
-        currentIndex = index.coerceIn(normalizedQueue.indices)
+        currentIndex = normalizedQueue.indexOf(song)
+            .takeIf { it >= 0 }
+            ?: index.coerceIn(normalizedQueue.indices)
         currentPositionMs = positionMs.coerceAtLeast(0)
         playerBusy = true
         playerError = null
@@ -2081,9 +2105,9 @@ internal fun AlbumCover(song: Song, modifier: Modifier = Modifier, size: Int = 5
         }
     }
     if (image != null) {
-        androidx.compose.foundation.Image(image!!.toPainter(), "专辑封面", modifier.size(size.dp).clip(RoundedCornerShape(12.dp)), contentScale = ContentScale.Crop)
+        androidx.compose.foundation.Image(image!!.toPainter(), "专辑封面", modifier.size(size.dp).clip(TaotaoShapes.medium), contentScale = ContentScale.Crop)
     } else {
-        Box(modifier.size(size.dp).clip(RoundedCornerShape(12.dp)).background(Color(song.color)), contentAlignment = Alignment.Center) {
+        Box(modifier.size(size.dp).clip(TaotaoShapes.medium).background(Color(song.color)), contentAlignment = Alignment.Center) {
             Icon(Icons.Default.MusicNote, "专辑封面", tint = Color.White, modifier = Modifier.size((size / 2).dp))
         }
     }
@@ -2107,19 +2131,19 @@ private fun LoginPage(
     var error by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-        Box(Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
-            Card(modifier = Modifier.width(430.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), elevation = CardDefaults.cardElevation(5.dp)) {
-                Column(Modifier.padding(32.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Box(Modifier.fillMaxSize().padding(TaotaoSpacing.xxl), contentAlignment = Alignment.Center) {
+            Card(modifier = Modifier.width(LoginCardWidth), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), elevation = CardDefaults.cardElevation(TaotaoElevation.raised)) {
+                Column(Modifier.padding(TaotaoSpacing.xxl), verticalArrangement = Arrangement.spacedBy(TaotaoSpacing.md)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(Modifier.size(42.dp).clip(RoundedCornerShape(12.dp)).background(Coral), contentAlignment = Alignment.Center) { Icon(Icons.Default.MusicNote, null, tint = Color.White) }
-                        Column(Modifier.padding(start = 12.dp).weight(1f)) {
-                            Text("桃桃音乐", fontSize = 26.sp, fontWeight = FontWeight.Bold)
-                            Text("Windows 音乐工作区", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+                        Box(Modifier.size(BrandMarkSize).clip(TaotaoShapes.medium).background(Coral), contentAlignment = Alignment.Center) { Icon(Icons.Default.MusicNote, null, tint = Color.White) }
+                        Column(Modifier.padding(start = TaotaoSpacing.sm).weight(1f)) {
+                            Text("桃桃音乐", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+                            Text("Windows 音乐工作区", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
                         }
                         IconButton(onClick = onToggleTheme) { Icon(Icons.Default.DarkMode, "切换主题") }
                     }
                     Divider()
-                    Text(if (register) "创建账号" else "登录桃桃音乐", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                    Text(if (register) "创建账号" else "登录桃桃音乐", style = TaotaoTypeScale.sectionTitle, fontWeight = FontWeight.Bold)
                     OutlinedTextField(username, { username = it }, Modifier.fillMaxWidth(), singleLine = true, label = { Text("用户名") }, leadingIcon = { Icon(Icons.Default.Person, null) })
                     OutlinedTextField(password, { password = it }, Modifier.fillMaxWidth(), singleLine = true, label = { Text("密码") }, visualTransformation = PasswordVisualTransformation())
                     if (register) {
@@ -2141,13 +2165,13 @@ private fun LoginPage(
                                     }
                                 },
                                 enabled = !verificationBusy,
-                                modifier = Modifier.padding(start = 8.dp),
+                                modifier = Modifier.padding(start = TaotaoSpacing.xs),
                             ) { Text(if (verificationBusy) "发送中" else "发送验证码") }
                         }
                         OutlinedTextField(code, { code = it }, Modifier.fillMaxWidth(), singleLine = true, label = { Text("验证码") })
-                        verificationStatus?.let { Text(it, color = MaterialTheme.colorScheme.primary, fontSize = 12.sp) }
+                        verificationStatus?.let { Text(it, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall) }
                     }
-                    error?.let { Text(it, color = Coral, fontSize = 13.sp) }
+                    error?.let { Text(it, color = Coral, style = MaterialTheme.typography.bodySmall) }
                     Button(
                         onClick = {
                             if (username.isBlank() || password.isBlank()) { error = "请输入用户名和密码"; return@Button }
@@ -2165,10 +2189,10 @@ private fun LoginPage(
                             }
                         },
                         enabled = !busy,
-                        modifier = Modifier.fillMaxWidth().height(46.dp),
+                        modifier = Modifier.fillMaxWidth().height(LoginButtonHeight),
                     ) {
-                        if (busy) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = Color.White) else Icon(if (register) Icons.Default.Person else Icons.Default.Login, null)
-                        Spacer(Modifier.width(8.dp)); Text(if (register) "注册并进入" else "登录")
+                        if (busy) CircularProgressIndicator(Modifier.size(TaotaoSizes.progressInline), strokeWidth = TaotaoStroke.medium, color = Color.White) else Icon(if (register) Icons.Default.Person else Icons.Default.Login, null)
+                        Spacer(Modifier.width(TaotaoSpacing.xs)); Text(if (register) "注册并进入" else "登录")
                     }
                     TextButton(onClick = { register = !register; error = null }, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text(if (register) "已有账号？返回登录" else "没有账号？创建一个") }
                 }

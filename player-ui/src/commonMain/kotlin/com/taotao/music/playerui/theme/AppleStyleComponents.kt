@@ -20,6 +20,15 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
+/**
+ * 滑块轨道厚度与滑块直径。
+ *
+ * 刻意不进 TaotaoSizes：两者必须成比例才好看（滑块要明显大于轨道），
+ * 单独挪动任何一个都会让进度条失衡，所以成对定义、只在本文件使用。
+ */
+private val SliderTrackHeight = 4.dp
+private val SliderThumbSize = 12.dp
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AppleStyleSlider(
@@ -43,7 +52,7 @@ fun AppleStyleSlider(
         thumb = {
             Box(
                 modifier = Modifier
-                    .size(12.dp)
+                    .size(SliderThumbSize)
                     .background(MaterialTheme.colorScheme.onSurface, CircleShape)
             )
         },
@@ -54,7 +63,7 @@ fun AppleStyleSlider(
                     activeTrackColor = MaterialTheme.colorScheme.onSurface,
                     inactiveTrackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f)
                 ),
-                modifier = Modifier.height(4.dp).clip(CircleShape)
+                modifier = Modifier.height(SliderTrackHeight).clip(CircleShape)
             )
         }
     )
@@ -67,8 +76,8 @@ fun ApplePlayButton(
     playIcon: ImageVector,
     pauseIcon: ImageVector,
     modifier: Modifier = Modifier,
-    size: Dp = 64.dp,
-    iconSize: Dp = 32.dp,
+    size: Dp = TaotaoSizes.playButton,
+    iconSize: Dp = TaotaoSizes.playButtonIcon,
     enabled: Boolean = true,
 ) {
     Box(

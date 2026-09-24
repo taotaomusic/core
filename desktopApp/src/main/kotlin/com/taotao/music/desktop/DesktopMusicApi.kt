@@ -548,6 +548,9 @@ class DesktopMusicApi(
             mid = mid,
             type = type,
             vip = optBoolean("vip"),
+            // ⚠️ 必须带默认值 true。`optBoolean(name)` 在字段缺失时返回 **false**，
+            // 那会把「服务端没下发这个字段」当成「不可播」，旧服务端下整个列表全被置灰。
+            playable = optBoolean("playable", true),
             favorited = optBoolean("favorited"),
             source = source,
         )

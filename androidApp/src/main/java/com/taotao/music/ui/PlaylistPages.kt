@@ -13,23 +13,21 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.AlertDialog
@@ -51,13 +49,31 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.taotao.music.data.TencentMusicApi
 import com.taotao.music.model.Song
+import com.taotao.music.playerui.SharedBackButton
+import com.taotao.music.playerui.SharedSectionHeader
+import com.taotao.music.playerui.SharedSectionLevel
+import com.taotao.music.playerui.theme.TaotaoShapes
+import com.taotao.music.playerui.theme.TaotaoSizes
+import com.taotao.music.playerui.theme.TaotaoSpacing
 import java.util.Locale
+
+/**
+ * 选歌 / 选歌单对话框内容区的最大高度。
+ *
+ * 两个选择器此前分别写了 460dp 与 420dp，超出部分靠滚动，
+ * 实际差异只是「早滚一行还是晚滚一行」，收敛成同一个上限。
+ */
+private val PickerDialogContentMaxHeight = 420.dp
 
 /** 歌单资料编辑模式；编辑模式携带原歌单以便提交对应 ID。 */
 sealed interface PlaylistEditorMode {
@@ -81,14 +97,19 @@ fun PlaylistLibraryPage(
     onRename: (TencentMusicApi.Playlist) -> Unit,
     onDelete: (TencentMusicApi.Playlist) -> Unit,
 ) {
-    Column(Modifier.fillMaxSize().padding(horizontal = 22.dp)) {
-        PlaylistPageHeader(
+    Column(Modifier.fillMaxSize().padding(horizontal = TaotaoSpacing.screenHorizontal)) {
+        SharedSectionHeader(
             title = "我的歌单",
             subtitle = if (playlists.isEmpty()) "云端同步到所有设备" else "${playlists.size} 个歌单 · 云端同步",
-            onBack = onBack,
-            action = {
-                IconButton(onClick = onCreate) { Icon(Icons.Default.Add, "新建歌单") }
-                IconButton(onClick = onRefresh, enabled = !loading) { Icon(Icons.Default.LibraryMusic, "刷新歌单") }
+            level = SharedSectionLevel.PAGE,
+            leading = { SharedBackButton(onBack) },
+            // 两个操作按钮需要并排，所以自己包一层 Row —— SharedSectionHeader
+            // 的 trailing 刻意不带 RowScope 接收者，见该参数说明。
+            trailing = {
+                Row {
+                    IconButton(onClick = onCreate) { Icon(Icons.Default.Add, "新建歌单") }
+                    IconButton(onClick = onRefresh, enabled = !loading) { Icon(Icons.Default.Refresh, "刷新歌单") }
+                }
             },
         )
         if (loading && playlists.isEmpty()) {
@@ -100,8 +121,8 @@ fun PlaylistLibraryPage(
         } else {
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(bottom = 24.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                contentPadding = PaddingValues(bottom = TaotaoSpacing.xl),
+                verticalArrangement = Arrangement.spacedBy(TaotaoSpacing.xs),
             ) {
                 items(playlists, key = { it.id }) { playlist ->
                     PlaylistCard(
@@ -165,48 +186,51 @@ fun PlaylistDetailPage(
             }
         }
     }
-    Column(Modifier.fillMaxSize().padding(horizontal = 22.dp)) {
-        PlaylistPageHeader(
+    Column(Modifier.fillMaxSize().padding(horizontal = TaotaoSpacing.screenHorizontal)) {
+        SharedSectionHeader(
             title = playlist.name,
             subtitle = "${playlist.songCount} 首 · 云端歌单",
-            onBack = onBack,
-            action = {
-                IconButton(onClick = onRename) { Icon(Icons.Default.Edit, "重命名") }
-                IconButton(onClick = onDelete) { Icon(Icons.Default.DeleteOutline, "删除歌单", tint = TaotaoCoral) }
+            level = SharedSectionLevel.PAGE,
+            leading = { SharedBackButton(onBack) },
+            trailing = {
+                Row {
+                    IconButton(onClick = onRename) { Icon(Icons.Default.Edit, "重命名") }
+                    IconButton(onClick = onDelete) { Icon(Icons.Default.DeleteOutline, "删除歌单", tint = TaotaoCoral) }
+                }
             },
         )
         if (playlist.description.isNotBlank()) {
             Text(
                 playlist.description,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontSize = 13.sp,
+                style = MaterialTheme.typography.bodySmall,
                 maxLines = 3,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(start = 8.dp, bottom = 10.dp),
+                modifier = Modifier.padding(start = TaotaoSpacing.xs, bottom = TaotaoSpacing.xs),
             )
         }
-        Row(Modifier.fillMaxWidth().padding(bottom = 10.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(Modifier.fillMaxWidth().padding(bottom = TaotaoSpacing.xs), horizontalArrangement = Arrangement.spacedBy(TaotaoSpacing.xs)) {
             Button(
                 onClick = { if (songs.isNotEmpty()) onPlayAll(songs) },
                 enabled = songs.isNotEmpty(),
                 modifier = Modifier.weight(1f),
             ) {
-                Icon(Icons.Default.PlayArrow, null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(6.dp))
+                Icon(Icons.Default.PlayArrow, null, modifier = Modifier.size(TaotaoSizes.iconSm))
+                Spacer(Modifier.width(TaotaoSpacing.xxs))
                 Text("播放全部")
             }
             OutlinedButton(onClick = onRename, modifier = Modifier.weight(1f)) {
-                Icon(Icons.Default.Edit, null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(6.dp))
+                Icon(Icons.Default.Edit, null, modifier = Modifier.size(TaotaoSizes.iconSm))
+                Spacer(Modifier.width(TaotaoSpacing.xxs))
                 Text("编辑资料")
             }
         }
         OutlinedButton(
             onClick = onAddSong,
-            modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp),
+            modifier = Modifier.fillMaxWidth().padding(bottom = TaotaoSpacing.xs),
         ) {
-            Icon(Icons.Default.Add, null, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(6.dp))
+            Icon(Icons.Default.Add, null, modifier = Modifier.size(TaotaoSizes.iconSm))
+            Spacer(Modifier.width(TaotaoSpacing.xxs))
             Text("添加歌曲")
         }
         if (songs.isEmpty()) {
@@ -214,8 +238,8 @@ fun PlaylistDetailPage(
         } else {
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-                contentPadding = PaddingValues(bottom = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(TaotaoSpacing.xxs),
+                contentPadding = PaddingValues(bottom = TaotaoSpacing.xl),
             ) {
                 itemsIndexed(playlist.songs, key = { _, item -> "${item.source}:${item.songId}" }) { index, item ->
                     val song = songs[index]
@@ -230,14 +254,14 @@ fun PlaylistDetailPage(
                             IconButton(
                                 onClick = { onMoveSong(index, index - 1) },
                                 enabled = index > 0,
-                                modifier = Modifier.size(30.dp),
-                            ) { Icon(Icons.Default.ExpandLess, "上移", modifier = Modifier.size(18.dp)) }
-                            Icon(Icons.Default.DragHandle, "歌曲顺序", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
+                                modifier = Modifier.size(TaotaoSizes.iconLg),
+                            ) { Icon(Icons.Default.ExpandLess, "上移", modifier = Modifier.size(TaotaoSizes.iconSm)) }
+                            Icon(Icons.Default.DragHandle, "歌曲顺序", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(TaotaoSizes.iconXs))
                             IconButton(
                                 onClick = { onMoveSong(index, index + 1) },
                                 enabled = index < playlist.songs.lastIndex,
-                                modifier = Modifier.size(30.dp),
-                            ) { Icon(Icons.Default.ExpandMore, "下移", modifier = Modifier.size(18.dp)) }
+                                modifier = Modifier.size(TaotaoSizes.iconLg),
+                            ) { Icon(Icons.Default.ExpandMore, "下移", modifier = Modifier.size(TaotaoSizes.iconSm)) }
                         }
                     }
                 }
@@ -279,34 +303,34 @@ fun PlaylistSongPickerDialog(
         title = { Text("添加歌曲") },
         text = {
             if (loading) {
-                Box(Modifier.fillMaxWidth().padding(28.dp), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = TaotaoCoral, modifier = Modifier.size(26.dp))
+                Box(Modifier.fillMaxWidth().padding(TaotaoSpacing.xl), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = TaotaoCoral, modifier = Modifier.size(TaotaoSizes.iconMd))
                 }
             } else if (usable.isEmpty()) {
-                Text("暂无可添加的歌曲，请先搜索或播放音乐。", modifier = Modifier.padding(vertical = 18.dp))
+                Text("暂无可添加的歌曲，请先搜索或播放音乐。", modifier = Modifier.padding(vertical = TaotaoSpacing.md))
             } else {
                 LazyColumn(
-                    modifier = Modifier.fillMaxWidth().heightIn(max = 460.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier.fillMaxWidth().heightIn(max = PickerDialogContentMaxHeight),
+                    verticalArrangement = Arrangement.spacedBy(TaotaoSpacing.xxs),
                 ) {
                     items(usable, key = ::playlistCandidateKey) { song ->
                         val exists = playlistIdentityKeys(song).any { it in existingKeys }
                         Row(
                             Modifier.fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
+                                .clip(TaotaoShapes.medium)
                                 .clickable(enabled = !exists) { onPick(song) }
-                                .padding(horizontal = 8.dp, vertical = 5.dp),
+                                .padding(horizontal = TaotaoSpacing.xs, vertical = TaotaoSpacing.xxs),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            AlbumArt(Color(song.color), 42.dp, 20.sp, song.coverUri)
-                            Column(Modifier.weight(1f).padding(start = 10.dp)) {
+                            AlbumArt(Color(song.color), TaotaoSizes.artworkRow, song.coverUri)
+                            Column(Modifier.weight(1f).padding(start = TaotaoSpacing.xs)) {
                                 Text(song.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Medium)
-                                Text(song.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+                                Text(song.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
                             }
                             Text(
                                 if (exists) "已在歌单" else "添加",
                                 color = if (exists) MaterialTheme.colorScheme.onSurfaceVariant else TaotaoCoral,
-                                fontSize = 12.sp,
+                                style = MaterialTheme.typography.bodySmall,
                             )
                         }
                     }
@@ -352,32 +376,36 @@ fun PlaylistPickerDialog(
         onDismissRequest = onDismiss,
         title = { Text("加入歌单") },
         text = {
-            Column(Modifier.fillMaxWidth().heightIn(max = 420.dp)) {
+            Column(Modifier.fillMaxWidth().heightIn(max = PickerDialogContentMaxHeight)) {
                 Text(
                     "将「${song.title}」保存到云端歌单",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontSize = 13.sp,
-                    modifier = Modifier.padding(bottom = 8.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(bottom = TaotaoSpacing.xs),
                 )
                 if (loading) {
-                    Box(Modifier.fillMaxWidth().padding(20.dp), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = TaotaoCoral, modifier = Modifier.size(24.dp))
+                    Box(Modifier.fillMaxWidth().padding(TaotaoSpacing.lg), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(color = TaotaoCoral, modifier = Modifier.size(TaotaoSizes.iconMd))
                     }
                 } else if (playlists.isEmpty()) {
-                    Text("还没有歌单，先创建一个吧", modifier = Modifier.padding(vertical = 14.dp))
+                    Text("还没有歌单，先创建一个吧", modifier = Modifier.padding(vertical = TaotaoSpacing.md))
                 } else {
                     Column(Modifier.verticalScroll(rememberScrollState())) {
                         playlists.forEach { playlist ->
                             Row(
-                                Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+                                Modifier.fillMaxWidth().clip(TaotaoShapes.medium)
                                     .clickable { onPick(playlist) }
-                                    .padding(horizontal = 10.dp, vertical = 12.dp),
+                                    .padding(horizontal = TaotaoSpacing.xs, vertical = TaotaoSpacing.sm),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                Icon(Icons.Default.LibraryMusic, null, tint = TaotaoCoral)
-                                Column(Modifier.weight(1f).padding(start = 10.dp)) {
-                                    Text(playlist.name, fontWeight = FontWeight.SemiBold)
-                                    Text("${playlist.songCount} 首", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+                                PlaylistCover(coverUrl = playlist.coverUrl, size = TaotaoSizes.artworkRow, shape = TaotaoShapes.small)
+                                Column(Modifier.weight(1f).padding(start = TaotaoSpacing.xs)) {
+                                    Text(playlist.name, style = MaterialTheme.typography.titleSmall)
+                                    Text(
+                                        "${playlist.songCount} 首",
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
                                 }
                             }
                         }
@@ -387,8 +415,8 @@ fun PlaylistPickerDialog(
         },
         confirmButton = {
             TextButton(onClick = onCreate) {
-                Icon(Icons.Default.Add, null, modifier = Modifier.size(17.dp))
-                Spacer(Modifier.width(4.dp))
+                Icon(Icons.Default.Add, null, modifier = Modifier.size(TaotaoSizes.iconXs))
+                Spacer(Modifier.width(TaotaoSpacing.xxs))
                 Text("新建歌单")
             }
         },
@@ -411,7 +439,7 @@ fun PlaylistEditorDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(TaotaoSpacing.xs)) {
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
@@ -439,6 +467,29 @@ fun PlaylistEditorDialog(
     )
 }
 
+/**
+ * 歌单封面：优先展示服务端返回的封面（歌单自己的封面为空时会兜底为
+ * 歌单内按曲目顺序第一张歌曲封面），没有封面时退回珊瑚色音符占位。
+ */
+@Composable
+private fun PlaylistCover(coverUrl: String?, size: Dp, shape: Shape = TaotaoShapes.medium) {
+    if (coverUrl.isNullOrBlank()) {
+        Box(
+            Modifier.size(size).clip(shape).background(TaotaoCoral.copy(alpha = 0.14f)),
+            contentAlignment = Alignment.Center,
+        ) { Icon(Icons.Default.LibraryMusic, null, tint = TaotaoCoral, modifier = Modifier.size(size / 2)) }
+    } else {
+        AsyncImage(
+            model = ImageRequest.Builder(LocalContext.current)
+                .data(coverUrl)
+                .crossfade(AnimationDurations.FADE)
+                .build(),
+            contentDescription = "歌单封面",
+            modifier = Modifier.size(size).clip(shape),
+        )
+    }
+}
+
 @Composable
 private fun PlaylistCard(
     playlist: TencentMusicApi.Playlist,
@@ -447,25 +498,28 @@ private fun PlaylistCard(
     onDelete: () -> Unit,
 ) {
     Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp))
+        Modifier.fillMaxWidth().clip(TaotaoShapes.card)
             .background(MaterialTheme.colorScheme.surface)
             .clickable(onClick = onClick)
-            .padding(14.dp),
+            .padding(TaotaoSpacing.md),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(
-            Modifier.size(62.dp).clip(RoundedCornerShape(14.dp)).background(TaotaoCoral.copy(alpha = 0.14f)),
-            contentAlignment = Alignment.Center,
-        ) { Icon(Icons.Default.LibraryMusic, null, tint = TaotaoCoral, modifier = Modifier.size(28.dp)) }
-        Column(Modifier.weight(1f).padding(horizontal = 14.dp)) {
-            Text(playlist.name, fontSize = 17.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        PlaylistCover(coverUrl = playlist.coverUrl, size = TaotaoSizes.artworkRow)
+        Column(Modifier.weight(1f).padding(horizontal = TaotaoSpacing.md)) {
+            Text(
+                playlist.name,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
             Text(
                 if (playlist.description.isBlank()) "${playlist.songCount} 首歌曲" else "${playlist.songCount} 首 · ${playlist.description}",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontSize = 12.sp,
+                style = MaterialTheme.typography.bodySmall,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(top = 4.dp),
+                modifier = Modifier.padding(top = TaotaoSpacing.xxs),
             )
         }
         IconButton(onClick = onRename) { Icon(Icons.Default.Edit, "重命名") }
@@ -474,33 +528,29 @@ private fun PlaylistCard(
 }
 
 @Composable
-private fun PlaylistPageHeader(
-    title: String,
-    subtitle: String,
-    onBack: () -> Unit,
-    action: @Composable RowScope.() -> Unit = {},
-) {
-    Row(Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") }
-        Column(Modifier.weight(1f).padding(start = 4.dp)) {
-            Text(title, fontSize = 26.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
-        }
-        Row(content = action)
-    }
-}
-
-@Composable
 private fun PlaylistEmptyState(error: String?, onRefresh: (() -> Unit)?, onCreate: (() -> Unit)?) {
     Column(
-        Modifier.fillMaxSize().padding(bottom = 30.dp),
+        Modifier.fillMaxSize().padding(bottom = TaotaoSpacing.xxl),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        Icon(Icons.Default.LibraryMusic, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(42.dp))
-        Text(if (error.isNullOrBlank()) "还没有云端歌单" else "歌单加载失败", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 12.dp))
-        Text(error ?: "创建歌单后会在所有设备同步", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp, modifier = Modifier.padding(top = 6.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 14.dp)) {
+        Icon(Icons.Default.LibraryMusic, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(TaotaoSizes.stateIcon))
+        Text(
+            if (error.isNullOrBlank()) "还没有云端歌单" else "歌单加载失败",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(top = TaotaoSpacing.sm),
+        )
+        Text(
+            error ?: "创建歌单后会在所有设备同步",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(top = TaotaoSpacing.xxs),
+        )
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(TaotaoSpacing.xs),
+            modifier = Modifier.padding(top = TaotaoSpacing.md),
+        ) {
             if (onRefresh != null) TextButton(onClick = onRefresh) { Text("重新加载") }
             if (onCreate != null) TextButton(onClick = onCreate) { Text("新建歌单") }
         }
