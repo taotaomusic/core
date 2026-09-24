@@ -56,8 +56,6 @@ node dist/main.js
 | `LDAP_*` | 可选；对接企业目录时配置，`LDAP_TLS_REJECT_UNAUTHORIZED` 保持默认 `true` |
 | `APK_DIR` | 服务进程可写、磁盘空间充足 |
 | `DESKTOP_RELEASE_DIR` | 桌面模块和差分对象目录可写、磁盘空间充足 |
-| `SHARE_PREVIEW_DIR` | 分享试听缓存目录可写；未安装 ffmpeg 时试听会返回 5034 |
-| `FFMPEG_BIN` | 指向可执行的 ffmpeg |
 | `COURGETTE_PATH` | 可选；PE 模块差分工具 |
 | `PUBLIC_BASE_URL` | 外部 HTTPS 地址 |
 | `APISWEET_BASE_URL` | 默认 `https://apisweet.com` |

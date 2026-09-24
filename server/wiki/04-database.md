@@ -160,7 +160,8 @@ CREATE TABLE image_generation_task (
 ### `song_share`
 
 保存分享 token、用户、来源、稳定歌曲身份和元数据快照。`token` 为 8–24 位短码，
-`(user_id, source, song_id)` 唯一；`preview_file` 只指向服务端裁剪出的试听文件，不能保存上游限时直链。
+`(user_id, source, song_id)` 唯一；**不存任何音频文件路径** —— 试听是转发上游音频，不是缓存，
+也不能保存上游限时直链（旧库的 `preview_file` 已在迁移里删除）。
 `access_count`、`enabled` 和时间字段用于公开分享统计与失效控制。
 
 ### `app_announcement`

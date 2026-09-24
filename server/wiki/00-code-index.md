@@ -34,8 +34,9 @@ codegraph query --path server --kind route --limit 200 --json ""
 | `src/playback/` | 播放会话幂等、最近播放、听歌统计和清空代际 | 4 张 playback 表 |
 | `src/playlists/` | 云端歌单、快照、排序和完整替换 | `playlists`、`playlist_songs` |
 | `src/music/` | 搜索、歌曲信息、直链、音频代理、歌词 | 上游 Client、`favorites` |
+| `src/open-api/`（`OpenApiModule`） | 开放搜歌 API Key 鉴权与第三方搜歌端点：`open-api.module.ts`、`open-api-key.repository.ts`、`open-api-key.service.ts`（`OpenApiKeyService`）、`open-api-key.guard.ts`（`ApiKeyGuard`）、`open-api.controller.ts`（`OpenApiController`）、`open-api-key-admin.controller.ts`（管理端 key CRUD） | `open_api_key` 表（只存 `sha256(key)`），imports `MusicModule` + `UpstreamModule` + `AdminAuthModule` |
 | `src/upstream/` | 腾讯/网易协议适配和错误收敛 | 外部音乐 API |
-| `src/shares/` | 歌曲短链、公开元数据、试听裁剪缓存 | `song_share`、ffmpeg、文件目录 |
+| `src/shares/` | 歌曲短链、公开元数据、试听转发 | `song_share`、`StreamService` |
 | `src/image-generation/` | 图片任务、Key 池、额度预扣和状态轮询 | `api_key`、`image_generation_task`、ApiSweet |
 | `src/release/` | Android APK/补丁、灰度、最低版本和远程配置 | `app_release`、`app_patch`、`app_channel`、`app_config` |
 | `src/desktop-release/` | Windows 模块化发布、内容寻址文件和二进制差分 | `desktop_*`、Courgette/bsdiff-wasm |
@@ -65,6 +66,12 @@ codegraph query --path server --kind route --limit 200 --json ""
 写操作还要注入 `AdminAuditService` 写审计。引用它们的模块必须自己
 `imports: [AdminAuthModule]`，否则启动时 `UnknownDependenciesException`。
 详见 [11-admin-auth.md](11-admin-auth.md)。
+
+`ApiKeyGuard`（`src/open-api/open-api-key.guard.ts`）也不是全局守卫，它只挂在 `OpenApiModule`
+的 `/open/**` 路由上：读取 `X-API-Key`（优先）或 `Authorization: Bearer tt_...`，校验开放
+API Key，失败一律 401/4014（**不能 403**）。用户访问令牌（`payload.signature` 形状、不以
+`tt_` 开头）与管理员会话都不能当开放 key。开放侧不经过 `AccessTokenGuard` 的用户令牌语义，
+鉴权矩阵见 [03-api-contracts.md](03-api-contracts.md) §12、§17。
 
 > `common/guards/admin-token.guard.ts` 里的 `AdminTokenGuard` **已删除**。它曾是死代码（全项目零引用），
 > 不要因为历史文档或文件名像“管理后台守卫”就以为它还在生效。判断某个守卫是否生效，
@@ -103,19 +110,26 @@ POST /api/v1/desktop/admin/artifacts
 
 - 管理后台：`/admin/`，构建目录 `dist/public`。
 - 分享播放器：`/share/*` 资源和 `/s/{token}` 页面，构建目录 `dist/share-player`。
+  入口 JS 与应用 wasm 都是**固定名**，两者必须严格同批（JS 胶水要提供 wasm 的全部 `js_code`
+  导入），否则浏览器抛 `LinkError ... requires a callable`。所以服务端把它们挂成
+  **版本化路径** `/share/v/<内容指纹>/…`，并改写 `index.html` 的 `<base>` 指向它，
+  让所有相对引用自动跟版本走（见 `src/common/share-player-assets.ts`）。
+  未版本化的 `/share/*` 保留，用于兼容历史页面与绝对路径引用。
 - 资源不存在时后端仍可启动，只记录警告。
 
 普通请求在 Guard → RateLimit → Controller → Service/Repository/上游 → Interceptor 的链路中运行。普通 JSON 请求体上限为 16KB；`POST /api/v1/desktop/admin/releases` 的桌面清单单独允许 1MB，原始 artifact 上传仍跳过 JSON 解析。任何跨网络调用都不得持有 PostgreSQL 连接；需要多条 SQL 原子化时使用 `DatabaseService.transaction`。
 
 ## 4. 完整路由索引
 
-以下路径均省略 `/api/v1` 前缀；`/health` 是唯一例外。总数由 CodeGraph 当前索引统计为 104。
+以下路径均省略 `/api/v1` 前缀；`/health` 是唯一例外。总数由 CodeGraph 当前索引统计为 104，
+加上开放搜歌 API 新增的 8 条（4 条 `/open/**` + 4 条 `/app/admin/open-api-keys`）后应为 112，
+下次刷新索引时以实际查询结果为准。
 
 ### 公开公告（1）
 
 - `GET /announcements`：读取最新可见公告，置顶优先，最多 20 条。
 
-### Android/后台聚合接口（26）
+### Android/后台聚合接口（30）
 
 - `GET /app/bootstrap`：公开更新检查、补丁和远程配置。
 - `GET /app/apk/:versionCode`、`HEAD /app/apk/:versionCode`：APK Range 下载/探测。
@@ -128,6 +142,7 @@ POST /api/v1/desktop/admin/artifacts
 - `GET /app/admin/image-keys`、`POST /app/admin/image-keys`、`DELETE /app/admin/image-keys/:id`：图片 Key 池后台维护。
 - `GET /app/admin/announcements`、`POST /app/admin/announcements`、`POST /app/admin/announcements/:id`、`POST /app/admin/announcements/:id/enabled`、`POST /app/admin/announcements/:id/pinned`、`DELETE /app/admin/announcements/:id`：公告管理。
 - `GET /app/admin/users`、`GET /app/admin/users/:id/playback`、`POST /app/admin/users/:id/disabled`、`DELETE /app/admin/users/:id`：用户与播放统计管理。
+- `GET /app/admin/open-api-keys`、`POST /app/admin/open-api-keys`、`PATCH /app/admin/open-api-keys/:id`、`DELETE /app/admin/open-api-keys/:id`：开放 API Key 列表、创建（明文只返回一次）、启停和吊销；走管理员会话，读 `READ_ROLES`，写 `WRITE_ROLES`。
 
 ### 认证与资料（13）
 
@@ -171,6 +186,15 @@ POST /api/v1/desktop/admin/artifacts
 - `GET /songs/:id/lyrics`：纯文本或 `format=json` 歌词。
 - `POST /draw/completions`、`GET /draw/result/:taskId`：图片任务创建/轮询。
 
+### 开放搜歌（4）
+
+第三方用 API Key 调用（`X-API-Key` 或 `Bearer tt_...`），`ApiKeyGuard` 鉴权，失败 401/4014。
+
+- `GET /open/search`：统一信封，`data = { songs, meta }`。
+- `GET /open/search/stream`：裸 NDJSON（`@RawResponse`），格式同内部 `/search`。
+- `GET /open/songs/:id/lyrics`：默认 `text/plain`，`format=json` 走信封。
+- `GET /open/songs/:id/link`：信封，`data = { songId, url, quality, requestedQuality, kbps, fallback }`。
+
 ### 收藏、歌单、播放（20）
 
 - 收藏：`GET /favorites`、`POST /favorites/:source/:songId`、`DELETE /favorites/:source/:songId`。
@@ -203,12 +227,14 @@ POST /api/v1/desktop/admin/artifacts
 | 同上（写：发版、放量、改配置、公告、用户、密钥） | 同上，`WRITE_ROLES` | 同上；观察者被拒，写操作另写 `admin_audit_log` |
 | 管理后台登录、2FA、改密码 | `@Public()` 或已认证 | 每 IP 10 次/15 分钟；`admin-login`/`admin-totp`/`admin-password` 三个独立桶 |
 | 管理后台其它接口 | 管理员会话 `Authorization: Bearer` | 默认无独立桶；再按角色判 403/4030 |
+| 开放搜歌 `/open/**` | 不要求桃桃访问令牌；用 `X-API-Key` 或 `Bearer tt_...`（`ApiKeyGuard`） | `open-api` 桶：每 key 120 次 + 每来源地址 600 次/15 分钟；失败 401/4014，超限 429/4290 |
+| 开放 API Key 管理 `/app/admin/open-api-keys` | 管理员会话；读 `READ_ROLES`，写 `WRITE_ROLES` | 同管理端 `admin` 桶（每 IP 60 次/15 分钟）；写操作记 `open_api_key.*` 审计 |
 
 限流器是进程内滑动窗口，重启清空，多实例不共享。不能把它当成跨实例的安全配额。
 
 ## 6. 数据模型速览
 
-迁移当前创建 24 张表：
+迁移当前创建 25 张表：
 
 ```text
 users                         refresh_tokens
@@ -220,6 +246,7 @@ app_announcement              api_key                    image_generation_task
 im_device_session             app_patch                  desktop_release
 desktop_jar                   desktop_patch
 admin_users                   admin_sessions            admin_audit_log
+open_api_key
 ```
 
 主要外键和删除语义：
@@ -229,6 +256,7 @@ admin_users                   admin_sessions            admin_audit_log
 - `desktop_jar`/`desktop_patch` 随 `desktop_release` 级联删除；磁盘内容寻址文件不会自动回收。
 - 播放清空只推进 `playback_history_state.revision`，不删除累计统计；每个 marker 另存于 `playback_history_clear_operation` 保证重试幂等。
 - `admin_sessions.admin_id` 随 `admin_users` 级联删除；`admin_audit_log.admin_id` 与 `admin_users.created_by` 是 `ON DELETE SET NULL`，管理员被删后审计仍保留、只是变成无归属。
+- `open_api_key` 只存 `sha256(key)`，明文 key 只在创建响应里返回一次；列表接口只回传 `keyPrefix`。
 
 所有 `Date.now()` 语义的字段使用 `bigint`，版本/大小/百分比使用 `integer`，历史布尔值使用 `smallint` 0/1。SQL 返回 TypeScript camelCase 时必须给别名加双引号。
 
@@ -244,8 +272,6 @@ admin_users                   admin_sessions            admin_audit_log
 | `CORS_ALLOWED_ORIGINS` | 空 | 允许跨域的来源白名单；留空不下发任何 CORS 头 |
 | `APK_DIR` | `./data/apk` | Android APK/补丁文件 |
 | `DESKTOP_RELEASE_DIR` | `./data/desktop` | 桌面内容寻址文件和差分 |
-| `SHARE_PREVIEW_DIR` | `./data/share-preview` | 分享试听缓存 |
-| `FFMPEG_BIN` | `ffmpeg` | 试听裁剪 |
 | `COURGETTE_PATH` | 空 | PE 文件 Courgette 差分，可选 |
 | `DEFAULT_CHANNEL` | `release` | 默认发布渠道 |
 | `PUBLIC_BASE_URL` | 空（按请求推导） | 公开下载/分享地址 |

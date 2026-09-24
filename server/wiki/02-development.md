@@ -38,8 +38,6 @@ AUTH_SECRET=change-me-to-a-random-string-at-least-32-chars
 ADMIN_INITIAL_PASSWORD=
 APK_DIR=./data/apk
 DESKTOP_RELEASE_DIR=./data/desktop
-SHARE_PREVIEW_DIR=./data/share-preview
-FFMPEG_BIN=ffmpeg
 COURGETTE_PATH=
 DEFAULT_CHANNEL=release
 PUBLIC_BASE_URL=http://127.0.0.1:4500
@@ -81,8 +79,6 @@ TOTP_ISSUER=桃桃音乐管理后台
 | `CORS_ALLOWED_ORIGINS` | 空 | 否 | 跨域来源白名单；留空不下发任何 CORS 头 |
 | `APK_DIR` | `./data/apk` | 否 | Android APK 和补丁文件目录 |
 | `DESKTOP_RELEASE_DIR` | `./data/desktop` | 否 | Windows 内容寻址模块和差分目录 |
-| `SHARE_PREVIEW_DIR` | `./data/share-preview` | 否 | 分享试听缓存目录 |
-| `FFMPEG_BIN` | `ffmpeg` | 否 | 分享试听裁剪程序 |
 | `COURGETTE_PATH` | 空 | 否 | PE 文件差分工具；未配置时使用 bsdiff-wasm |
 | `DEFAULT_CHANNEL` | `release` | 否 | 默认发布渠道 |
 | `PUBLIC_BASE_URL` | 按请求推导 | 生产建议 | APK 和播放占位地址的外部基地址 |
@@ -253,7 +249,7 @@ npm run dev
 503/5031」会变成 502/5020；`CORS_ALLOWED_ORIGINS` 要包含 `https://verify.example`，
 否则跨域白名单那条断言会失败。
 
-运行前还要清掉 `data/desktop` 与 `data/share-preview`：内容寻址存储在命中已有对象时会走
+运行前还要清掉 `data/desktop`：内容寻址存储在命中已有对象时会走
 「删除临时文件」的分支，上一轮留下的对象会让上传路径和首次运行时不同。
 
 另一个终端执行：

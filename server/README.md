@@ -74,6 +74,7 @@ src/
   shares/                 分享短链、公开元数据与 60 秒低码率试听
   upstream/               第三方接口适配（成功码、字段名、音质降级都收敛在此）
   music/                  搜索、播放转发、歌词
+  open-api/               开放搜歌：API Key 鉴权（ApiKeyGuard）、第三方搜歌/歌词/直链端点与后台 key 管理
   image-generation/       gpt-image-2 图片生成任务适配
   release/                热更新：客户端引导、安装包分发、发布管理
   desktop-release/        Windows 模块清单、内容寻址对象和差分发布
@@ -186,8 +187,6 @@ npm run dev:frontend      # 独立开发服务器（5173），API 代理到本�
 | `ADMIN_INITIAL_PASSWORD` | 默认超级管理员的初始口令。留空则启动时随机生成并只打印一次；设置时至少 12 字符。两种情况下该账号首次登录都必须改密 |
 | `APK_DIR` | APK 存放目录，默认 `./data/apk` |
 | `DESKTOP_RELEASE_DIR` | Windows 模块和差分对象目录，默认 `./data/desktop` |
-| `SHARE_PREVIEW_DIR` | 分享试听缓存目录，默认 `./data/share-preview` |
-| `FFMPEG_BIN` | ffmpeg 可执行文件，默认从 `PATH` 查找；用于裁剪最多 60 秒、64 kbps MP3 |
 | `COURGETTE_PATH` | 可选的 PE 差分工具；未配置时使用 bsdiff-wasm |
 | `DEFAULT_CHANNEL` | 默认渠道，默认 `release` |
 | `PUBLIC_BASE_URL` | 对外基地址，用于拼装 APK 下载地址 |
@@ -225,11 +224,12 @@ npm run dev:frontend      # 独立开发服务器（5173），API 代理到本�
 以下端点自己写响应体，**不套信封**（代码里用 `@RawResponse()` 标注）：
 
 - `GET /api/v1/search` —— NDJSON 流
+- `GET /api/v1/open/search/stream` —— 开放侧 NDJSON 流，格式同内部 `/search`
 - `GET /api/v1/songs/{id}/play` —— 音频流
 - `GET /api/v1/songs/{id}/lyrics` —— 默认纯文本（带 `format=json` 时才是信封）
 - `GET /api/v1/app/apk/{versionCode}` —— 二进制
 - `GET /api/v1/app/patch/{targetVersionCode}/{patchVersion}` —— Android 补丁二进制
-- `GET /api/v1/public/shares/{token}/preview` —— 最多 60 秒的低码率 MP3，支持 Range
+- `GET /api/v1/public/shares/{token}/preview` —— 上游完整音频的转发流，支持 Range（60 秒上限由分享页自己守）
 - `GET /api/v1/desktop/artifacts/{sha256}`、`GET /api/v1/desktop/patches/{sha256}` —— 桌面对象/差分二进制，支持 Range
 
 ## 接口
@@ -303,8 +303,9 @@ npm run dev:frontend      # 独立开发服务器（5173），API 代理到本�
 - `POST /api/v1/shares/songs`：需要访问令牌；JSON 传 `source`、`remoteId`/`mid`、可选 `type`，
   返回 `{token,url}`。同一账号重复分享同一来源和歌曲身份会复用原短链。
 - `GET /api/v1/public/shares/{token}`：公开读取网页展示元数据、试听地址与最新稳定 APK 下载地址。
-- `GET /api/v1/public/shares/{token}/preview`：公开试听流。服务端按最低音质重新解析上游地址，
-  再用 ffmpeg 裁成最多 60 秒、64 kbps MP3 并缓存；响应不下发原始完整音频地址。
+- `GET /api/v1/public/shares/{token}/preview`：公开试听流。服务端按**标准音质**解析上游地址后
+  直接转发（支持 Range），**不裁剪也不落盘** —— 音乐不进服务器磁盘，返回的就是完整音频；
+  「最多 60 秒」由分享页 `webApp` 自己守（`previewDurationSeconds` 只是告知）。
 - `GET /s/{token}`：Kotlin/Wasm 分享页，循环播放这一首试听，不包含播放列表和下载歌曲能力。
 
 生产环境应显式配置 `PUBLIC_BASE_URL`，否则短链会按请求的 Host 和代理协议头推导。
@@ -372,6 +373,19 @@ npm run dev:frontend      # 独立开发服务器（5173），API 代理到本�
 `GET /api/v1/songs/{id}/play?quality=10&source=netease` 仍然保留：装机的旧客户端在用，也是新客户端解析失败时的兜底。支持 Range 断点续传（透传给上游并回写 206 与 `Content-Range`）；无 Range 时返回 200 全量。上游非 2xx 一律归成 502，**不透传上游的状态码** —— 上游的 401 会被客户端当成自己的令牌失效。
 
 `GET /api/v1/songs/{id}/lyrics?source=netease` 默认返回纯 LRC 文本；带 `format=json` 时返回 `{lrc, yrc, trans}`，其中 `yrc` 是逐字时间轴，格式为 `[行起始ms,行时长ms]文本(字起始ms,字时长ms)…`。
+
+### 开放搜歌 API（需要 API Key）
+
+第三方通过 API Key 调用的开放接口，前缀 `/api/v1`。它与用户访问令牌、管理员会话是三套互相独立的凭据。
+
+- `GET /api/v1/open/search?keyword&page&num&limit&quality&source`：统一信封，`data = { songs, meta }`。
+- `GET /api/v1/open/search/stream?...`：裸 NDJSON（`@RawResponse`），格式同内部 `/search`。
+- `GET /api/v1/open/songs/{id}/lyrics?format&mid&source`：默认纯文本，`format=json` 走信封。
+- `GET /api/v1/open/songs/{id}/link?quality&mid&type&source`：信封，`data = { songId, url, quality, requestedQuality, kbps, fallback }`。
+
+鉴权用 `X-API-Key: tt_...`（优先）或 `Authorization: Bearer tt_...`；缺失、无效、禁用或吊销一律 **401/4014**（新码，绝不能 403）。用户 access token（不以 `tt_` 开头）不能当开放 key。开放侧 Song 的 `favorited` 恒为 `false`，**不下发 `audioUrl`**（外部改用 `/open/songs/{id}/link` 换直链），`lyricUrl` 指向 `/api/v1/open/songs/...`；开放 JSON 端点下发 `access-control-allow-origin: *`（不带 credentials）。限流用独立的 `open-api` 桶：每 key 120 次 + 每来源地址 600 次 / 15 分钟，超限 429/4290。
+
+管理端（需管理员会话）：`GET/POST /api/v1/app/admin/open-api-keys`、`PATCH/DELETE /api/v1/app/admin/open-api-keys/{id}`；读用 `READ_ROLES`，写用 `WRITE_ROLES`，创建返回的明文 key 只出现一次（列表只有 `keyPrefix`），写操作记 `open_api_key.*` 审计。详见 [wiki/03-api-contracts.md](wiki/03-api-contracts.md) §17。
 
 ### 图片生成（需要访问令牌）
 
@@ -503,6 +517,7 @@ ON CONFLICT (channel, key) DO UPDATE SET quota = excluded.quota;
 | 发布管理 | 按来源地址 60 次 / 15 分钟 |
 | 图片任务创建 | 按用户 10 次 + 按来源地址 60 次 / 15 分钟 |
 | 图片任务轮询 | 按用户 300 次 + 按来源地址 1800 次 / 15 分钟 |
+| 开放搜歌 `/api/v1/open/**` | 按 key 120 次 + 按来源地址 600 次 / 15 分钟 |
 
 外层阈值放得宽，因为校园网、办公网等 NAT 环境下大量用户共用一个出口地址，按 IP 收紧会互相挤占。状态在进程内存中，重启即清空，也不跨实例共享。
 
@@ -536,10 +551,10 @@ node tools/verify-contract.mjs http://127.0.0.1:4720
 - `EMAIL_VERIFICATION_TEST_CODE` 要同时给**脚本自己**的环境，脚本会读它做断言。
 
 另外两个容易踩的坑：**每次运行前必须重置验证库**（版本/rollout 类断言依赖空库），以及
-**桌面发布与试听缓存目录要清空**（`data/desktop`、`data/share-preview`）。内容寻址存储在命中
+**桌面发布目录要清空**（`data/desktop`）。内容寻址存储在命中
 已有对象时会走「删除临时文件」的分支，上一轮留下的对象会让上传路径和首次运行时不同。
 
-以脚本实际输出为准，所有契约必须全绿（当前为 **213 项**）。脚本会核对状态码、业务码、信封形状、
+以脚本实际输出为准，所有契约必须全绿（当前为 **259 项**）。脚本会核对状态码、业务码、信封形状、
 NDJSON 行格式、字段类型（`data.id` 必须是 number、`songId` 必须是字符串、`createdAt` /
 `configVersion` / `apkSize` 必须是 number）、纯文本歌词、Range 行为，以及「无效令牌访问
 bootstrap 仍返回 200」这类红线。

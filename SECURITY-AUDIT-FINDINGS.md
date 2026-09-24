@@ -288,7 +288,9 @@ rejectUnauthorized: this.config.ldapTlsRejectUnauthorized,
 7. **会话管理规范**。令牌 48 字节随机，库中仅存 SHA-256 哈希，24 小时过期，改密后撤销其它会话。
 8. **角色矩阵有唯一定义处**。`admin-roles.ts` 集中定义三档角色与三个分组；抽查 5 个业务管理控制器的全部写路由，均正确标注 `WRITE_ROLES`，`viewer` 被一致排除。
 9. **无「裸奔」路由**。101 条路由全部至少受全局令牌守卫或显式 `@Public()` 覆盖；未发现应公开却漏标的路由。
-10. **命令执行面收窄**。唯一外部进程调用是 ffmpeg，使用参数数组而非 shell 字符串（`song-share.service.ts:168-181`）；bsdiff 通过 wasm 虚拟文件系统调用，无 shell 参与。
+10. **命令执行面已收窄到零**。2026-09-20 起分享试听改为转发上游音频（`song-share.service.ts` 不再 spawn），
+    服务端**已无任何外部进程调用**；bsdiff 通过 wasm 虚拟文件系统调用，无 shell 参与。
+    （本轮之前唯一的调用是 ffmpeg 裁剪试听，当时已使用参数数组而非 shell 字符串。）
 11. **敏感文件未入库**。`taotao-release.jks` 与 `local.properties` 均在 `.gitignore` 中且 `git ls-files` 确认未被跟踪；仓库仅含 `server/.env.example`（无真实凭据）。
 12. **若干生产校验设计良好**：`EMAIL_VERIFICATION_TEST_CODE` 仅在 `NODE_ENV=test` 生效（防止测试后门带入生产）；`DATABASE_URL` 无默认值；`TRUST_PROXY` 默认关闭（防止伪造 `X-Forwarded-For` 绕过 IP 白名单）；已 `disable("x-powered-by")`。
 

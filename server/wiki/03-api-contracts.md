@@ -40,6 +40,7 @@
 | 路径 | 格式 | 不能改变的原因 |
 | --- | --- | --- |
 | `GET /api/v1/search` | `application/x-ndjson` | 客户端逐行读取 `type` |
+| `GET /api/v1/open/search/stream` | `application/x-ndjson` | 开放侧与内部 `/search` 同格式，第三方逐行读 `type` |
 | `GET /api/v1/songs/{id}/play` | 音频流 | 支持 Range 和播放器直读 |
 | `GET /api/v1/songs/{id}/lyrics` | 默认 `text/plain` | 旧客户端直接展示响应体 |
 | `GET /api/v1/app/apk/{versionCode}` | APK 字节 | 下载器要求 Range/ETag |
@@ -55,16 +56,19 @@
 | HTTP | 业务码示例 | 含义 |
 | --- | --- | --- |
 | 400 | 4000、4001、4002、4003、4004、4005、4006、4007、4008、4009 | 输入、来源、文件校验、邮箱或歌单集合不合法 |
-| 401 | 4010、4011、4012、4013 | 用户、刷新令牌、管理令牌或管理员会话无效 |
+| 401 | 4010、4011、4012、4013、4014 | 用户、刷新令牌、管理令牌、管理员会话无效，或开放 API Key 无效、已禁用或已吊销 |
 | 403 | 4030 | 管理员角色不足，或当前 IP 不在白名单中 |
 | 404 | 4040、4041、4042、4043、4044、4045 | 路由、版本、文件、公告、用户、歌单或分享不存在 |
 | 409 | 4090、4091、4092、4093、4094、4095、4096 | 唯一约束、发布守卫、邮箱状态或播放因果冲突 |
 | 429 | 4290、4291 | 本地或图片上游限流 |
 | 502 | 5020、5021 | 音乐、图片、IM 或未知上游失败 |
-| 503 | 5031、5032、5034 | IM 未启用、发布读写失败或试听 ffmpeg 不可用 |
+| 503 | 5031、5032 | IM 未启用或发布读写失败 |
 
 4011 在两个语境下复用：普通用户登录失败，以及管理员登录 / 2FA 校验失败。两者不会混淆，
 因为路径不同；但排查时要先确认是哪一个入口。
+
+4014 只用于 `/open/**` 开放接口：开放 API Key 缺失、无效、已禁用或已吊销时返回 401/4014，
+不能改成 403。用户访问令牌与管理员会话都不能当作开放 key 使用。
 
 `4030` 是本次新增的“已认证但权限不够”码。注意它和管理令牌缺失时的 401/4013 语义不同：
 **没有凭据是 401，凭据有效但角色不够才是 403**。不要为了省事把权限不足改成 401 —— 前端收到
@@ -149,6 +153,62 @@ POST /api/v1/auth/refresh
 
 ## 7. 搜索契约
 
+### 搜索联想
+
+```http
+GET /api/v1/search/suggestions?keyword=雨&limit=10&source=kuwo
+Authorization: Bearer <accessToken>
+```
+
+返回普通 JSON 信封，`data` 是按官方顺序排列的联想词数组：
+
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": ["雨爱", "雨一直下", "雨蝶"]
+}
+```
+
+- `keyword` 必填，去除首尾空白后不能为空。
+- `limit` 默认 10，最大 20；限制在本服务本地执行。
+- `source` 当前仅支持 `kuwo`，省略时默认使用 `kuwo`。
+- 官方波点 5.9.1 调用 `search/tip/v2/list`，只传业务参数
+  `keyword` 与 `tipsFrom=bd`，读取 `data.resultList[].relword`。该接口没有分页参数，
+  不要自行添加 `pn` / `rn`，以免联想排序或召回结果偏离官方客户端。
+
+### 热搜
+
+```http
+GET /api/v1/search/hot?limit=20&source=kuwo
+Authorization: Bearer <accessToken>
+```
+
+返回普通 JSON 信封，`data` 为官方排序的热搜对象数组：
+
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": [
+    {
+      "keyword": "起风了",
+      "type": 0,
+      "icon": "",
+      "sort": 1,
+      "searchType": 4,
+      "jumpUrl": "123456"
+    }
+  ]
+}
+```
+
+- `limit` 默认 10，最大 20；`source` 省略时默认 `kuwo`。
+- `keyword` 可直接作为普通搜索词使用。
+- `searchType` / `jumpUrl` 保留官方定向跳转信息；不需要定向跳转的客户端可忽略。
+- 官方波点 5.9.1 使用无业务参数的 `GET search/topic/word/list`，热搜列表位于
+  `data.hotWord`。同一响应还含专题、运营入口等内容，它们不是热搜，不混入本接口。
+
 ```http
 GET /api/v1/search?keyword=周杰伦&page=1&num=60&quality=10
 Authorization: Bearer <accessToken>
@@ -157,14 +217,29 @@ Authorization: Bearer <accessToken>
 每首歌一行：
 
 ```json
-{"type":"song","data":{"id":97773,"mid":"...","favorited":false,"vip":false}}
+{"type":"song","data":{"id":97773,"mid":"...","favorited":false,"vip":false,"playable":true}}
 ```
 
 末行：
 
 ```json
-{"type":"end","meta":{"dropped":0,"quality":10}}
+{"type":"end","meta":{"dropped":0,"droppedBySource":{},"quality":10}}
 ```
+
+`playable` 是**这首歌能不能拿到播放地址**。`false` 时客户端必须置灰并标注，
+不要发起播放（发起也只会拿到一句「没有可用播放链接」）。
+
+- 与 `vip` **不是一回事**：`vip` 是「上游标它付费」，`playable` 是「实测取不到地址」。
+- **不可播的歌照常下发**，不丢。依据是波点 App 自己也不滤：同一关键词下它综合页的
+  `musicpage` 与我们的原始列表逐条一致，它把放不了的歌也列出来。
+  2026-09-19 之前我们按 `listen_fragment` 滤掉，导致搜「周杰伦」上游 30 条全被滤、
+  客户端拿到 0 条 —— 用户看到的是「搜不到歌」，第一反应是账号或音源坏了。
+  那 30 首在酷我上都没有版权（周杰伦是 TME 独家），上游逐首回 `code 20012 歌曲已下线`。
+- 只有酷我会判断；QQ 音乐与网易云恒为 `true`。
+
+`dropped` 是**上游返回了、但没有下发**的条数。**目前恒为 0** —— 酷我也不再丢歌了。
+字段与 `droppedBySource` 都**不能删**：装机的旧客户端会读 `dropped` 做算术，
+拿到 `undefined` 会算出 `NaN`。保留它们只为契约兼容，不再承载信息。
 
 红线：
 
@@ -172,7 +247,7 @@ Authorization: Bearer <accessToken>
 - 收藏接口的 `songId` 是 JSON string。
 - `coverUrl` 是绝对 HTTPS。
 - `lyricUrl` 是带 `/api/v1/` 的相对路径。
-- `favorited`、`vip` 是 boolean。
+- `favorited`、`vip`、`playable` 是 boolean。
 - 响应头包含 `X-Accel-Buffering: no`。
 - 搜索只返回元信息，不逐首解析播放地址。
 
@@ -287,7 +362,7 @@ APK 下载必须支持：
 - 错误是否可能错误触发令牌刷新？
 - 绝对 URL 是否为 HTTPS 且免鉴权？
 - 是否需要 `@RawResponse()`？
-- 是否需要独立限流桶？
+- 是否需要独立限流桶？（开放搜歌用了独立的 `open-api` 桶，见 §17）
 - 是否为新增行为补充契约验证？
 - 是否更新本专题和后端 README？
 
@@ -301,7 +376,8 @@ APK 下载必须支持：
 | `/search`、`/songs/**` | 必须 | 不使用 | 音乐业务接口 |
 | `/draw/**` | 必须 | 不使用 | 图片任务属于当前登录用户调用会话，但任务表当前不存 user_id |
 | `/app/bootstrap`、`/app/apk/**`、`/app/patch/**` | 不要求 | 不要求 | Android 热更新通道必须公开 |
-| `/app/admin/**` | 不使用 | 管理员会话 | `AdminAuthGuard` + `RolesGuard`；读 `READ_ROLES`，写 `WRITE_ROLES`（观察者 403/4030），写操作另写审计。`/app/admin/users/**` 的**读**用 `PRIVILEGED_READ_ROLES`（返回 email 与听歌历史） |
+| `/app/admin/**` | 不使用 | 管理员会话 | `AdminAuthGuard` + `RolesGuard`；读 `READ_ROLES`，写 `WRITE_ROLES`（观察者 403/4030），写操作另写审计。`/app/admin/users/**` 的**读**用 `PRIVILEGED_READ_ROLES`（返回 email 与听歌历史）。`/app/admin/open-api-keys` 同走管理员会话：读 `READ_ROLES`，写 `WRITE_ROLES` |
+| `/open/**` | 不要求（用 `X-API-Key` 或 `Authorization: Bearer tt_...`） | 不使用 | 开放搜歌，`ApiKeyGuard`，鉴权失败 401/4014；与用户访问令牌、管理员会话三套凭据互相独立。详见 §17 |
 | `/admin/auth/login`、`/totp-verify`、`/logout` | 不要求 | 不要求 | 显式公开；2FA 第二步额外要求 `temp_token` |
 | `/admin/auth/**`（其余） | 不使用 | 管理员会话 | 由 AdminAuthGuard + RolesGuard 校验；角色不足为 403/4030 |
 | `/desktop/bootstrap`、`/desktop/artifacts/**`、`/desktop/patches/**` | 不要求 | 不要求 | 桌面更新通道必须公开 |
@@ -415,10 +491,11 @@ Controller 不应返回 HTTP 200 加错误业务码；失败应同时使用正�
   `type`；同一账号、来源和稳定歌曲身份会复用短码，成功 HTTP 201。
 - `GET /public/shares/{token}` 返回元数据、最多 60 秒试听地址和最新 100% Android APK 地址。
   这是普通 JSON 信封，分享 token 只允许 8–24 位 `[A-Za-z0-9_-]`。
-- `GET /public/shares/{token}/preview` 返回服务端用 ffmpeg 裁出的 64 kbps MP3，支持 200/206/416，
-  不暴露上游完整音频直链。ffmpeg 缺失返回 503/5034。
+- `GET /public/shares/{token}/preview` 转发上游**完整**音频（标准音质），支持 200/206/416，
+  不暴露上游直链，也不在服务端裁剪或缓存。上游取址失败归 502/5020，**不能是 401**。
+  「最多 60 秒」只由分享页自己守，服务端不下发任何时长限制。
 
-试听缓存只存文件路径和元数据，不把上游限时链接持久化；生产必须设置 `PUBLIC_BASE_URL`，否则
+试听不落盘：`song_share` 只存歌曲身份和元数据快照，上游限时链接绝不持久化；生产必须设置 `PUBLIC_BASE_URL`，否则
 短链会根据代理头推导出错误协议。
 
 ### IM 会话与同步
@@ -517,5 +594,90 @@ Content-Type: application/json
 | `image-status` | 每用户 300 次 + 每 IP 1,800 次 |
 | `im-session` | 每用户 30 次 + 每 IP 180 次 |
 | `im-sync` | 每用户 300 次 + 每 IP 1,800 次 |
+| `open-api` | 每 key 120 次 + 每来源地址 600 次 |
 
 限流是进程内状态，重启清空且多实例不共享。客户端收到 429/4290 时应退避，不能把它当成登录失效。
+
+## 17. 开放搜歌 API
+
+> 本节是补充小节：§1–§16 的既有编号保持不变，开放搜歌 API 追加为 §17。
+
+第三方通过 API Key 调用的开放搜歌接口，前缀 `/api/v1`。它与用户访问令牌、管理员会话是
+**三套互相独立的凭据**：开放接口只认 API Key，用户 access token 不能当开放 key 使用。
+
+### 端点
+
+| 方法 | 路径 | 鉴权 | 响应 |
+| --- | --- | --- | --- |
+| GET | `/open/search?keyword&page&num&limit&quality&source` | `X-API-Key` 或 `Bearer tt_...` | 统一信封，`data = { songs: Song[], meta }` |
+| GET | `/open/search/stream?...` | 同上 | 裸 NDJSON（`@RawResponse`），格式同内部 `/search` |
+| GET | `/open/songs/:id/lyrics?format&mid&source` | 同上 | 默认 `text/plain`；`format=json` 走信封 |
+| GET | `/open/songs/:id/link?quality&mid&type&source` | 同上 | 信封，`data = { songId, url, quality, requestedQuality, kbps, fallback }` |
+
+### 鉴权
+
+- Header 二选一：`X-API-Key: tt_<random>`（优先），或 `Authorization: Bearer tt_<random>`。
+- 缺失、无效、已禁用或已吊销 → **HTTP 401 且业务码 4014**。4010–4013 已被占用，4014 是新码；
+  **绝不能返回 403**。
+- 用户访问令牌是 `payload.signature` 形状、不以 `tt_` 开头，不能当开放 key。
+
+```bash
+curl -H "X-API-Key: tt_xxxxxxxx" \
+  "https://music.example/api/v1/open/search?keyword=周杰伦&page=1&num=10"
+# 或
+curl -H "Authorization: Bearer tt_xxxxxxxx" \
+  "https://music.example/api/v1/open/search?keyword=周杰伦&page=1&num=10"
+```
+
+### 两种搜索响应
+
+JSON 信封（`/open/search`）：
+
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "songs": [
+      { "id": 97773, "mid": "...", "favorited": false, "vip": false, "playable": true }
+    ],
+    "meta": { "dropped": 0, "quality": 10 }
+  }
+}
+```
+
+NDJSON 每行形状（`/open/search/stream`，与内部 `/search` 同格式）：
+
+```text
+{"type":"song","data":{"id":97773,"mid":"...","favorited":false,"vip":false,"playable":true}}
+{"type":"end","meta":{"dropped":0,"droppedBySource":{},"quality":10}}
+```
+
+### 开放侧 Song 与内部 `/search` 的差异
+
+- `favorited` 恒为 `false`（开放侧没有用户身份，跳过收藏填充）。
+- **不下发 `audioUrl`**：外部调用方改用 `/open/songs/:id/link` 换取播放直链。
+- `lyricUrl` 指向 `/api/v1/open/songs/...`（开放侧歌词路径），不是内部 `/songs/...`。
+
+开放 JSON 端点下发 `access-control-allow-origin: *`（不带 credentials）；NDJSON stream 内部
+已有的 `*` 同样适用。**内部 `/search` 的契约不受本节任何影响** —— 开放侧只是新增路由，
+不改既有 NDJSON 字段、红线和错误映射。
+
+### 错误码与限流
+
+- 鉴权失败：401/4014（见上）。
+- 限流桶 `open-api`：按 key 120 次 + 按来源地址 600 次 / 15 分钟，超限返回 429/4290。
+
+### 管理端（需管理员会话）
+
+| 方法 | 路径 | 角色 | 说明 |
+| --- | --- | --- | --- |
+| GET | `/app/admin/open-api-keys` | `READ_ROLES` | 列表（只有 `keyPrefix`，无明文） |
+| POST | `/app/admin/open-api-keys` | `WRITE_ROLES` | body `{ name }`，201，`data.apiKey` 明文只返回一次 |
+| PATCH | `/app/admin/open-api-keys/:id` | `WRITE_ROLES` | body `{ enabled }` |
+| DELETE | `/app/admin/open-api-keys/:id` | `WRITE_ROLES` | 204 吊销 |
+
+写操作审计 action：`open_api_key.create` / `open_api_key.set_enabled` / `open_api_key.revoke`；
+审计只记 `keyPrefix`，不记明文。模块在 `server/src/open-api/`（`OpenApiModule`，imports
+`MusicModule` + `UpstreamModule` + `AdminAuthModule`），表 `open_api_key` 只存 `sha256(key)`，建表在
+`migrations.ts`。

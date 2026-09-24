@@ -119,6 +119,17 @@ AS "songId"
 
 这是热更新红线。`/app/bootstrap` 必须 `@Public()`，公开守卫只能尝试解析令牌，失败后继续放行。
 
+### 开放搜歌返回 401/4014
+
+按顺序检查：
+
+- 请求头是否带了 `X-API-Key: tt_...`（优先）或 `Authorization: Bearer tt_...`，两者都缺就是 401/4014。
+- key 是否已被禁用（`PATCH .../enabled`）或吊销（`DELETE .../:id`）；库里按 `sha256(key)` 匹配，手工改过明文会导致永远对不上。
+- 是否误用了**用户 access token**（`payload.signature` 形状、不以 `tt_` 开头）或管理员会话令牌 —— 它们都不能当开放 key，同样回 401/4014。
+- 若返回的是 429/4290 而不是 401，那是 `open-api` 限流桶（每 key 120 次 + 每来源地址 600 次/15 分钟）先命中，等窗口过去再试。
+
+401/4014 **不会**退化成 403；看到 403 说明请求没走到 `ApiKeyGuard`，先核对路径是否真是 `/open/**`。
+
 ## 4.1 管理后台登录
 
 ### 所有 `/admin/auth/login` 请求都返回 401/4013
@@ -392,6 +403,7 @@ ORDER BY quota DESC, id;
 | 401/4011 | 普通登录密码错；管理员登录失败或 2FA 票据过期 |
 | 401/4012 | 刷新令牌是否已轮换、撤销或过期 |
 | 401/4013 | 管理员会话不被接受（`Authorization: Bearer` 缺失、过期、已撤销，或用了已移除的 `X-Admin-Token`） |
+| 401/4014 | 开放 API Key 缺失、无效、禁用或吊销 |
 | 403/4030 | 管理员角色不足，或当前 IP 不在白名单中 |
 | 404/4040 | 路径和全局 `/api/v1` 前缀 |
 | 404/4041 | Android/桌面版本、补丁或发布对象不存在 |
@@ -410,7 +422,6 @@ ORDER BY quota DESC, id;
 | 502/5021 | ApiSweet Key、余额或上游错误 |
 | 503/5031 | IM 未启用 |
 | 503/5032 | 发布记录读写失败或 GPTIMAGE2 无 Key/额度不足 |
-| 503/5034 | 分享试听 ffmpeg 不可用 |
 
 ## 11. 只读诊断命令
 
@@ -532,11 +543,14 @@ Courgette 失败会回退 bsdiff-wasm；两者都失败或差分过大时返回�
 域名。公开元数据不需要登录；若反向代理把 `/api/v1/public/shares` 重写到需要 Authorization 的
 位置，会表现为 401 而不是 404。
 
-### 试听 503/5034 或 Range 异常
+### 试听 502/5020 或 Range 异常
 
-确认 `FFMPEG_BIN` 可执行、`SHARE_PREVIEW_DIR` 可写且磁盘有空间；首次请求会下载上游低音质并裁剪
-最多 60 秒 64 kbps MP3。试听接口支持 200/206/416，必须保留 `Range`、`Content-Range` 和
-`Accept-Ranges`，不要由代理层缓存成 JSON 错误页。
+试听是**转发上游音频**，不再裁剪也不再落盘，所以没有 ffmpeg / 磁盘相关故障。
+取不到地址一律归 502/5020（上游风控、歌曲下架），**绝不能是 401** —— 那会让客户端
+把上游故障当成自己的令牌失效去续期。接口支持 200/206/416，必须保留 `Range`、
+`Content-Range` 和 `Accept-Ranges`，不要由代理层缓存成 JSON 错误页。
+上游偶发 `110001` 风控时 `resolveLink` 会回退到 v2 低码率试听链（约 60 秒），
+此时分享页听到的是片段而不是整首 —— 这是全站播放路径共用的既有兜底，不是试听接口特有的问题。
 
 ## 16. 代码索引与文档漂移
 
@@ -548,5 +562,6 @@ codegraph status server --json
 codegraph query --path server --kind route --limit 200 --json ""
 ```
 
-再对照 [00-code-index.md](00-code-index.md) 的 104 条路由和 24 张表。不要通过 `grep` 猜测 Controller
+再对照 [00-code-index.md](00-code-index.md) 的路由和表清单（含开放搜歌 8 条新路由与 `open_api_key` 表）。
+不要通过 `grep` 猜测 Controller
 是否已注册，也不要在未确认索引状态时直接修改契约文档。
