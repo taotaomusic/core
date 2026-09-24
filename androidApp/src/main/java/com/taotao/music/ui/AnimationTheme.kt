@@ -153,9 +153,10 @@ fun <T> taotaoSettleSpring(): SpringSpec<T> =
  */
 fun pageDepthOf(page: String): Int = when (page) {
     "home", "mine", "ai", "chat" -> 0
-    "search", "settings", "mine-favorites", "mine-history", "mine-local" -> 1
+    "search", "settings", "mine-favorites", "mine-history", "mine-local", "mine-playlists" -> 1
     // 账号管理从设置页继续进入，不能和设置页标成同层，否则会被导航策略瞬切。
-    "profile", "detail" -> 2
+    // 歌单详情从我的歌单继续进入，不能和我的歌单标成同层。
+    "profile", "detail", "playlist-detail" -> 2
     else -> 0
 }
 
