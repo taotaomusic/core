@@ -125,6 +125,21 @@ export async function apiPatch<T>(path: string, adminToken: string, payload: unk
   }));
 }
 
+/**
+ * 全量替换一个子资源的 PUT。
+ *
+ * 与 [apiPatch] 分开是因为语义不同：PATCH 只改提交过的字段，PUT 是「把这块状态设成这个值」。
+ * 音源账号的启停走 PUT（`/enabled`），传的就是目标状态本身。
+ */
+export async function apiPut<T>(path: string, adminToken: string, payload: unknown): Promise<T> {
+  const headers = { "content-type": "application/json", ...authHeaders(adminToken) };
+  return unwrap<T>(await fetch(`${BASE}${path}`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify(payload),
+  }));
+}
+
 /** 管理员认证 —— 登录（用户名密码） */
 export async function adminLogin(username: string, password: string) {
   const response = await fetch(`${BASE}/admin/auth/login`, {

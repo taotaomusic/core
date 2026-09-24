@@ -11,6 +11,7 @@ import {
   Put,
 } from "@nestjs/common";
 import { ApiErrors } from "../common/api.exception";
+import { MUSIC_SOURCES } from "../upstream/music-source.client";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
 import type { SessionUser } from "../common/request.types";
 import {
@@ -23,7 +24,8 @@ import {
 
 const SOURCE_PATTERN = /^[a-z0-9_-]{2,32}$/i;
 // 歌单项必须能被当前音乐路由解析；新增来源时先补齐 music 模块和双端客户端。
-const SUPPORTED_SOURCES = new Set(["tencent", "netease"]);
+// 白名单来自上游适配层的 MUSIC_SOURCES，不要在业务模块里另立一份。
+const SUPPORTED_SOURCES = new Set<string>(MUSIC_SOURCES);
 const SONG_ID_PATTERN = /^[\w.-]{1,128}$/;
 const MAX_NAME_LENGTH = 80;
 const MAX_DESCRIPTION_LENGTH = 1_000;

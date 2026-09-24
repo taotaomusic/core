@@ -31,10 +31,6 @@ export class AppConfigService {
   readonly apkDirectory: string;
   /** Windows 模块、清单差分和原生更新工具的内容寻址存储目录。 */
   readonly desktopReleaseDirectory: string;
-  /** 分享试听文件缓存目录；只保存服务端裁出的最多 60 秒低码率音频。 */
-  readonly sharePreviewDirectory: string;
-  /** 试听裁剪程序，默认从 PATH 查找 ffmpeg。 */
-  readonly ffmpegExecutable: string;
   /** 可选的 Courgette 可执行文件；仅用于 .dll/.exe 等 PE 原生二进制。 */
   readonly courgettePath: string;
   readonly defaultChannel: string;
@@ -149,8 +145,26 @@ export class AppConfigService {
   readonly accessLifetimeSeconds = 15 * 60;
   readonly refreshLifetimeSeconds = 60 * 60 * 24 * 30;
 
-  /** 只允许转发这些主机的媒体地址，防止把服务端当成任意 URL 的代理。 */
-  readonly allowedMediaHosts = new Set(["ws.stream.qqmusic.qq.com", "y.qq.com"]);
+  /**
+   * 只允许转发这些主机的媒体地址，防止把服务端当成任意 URL 的代理。
+   *
+   * 酷我的四个音频 CDN 是**实测枚举出来的**（8 组关键词 × 每首 5 个档位，
+   * 共 220 个地址样本）：`bd-er` 114 次、`bd-lv` 58 次、`bd-lw` 30 次、`bd-bj` 18 次。
+   * 四个都要写全 —— 只写见过的那两个会挡掉约三分之一的请求，而且表现为
+   * 「有的歌能放、有的放不了」，很难定位。
+   *
+   * **刻意不用 `*.kuwo.cn` 通配**：那等于把整个 kuwo.cn 域开放成代理目标，
+   * 而 CDN 主机会随上游调整变化，多出来的主机应该显式加进来，而不是自动放行。
+   * 四个主机都验证过 https + Range 可用（206 + `audio/mpeg`）。
+   */
+  readonly allowedMediaHosts = new Set([
+    "ws.stream.qqmusic.qq.com",
+    "y.qq.com",
+    "bd-er.kuwo.cn",
+    "bd-lv.kuwo.cn",
+    "bd-lw.kuwo.cn",
+    "bd-bj.kuwo.cn",
+  ]);
 
   /** 只允许已接入音源的 CDN，避免音频代理被用于请求任意站点。 */
   isAllowedMediaHost(hostname: string): boolean {
@@ -163,8 +177,6 @@ export class AppConfigService {
     this.authSecret = String(config.get("AUTH_SECRET") ?? "");
     this.apkDirectory = resolve(String(config.get("APK_DIR") ?? "./data/apk"));
     this.desktopReleaseDirectory = resolve(String(config.get("DESKTOP_RELEASE_DIR") ?? "./data/desktop"));
-    this.sharePreviewDirectory = resolve(String(config.get("SHARE_PREVIEW_DIR") ?? "./data/share-preview"));
-    this.ffmpegExecutable = String(config.get("FFMPEG_BIN") ?? "ffmpeg").trim() || "ffmpeg";
     this.courgettePath = String(config.get("COURGETTE_PATH") ?? "").trim();
     this.defaultChannel = String(config.get("DEFAULT_CHANNEL") ?? "release");
     this.bsdiffExecutable = String(config.get("BSDIFF_BIN") ?? "bsdiff");

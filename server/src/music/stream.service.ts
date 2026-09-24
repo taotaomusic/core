@@ -3,9 +3,8 @@ import { once } from "node:events";
 import type { Request, Response } from "express";
 import { ApiErrors } from "../common/api.exception";
 import { AppConfigService } from "../config/app-config.service";
-import { TencentClient } from "../upstream/tencent.client";
-import { NeteaseClient } from "../upstream/netease.client";
-import type { MusicSource } from "./search.service";
+import type { MusicSource, SongKey } from "../upstream/music-source.client";
+import { MusicSourceRegistry } from "../upstream/music-source.registry";
 
 @Injectable()
 export class StreamService {
@@ -13,8 +12,7 @@ export class StreamService {
 
   constructor(
     private readonly config: AppConfigService,
-    private readonly upstream: TencentClient,
-    private readonly netease: NeteaseClient,
+    private readonly registry: MusicSourceRegistry,
   ) {}
 
   /**
@@ -72,11 +70,11 @@ export class StreamService {
 
   /** 只取播放地址，供转发使用。跳过可用性探测，让实际转发去暴露问题。 */
   async resolvePlayUrl(
-    key: { id?: number; mid?: string; type?: number },
+    key: SongKey,
     quality: number,
     source: MusicSource = "tencent",
   ): Promise<string> {
-    const link = await (source === "netease" ? this.netease : this.upstream).resolveLink(key, quality);
+    const link = await this.registry.of(source).resolveLink(key, quality);
     return link.url;
   }
 }

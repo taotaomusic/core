@@ -25,6 +25,7 @@ import { PlaylistsModule } from "./playlists/playlists.module";
 import { LatestVersionModule } from "./release/latest-version.cache";
 import { ReleaseModule } from "./release/release.module";
 import { SongShareModule } from "./shares/song-share.module";
+import { MusicSourceAdminModule } from "./upstream/music-source-admin.module";
 import { UserAdminModule } from "./user-admin/user-admin.module";
 
 /**
@@ -54,6 +55,7 @@ import { UserAdminModule } from "./user-admin/user-admin.module";
     ReleaseModule,
     SongShareModule,
     UserAdminModule,
+    MusicSourceAdminModule,
   ],
   controllers: [HealthController],
   providers: [

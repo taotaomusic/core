@@ -1,10 +1,17 @@
 import { Injectable } from "@nestjs/common";
 import { ApiErrors } from "../common/api.exception";
+import type { MusicSource, MusicSourceClient, SongKey } from "./music-source.client";
 import type { RichLyric, SearchResult, UpstreamLink, UpstreamSong, UpstreamSongInfo } from "./tencent.client";
 
 /** 网易云点歌接口适配。它的搜索和单曲直链共用同一个 v2 接口。 */
 @Injectable()
-export class NeteaseClient {
+export class NeteaseClient implements MusicSourceClient {
+  readonly source: MusicSource = "netease";
+  readonly displayName = "网易云";
+  readonly numericIdOnly = true;
+  /** 上游不分音质档位，多取一次单曲信息只是白白多一个请求。 */
+  readonly supportsTierProbe = false;
+
   private readonly baseUrl = "https://api.vkeys.cn/v2/music/netease";
 
   /** 搜索只返回元数据；播放地址按需在 [resolveLink] 中获取。 */
@@ -19,11 +26,13 @@ export class NeteaseClient {
       perPage: limit,
       nextPage: list.length === limit ? page + 1 : null,
       list,
+      // 本音源不做可播性预筛，上游返回什么就下发什么。
+      dropped: 0,
     };
   }
 
   /** 文档未提供音质列表接口；用最高请求档取回歌曲资料，供历史记录补全。 */
-  async requestSongInfo(key: { id?: number }): Promise<UpstreamSongInfo> {
+  async requestSongInfo(key: SongKey): Promise<UpstreamSongInfo> {
     const data = await this.requestSong(key.id, 18);
     return {
       songID: Number(data.id ?? 0),
@@ -38,14 +47,15 @@ export class NeteaseClient {
     };
   }
 
-  async resolveLink(key: { id?: number }, quality: number): Promise<UpstreamLink> {
+  async resolveLink(key: SongKey, quality: number): Promise<UpstreamLink> {
     const data = await this.requestSong(key.id, quality);
     const url = this.httpsUrl(data.url);
     if (!url) throw ApiErrors.upstream("播放地址不可用");
     return { url, kbps: String(data.kbps ?? ""), quality };
   }
 
-  async requestLyric(id: number | undefined): Promise<RichLyric> {
+  async requestLyric(key: SongKey): Promise<RichLyric> {
+    const id = key.id;
     if (!id || !Number.isInteger(id) || id <= 0) {
       throw ApiErrors.badRequest(4001, "网易云歌曲必须提供正整数 ID");
     }

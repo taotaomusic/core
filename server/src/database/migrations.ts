@@ -134,11 +134,13 @@ export async function runMigrations(pool: Pool): Promise<void> {
         ON playlist_songs (playlist_id, position);
 
       -- 歌曲分享短链。只保存稳定歌曲身份和元数据快照；上游直链有时效，绝不能落库。
-      -- preview_file 仅指向服务端裁剪出的最多 60 秒低码率试听文件。
+      -- 试听**不在服务端裁剪、也不落盘**：只把上游的完整标准音频转发出去，
+      -- 「最多 60 秒」由分享页自己守（webApp 的 WebAudioController）。
+      -- 所以这里没有任何音频文件字段 —— 别再往这张表加「缓存路径」。
       CREATE TABLE IF NOT EXISTS song_share (
         token            text PRIMARY KEY CHECK (token ~ '^[A-Za-z0-9_-]{8,24}$'),
         user_id          integer NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        source           text NOT NULL CHECK (source IN ('tencent', 'netease')),
+        source           text NOT NULL CHECK (source IN ('tencent', 'netease', 'kuwo')),
         song_id          text NOT NULL,
         remote_id        text,
         mid              text,
@@ -149,7 +151,6 @@ export async function runMigrations(pool: Pool): Promise<void> {
         cover_url        text,
         duration_seconds integer NOT NULL DEFAULT 0 CHECK (duration_seconds >= 0),
         vip              smallint NOT NULL DEFAULT 0 CHECK (vip IN (0, 1)),
-        preview_file     text,
         enabled          smallint NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
         access_count     integer NOT NULL DEFAULT 0 CHECK (access_count >= 0),
         created_at       bigint NOT NULL,
@@ -157,6 +158,33 @@ export async function runMigrations(pool: Pool): Promise<void> {
         UNIQUE (user_id, source, song_id)
       );
       CREATE INDEX IF NOT EXISTS idx_song_share_lookup ON song_share (source, song_id, enabled);
+
+      -- 旧库里的 preview_file 存的是「服务端裁出的 60 秒试听文件」文件名。裁剪取消后它恒为 NULL，
+      -- 留着只会让人以为这张表还在缓存音频，因此显式删掉；新建库的建表语句里已经没有它。
+      -- 顺带一句：data/share-preview 目录下遗留的文件可以手工清掉，服务端不再读它。
+      ALTER TABLE song_share DROP COLUMN IF EXISTS preview_file;
+
+      -- 放行酷我分享。上面 CREATE TABLE 里的 CHECK 只对新建库生效，已有库里的旧约束
+      -- 必须显式换掉 —— 否则客户端分享一首酷我的歌会在写库时被约束拦下，表现为
+      -- 一个看不懂的 502，而分享接口本身完全正常。
+      --
+      -- 条件换约束而不是每次启动都 DROP + ADD：后者会在启动瞬间留下一个没有约束的窗口，
+      -- 且每次都全表校验一遍。这里只在旧定义的确实不含 kuwo 时才重写。
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conname = 'song_share_source_check'
+            AND pg_get_constraintdef(oid) NOT LIKE '%kuwo%'
+        ) THEN
+          ALTER TABLE song_share DROP CONSTRAINT song_share_source_check;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'song_share_source_check') THEN
+          ALTER TABLE song_share
+            ADD CONSTRAINT song_share_source_check CHECK (source IN ('tencent', 'netease', 'kuwo'));
+        END IF;
+      END
+      $$;
 
       -- 播放会话由客户端生成稳定 session_id，并以累计快照重复上报。服务端只累加相对旧快照
       -- 增长的部分，所以断线重传、超时重试都不会重复增加听歌时间或播放次数。
@@ -323,6 +351,40 @@ export async function runMigrations(pool: Pool): Promise<void> {
         api_key_id     integer NOT NULL REFERENCES api_key(id) ON DELETE RESTRICT
       );
       CREATE INDEX IF NOT EXISTS idx_image_generation_task_key ON image_generation_task (api_key_id);
+
+      -- 音源账号。第三方音源在需要登录态时才给出完整音质与曲库，凭据由管理后台维护，
+      -- 播放链路按 source 取用。
+      --
+      -- token 与 uid 是账号凭据，**只写不读**：管理接口一律只回传掩码，
+      -- 明文既不进响应体也不进审计表。
+      --
+      -- 「enabled」按本文件的既有约定用 smallint 0/1 而不是 boolean。
+      CREATE TABLE IF NOT EXISTS music_source_account (
+        id              integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        source          text NOT NULL CHECK (source ~ '^[a-z0-9_-]{2,32}$'),
+        label           text NOT NULL DEFAULT '',
+        phone           text NOT NULL DEFAULT '',
+        token           text NOT NULL DEFAULT '',
+        uid             text NOT NULL DEFAULT '',
+        enabled         smallint NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+        remark          text NOT NULL DEFAULT '',
+        last_status     text NOT NULL DEFAULT 'unknown'
+                        CHECK (last_status IN ('unknown', 'ok', 'invalid')),
+        last_error      text NOT NULL DEFAULT '',
+        -- 上一次连通性测试探测到的真实音质，例如「mp3 128kbps」。落库是为了让
+        -- 管理员一眼看出「这个账号有没有真的换来更高音质」—— 上游不会因为
+        -- 请求了无损就给无损，只测「通不通」是看不出来的。
+        last_note       text NOT NULL DEFAULT '',
+        last_checked_at bigint,
+        created_at      bigint NOT NULL,
+        updated_at      bigint NOT NULL
+      );
+      -- 同一音源下同一份登录凭据只应存在一条。uid 为空表示尚未登录的占位记录，
+      -- 用部分索引跳过它，否则多条空 uid 会互相冲突。
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_music_source_account_identity
+        ON music_source_account (source, uid) WHERE uid <> '';
+      CREATE INDEX IF NOT EXISTS idx_music_source_account_enabled
+        ON music_source_account (source, enabled, id);
 
       -- 悟空 IM 的连接凭据。消息正文和同步游标由悟空 IM 保存；本库只保存业务账号与
       -- 设备凭据的可撤销映射。悟空 IM 当前按 device_flag 管理同类设备 Token，因此一名
@@ -508,6 +570,22 @@ export async function runMigrations(pool: Pool): Promise<void> {
       ALTER TABLE admin_users DROP CONSTRAINT IF EXISTS admin_users_created_by_fkey;
       ALTER TABLE admin_users ADD CONSTRAINT admin_users_created_by_fkey
         FOREIGN KEY (created_by) REFERENCES admin_users(id) ON DELETE SET NULL;
+
+      -- 入站开放 API Key（第三方搜歌接口用）。
+      -- 与出站的 api_key 表（图片服务凭据）无关，是两套东西。
+      -- 只存 sha256(key)，明文仅在创建响应里返回一次；key_prefix 供列表页回显。
+      CREATE TABLE IF NOT EXISTS open_api_key (
+        id           integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        name         text NOT NULL CHECK (btrim(name) <> ''),
+        key_hash     text NOT NULL UNIQUE,
+        key_prefix   text NOT NULL,
+        enabled      smallint NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+        created_by   integer REFERENCES admin_users(id) ON DELETE SET NULL,
+        created_at   bigint NOT NULL,
+        last_used_at bigint,
+        revoked_at   bigint
+      );
+      CREATE INDEX IF NOT EXISTS idx_open_api_key_enabled ON open_api_key (enabled, created_at DESC);
     `);
     await client.query("COMMIT");
   } catch (error) {

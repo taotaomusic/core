@@ -1,6 +1,23 @@
 import { Injectable } from "@nestjs/common";
 
 /**
+ * 管理端请求的额度上限。
+ *
+ * 默认 60 次 / 15 分钟（按来源地址），与迁移前一致。
+ *
+ * `ADMIN_RATE_LIMIT` 可以覆盖它，存在的唯一理由是**契约验证脚本**：它要在一次运行里
+ * 打上百次管理接口，60 的额度会在中途把它自己限流掉，表现为一批看不懂的 429 ——
+ * 而且失败位置取决于脚本里请求的先后顺序，看起来像是业务坏了。
+ *
+ * **生产环境不要设这个变量**：它调大的正是「拿着会话令牌刷管理接口」的窗口。
+ * 解析失败或不是正整数时静默回落到默认值，不因为一个写错的变量把限流关掉。
+ */
+function adminRequestLimit(): number {
+  const raw = Number(process.env.ADMIN_RATE_LIMIT ?? "");
+  return Number.isSafeInteger(raw) && raw > 0 ? raw : 60;
+}
+
+/**
  * 内存滑动窗口计数器。
  *
  * 状态在进程内，重启即清空，也不跨实例共享 —— 与迁移前完全一致。
@@ -9,6 +26,7 @@ import { Injectable } from "@nestjs/common";
 @Injectable()
 export class RateLimitService {
   private readonly attempts = new Map<string, { count: number; resetAt: number }>();
+  private readonly adminLimit = adminRequestLimit();
 
   private allow(key: string, limit: number, windowMs: number): boolean {
     const now = Date.now();
@@ -56,9 +74,13 @@ export class RateLimitService {
     return this.allow(`app-device:${deviceId || address}`, 60, 15 * 60_000);
   }
 
-  /** 发布管理：按来源地址 60 次 / 15 分钟，防止静态令牌被暴力猜测。 */
+  /**
+   * 发布管理：按来源地址限流，防止静态令牌被暴力猜测。
+   *
+   * 额度见 [adminRequestLimit] —— 默认 60 次 / 15 分钟，`ADMIN_RATE_LIMIT` 可覆盖。
+   */
   allowAdminRequest(address: string): boolean {
-    return this.allow(`admin:${address}`, 60, 15 * 60_000);
+    return this.allow(`admin:${address}`, this.adminLimit, 15 * 60_000);
   }
 
   /**
@@ -94,5 +116,31 @@ export class RateLimitService {
   allowImSyncRequest(userId: number, address: string): boolean {
     if (!this.allow(`im-sync-ip:${address}`, 1_800, 15 * 60_000)) return false;
     return this.allow(`im-sync-user:${userId}`, 300, 15 * 60_000);
+  }
+
+  /**
+   * 音源账号的短信验证码：按来源地址 5 次 + 按手机号 3 次 / 15 分钟。
+   *
+   * 短信是**真实外发的计费资源**，而且这里的手机号由请求体指定 —— 只按地址限流
+   * 挡不住「同一个管理员账号被接管后轮着给不同号码发」的刷短信模式。手机号维度
+   * 的桶专门保护被填进来的号码不被反复骚扰，两者缺一不可。
+   *
+   * 不复用 `admin` 桶（60 次 / 15 分钟）：那是为发布管理这类纯内部写操作设的额度，
+   * 拿来发短信等于把一个能被滥用的外发动作放进了宽额度里。
+   */
+  allowMusicSourceSms(address: string, phone: string): boolean {
+    if (!this.allow(`music-source-sms-ip:${address}`, 5, 15 * 60_000)) return false;
+    return this.allow(`music-source-sms-phone:${phone}`, 3, 15 * 60_000);
+  }
+
+  /**
+   * 开放搜歌接口：按 API Key 120 次 + 按来源地址 600 次 / 15 分钟。
+   *
+   * 内层按 key 限制单个第三方调用方的总量；外层按地址兜底，防止伪造大量
+   * key 从同一出口扫接口。地址阈值放宽是因为服务端调用方普遍共用 NAT。
+   */
+  allowOpenApiRequest(keyIdentity: string, address: string): boolean {
+    if (!this.allow(`open-api-ip:${address}`, 600, 15 * 60_000)) return false;
+    return this.allow(`open-api-key:${keyIdentity || address}`, 120, 15 * 60_000);
   }
 }

@@ -22,6 +22,15 @@ class TencentMusicApi(
     private val tokenProvider: TokenProvider,
     private val appVersionCode: Long = 0L,
 ) {
+    /** 波点搜索首页热词；点击时 [keyword] 可直接进入普通搜索。 */
+    data class HotSearchItem(
+        val keyword: String,
+        val type: Int,
+        val icon: String,
+        val sort: Int,
+        val searchType: Int,
+        val jumpUrl: String,
+    )
     data class ImContact(val uid: String, val nickname: String)
     /**
      * 认证响应中携带的账号 ID 只用于本地数据分桶，绝不作为鉴权凭据使用。
@@ -191,17 +200,27 @@ class TencentMusicApi(
      * 这样设计是因为 [authorized] 在令牌被拒时会重放整个请求、把 NDJSON 从头再读一遍：
      * 若回调语义是「追加一首」，重放就会产出重复条目；传累积快照时累积列表是下面这个
      * lambda 的局部变量，重放自然从空开始，界面直接整体赋值即可。
+     *
+     * [source] 是**搜索范围**，与歌曲自身的来源不是一回事，所以默认值不是 [DEFAULT_SOURCE]：
+     * 传 [SEARCH_SOURCE_ALL] 时服务端按聚合白名单并发查多个音源，传具体音源名则只查那一个。
+     * 服务端对缺失 / 空串 / `all` 一律归一成聚合搜索，所以这里显式传值只是为了
+     * 让「用户选了什么」在客户端就有据可查，不依赖服务端的默认分支。
+     *
+     * ⚠️ 聚合白名单由服务端的 `AGGREGATED_SOURCES` 决定，**不等于「所有已接入音源」** ——
+     * 酷我刻意不在其中，只能显式指定。别假设选了「全部」就等于三端都查了。
      */
     fun search(
         keyword: String,
         page: Int = 1,
         num: Int = 60,
         quality: Int = AudioQuality.Default.value,
+        source: String = SEARCH_SOURCE_KUWO,
         onProgress: (List<Song>) -> Unit = {},
     ): SearchResult {
         val query = "?keyword=${encode(keyword)}" +
             "&page=$page&num=${num.coerceIn(1, 60)}" +
-            "&quality=${quality.coerceIn(0, MAX_QUALITY)}"
+            "&quality=${quality.coerceIn(0, MAX_QUALITY)}" +
+            "&source=${encode(source.ifBlank { SEARCH_SOURCE_KUWO })}"
         return authorized("/api/v1/search$query") { connection ->
             val songs = mutableListOf<Song>()
             var dropped = 0
@@ -216,7 +235,9 @@ class TencentMusicApi(
                             onProgress(songs.toList())
                         }
                         "end" -> record.optJSONObject("meta")?.let { meta ->
-                            // dropped 现在恒为 0（服务端不再逐首探测），仍然读它是为了兼容旧服务端。
+                            // 服务端因拿不到播放地址而丢掉的条数。**不再是恒为 0 的装饰字段**：
+                            // 酷我搜热门歌手时上游给 20 条、20 条全被预筛掉，这里就会读到 20，
+                            // 而 songs 是空的 —— 那才是「搜到了但都不可播」，不是「没搜到」。
                             dropped = meta.optInt("dropped")
                             hasMore = meta.optBoolean("hasMore")
                             total = meta.optInt("total")
@@ -225,6 +246,49 @@ class TencentMusicApi(
                 }
             }
             SearchResult(songs, dropped, hasMore, total, page)
+        }
+    }
+
+    /** 搜索框联想词，服务端已按波点官方顺序裁剪。 */
+    fun searchSuggestions(keyword: String, limit: Int = 10): List<String> {
+        if (keyword.isBlank()) return emptyList()
+        return authorized(
+            "/api/v1/search/suggestions?keyword=${encode(keyword.trim())}&limit=${limit.coerceIn(1, 20)}&source=kuwo",
+        ) { connection ->
+            val root = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+            check(root.optInt("code") == 0) { root.optString("message", "无法获取搜索联想") }
+            val data = root.optJSONArray("data") ?: JSONArray()
+            buildList {
+                for (index in 0 until data.length()) {
+                    data.optString(index).trim().takeIf(String::isNotEmpty)?.let(::add)
+                }
+            }
+        }
+    }
+
+    /** 波点官方搜索首页热词。 */
+    fun hotSearch(limit: Int = 20): List<HotSearchItem> = authorized(
+        "/api/v1/search/hot?limit=${limit.coerceIn(1, 20)}&source=kuwo",
+    ) { connection ->
+        val root = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+        check(root.optInt("code") == 0) { root.optString("message", "无法获取热搜") }
+        val data = root.optJSONArray("data") ?: JSONArray()
+        buildList {
+            for (index in 0 until data.length()) {
+                val item = data.optJSONObject(index) ?: continue
+                val keyword = item.optString("keyword").trim()
+                if (keyword.isEmpty()) continue
+                add(
+                    HotSearchItem(
+                        keyword = keyword,
+                        type = item.optInt("type"),
+                        icon = item.optString("icon"),
+                        sort = item.optInt("sort"),
+                        searchType = item.optInt("searchType"),
+                        jumpUrl = item.optString("jumpUrl"),
+                    ),
+                )
+            }
         }
     }
 
@@ -1192,6 +1256,9 @@ class TencentMusicApi(
             mid = mid,
             type = type,
             vip = optBoolean("vip"),
+            // ⚠️ 必须带默认值 true。`optBoolean(name)` 在字段缺失时返回 **false**，
+            // 那会把「服务端没下发这个字段」当成「不可播」，旧服务端下整个列表全被置灰。
+            playable = optBoolean("playable", true),
             favorited = optBoolean("favorited"),
             source = source,
         )
@@ -1217,6 +1284,16 @@ class TencentMusicApi(
         private const val FAVORITE_INFO_CONCURRENCY = 4
         private const val BATCH_INFO_SIZE = 60
         private const val DEFAULT_SOURCE = "tencent"
+
+        /**
+         * 搜索范围：聚合查询（服务端按 `AGGREGATED_SOURCES` 并发查多个音源）。
+         *
+         * 与 [DEFAULT_SOURCE] 刻意分开：后者是**歌曲身份**缺失时的兜底音源，
+         * 前者是**搜索范围**。两者语义不同，混用会让「搜不到歌」和「放不出歌」互相冒充。
+         */
+        const val SEARCH_SOURCE_ALL = "all"
+        /** Android 搜索页固定使用酷我（波点），界面不再暴露音源选择。 */
+        const val SEARCH_SOURCE_KUWO = "kuwo"
 
         /** 网络歌曲的稳定键；remoteId=0 或 null 时回退到上游 mid。 */
         fun playlistSongId(song: Song): String? = song.remoteId?.takeIf { it > 0L }?.toString()
@@ -1392,9 +1469,11 @@ data class RichLyric(val lrc: String, val yrc: String)
 /**
  * 搜索结果。
  *
- * [dropped] 是服务端因拿不到可用播放地址而丢弃的数量，服务端不再逐首探测后恒为 0，
- * 保留只为兼容尚未升级的服务端。[hasMore] 与 [total] 服务端一直在返回，
- * 客户端以前直接丢掉，现在用来驱动滚到底加载下一页。
+ * [dropped] 是服务端因拿不到可用播放地址而丢弃的数量（不再逐首探测，改用上游元数据预筛）。
+ * **它不再恒为 0** —— 酷我搜热门歌手时上游给 20 条、20 条全被预筛掉，这里就是 20。
+ * 所以「[songs] 为空」有两种含义，要靠它区分：`dropped > 0` 是「搜到了但都不可播」，
+ * 该提示用户换个音源；`dropped == 0` 才是真的没搜到。
+ * [hasMore] 与 [total] 服务端一直在返回，客户端以前直接丢掉，现在用来驱动滚到底加载下一页。
  */
 data class SearchResult(
     val songs: List<Song>,

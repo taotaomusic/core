@@ -15,6 +15,8 @@ export const RATE_LIMIT_METADATA_KEY = "taotao:rate-limit";
  * - `image-status`：图片任务轮询，按用户 300 次 + 按来源地址 1800 次 / 15 分钟
  * - `im-session`：IM 连接凭据签发，按用户与来源地址限制频率
  * - `im-sync`：IM 消息同步，按用户与来源地址限制频率
+ * - `music-source-sms`：音源账号短信验证码，按来源地址 5 次 + 按手机号 3 次 / 15 分钟
+ * - `open-api`：开放搜歌接口，按 API Key 120 次 + 按来源地址 600 次 / 15 分钟
  *
  * 各用途计数器必须互相独立：更新检查和图片轮询都是周期性调用，
  * 与登录或图片创建共用会烧掉其它用途的额度。
@@ -27,6 +29,8 @@ export type RateLimitBucket =
   | "image"
   | "image-status"
   | "im-session"
-  | "im-sync";
+  | "im-sync"
+  | "music-source-sms"
+  | "open-api";
 
 export const RateLimit = (bucket: RateLimitBucket) => SetMetadata(RATE_LIMIT_METADATA_KEY, bucket);

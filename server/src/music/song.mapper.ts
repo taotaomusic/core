@@ -1,4 +1,5 @@
 import { Injectable } from "@nestjs/common";
+import type { MusicSource } from "../upstream/music-source.client";
 import type { UpstreamSong } from "../upstream/tencent.client";
 
 /**
@@ -7,6 +8,9 @@ import type { UpstreamSong } from "../upstream/tencent.client";
  * 字段名与类型都是历史契约，客户端逐个字段读取：
  * - `id` 必须是 JSON number，字符串化会让客户端算出 remoteId=null，
  *   该歌随即不可播、不可收藏、无歌词
+ * - **`id` 只在 `source` 内有意义**：同一个数字在不同音源里是两首歌，
+ *   两者必须成对使用，任何按 id 建索引/去重/缓存的地方都要带上 `source`。
+ *   详见 `MusicSourceClient` 上方关于 SongKey 的说明。
  * - `duration` 是已格式化的 `mm:ss` 字符串，不是秒数
  * - `lyricUrl` 是相对路径（带前导斜杠），客户端会自己补上基地址
  * - `coverUrl` 必须是免鉴权的绝对 https 地址，客户端直接交给图片库加载
@@ -28,10 +32,18 @@ export type Song = {
   type?: number;
   /** 是否为付费/VIP 歌曲。搜索结果里本来就有 `pay` 字段，之前一直没读。 */
   vip: boolean;
+  /**
+   * 这首歌**能不能拿到播放地址**。`false` 时客户端必须置灰并标注，不要发起播放。
+   *
+   * 与 [vip] 是两件事：`vip` 说的是「上游标它付费」，这里是「实测取不到地址」。
+   * 酷我上大量正版热门曲（周杰伦全系列等）属于后者 —— 上游逐首回
+   * `code 20012 歌曲已下线`。搜索**照常列出**它们（波点 App 也列），只是不可播。
+   */
+  playable: boolean;
   /** 当前用户是否已收藏。由 [SearchService] 批量查询后填入。 */
   favorited: boolean;
   /** 音乐数据源。新客户端据此把后续链接、歌词与收藏请求路由到同一上游。 */
-  source: "tencent" | "netease";
+  source: MusicSource;
 };
 
 /** 音质档位上限。实测上游 `qualityInfo` 到 18（NAC），README 里写的 16 是旧的。 */
@@ -68,11 +80,18 @@ export class SongMapper {
     playBase: string,
     quality: number,
     favorited = false,
-    source: "tencent" | "netease" = "tencent",
+    source: MusicSource = "tencent",
+    /**
+     * 该音源是否允许 mid-only 身份。
+     *
+     * 由适配器的 `numericIdOnly` 取反后传入，而不是在这里判断 source ——
+     * 判定规则属于适配器自己的能力，散在映射层会让新增音源时漏改。
+     */
+    allowMidOnly = false,
   ): Song {
     const id = Number(item.songID);
     const mid = String(item.songMID ?? "").trim();
-    const hasIdentity = id > 0 || (source === "tencent" && mid.length > 0);
+    const hasIdentity = id > 0 || (allowMidOnly && mid.length > 0);
     const playParams = new URLSearchParams({ quality: String(quality), source });
     const lyricParams = new URLSearchParams({ source });
     if (mid) {
@@ -96,6 +115,8 @@ export class SongMapper {
       mid: mid || undefined,
       type: item.type,
       vip: (item.pay ?? "").includes("付费"),
+      // 只有酷我会判断；`undefined`（QQ 音乐 / 网易云）按可播处理。
+      playable: item.playable !== false,
       favorited,
       source,
     };

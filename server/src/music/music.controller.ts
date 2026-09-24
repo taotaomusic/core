@@ -5,9 +5,10 @@ import { CurrentUser } from "../common/decorators/current-user.decorator";
 import { RawResponse } from "../common/decorators/raw-response.decorator";
 import type { SessionUser } from "../common/request.types";
 import { AppConfigService } from "../config/app-config.service";
-import { TencentClient } from "../upstream/tencent.client";
-import { NeteaseClient } from "../upstream/netease.client";
-import type { MusicSource, SearchSource } from "./search.service";
+import { MUSIC_SOURCES } from "../upstream/music-source.client";
+import type { MusicSource, SongKey } from "../upstream/music-source.client";
+import { MusicSourceRegistry } from "../upstream/music-source.registry";
+import type { SearchSource } from "./search.service";
 import { SearchService } from "./search.service";
 import { SongMapper } from "./song.mapper";
 import { StreamService } from "./stream.service";
@@ -16,13 +17,18 @@ import { StreamService } from "./stream.service";
 const DEFAULT_PAGE_SIZE = 60;
 const MAX_PAGE_SIZE = 60;
 const MAX_INFO_BATCH_SIZE = 60;
-type SongKey = { id?: number; mid?: string };
+const DEFAULT_SUGGESTION_SIZE = 10;
+const MAX_SUGGESTION_SIZE = 20;
 
 /**
  * 搜索、播放与歌词。
  *
  * 搜索、播放转发、歌词三个端点自己写响应体（NDJSON 流、音频流、纯文本），标了 [RawResponse]；
  * `/link` 和 `/info` 是普通 JSON，走统一信封。
+ *
+ * 上游一律经 [MusicSourceRegistry] 取，**这个文件里不允许出现按 `source` 分支的逻辑**：
+ * 判断该由适配器自己的能力标记（`numericIdOnly` / `supportsTierProbe`）表达，
+ * 否则每加一个音源就要回来改一次。
  */
 @Controller()
 export class MusicController {
@@ -30,10 +36,46 @@ export class MusicController {
     private readonly config: AppConfigService,
     private readonly search: SearchService,
     private readonly stream: StreamService,
-    private readonly upstream: TencentClient,
-    private readonly netease: NeteaseClient,
+    private readonly registry: MusicSourceRegistry,
     private readonly mapper: SongMapper,
   ) {}
+
+  /**
+   * 搜索框联想词。返回普通 JSON 信封，`data` 是按上游顺序排列的字符串数组。
+   * 当前只有酷我（波点）提供此能力，因此默认 source=kuwo。
+   */
+  @Get("search/suggestions")
+  async searchSuggestions(
+    @Query("keyword") keyword?: string,
+    @Query("limit") limit?: string,
+    @Query("source") source?: string,
+  ): Promise<string[]> {
+    const trimmed = (keyword ?? "").trim();
+    if (!trimmed) throw ApiErrors.badRequest(4001, "请输入搜索关键词");
+    const client = this.registry.of(this.sourceOf(source ?? "kuwo"));
+    if (!client.searchSuggestions) {
+      throw ApiErrors.badRequest(4007, `${client.displayName}不支持搜索联想`);
+    }
+    return client.searchSuggestions(
+      trimmed,
+      Math.min(MAX_SUGGESTION_SIZE, this.positiveIntOr(limit, DEFAULT_SUGGESTION_SIZE)),
+    );
+  }
+
+  /** 获取官方搜索首页热词，默认取酷我（波点）数据。 */
+  @Get("search/hot")
+  async searchHotKeywords(
+    @Query("limit") limit?: string,
+    @Query("source") source?: string,
+  ) {
+    const client = this.registry.of(this.sourceOf(source ?? "kuwo"));
+    if (!client.searchHotKeywords) {
+      throw ApiErrors.badRequest(4007, `${client.displayName}不支持热搜`);
+    }
+    return client.searchHotKeywords(
+      Math.min(MAX_SUGGESTION_SIZE, this.positiveIntOr(limit, DEFAULT_SUGGESTION_SIZE)),
+    );
+  }
 
   @RawResponse()
   @Get("search")
@@ -86,25 +128,18 @@ export class MusicController {
     const requested = this.mapper.qualityOf(quality);
     const selectedSource = this.sourceOf(source);
     const key = this.songKeyOf(id, mid, selectedSource);
-    if (selectedSource === "netease") {
-      const link = await this.netease.resolveLink({ id: key.id }, requested);
-      return {
-        songId: id,
-        url: link.url,
-        quality: link.quality,
-        requestedQuality: requested,
-        kbps: link.kbps,
-        fallback: false,
-      };
-    }
+    const client = this.registry.of(selectedSource);
     // 先问一次可用档位，能直接命中真实存在的档，省掉逐级试错的多次请求。
-    // info 自己失败不算致命，退回音质阶梯。
-    const available = await this.upstream
-      .requestSongInfo(key)
-      .then((info) => new Set(info.tiers.filter((tier) => tier.size > 0).map((tier) => tier.type)))
-      .catch(() => undefined);
+    // info 自己失败不算致命，退回音质阶梯。不支持分档的音源跳过这一步，
+    // 否则只是白白多打一次上游。
+    const available = client.supportsTierProbe
+      ? await client
+          .requestSongInfo(key)
+          .then((info) => new Set(info.tiers.filter((tier) => tier.size > 0).map((tier) => tier.type)))
+          .catch(() => undefined)
+      : undefined;
 
-    const link = await this.upstream.resolveLink(
+    const link = await client.resolveLink(
       { ...key, type: this.optionalInt(type) },
       requested,
       undefined,
@@ -150,6 +185,7 @@ export class MusicController {
     @Query("source") source?: string,
   ) {
     const selectedSource = this.sourceOf(source);
+    const client = this.registry.of(selectedSource);
     const uniqueIds = [...new Set((ids ?? "").split(",").map((value) => Number(value.trim())))]
       .filter((value) => Number.isInteger(value) && value > 0);
     const uniqueMids = [
@@ -160,8 +196,8 @@ export class MusicController {
           .filter(Boolean),
       ),
     ];
-    if (selectedSource === "netease" && uniqueMids.length > 0) {
-      throw ApiErrors.badRequest(4001, "网易云歌曲必须提供正整数 ID");
+    if (client.numericIdOnly && uniqueMids.length > 0) {
+      throw ApiErrors.badRequest(4001, `${client.displayName}歌曲必须提供正整数 ID`);
     }
     const keys: SongKey[] = [
       ...uniqueIds.map((id) => ({ id })),
@@ -182,7 +218,7 @@ export class MusicController {
   }
 
   private async songInfo(key: SongKey, source: MusicSource = "tencent") {
-    const info = await (source === "netease" ? this.netease : this.upstream).requestSongInfo({
+    const info = await this.registry.of(source).requestSongInfo({
       id: key.id,
       mid: key.mid,
     });
@@ -243,10 +279,7 @@ export class MusicController {
   ): Promise<void> {
     const selectedSource = this.sourceOf(source);
     const key = this.songKeyOf(id, mid, selectedSource);
-    const rich =
-      selectedSource === "netease"
-        ? await this.netease.requestLyric(key.id)
-        : await this.upstream.requestLyric(key);
+    const rich = await this.registry.of(selectedSource).requestLyric(key);
     if (format === "json") {
       response.status(200).json({ code: 0, message: "success", data: rich });
       return;
@@ -284,25 +317,40 @@ export class MusicController {
     return Number.isInteger(parsed) ? parsed : undefined;
   }
 
-  /** 单曲接口统一校验身份；QQ 音乐允许 mid-only，网易云只接受正整数 ID。 */
+  /**
+   * 单曲接口统一校验身份。
+   *
+   * **`id` 必须和 `source` 一起用**：数字 ID 只在所属音源内有意义，同一个数字在
+   * QQ 和酷我里是两首完全不同的歌，混用不会报错、只会安静地返回另一首歌。
+   *
+   * 哪些音源允许 mid-only 由适配器的 `numericIdOnly` 决定，这里不写按音源的分支 ——
+   * 新增音源时只需要在适配器上标一个标记。
+   */
   private songKeyOf(id: number, mid: string | undefined, source: MusicSource): SongKey {
+    const client = this.registry.of(source);
     const normalizedMid = mid?.trim();
     if (Number.isInteger(id) && id > 0) {
       return { id, ...(normalizedMid ? { mid: normalizedMid } : {}) };
     }
-    if (source === "tencent" && normalizedMid) return { mid: normalizedMid };
-    const message = source === "netease" ? "网易云歌曲必须提供正整数 ID" : "请提供歌曲 ID 或 mid";
-    throw ApiErrors.badRequest(4001, message);
+    if (!client.numericIdOnly && normalizedMid) return { mid: normalizedMid };
+    throw ApiErrors.badRequest(
+      4001,
+      client.numericIdOnly ? `${client.displayName}歌曲必须提供正整数 ID` : "请提供歌曲 ID 或 mid",
+    );
   }
 
-  /** 默认 QQ 音乐，未知来源必须明确拒绝，避免悄悄把网易云 ID 发给 QQ 上游。 */
+  /**
+   * 解析音源参数。默认 QQ 音乐，未知来源必须明确拒绝 ——
+   * 静默兜底会把别的音源的 ID 发给 QQ 上游。
+   */
   private sourceOf(value: string | undefined): MusicSource {
-    if (value === undefined || value === "" || value === "tencent") return "tencent";
-    if (value === "netease") return "netease";
-    throw ApiErrors.badRequest(4001, "不支持的音乐来源");
+    if (value === undefined || value === "") return "tencent";
+    const matched = MUSIC_SOURCES.find((source) => source === value);
+    if (!matched) throw ApiErrors.badRequest(4001, "不支持的音乐来源");
+    return matched;
   }
 
-  /** 搜索默认聚合两个音源；其余单曲接口必须指定为某一个实际来源。 */
+  /** 搜索默认聚合；其余单曲接口必须指定为某一个实际来源。 */
   private searchSourceOf(value: string | undefined): SearchSource {
     if (value === undefined || value === "" || value === "all") return "all";
     return this.sourceOf(value);
