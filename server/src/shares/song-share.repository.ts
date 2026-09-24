@@ -1,10 +1,11 @@
 import { Injectable } from "@nestjs/common";
 import { DatabaseService } from "../database/database.service";
+import type { MusicSource } from "../upstream/music-source.client";
 
 export type SongShareRecord = {
   token: string;
   user_id: number;
-  source: "tencent" | "netease";
+  source: MusicSource;
   song_id: string;
   remote_id: string | null;
   mid: string | null;
@@ -15,7 +16,6 @@ export type SongShareRecord = {
   cover_url: string | null;
   duration_seconds: number;
   vip: number;
-  preview_file: string | null;
   enabled: number;
   access_count: number;
   created_at: number;
@@ -49,10 +49,6 @@ export class SongShareRepository {
            cover_url = excluded.cover_url,
            duration_seconds = excluded.duration_seconds,
            vip = excluded.vip,
-           preview_file = CASE
-             WHEN song_share.song_type IS DISTINCT FROM excluded.song_type THEN NULL
-             ELSE song_share.preview_file
-           END,
            enabled = 1,
            updated_at = excluded.updated_at
          RETURNING *`,
@@ -90,13 +86,6 @@ export class SongShareRepository {
     await this.database.run(
       "UPDATE song_share SET access_count = access_count + 1 WHERE token = $1 AND enabled = 1",
       [token],
-    );
-  }
-
-  async setPreviewFile(token: string, file: string): Promise<void> {
-    await this.database.run(
-      "UPDATE song_share SET preview_file = $2, updated_at = $3 WHERE token = $1 AND enabled = 1",
-      [token, file, Date.now()],
     );
   }
 }

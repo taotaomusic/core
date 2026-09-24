@@ -1,42 +1,56 @@
 import { Injectable } from "@nestjs/common";
 import { randomBytes } from "node:crypto";
-import { createReadStream, existsSync } from "node:fs";
-import { mkdir, rename, rm, stat } from "node:fs/promises";
-import { basename, join } from "node:path";
-import { spawn } from "node:child_process";
 import type { Request, Response } from "express";
 import { ApiErrors } from "../common/api.exception";
 import { AppConfigService } from "../config/app-config.service";
+import { StreamService } from "../music/stream.service";
 import { ReleaseRepository } from "../release/release.repository";
-import { NeteaseClient } from "../upstream/netease.client";
-import { TencentClient } from "../upstream/tencent.client";
+import type { MusicSource, SongKey } from "../upstream/music-source.client";
+import { MusicSourceRegistry } from "../upstream/music-source.registry";
 import { SongShareRepository, type SongShareRecord, type SongShareSnapshot } from "./song-share.repository";
 
 export type CreateSongShareInput = {
-  source: "tencent" | "netease";
+  /** 分享歌曲的音源。**必须与 remoteId 成对**：数字 ID 只在所属音源内有意义。 */
+  source: MusicSource;
   remoteId?: number;
   mid?: string;
   type?: number;
 };
 
+/**
+ * 分享页最多允许试听多少秒。
+ *
+ * 这个上限**只用来告知客户端**（`previewDurationSeconds`），服务端不做任何裁剪：
+ * 音乐不进我们的磁盘，超时由分享页自己守（`webApp` 的 `WebAudioController`）。
+ */
 const PREVIEW_SECONDS = 60;
-const PREVIEW_BITRATE = "64k";
+
+/**
+ * 取试听地址用的音质档位 = **标准音质**。
+ *
+ * 实测《晴天》的 `qualityInfo`：档位 0「音乐试听」本身就是上游裁好的 60 秒片段（约 960 KB），
+ * 档位 3 / 4 才是完整的「标准音质」（m4a，约 6.5 MB）。**用 0 就是在要 60 秒音乐**，
+ * 所以这里要 4；档位不存在时 `resolveLink` 会自己沿阶梯降级。
+ *
+ * 注意上游偶发 `110001` 风控时，`resolveLink` 会回退到 v2 `geturl` 的低码率试听链
+ * （那确实是个 60 秒文件）。这是**全站播放路径共用的既有兜底**，不是本接口特有的行为 ——
+ * 与其在这里加一套重试，不如让 `/songs/:id/play` 一起受益。
+ */
+const PREVIEW_QUALITY = 4;
 
 @Injectable()
 export class SongShareService {
-  private readonly generating = new Map<string, Promise<string>>();
-
   constructor(
     private readonly config: AppConfigService,
     private readonly repository: SongShareRepository,
     private readonly releases: ReleaseRepository,
-    private readonly tencent: TencentClient,
-    private readonly netease: NeteaseClient,
+    private readonly registry: MusicSourceRegistry,
+    private readonly stream: StreamService,
   ) {}
 
   async create(userId: number, input: CreateSongShareInput, request: Request) {
     const key = this.keyOf(input);
-    const info = await (input.source === "netease" ? this.netease : this.tencent).requestSongInfo(key);
+    const info = await this.registry.of(input.source).requestSongInfo(key);
     const remoteId = Number(info.songID) > 0 ? String(info.songID) : input.remoteId ? String(input.remoteId) : null;
     const mid = String(info.songMID || input.mid || "").trim() || null;
     const stableId = remoteId || mid;
@@ -85,42 +99,20 @@ export class SongShareService {
     };
   }
 
+  /**
+   * 公开试听流。
+   *
+   * **服务端不裁剪、不落盘**：这里只按 Range 转发上游的完整标准音频，「最多 60 秒」
+   * 由分享页自己守。所以响应体里就是完整音频 —— 这没关系，上游直链本来就有时效，
+   * 而把音乐缓存到服务器磁盘（哪怕只有 60 秒）是明确不做的。
+   *
+   * 失败一律归 502：**绝不能返回 401**，那会让客户端把上游故障当成自己的令牌失效
+   * 去续期，二次失败后把用户踢回登录页。
+   */
   async streamPreview(token: string, request: Request, response: Response): Promise<void> {
     const share = await this.requiredShare(token);
-    const file = await this.ensurePreview(share);
-    const info = await stat(file);
-    const range = request.headers.range;
-    response.setHeader("Content-Type", "audio/mpeg");
-    response.setHeader("Accept-Ranges", "bytes");
-    response.setHeader("Cache-Control", "public, max-age=86400, immutable");
-    if (!range) {
-      response.writeHead(200, { "Content-Length": info.size });
-      createReadStream(file).pipe(response);
-      return;
-    }
-    const match = /^bytes=(\d*)-(\d*)$/.exec(range);
-    if (!match) {
-      response.writeHead(416, { "Content-Range": `bytes */${info.size}` });
-      response.end();
-      return;
-    }
-    const suffixLength = !match[1] && match[2] ? Number(match[2]) : undefined;
-    const start = suffixLength === undefined
-      ? Number(match[1] || 0)
-      : Math.max(0, info.size - suffixLength);
-    const end = suffixLength === undefined && match[2]
-      ? Math.min(Number(match[2]), info.size - 1)
-      : info.size - 1;
-    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || start > end || start >= info.size) {
-      response.writeHead(416, { "Content-Range": `bytes */${info.size}` });
-      response.end();
-      return;
-    }
-    response.writeHead(206, {
-      "Content-Length": end - start + 1,
-      "Content-Range": `bytes ${start}-${end}/${info.size}`,
-    });
-    createReadStream(file, { start, end }).pipe(response);
+    const target = await this.stream.resolvePlayUrl(this.playKeyOf(share), PREVIEW_QUALITY, share.source);
+    await this.stream.proxy(request, response, target);
   }
 
   private async requiredShare(token: string): Promise<SongShareRecord> {
@@ -130,79 +122,39 @@ export class SongShareService {
     return share;
   }
 
-  private ensurePreview(share: SongShareRecord): Promise<string> {
-    const existing = this.generating.get(share.token);
-    if (existing) return existing;
-    const task = this.generatePreview(share).finally(() => this.generating.delete(share.token));
-    this.generating.set(share.token, task);
-    return task;
+  /**
+   * 从落库的快照还原歌曲身份。
+   *
+   * 快照里 `remote_id` / `mid` / `song_type` 都是可空的，缺哪个就不带哪个 ——
+   * 单曲接口自己会按音源能力标记判断这份身份够不够用，这里不做音源分支。
+   */
+  private playKeyOf(share: SongShareRecord): SongKey {
+    const id = Number(share.remote_id ?? 0);
+    return {
+      ...(Number.isSafeInteger(id) && id > 0 ? { id } : {}),
+      ...(share.mid ? { mid: share.mid } : {}),
+      ...(share.song_type === null ? {} : { type: share.song_type }),
+    };
   }
 
-  private async generatePreview(share: SongShareRecord): Promise<string> {
-    await mkdir(this.config.sharePreviewDirectory, { recursive: true });
-    const fileName = `${share.token}.mp3`;
-    const destination = join(this.config.sharePreviewDirectory, fileName);
-    if (share.preview_file && basename(share.preview_file) === fileName && existsSync(destination)) return destination;
-    const temp = `${destination}.${process.pid}.${Date.now()}.tmp`;
-    const remoteId = Number(share.remote_id || 0) || undefined;
-    const target = share.source === "netease"
-      ? (await this.netease.resolveLink({ id: remoteId }, 0)).url
-      : (await this.tencent.resolveLink({ id: remoteId, mid: share.mid || undefined, type: share.song_type || undefined }, 0)).url;
-    const targetHost = new URL(target).hostname;
-    if (!this.config.isAllowedMediaHost(targetHost)) throw ApiErrors.upstream("试听地址不可用");
-    try {
-      await this.runFfmpeg(target, temp);
-      await rm(destination, { force: true });
-      await rename(temp, destination);
-      await this.repository.setPreviewFile(share.token, fileName);
-      return destination;
-    } catch (error) {
-      await rm(temp, { force: true }).catch(() => undefined);
-      if (error instanceof Error && error.message.includes("ffmpeg")) {
-        throw ApiErrors.serviceUnavailable(5034, "试听服务暂时不可用");
-      }
-      throw error;
-    }
-  }
-
-  private runFfmpeg(input: string, output: string): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const child = spawn(
-        this.config.ffmpegExecutable,
-        [
-          "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
-          "-i", input,
-          "-t", String(PREVIEW_SECONDS),
-          "-vn", "-map_metadata", "-1",
-          "-ac", "2", "-ar", "44100", "-b:a", PREVIEW_BITRATE,
-          "-f", "mp3", output,
-        ],
-        { windowsHide: true },
-      );
-      let stderr = "";
-      child.stderr.setEncoding("utf8");
-      child.stderr.on("data", (chunk: string) => {
-        if (stderr.length < 4_000) stderr += chunk;
-      });
-      child.once("error", (error) => reject(new Error(`ffmpeg 启动失败：${error.message}`)));
-      child.once("exit", (code) => {
-        if (code === 0) resolve();
-        else reject(new Error(`ffmpeg 裁剪失败（${code ?? "unknown"}）：${stderr.trim()}`));
-      });
-    });
-  }
-
-  private keyOf(input: CreateSongShareInput): { id?: number; mid?: string } {
+  /**
+   * 组装歌曲身份。
+   *
+   * 哪些音源允许 mid-only 由适配器的 `numericIdOnly` 决定，这里不写按音源的分支。
+   * `remoteId` 单独拿出来没有意义 —— 它必须和 `input.source` 一起才能定位一首歌。
+   */
+  private keyOf(input: CreateSongShareInput): SongKey {
+    const client = this.registry.of(input.source);
     const id = Number.isSafeInteger(input.remoteId) && Number(input.remoteId) > 0
       ? input.remoteId
       : undefined;
-    if (input.source === "netease") {
-      if (!Number.isSafeInteger(id) || Number(id) <= 0) throw ApiErrors.badRequest(4001, "网易云歌曲必须提供正整数 ID");
+    if (client.numericIdOnly) {
+      if (!id) throw ApiErrors.badRequest(4001, `${client.displayName}歌曲必须提供正整数 ID`);
       return { id };
     }
     const mid = input.mid?.trim();
-    if ((!Number.isSafeInteger(id) || Number(id) <= 0) && !mid) throw ApiErrors.badRequest(4001, "请提供歌曲 ID 或 mid");
-    return { ...(Number.isSafeInteger(id) && Number(id) > 0 ? { id } : {}), ...(mid ? { mid } : {}) };
+    if (!id && !mid) throw ApiErrors.badRequest(4001, "请提供歌曲 ID 或 mid");
+    return { ...(id ? { id } : {}), ...(mid ? { mid } : {}) };
   }
 
   private newToken(): string {

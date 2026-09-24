@@ -11,6 +11,7 @@ import {
 } from "@nestjs/common";
 import type { Request, Response } from "express";
 import { ApiErrors } from "../common/api.exception";
+import { isMusicSource } from "../upstream/music-source.client";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
 import { Public } from "../common/decorators/public.decorator";
 import { RateLimit } from "../common/decorators/rate-limit.decorator";
@@ -53,8 +54,9 @@ export class SongShareController {
   }
 
   private inputOf(body: Record<string, unknown>): CreateSongShareInput {
+    // 白名单统一走 isMusicSource，不要手写音源数组 —— 每加一个音源都要回来改一遍。
     const source = String(body.source ?? "tencent").trim().toLowerCase();
-    if (source !== "tencent" && source !== "netease") {
+    if (!isMusicSource(source)) {
       throw ApiErrors.badRequest(4001, "不支持的音乐来源");
     }
     const remoteId = this.optionalPositiveInt(body.remoteId ?? body.songId, "歌曲 ID");

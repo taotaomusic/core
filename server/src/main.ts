@@ -5,9 +5,11 @@ import { NestFactory } from "@nestjs/core";
 import type { NestExpressApplication } from "@nestjs/platform-express";
 import { json, static as expressStatic } from "express";
 import type { NextFunction, Request, Response } from "express";
-import { existsSync } from "fs";
+import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { AppModule } from "./app.module";
+import { rewriteShareIndexHtml, sharePlayerVersion } from "./common/share-player-assets";
+import { sharePlayerCacheHeaders } from "./common/static-cache-policy";
 import { AppConfigService } from "./config/app-config.service";
 
 /**
@@ -129,13 +131,58 @@ async function bootstrap(): Promise<void> {
 
   // 分享页只托管 Kotlin/Wasm 静态产物；歌曲身份和试听地址仍由公开 API 按短码读取。
   // 资源使用独立 /share 前缀，避免 /s/{token} 下的相对路径被浏览器解析成错误地址。
+  //
+  // 防混批是这里的**首要目标**，用了两层，缺一层都会漏：
+  //
+  // 1. **路径版本化**（`/share/v/<内容指纹>/…`）。入口的 JS 胶水与应用 wasm 都是**固定名**，
+  //    而 JS 必须提供 wasm 要 import 的那批 `js_code` 实现，两者严格同批才行。把指纹写进
+  //    路径后，内容一变 URL 就变，浏览器手上不可能存在该 URL 的旧缓存。`index.html` 的
+  //    `<base>` 也指向版本化路径，于是 JS / wasm / skiko / 字体等**所有相对引用**自动跟版本走。
+  // 2. **缓存头分档**（见 [sharePlayerCacheHeaders]）。版本化路径下内容不可变，整目录吃
+  //    `immutable`；未版本化的老 URL 走 ETag 协商。
+  //
+  // 为什么光有第 2 层不够：`no-cache` 只能保证「以后」不再混批，浏览器里**已经按 immutable
+  // 存下的那份不会自动失效** —— 用户不硬刷新就一直抛
+  // `LinkError ... requires a callable`。第 1 层才是让用户「什么都不用做」就能恢复的原因。
   const sharePlayerDir = resolveSharePlayerDir();
   if (sharePlayerDir) {
-    app.use("/share", expressStatic(sharePlayerDir, { immutable: true, maxAge: "1d" }));
-    app.getHttpAdapter().getInstance().get(
-      /^\/s\/[A-Za-z0-9_-]{8,24}\/?$/,
-      (_request: Request, response: Response) => response.sendFile(join(sharePlayerDir, "index.html")),
+    const shareVersion = sharePlayerVersion(sharePlayerDir);
+    const shareIndexHtml = rewriteShareIndexHtml(
+      readFileSync(join(sharePlayerDir, "index.html"), "utf8"),
+      shareVersion,
     );
+    const sendShareIndex = (_request: Request, response: Response): void => {
+      // 入口 HTML 必须每次协商：它决定了 `<base>` 里的版本号，缓存住就等于把用户锁在旧版本上。
+      response.type("html").setHeader("cache-control", "no-cache").send(shareIndexHtml);
+    };
+
+    // 版本化路径：路径自带内容指纹，可以放心整目录长缓存。
+    app.use(
+      `/share/v/${shareVersion}`,
+      expressStatic(sharePlayerDir, {
+        etag: true,
+        lastModified: true,
+        setHeaders: (response: Response) =>
+          response.setHeader("cache-control", "public, max-age=31536000, immutable"),
+      }),
+    );
+
+    // index.html 要改写 `<base>`，所以必须由我们自己吐，关掉 static 的目录默认页。
+    app.getHttpAdapter().getInstance().get("/share/", sendShareIndex);
+    app.getHttpAdapter().getInstance().get("/share/index.html", sendShareIndex);
+
+    // 兼容未版本化的老 URL（历史页面、绝对路径引用），走 ETag 协商。
+    app.use(
+      "/share",
+      expressStatic(sharePlayerDir, {
+        index: false,
+        etag: true,
+        lastModified: true,
+        setHeaders: sharePlayerCacheHeaders,
+      }),
+    );
+
+    app.getHttpAdapter().getInstance().get(/^\/s\/[A-Za-z0-9_-]{8,24}\/?$/, sendShareIndex);
   } else {
     new Logger("Bootstrap").warn("未找到分享播放器构建产物。执行 npm run build:web-player 生成");
   }
