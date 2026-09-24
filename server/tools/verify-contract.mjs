@@ -11,6 +11,7 @@
 //   $env:ADMIN_INITIAL_PASSWORD="verify-initial-123456"
 //   $env:NODE_ENV="test"; $env:EMAIL_VERIFICATION_TEST_CODE="123456"
 //   $env:IM_ENABLED="false"
+//   $env:ADMIN_RATE_LIMIT="1000"
 //   npm run dev
 //   node tools/verify-contract.mjs http://127.0.0.1:4720
 //
@@ -26,7 +27,12 @@
 //     回显自身 Origin」一条会失败（默认不下发任何 CORS 头，失败即证明这一点）。
 //   * dist/public 必须先构建（npm run build:frontend），否则 /admin 下的 CSP
 //     与主题脚本断言拿不到 200。
-//   全绿应为「通过 213 项，失败 0 项」。检查项数量随脚本版本变化，以实际输出为准。
+//   * dist/share-player 必须存在（node tools/build-web-player.mjs），否则分享页
+//     入口的缓存头断言拿不到 200。
+//   * ADMIN_RATE_LIMIT 必须显式调大（默认 60 次 / 15 分钟，按来源地址）。本脚本一次
+//     运行要打上百次管理接口，用默认值会在中途把自己限流掉，报一批 4290 —— 失败位置
+//     还取决于脚本里请求的顺序，看起来像业务坏了。这个变量只该在验证/本地环境设置。
+//   全绿应为『通过 N 项，失败 0 项』。检查项数量随脚本版本变化，以实际输出为准。
 import { createHash, randomBytes } from "node:crypto";
 
 const base = (process.argv[2] ?? "http://127.0.0.1:4720").replace(/\/+$/, "");
@@ -190,6 +196,16 @@ async function main() {
     ["POST", "/api/v1/app/admin/announcements/1/enabled"],
     ["POST", "/api/v1/app/admin/announcements/1/pinned"],
     ["DELETE", "/api/v1/app/admin/announcements/1"],
+    // app/admin/music-sources —— 音源账号（凭据）
+    ["GET", "/api/v1/app/admin/music-sources"],
+    ["GET", "/api/v1/app/admin/music-sources/available"],
+    ["POST", "/api/v1/app/admin/music-sources"],
+    ["PATCH", "/api/v1/app/admin/music-sources/1"],
+    ["PUT", "/api/v1/app/admin/music-sources/1/enabled"],
+    ["POST", "/api/v1/app/admin/music-sources/1/probe"],
+    ["DELETE", "/api/v1/app/admin/music-sources/1"],
+    ["POST", "/api/v1/app/admin/music-sources/sms"],
+    ["POST", "/api/v1/app/admin/music-sources/login"],
   ];
   for (const [method, path] of guardedAdminRoutes) {
     const response = await fetch(`${base}${path}`, { method });
@@ -245,6 +261,26 @@ async function main() {
     themeBootstrap.status === 200 && (themeBootstrap.headers.get("content-type") ?? "").includes("javascript"),
     `HTTP ${themeBootstrap.status} ${themeBootstrap.headers.get("content-type")}`,
   );
+
+  // 分享页的入口文件是**不带内容哈希的固定名**，而 JS 胶水必须提供 wasm 要 import 的
+  // 那批 `js_code` 实现 —— 两者一旦新旧混用，浏览器直接抛
+  // `LinkError: WebAssembly.instantiate(): Import #N "js_code" ... requires a callable`
+  // （2026-09-21 真实事故，且每次发版都会复现）。所以这里钉住：入口文件必须可协商
+  // （`no-cache` + ETag），只有带内容哈希的文件才允许 `immutable`。
+  // 前提：`dist/share-player` 存在（`node tools/build-web-player.mjs` 产出）。
+  //
+  // ⚠️ **不要在这里断言 304**：undici 的 `fetch` 走条件请求拿不到 304（实测 ETag 与
+  // Last-Modified 完全一致仍回 200），会把正确的服务端行为判成失败。
+  // 条件请求的行为由 `node tools/verify-static-cache.ts` 用原生 http 覆盖。
+  const shareEntry = await fetch(`${base}/share/taotao-share-player.js`);
+  check(
+    "分享页入口 JS 可协商缓存（否则新旧 JS / wasm 会混用）",
+    shareEntry.status === 200 &&
+      shareEntry.headers.get("cache-control") === "no-cache" &&
+      Boolean(shareEntry.headers.get("etag")),
+    `HTTP ${shareEntry.status} cache-control=${shareEntry.headers.get("cache-control")} etag=${shareEntry.headers.get("etag")}`,
+  );
+  await shareEntry.arrayBuffer();
 
   const bootstrapPath = "/api/v1/app/bootstrap?versionCode=1&sdk=36&deviceId=verify-cors";
   const foreignOrigin = await fetch(`${base}${bootstrapPath}`, {
@@ -405,7 +441,7 @@ async function main() {
   const shareMetadataResponse = await fetch(`${base}/api/v1/public/shares/${shareToken}`);
   const shareMetadataBody = await shareMetadataResponse.json();
   check(
-    "短链元数据公开且只暴露受限试听地址",
+    "短链元数据公开，试听地址指向自家转发端点（不下发上游直链）",
     shareMetadataResponse.status === 200 &&
       shareMetadataBody.data?.title === "晴天" &&
       shareMetadataBody.data?.previewDurationSeconds === 60 &&
@@ -416,14 +452,19 @@ async function main() {
     headers: { range: "bytes=0-1023" },
   });
   const sharePreviewBytes = Buffer.from(await sharePreviewResponse.arrayBuffer());
+  // 试听**不再在服务端裁剪、也不落盘**：这里直接把上游的完整标准音频按 Range 转发出去。
+  // 因此 content-type 与总字节数都由上游决定（实测《晴天》标准音质是 6.5 MB 的 m4a；
+  // 上游偶发 110001 风控时 `resolveLink` 会回退到 v2 的低码率试听链，那只有约 960 KB），
+  // 所以这里**不断言具体大小、也不断言 ID3 魔数**，只守住「是真实音频流 + Range 可用」。
+  const sharePreviewTotal = Number((sharePreviewResponse.headers.get("content-range") ?? "").split("/")[1]);
   check(
-    "试听由服务器生成低码率 MP3 并支持 Range",
+    "试听直接转发上游音频流（不再由服务端裁剪/落盘）并支持 Range",
     sharePreviewResponse.status === 206 &&
-      sharePreviewResponse.headers.get("content-type")?.startsWith("audio/mpeg") === true &&
+      sharePreviewResponse.headers.get("content-type")?.startsWith("audio/") === true &&
       sharePreviewResponse.headers.get("content-range")?.startsWith("bytes 0-1023/") === true &&
       sharePreviewBytes.length === 1_024 &&
-      sharePreviewBytes.subarray(0, 3).toString("latin1") === "ID3",
-    `${sharePreviewResponse.status} ${sharePreviewResponse.headers.get("content-range")} ${sharePreviewBytes.length}`,
+      sharePreviewTotal > 100_000,
+    `${sharePreviewResponse.status} ${sharePreviewResponse.headers.get("content-type")} ${sharePreviewResponse.headers.get("content-range")} ${sharePreviewBytes.length}`,
   );
 
   section("收藏");
@@ -561,6 +602,52 @@ async function main() {
   check("删除歌单返回 204", deletedPlaylist.status === 204);
 
   section("搜索（NDJSON 流）");
+
+  const suggestions = await fetch(
+    `${base}/api/v1/search/suggestions?keyword=${encodeURIComponent("雨")}&limit=10&source=kuwo`,
+    { headers: { authorization: `Bearer ${token}` } },
+  );
+  const suggestionsBody = await suggestions.json();
+  check(
+    "酷我搜索联想返回 JSON 字符串数组",
+    suggestions.status === 200
+      && suggestionsBody.code === 0
+      && Array.isArray(suggestionsBody.data)
+      && suggestionsBody.data.length > 0
+      && suggestionsBody.data.every((word) => typeof word === "string" && word.length > 0),
+    `${suggestions.status} ${JSON.stringify(suggestionsBody).slice(0, 180)}`,
+  );
+  check(
+    "搜索联想包含真实相关词「雨爱」",
+    suggestionsBody.data?.includes("雨爱") === true,
+    JSON.stringify(suggestionsBody.data),
+  );
+
+  const emptySuggestion = await fetch(`${base}/api/v1/search/suggestions?keyword=`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  const emptySuggestionBody = await emptySuggestion.json();
+  check(
+    "搜索联想空关键词 400 且 code 4001",
+    emptySuggestion.status === 400 && emptySuggestionBody.code === 4001,
+    `${emptySuggestion.status} ${JSON.stringify(emptySuggestionBody)}`,
+  );
+
+  const hotSearch = await fetch(`${base}/api/v1/search/hot?limit=10&source=kuwo`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  const hotSearchBody = await hotSearch.json();
+  check(
+    "酷我热搜返回官方字段的 JSON 对象数组",
+    hotSearch.status === 200
+      && hotSearchBody.code === 0
+      && Array.isArray(hotSearchBody.data)
+      && hotSearchBody.data.length > 0
+      && hotSearchBody.data.every((item) => typeof item?.keyword === "string"
+        && typeof item?.sort === "number" && typeof item?.searchType === "number"),
+    `${hotSearch.status} ${JSON.stringify(hotSearchBody).slice(0, 220)}`,
+  );
+
   const emptyKeyword = await fetch(`${base}/api/v1/search?keyword=`, { headers: { authorization: `Bearer ${token}` } });
   const emptyBody = await emptyKeyword.json();
   check("空关键词 400 且 code 4001", emptyKeyword.status === 400 && emptyBody.code === 4001, JSON.stringify(emptyBody));
@@ -602,8 +689,303 @@ async function main() {
   check("回写了 content-range", !!audio.headers.get("content-range"), audio.headers.get("content-range"));
   check("拿到的是音频字节", head.length > 0, `${head.length} 字节`);
 
-  const full = await fetch(`${base}/api/v1/songs/97773/play?quality=10`);
-  check("播放接口无令牌时不返回 401（应为 4010 以外的错误或 200）", full.status !== 403, `实际 ${full.status}`);
+  // 带上 Range 只是防御：万一将来播放接口真的裸奔了，这条断言会失败但不必把整首歌拉下来。
+  // 鉴权在守卫层，与 Range 无关，不影响判定。
+  const full = await fetch(`${base}/api/v1/songs/97773/play?quality=10`, { headers: { range: "bytes=0-2047" } });
+  const fullBody = await full.json().catch(() => ({}));
+  // 播放链路受全局 `AccessTokenGuard` 保护：无令牌必须 **401/4010**，不能是 403 ——
+  // 403 会让客户端把「没登录」当成「没权限」直接判定失败，而不是去续期。
+  //
+  // 早先这里写的是「不返回 401」但条件只查 `!== 403`：**名字与条件相反**，
+  // 而且返回 200 或 500 同样会「通过」—— 播放接口一旦意外裸奔，这条断言不会响。
+  // 实测（2026-09-18）：search / info / link / lyrics / play 无令牌全部 401。
+  check(
+    "播放接口无令牌时返回 401/4010（不能是 403）",
+    full.status === 401 && fullBody.code === 4010,
+    `${full.status} ${JSON.stringify(fullBody).slice(0, 120)}`,
+  );
+
+  // ==================== 开放搜歌 API（API Key） ====================
+  //
+  // 面向第三方的只读搜歌 / 歌词 / 取址通道，与内部接口的关键差异：
+  //   * 鉴权是独立的 API Key（tt_ 前缀），用户访问令牌**不能**当开放 Key 用 ——
+  //     否则泄露的 accessToken 就能白嫖开放配额。
+  //   * 失败一律 401/4014，不能是 403：接入方要能区分「key 该换了」与「没权限」，
+  //     客户端也不能把 403 当成续期信号。
+  //   * 不下发 audioUrl：开放端点只出元信息，取址必须再走 /open/songs/{id}/link。
+  //
+  // 管理端 key 的准备、停用与吊销都放在本段内：adminSession（管理端会话准备段）
+  // 与 token（鉴权段）此刻均已就绪；key 供本段全部开放端点复用，段尾清理。
+  section("开放搜歌 API（API Key）");
+
+  // ---- 管理端：无会话探测 / 创建 / 列表 ----
+  const openKeyNoAuth = await fetch(`${base}/api/v1/app/admin/open-api-keys`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name: "无会话不应成功" }),
+  });
+  const openKeyNoAuthBody = await openKeyNoAuth.json().catch(() => ({}));
+  check(
+    "无管理会话创建开放 Key 被拒 401（管理守卫，不能是 403）",
+    openKeyNoAuth.status === 401,
+    `${openKeyNoAuth.status} ${JSON.stringify(openKeyNoAuthBody).slice(0, 160)}`,
+  );
+
+  const openKeyCreate = await fetch(`${base}/api/v1/app/admin/open-api-keys`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${adminSession}` },
+    body: JSON.stringify({ name: "契约验证开放 Key" }),
+  });
+  const openKeyCreateBody = await openKeyCreate.json().catch(() => ({}));
+  const openApiKey = openKeyCreateBody.data?.apiKey ?? "";
+  const openKeyId = openKeyCreateBody.data?.id;
+  check(
+    "创建开放 Key 返回 201 且信封 code 0",
+    openKeyCreate.status === 201 && openKeyCreateBody.code === 0,
+    `${openKeyCreate.status} ${JSON.stringify(openKeyCreateBody).slice(0, 160)}`,
+  );
+  check(
+    "data.apiKey 是 tt_ 开头的明文字符串（仅创建时返回这一次）",
+    typeof openKeyCreateBody.data?.apiKey === "string"
+      && openKeyCreateBody.data.apiKey.startsWith("tt_"),
+    typeof openKeyCreateBody.data?.apiKey,
+  );
+  check(
+    "data.keyPrefix 是明文 apiKey 的前 12 位",
+    typeof openKeyCreateBody.data?.keyPrefix === "string"
+      && openKeyCreateBody.data.keyPrefix === openApiKey.slice(0, 12),
+    `${openKeyCreateBody.data?.keyPrefix} vs ${openApiKey.slice(0, 12)}`,
+  );
+  check("data.id 是 number", typeof openKeyId === "number", typeof openKeyId);
+
+  const openKeyList = await fetch(`${base}/api/v1/app/admin/open-api-keys`, {
+    headers: { authorization: `Bearer ${adminSession}` },
+  });
+  const openKeyListBody = await openKeyList.json().catch(() => ({}));
+  const openKeyRows = openKeyListBody.data;
+  check(
+    "GET 开放 Key 列表 200 且 data 是数组",
+    openKeyList.status === 200 && openKeyListBody.code === 0 && Array.isArray(openKeyRows),
+    `${openKeyList.status} ${JSON.stringify(openKeyListBody).slice(0, 160)}`,
+  );
+  check(
+    "列表包含刚创建的 id",
+    Array.isArray(openKeyRows) && openKeyRows.some((row) => row?.id === openKeyId),
+    JSON.stringify(openKeyRows).slice(0, 160),
+  );
+  check(
+    "列表元素不含明文 apiKey / key_hash 字段（只允许 keyPrefix）",
+    Array.isArray(openKeyRows) && openKeyRows.length > 0
+      && openKeyRows.every((row) => !("apiKey" in (row ?? {})) && !("key_hash" in (row ?? {}))),
+    JSON.stringify(openKeyRows?.[0] ?? null).slice(0, 200),
+  );
+
+  // ---- 开放端点：有效 key 下的搜索 ----
+  // 与内部搜索同一信任假设：source=tencent 无结果时下面的断言会失败 ——
+  // 音源波动不在本脚本的容错范围内（现有搜索断言同样如此）。
+  const openSearchStarted = Date.now();
+  const openSearch = await fetch(
+    `${base}/api/v1/open/search?keyword=${encodeURIComponent("周杰伦")}&num=10&quality=10&source=tencent`,
+    { headers: { "x-api-key": openApiKey } },
+  );
+  const openSearchElapsed = Date.now() - openSearchStarted;
+  const openSearchBody = await openSearch.json().catch(() => ({}));
+  const openSongs = openSearchBody.data?.songs;
+  const openFirstSong = openSongs?.[0];
+  check(
+    "开放搜索 200 且信封 code 0",
+    openSearch.status === 200 && openSearchBody.code === 0,
+    `${openSearch.status} ${JSON.stringify(openSearchBody).slice(0, 160)}`,
+  );
+  check(
+    "data.songs 是非空数组",
+    Array.isArray(openSongs) && openSongs.length > 0,
+    `长度 ${Array.isArray(openSongs) ? openSongs.length : typeof openSongs}`,
+  );
+  check(
+    "data.meta.count 是 number",
+    typeof openSearchBody.data?.meta?.count === "number",
+    typeof openSearchBody.data?.meta?.count,
+  );
+  check("首首 id 是 number", typeof openFirstSong?.id === "number", typeof openFirstSong?.id);
+  check(
+    "duration 是 mm:ss 或「网络歌曲」",
+    /^\d{2}:\d{2}$|^网络歌曲$/.test(openFirstSong?.duration ?? ""),
+    openFirstSong?.duration,
+  );
+  check(
+    "coverUrl 以 https:// 开头或为空",
+    (openFirstSong?.coverUrl ?? "") === "" || openFirstSong.coverUrl.startsWith("https://"),
+    openFirstSong?.coverUrl,
+  );
+  check(
+    "lyricUrl 指向 /api/v1/open/songs/ 前缀",
+    String(openFirstSong?.lyricUrl ?? "").startsWith("/api/v1/open/songs/"),
+    openFirstSong?.lyricUrl,
+  );
+  check(
+    "不下发 audioUrl（开放端点只出元信息）",
+    openFirstSong?.audioUrl === undefined,
+    String(openFirstSong?.audioUrl),
+  );
+  check(
+    "favorited 恒为 false（开放端点没有用户态）",
+    openFirstSong?.favorited === false,
+    String(openFirstSong?.favorited),
+  );
+  check(
+    "access-control-allow-origin 为 *",
+    openSearch.headers.get("access-control-allow-origin") === "*",
+    String(openSearch.headers.get("access-control-allow-origin")),
+  );
+  // 沿用内部搜索的 3 秒惯例：开放端点复用同一条搜索链路，耗时量级应当相同。
+  check(`开放搜索耗时在 3 秒内（实测 ${openSearchElapsed}ms）`, openSearchElapsed < 3000, `${openSearchElapsed}ms`);
+
+  // ---- 开放端点：流式搜索 ----
+  const openStream = await fetch(
+    `${base}/api/v1/open/search/stream?keyword=${encodeURIComponent("周杰伦")}&num=5&source=tencent`,
+    { headers: { "x-api-key": openApiKey } },
+  );
+  const openStreamText = await openStream.text();
+  const openStreamLines = openStreamText.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  check(
+    "流式搜索 content-type 含 x-ndjson",
+    (openStream.headers.get("content-type") ?? "").includes("x-ndjson"),
+    openStream.headers.get("content-type"),
+  );
+  check(
+    "流式搜索首行 type 为 song",
+    openStreamLines[0]?.type === "song",
+    JSON.stringify(openStreamLines[0]).slice(0, 100),
+  );
+  const openStreamEnd = openStreamLines.at(-1);
+  check(
+    "流式搜索末行 type 为 end 且 meta.dropped 是 number",
+    openStreamEnd?.type === "end" && typeof openStreamEnd?.meta?.dropped === "number",
+    JSON.stringify(openStreamEnd).slice(0, 160),
+  );
+
+  // ---- 开放端点：参数校验与鉴权失败矩阵 ----
+  const openEmptyKeyword = await fetch(`${base}/api/v1/open/search?keyword=`, {
+    headers: { "x-api-key": openApiKey },
+  });
+  const openEmptyKeywordBody = await openEmptyKeyword.json().catch(() => ({}));
+  check(
+    "空关键词 400 且 code 4001",
+    openEmptyKeyword.status === 400 && openEmptyKeywordBody.code === 4001,
+    `${openEmptyKeyword.status} ${JSON.stringify(openEmptyKeywordBody).slice(0, 160)}`,
+  );
+
+  const openNoKey = await fetch(`${base}/api/v1/open/search?keyword=test`);
+  const openNoKeyBody = await openNoKey.json().catch(() => ({}));
+  check(
+    "无 key 访问开放搜索 401 且 code 4014（不能是 403）",
+    openNoKey.status === 401 && openNoKeyBody.code === 4014,
+    `${openNoKey.status} ${JSON.stringify(openNoKeyBody).slice(0, 160)}`,
+  );
+
+  const openForgedKey = await fetch(`${base}/api/v1/open/search?keyword=test`, {
+    headers: { "x-api-key": "tt_invalid_invalid_invalid_invalid_0000" },
+  });
+  const openForgedKeyBody = await openForgedKey.json().catch(() => ({}));
+  check(
+    "伪造 key 同样 401 且 code 4014",
+    openForgedKey.status === 401 && openForgedKeyBody.code === 4014,
+    `${openForgedKey.status} ${JSON.stringify(openForgedKeyBody).slice(0, 160)}`,
+  );
+
+  const openUserToken = await fetch(`${base}/api/v1/open/search?keyword=test`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  const openUserTokenBody = await openUserToken.json().catch(() => ({}));
+  check(
+    "用户访问令牌不能当开放 key（仍 401/4014）",
+    openUserToken.status === 401 && openUserTokenBody.code === 4014,
+    `${openUserToken.status} ${JSON.stringify(openUserTokenBody).slice(0, 160)}`,
+  );
+
+  // ---- 开放端点：歌词 / 取址 ----
+  const openLyrics = await fetch(`${base}/api/v1/open/songs/97773/lyrics`, {
+    headers: { "x-api-key": openApiKey },
+  });
+  const openLyricsText = await openLyrics.text();
+  check(
+    "开放歌词 200 且 content-type 含 text/plain",
+    openLyrics.status === 200 && (openLyrics.headers.get("content-type") ?? "").includes("text/plain"),
+    `${openLyrics.status} ${openLyrics.headers.get("content-type")}`,
+  );
+  check("开放歌词体以 [ 开头", openLyricsText.startsWith("["), openLyricsText.slice(0, 40));
+
+  // 两种投递方式都写进契约：X-API-Key 与 Authorization: Bearer 必须等效。
+  const openBearerLyrics = await fetch(`${base}/api/v1/open/songs/97773/lyrics`, {
+    headers: { authorization: `Bearer ${openApiKey}` },
+  });
+  const openBearerLyricsText = await openBearerLyrics.text();
+  check(
+    "Authorization: Bearer tt_... 与 X-API-Key 等效",
+    openBearerLyrics.status === 200 && openBearerLyricsText.startsWith("["),
+    `${openBearerLyrics.status} ${openBearerLyricsText.slice(0, 60)}`,
+  );
+
+  const openLink = await fetch(`${base}/api/v1/open/songs/97773/link?quality=10`, {
+    headers: { "x-api-key": openApiKey },
+  });
+  const openLinkBody = await openLink.json().catch(() => ({}));
+  check(
+    "开放取址 200 且信封 code 0",
+    openLink.status === 200 && openLinkBody.code === 0,
+    `${openLink.status} ${JSON.stringify(openLinkBody).slice(0, 160)}`,
+  );
+  check(
+    "取址 data.url 是非空字符串",
+    typeof openLinkBody.data?.url === "string" && openLinkBody.data.url.length > 0,
+    typeof openLinkBody.data?.url,
+  );
+
+  // ---- 回归：开放端点不能改写内部 401 语义 ----
+  // 内部 /search 无令牌必须仍然是全局 AccessTokenGuard 的 401/4010 ——
+  // 若新守卫把它改成了 4014，所有装机客户端的错误分支都会走错。
+  const internalSearchNoAuth = await fetch(`${base}/api/v1/search?keyword=test&num=3&source=tencent`);
+  const internalSearchNoAuthBody = await internalSearchNoAuth.json().catch(() => ({}));
+  check(
+    "内部 /api/v1/search 无令牌仍 401 且 code 4010",
+    internalSearchNoAuth.status === 401 && internalSearchNoAuthBody.code === 4010,
+    `${internalSearchNoAuth.status} ${JSON.stringify(internalSearchNoAuthBody).slice(0, 160)}`,
+  );
+
+  // ---- 段尾清理：停用 → 吊销，并验证失效后的 key 不可再用 ----
+  const openKeyPatch = await fetch(`${base}/api/v1/app/admin/open-api-keys/${openKeyId}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json", authorization: `Bearer ${adminSession}` },
+    body: JSON.stringify({ enabled: false }),
+  });
+  check("停用开放 Key 返回 200", openKeyPatch.status === 200, `实际 ${openKeyPatch.status}`);
+
+  const openDisabled = await fetch(`${base}/api/v1/open/search?keyword=test&num=3&source=tencent`, {
+    headers: { "x-api-key": openApiKey },
+  });
+  const openDisabledBody = await openDisabled.json().catch(() => ({}));
+  check(
+    "停用后的 key 打开放搜索 401 且 code 4014",
+    openDisabled.status === 401 && openDisabledBody.code === 4014,
+    `${openDisabled.status} ${JSON.stringify(openDisabledBody).slice(0, 160)}`,
+  );
+
+  const openKeyDelete = await fetch(`${base}/api/v1/app/admin/open-api-keys/${openKeyId}`, {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${adminSession}` },
+  });
+  check("删除开放 Key 返回 204", openKeyDelete.status === 204, `实际 ${openKeyDelete.status}`);
+
+  const openRevoked = await fetch(`${base}/api/v1/open/search?keyword=test&num=3&source=tencent`, {
+    headers: { "x-api-key": openApiKey },
+  });
+  const openRevokedBody = await openRevoked.json().catch(() => ({}));
+  check(
+    "吊销后的 key 打开放搜索 401 且 code 4014",
+    openRevoked.status === 401 && openRevokedBody.code === 4014,
+    `${openRevoked.status} ${JSON.stringify(openRevokedBody).slice(0, 160)}`,
+  );
 
   section("热更新：bootstrap");
   const bootstrap = await (await fetch(`${base}/api/v1/app/bootstrap?versionCode=60&sdk=36&deviceId=verify-device`)).json();
@@ -1230,6 +1612,8 @@ async function main() {
     { name: "Windows 发布列表", path: "/api/v1/desktop/admin/releases" },
     { name: "公告列表", path: "/api/v1/app/admin/announcements" },
     { name: "图片 Key 列表", path: "/api/v1/app/admin/image-keys" },
+    // 音源清单只有音源名与能力标记，不含账号数据，观察者可以看。
+    { name: "音源清单", path: "/api/v1/app/admin/music-sources/available" },
   ];
   for (const probe of readProbes) {
     const response = await fetch(`${base}${probe.path}`, { headers: bearer(viewerSession) });
@@ -1245,6 +1629,8 @@ async function main() {
   const userPrivacyProbes = [
     { name: "用户列表", path: "/api/v1/app/admin/users" },
     { name: "听歌历史", path: "/api/v1/app/admin/users/1/playback" },
+    // 音源账号列表带掩码手机号与上游账号 ID，同属个人信息面。
+    { name: "音源账号列表", path: "/api/v1/app/admin/music-sources" },
   ];
   for (const probe of userPrivacyProbes) {
     const response = await fetch(`${base}${probe.path}`, { headers: bearer(viewerSession) });
@@ -1397,6 +1783,329 @@ async function main() {
     "删除已有审计记录的管理员返回 204（外键不再阻断）",
     deletedAdmin.status === 204,
     `${deletedAdmin.status} ${(await deletedAdmin.text()).slice(0, 160)}`,
+  );
+
+  section("音源账号（后台）与酷我音源接入");
+
+  const sourceList = await fetch(`${base}/api/v1/app/admin/music-sources/available`, { headers: bearer(adminSession) });
+  const sourceListBody = await sourceList.json();
+  const sourceRows = sourceListBody.data ?? [];
+  check(
+    "音源清单包含酷我且标记支持登录",
+    sourceList.status === 200 && sourceRows.some((row) => row.source === "kuwo" && row.supportsLogin === true),
+    JSON.stringify(sourceListBody).slice(0, 240),
+  );
+  check(
+    "腾讯与网易未标记支持后台登录",
+    sourceRows.filter((row) => row.source !== "kuwo").every((row) => row.supportsLogin === false),
+    JSON.stringify(sourceRows).slice(0, 240),
+  );
+  // 前端据 `numericUidOnly` 决定 uid 输入框要不要提示「必须纯数字」。
+  // 它是能力标记，和 `supportsLogin` 一样只有注册表一处定义 —— 前端不硬编码音源名。
+  check(
+    "音源清单标记酷我要求纯数字 uid",
+    sourceRows.some((row) => row.source === "kuwo" && row.numericUidOnly === true),
+    JSON.stringify(sourceRows).slice(0, 240),
+  );
+  check(
+    "腾讯与网易未标记要求纯数字 uid",
+    sourceRows.filter((row) => row.source !== "kuwo").every((row) => row.numericUidOnly === false),
+    JSON.stringify(sourceRows).slice(0, 240),
+  );
+
+  // 新增：只填手机号占位，凭据留空。这条也是「空凭据按匿名探测」的前提。
+  const createdSource = await fetch(`${base}/api/v1/app/admin/music-sources`, {
+    method: "POST", headers: bearer(adminSession),
+    body: JSON.stringify({ source: "kuwo", label: "契约验证号", phone: "13800001111", remark: "契约验证" }),
+  });
+  const createdSourceBody = await createdSource.json();
+  const sourceAccountId = createdSourceBody.data?.id;
+  check(
+    "新增音源账号返回 201",
+    createdSource.status === 201 && Number.isInteger(sourceAccountId),
+    `${createdSource.status} ${JSON.stringify(createdSourceBody).slice(0, 200)}`,
+  );
+  // 响应体里不能出现 token 这个键 —— 明文凭据只允许存在于服务端数据库里。
+  check(
+    "新增响应里没有明文凭据字段",
+    !Object.prototype.hasOwnProperty.call(createdSourceBody.data ?? {}, "token"),
+    Object.keys(createdSourceBody.data ?? {}).join(","),
+  );
+  check(
+    "手机号只回掩码（保留号段与尾号）",
+    createdSourceBody.data?.maskedPhone === "138****1111",
+    createdSourceBody.data?.maskedPhone,
+  );
+
+  // 无凭据时按匿名探测。这是唯一能在不持有真实账号的前提下验证取址链路的方式。
+  const anonProbe = await fetch(`${base}/api/v1/app/admin/music-sources/${sourceAccountId}/probe`, {
+    method: "POST", headers: bearer(adminSession), body: JSON.stringify({}),
+  });
+  const anonProbeBody = await anonProbe.json();
+  check(
+    "无凭据时按匿名探测成功并标注「匿名」",
+    anonProbe.status === 201 && typeof anonProbeBody.data?.note === "string" && anonProbeBody.data.note.startsWith("匿名 "),
+    `${anonProbe.status} ${JSON.stringify(anonProbeBody).slice(0, 200)}`,
+  );
+
+  // 非数字 uid 必须在**写入时**就被拒掉。
+  //
+  // 实测的上游规则是「**uid 必须是纯数字**」：传非数字时上游拒绝下发任何播放地址，
+  // 而搜索、单曲信息、歌词都照常 —— 表现为「搜得到、放不出」，换任何 token 都救不回来。
+  // token 的取值与取址无关（乱码 token 配数字 uid 照样能取到地址）。
+  // 早先这条被记成「无效凭据」，是因为当时用的凭据恰好是非数字 uid，
+  // 把「uid 形状」和「token 有效性」两个变量混在了一起。
+  //
+  // 这种账号存进库就是坏的，而且要到播放时才暴露，所以两条写入路径都要拦。
+  const nonNumericUidPatch = await fetch(`${base}/api/v1/app/admin/music-sources/${sourceAccountId}`, {
+    method: "PATCH", headers: bearer(adminSession), body: JSON.stringify({ uid: "contract-uid" }),
+  });
+  const nonNumericUidPatchBody = await nonNumericUidPatch.json();
+  check(
+    "非数字 uid 的局部更新被拒 400 且原因指向 uid",
+    nonNumericUidPatch.status === 400 && String(nonNumericUidPatchBody.message ?? "").includes("纯数字"),
+    `${nonNumericUidPatch.status} ${JSON.stringify(nonNumericUidPatchBody).slice(0, 200)}`,
+  );
+  // 新增路径漏了这条，就能绕开 PATCH 直接造出一个坏账号。
+  const nonNumericUidCreate = await fetch(`${base}/api/v1/app/admin/music-sources`, {
+    method: "POST", headers: bearer(adminSession),
+    body: JSON.stringify({ source: "kuwo", uid: "contract-uid", token: "contract-invalid-token" }),
+  });
+  const nonNumericUidCreateBody = await nonNumericUidCreate.json();
+  check(
+    "非数字 uid 的新增被拒 400 且原因指向 uid",
+    nonNumericUidCreate.status === 400 && String(nonNumericUidCreateBody.message ?? "").includes("纯数字"),
+    `${nonNumericUidCreate.status} ${JSON.stringify(nonNumericUidCreateBody).slice(0, 200)}`,
+  );
+  // 数字 uid 必须放行 —— 只拦形状，不拦内容。token 故意给乱码：
+  // 取址与 token 取值无关，所以这条校验不该影响「能不能取到地址」。
+  const patchedSource = await fetch(`${base}/api/v1/app/admin/music-sources/${sourceAccountId}`, {
+    method: "PATCH", headers: bearer(adminSession),
+    body: JSON.stringify({ token: "contract-invalid-token", uid: "900000001" }),
+  });
+  check("音源账号可以局部更新", patchedSource.status === 200, String(patchedSource.status));
+
+  // 探测失败必须报 502，且错误文案要同时列出「uid 形状」与「凭据失效」两种可能。
+  //
+  // 触发手段是给一个不存在的曲目 ID，而不是靠非数字 uid —— 后者现在连库都进不去
+  // （上面两条断言就是拦它的）。**失败路径本身仍要测**：它要落库、要写审计，
+  // 而且这条文案是管理员唯一的线索来源，改坏了没人会发现。
+  const badProbe = await fetch(`${base}/api/v1/app/admin/music-sources/${sourceAccountId}/probe`, {
+    method: "POST", headers: bearer(adminSession), body: JSON.stringify({ musicId: 999999999999999 }),
+  });
+  const badProbeBody = await badProbe.json();
+  check(
+    "探测失败被报成 502 且原因列出 uid 形状与凭据两种可能",
+    badProbe.status === 502 && String(badProbeBody.message ?? "").includes("凭据"),
+    `${badProbe.status} ${JSON.stringify(badProbeBody).slice(0, 200)}`,
+  );
+
+  const sourceAccounts = await fetch(`${base}/api/v1/app/admin/music-sources?source=kuwo`, { headers: bearer(adminSession) });
+  const sourceAccountsText = await sourceAccounts.text();
+  const sourceAccountsBody = JSON.parse(sourceAccountsText);
+  const myAccount = (sourceAccountsBody.data ?? []).find((row) => row.id === sourceAccountId);
+  check(
+    "列表只回掩码且不含明文 token",
+    sourceAccounts.status === 200 && myAccount?.maskedToken === "••••••••oken" && !sourceAccountsText.includes("contract-invalid-token"),
+    // `JSON.stringify(undefined)` 返回 undefined，再 `.slice` 会抛 TypeError 把整节断言带走 ——
+    // 上面那条断言已经失败了，这里只需要把现场打印出来，不该再制造一次崩溃。
+    JSON.stringify(myAccount ?? null).slice(0, 240),
+  );
+  check("探测失败已落库（状态与原因都在）", myAccount?.lastStatus === "invalid" && myAccount?.lastError.length > 0, myAccount?.lastStatus);
+
+  // 同一音源同一 uid 的第二条必须被唯一索引拦下并翻成 409，而不是冒成 502。
+  // 索引是带 `WHERE uid <> ''` 的部分索引，`ON CONFLICT` 的推断必须带上同样的谓词 ——
+  // 漏了谓词会在运行时报「no unique or exclusion constraint matching the ON CONFLICT
+  // specification」，而那条路径只在重复登录时才走到。
+  //
+  // uid 用数字：形状校验在唯一索引之前，非数字根本走不到冲突分支。
+  const duplicateSource = await fetch(`${base}/api/v1/app/admin/music-sources`, {
+    method: "POST", headers: bearer(adminSession),
+    body: JSON.stringify({ source: "kuwo", uid: "900000001", token: "duplicate-token" }),
+  });
+  const duplicateSourceBody = await duplicateSource.json();
+  check(
+    "同音源同 uid 的第二条被拒 409 且 code 4090",
+    duplicateSource.status === 409 && duplicateSourceBody.code === 4090,
+    `${duplicateSource.status} ${JSON.stringify(duplicateSourceBody).slice(0, 160)}`,
+  );
+
+  // 局部更新要能**清空**字段：传空串必须真的清掉，不能被当成「没提交」。
+  // 用 COALESCE 实现就会永远清不掉，所以这条断言盯的是 SQL 的写法。
+  const clearedLabel = await fetch(`${base}/api/v1/app/admin/music-sources/${sourceAccountId}`, {
+    method: "PATCH", headers: bearer(adminSession), body: JSON.stringify({ label: "" }),
+  });
+  const clearedLabelBody = await clearedLabel.json();
+  check(
+    "局部更新可以把字段清成空串",
+    clearedLabel.status === 200 && clearedLabelBody.data?.label === "",
+    JSON.stringify(clearedLabelBody.data).slice(0, 160),
+  );
+
+  // 空补丁（一个字段都没提交）应当被拒，否则等于一次什么都不做的审计噪音。
+  const emptyPatch = await fetch(`${base}/api/v1/app/admin/music-sources/${sourceAccountId}`, {
+    method: "PATCH", headers: bearer(adminSession), body: JSON.stringify({}),
+  });
+  check("空补丁被拒 400", emptyPatch.status === 400, String(emptyPatch.status));
+
+  const disabledSource = await fetch(`${base}/api/v1/app/admin/music-sources/${sourceAccountId}/enabled`, {
+    method: "PUT", headers: bearer(adminSession), body: JSON.stringify({ enabled: false }),
+  });
+  const disabledSourceBody = await disabledSource.json();
+  check(
+    "音源账号可以停用",
+    disabledSource.status === 200 && disabledSourceBody.data?.enabled === 0,
+    JSON.stringify(disabledSourceBody).slice(0, 160),
+  );
+
+  const badSourceCreate = await fetch(`${base}/api/v1/app/admin/music-sources`, {
+    method: "POST", headers: bearer(adminSession), body: JSON.stringify({ source: "spotify" }),
+  });
+  const badSourceCreateBody = await badSourceCreate.json();
+  check(
+    "未知音源被拒 400 且 code 4001",
+    badSourceCreate.status === 400 && badSourceCreateBody.code === 4001,
+    JSON.stringify(badSourceCreateBody).slice(0, 160),
+  );
+
+  const removedSource = await fetch(`${base}/api/v1/app/admin/music-sources/${sourceAccountId}`, {
+    method: "DELETE", headers: bearer(adminSession),
+  });
+  check("删除音源账号返回 204", removedSource.status === 204, String(removedSource.status));
+
+  // 酷我已在音源白名单里：/search 必须接受它，并且仍然返回**裸 NDJSON**（不能被信封包住）。
+  const kuwoSearch = await fetch(`${base}/api/v1/search?keyword=${encodeURIComponent("轻音乐")}&num=5&source=kuwo`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  const kuwoNdjson = await kuwoSearch.text();
+  const kuwoLines = kuwoNdjson.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  const kuwoSongs = kuwoLines.filter((line) => line.type === "song");
+  check(
+    "source=kuwo 的搜索被接受且返回裸 NDJSON",
+    kuwoSearch.status === 200
+      && (kuwoSearch.headers.get("content-type") ?? "").includes("x-ndjson")
+      && kuwoLines[0]?.type === "song",
+    `${kuwoSearch.status} ${kuwoNdjson.slice(0, 160)}`,
+  );
+  check("酷我搜索返回了歌曲", kuwoSongs.length > 0, `${kuwoSongs.length} 首`);
+  // 酷我没有 mid 概念，身份完全由数字 id 承载，所以 mid 必须缺省而不是空串。
+  check(
+    "酷我歌曲 id 是 number 且不带 mid",
+    typeof kuwoSongs[0]?.data?.id === "number" && kuwoSongs[0]?.data?.mid === undefined,
+    JSON.stringify(kuwoSongs[0]?.data ?? {}).slice(0, 200),
+  );
+  check(
+    "酷我搜索结果的 source 字段回填为 kuwo",
+    kuwoSongs.every((line) => line.data?.source === "kuwo"),
+    kuwoSongs[0]?.data?.source,
+  );
+
+  // ---------- 翻页起点（防「第一页拿到第二页的歌」回归）----------
+  //
+  // 上游 `search/music/list` 的偏移量是 **`pn × rn`**，且 `pn` 是 **0 基**的。
+  // 参考实现写的是 `pn: page`，本项目照抄过，于是第一页实际拿到第二页的歌
+  // （`pn=1&rn=60` → 偏移 60），表现就是「搜索结果和波点 App 对不上」。
+  // 2026-09-19 用真实 VIP 凭据 + blutter 逆向出的 App 请求形状定位并修复。
+  //
+  // 这里用一条**不需要外部裁判**的不变量来守住它：
+  // 同一个 `page` 下，无论 `num` 取多少，**起点必须相同**（因为偏移 = pn × rn，pn 相同时
+  // 起点只由 pn 决定，而修复后 pn 恒为 page-1，与 num 无关）。
+  // 旧实现下 `num=20` → pn=1,rn=20 → 偏移 20，`num=60` → pn=1,rn=60 → 偏移 60，两者必然不同。
+  //
+  // ⚠️ 关键词挑的是**可播比例高**的：酷我会把拿不到播放地址的歌滤掉，
+  // 用「周杰伦」这种全被滤掉的词会让下面的比较变成空对空，断言假通过。
+  const pageIds = async (page, num, keyword = "稻香") => {
+    const res = await fetch(
+      `${base}/api/v1/search?keyword=${encodeURIComponent(keyword)}&page=${page}&num=${num}&source=kuwo`,
+      { headers: { authorization: `Bearer ${token}` } },
+    );
+    return (await res.text())
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line))
+      .filter((line) => line.type === "song")
+      .map((line) => line.data.id);
+  };
+
+  const p1n20 = await pageIds(1, 20);
+  const p1n60 = await pageIds(1, 60);
+  check(
+    "同一页不同页大小返回同一批歌（起点不随 num 漂移）",
+    p1n20.length > 0 && p1n20.join() === p1n60.slice(0, p1n20.length).join(),
+    `num=20 得 ${p1n20.length} 首 [${p1n20.slice(0, 3)}]，num=60 得 ${p1n60.length} 首 [${p1n60.slice(0, 3)}]`,
+  );
+
+  const p2n60 = await pageIds(2, 60);
+  check(
+    "第 1 页与第 2 页不重叠（翻页必须前进）",
+    p1n60.length > 0 && p2n60.length > 0 && p1n60.filter((id) => p2n60.includes(id)).length === 0,
+    `第 1 页 ${p1n60.length} 首、第 2 页 ${p2n60.length} 首，重叠 ${p1n60.filter((id) => p2n60.includes(id)).length} 首`,
+  );
+
+  // 「拿不到地址的歌」必须**照常下发并逐首标记**，不能再整列滤掉。
+  //
+  // 酷我搜「周杰伦」上游返回的每一条都是 `listen_fragment=1`（取不到播放地址，
+  // 上游逐首回 `code 20012 歌曲已下线`）。2026-09-19 之前适配器据此把它们全滤掉，
+  // 客户端收到 0 条 —— 用户看到「搜不到歌」，第一反应是账号或音源坏了。
+  // 实测波点 App 自己也不滤（它综合页的 `musicpage` 与我们的原始列表逐条一致），
+  // 所以现在改成「照列 + 逐首标记 playable=false」。
+  //
+  // 下面第一条是这次修复的核心回归点：**列表不能再空掉**。
+  //
+  // ⚠️ 这两条都依赖上游曲库：哪天周杰伦的歌在酷我拿到版权（`dropped` 类断言当年也这么写），
+  // 它们会失败。那时换一个同样全部不可播的关键词即可，不代表代码坏了。
+  const playableSearch = async (keyword, num) => {
+    const res = await fetch(
+      `${base}/api/v1/search?keyword=${encodeURIComponent(keyword)}&num=${num}&source=kuwo`,
+      { headers: { authorization: `Bearer ${token}` } },
+    );
+    const lines = (await res.text()).split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    return {
+      songs: lines.filter((line) => line.type === "song").map((line) => line.data),
+      meta: lines.at(-1)?.meta,
+    };
+  };
+
+  const blocked = await playableSearch("周杰伦", 5);
+  check(
+    "全部不可播的关键词仍返回完整列表（不再整列滤空）",
+    blocked.songs.length === 5,
+    `num=5 得到 ${blocked.songs.length} 首 [${blocked.songs.slice(0, 3).map((s) => s.id)}]`,
+  );
+  check(
+    "不可播的歌逐首带 playable=false（不是被丢掉）",
+    blocked.songs.length > 0 && blocked.songs.every((song) => song.playable === false),
+    `playable 取值：${blocked.songs.map((song) => song.playable).join(",")}`,
+  );
+  // 反向守卫：`playable` 必须是逐首判定的，不能退化成常量 true/false。
+  // 用「稻香」——它的结果里同时有可播与不可播的歌（原唱 440613 不可播、翻唱可播）。
+  const mixed = await playableSearch("稻香", 20);
+  check(
+    "playable 逐首判定（同一关键词下 true / false 同时出现）",
+    mixed.songs.some((song) => song.playable === true) && mixed.songs.some((song) => song.playable === false),
+    `true ${mixed.songs.filter((song) => song.playable === true).length} 条 / false ${mixed.songs.filter((song) => song.playable === false).length} 条`,
+  );
+
+  // `dropped` 与 `droppedBySource` 现在恒为 0 / 空对象 —— 可播性改由逐首的 `playable` 承载。
+  // 字段本身**不能删**（装机的旧客户端会读它做算术，拿到 undefined 会算出 NaN），
+  // 所以这里守的是「字段还在，且语义确实是 0」。
+  check(
+    "不再丢歌：meta.dropped 为 0 且 droppedBySource 为空",
+    blocked.meta?.dropped === 0
+      && typeof blocked.meta?.droppedBySource === "object"
+      && blocked.meta?.droppedBySource !== null
+      && Object.keys(blocked.meta.droppedBySource).length === 0,
+    JSON.stringify({ dropped: blocked.meta?.dropped, bySource: blocked.meta?.droppedBySource }),
+  );
+
+  const unknownSourceSearch = await fetch(`${base}/api/v1/search?keyword=test&num=3&source=spotify`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  const unknownSourceSearchBody = await unknownSourceSearch.json();
+  check(
+    "未知音源的搜索被拒 400 且 code 4001",
+    unknownSourceSearch.status === 400 && unknownSourceSearchBody.code === 4001,
+    `${unknownSourceSearch.status} ${JSON.stringify(unknownSourceSearchBody).slice(0, 160)}`,
   );
 
   console.log(`\n通过 ${passed} 项，失败 ${failed} 项`);

@@ -11,7 +11,9 @@
     "start": "node dist/main.js",
     "send-mail": "ts-node --project tools/tsconfig.json tools/send-outlook-mail.ts",
     "verify": "node tools/verify-contract.mjs",
-    "verify:totp": "ts-node --project tools/tsconfig.json tools/verify-totp.ts"
+    "verify:totp": "ts-node --project tools/tsconfig.json tools/verify-totp.ts",
+    "verify:kpk": "ts-node --project tools/tsconfig.json tools/verify-kpk.ts",
+    "verify:lrcx": "ts-node --project tools/tsconfig.json tools/verify-lrcx.ts"
   },
   "engines": {
     "node": ">=20"
