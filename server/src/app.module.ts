@@ -20,6 +20,7 @@ import { ImModule } from "./im/im.module";
 import { LdapModule } from "./ldap/ldap.module";
 import { MusicModule } from "./music/music.module";
 import { MailModule } from "./mail/mail.module";
+import { OpenApiModule } from "./open-api/open-api.module";
 import { PlaybackModule } from "./playback/playback.module";
 import { PlaylistsModule } from "./playlists/playlists.module";
 import { LatestVersionModule } from "./release/latest-version.cache";
@@ -49,6 +50,7 @@ import { UserAdminModule } from "./user-admin/user-admin.module";
     PlaybackModule,
     PlaylistsModule,
     MusicModule,
+    OpenApiModule,
     ImageGenerationModule,
     ImModule,
     LdapModule,

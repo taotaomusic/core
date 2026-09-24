@@ -25,6 +25,17 @@ export type AdminActor = {
 export type AdminAuthenticatedRequest = Request & { adminUser?: AdminActor };
 
 /**
+ * 开放 API Key 身份。
+ *
+ * 由开放接口的方法级守卫校验后挂到请求上；与用户访问令牌、管理员会话
+ * 是三套互相独立的凭据，任何一处都不得互相借用。
+ */
+export type OpenApiKeyIdentity = { id: number; name: string };
+
+/** 经过 [ApiKeyGuard] 的开放接口请求。 */
+export type OpenApiAuthenticatedRequest = Request & { openApiKey?: OpenApiKeyIdentity };
+
+/**
  * 把请求上的管理员身份转成可以写进外键列的 ID。
  *
  * 防御性收敛：身份缺失或 id 不是正整数时折成 `null`，而不是把 0 或
