@@ -57,8 +57,13 @@ export class PlaylistOrderError extends Error {}
 type PlaylistBase = Omit<PlaylistRecord, "songCount">;
 type StoredPlaylistSong = PlaylistSongRecord;
 
+// cover_url 为空时兜底取歌单内按曲目顺序第一张歌曲封面，客户端列表无需再逐个拉详情。
 const PLAYLIST_COLUMNS = `p.id, p.name, p.description,
-  p.cover_url AS "coverUrl", p.revision,
+  COALESCE(p.cover_url, (
+    SELECT ps.cover_url FROM playlist_songs ps
+    WHERE ps.playlist_id = p.id AND ps.cover_url IS NOT NULL
+    ORDER BY ps.position ASC LIMIT 1
+  )) AS "coverUrl", p.revision,
   p.created_at AS "createdAt", p.updated_at AS "updatedAt"`;
 
 const SONG_COLUMNS = `source, song_id AS "songId", mid, title, artist, album,
@@ -409,7 +414,12 @@ export class PlaylistsRepository {
     // 客户端拿到可用于下一次同步的最新版本号和更新时间。
     const playlist = (
       await client.query<PlaylistBase>(
-        `SELECT id, name, description, cover_url AS "coverUrl", revision,
+        `SELECT id, name, description,
+                COALESCE(cover_url, (
+                  SELECT ps.cover_url FROM playlist_songs ps
+                  WHERE ps.playlist_id = playlists.id AND ps.cover_url IS NOT NULL
+                  ORDER BY ps.position ASC LIMIT 1
+                )) AS "coverUrl", revision,
                 created_at AS "createdAt", updated_at AS "updatedAt"
          FROM playlists WHERE id = $1`,
         [playlistId],
