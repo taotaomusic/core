@@ -1,15 +1,30 @@
 <template>
   <div class="manager">
     <div class="bar">
-      <el-button type="primary" @click="showImport = true">导入 GPT Image Key</el-button>
-      <el-button :loading="loading" @click="refresh">刷新</el-button>
-      <span class="hint">Key 仅显示末四位；额度为可创建图片任务次数。</span>
+      <el-button type="primary" @click="showImport = true">
+        <el-icon><Key /></el-icon>
+        <span>导入 GPT Image Key</span>
+      </el-button>
+      <el-button :loading="loading" @click="refresh">
+        <el-icon><Refresh /></el-icon>
+        <span>刷新</span>
+      </el-button>
+      <span class="bar-spacer"></span>
+      <span class="pill">Key 仅显示末四位 · 额度为可创建图片任务次数</span>
     </div>
 
     <el-table :data="keys" v-loading="loading" empty-text="尚未导入 GPT Image Key">
       <el-table-column prop="id" label="ID" width="90" />
-      <el-table-column prop="maskedKey" label="Key" min-width="220" />
-      <el-table-column prop="quota" label="剩余额度" width="130" />
+      <el-table-column prop="maskedKey" label="Key" min-width="220">
+        <template #default="{ row }">
+          <span class="key-cell">{{ row.maskedKey }}</span>
+        </template>
+      </el-table-column>
+      <el-table-column label="剩余额度" width="130" align="right">
+        <template #default="{ row }">
+          <span class="quota-cell">{{ row.quota }}</span>
+        </template>
+      </el-table-column>
       <el-table-column label="操作" width="110">
         <template #default="{ row }">
           <el-popconfirm title="移除后不可恢复，确认继续？" @confirm="remove(row.id)">
@@ -32,6 +47,7 @@
 
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
+import { Key, Refresh } from "@element-plus/icons-vue";
 import { apiDelete, apiGet, apiPostJson } from "../api";
 
 type ImageKey = { id: number; channel: string; maskedKey: string; quota: number };
@@ -67,6 +83,32 @@ onMounted(refresh);
 
 <style scoped>
 .manager { padding: 8px 0; }
-.bar { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
-.hint { color: #7a7370; font-size: 13px; }
+
+.bar { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; flex-wrap: wrap; }
+.bar-spacer { flex: 1; min-width: 8px; }
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 13px;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--el-text-color-secondary);
+  background: var(--hint-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+/* 原本硬编码 #7a7370，在暗色模式下几乎看不清 —— 统一走主题变量 */
+.hint { color: var(--el-text-color-secondary); font-size: 13px; }
+
+.key-cell,
+.quota-cell {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  color: var(--el-text-color-primary);
+}
+
+.quota-cell { font-variant-numeric: tabular-nums; font-weight: 600; }
 </style>

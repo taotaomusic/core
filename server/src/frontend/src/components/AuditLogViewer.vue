@@ -1,7 +1,7 @@
 <template>
   <div class="manager">
     <div class="bar">
-      <el-select v-model="filterAction" clearable placeholder="操作类型" style="width: 180px">
+      <el-select v-model="filterAction" clearable placeholder="全部操作类型" style="width: 180px">
         <el-option label="登录" value="auth.login" />
         <el-option label="TOTP登录" value="auth.login_totp" />
         <el-option label="修改密码" value="auth.change_password" />
@@ -11,8 +11,12 @@
         <el-option label="删除用户" value="user.delete" />
         <el-option label="发布公告" value="announcement.publish" />
       </el-select>
-      <el-button @click="fetchLogs" :loading="loading">刷新</el-button>
-      <span class="hint">共 {{ total }} 条记录</span>
+      <el-button @click="fetchLogs" :loading="loading">
+        <el-icon><Refresh /></el-icon>
+        <span>刷新</span>
+      </el-button>
+      <span class="bar-spacer"></span>
+      <span class="pill">共 <strong>{{ total }}</strong> 条记录</span>
     </div>
 
     <el-table :data="logs" v-loading="loading" empty-text="暂无审计日志">
@@ -22,7 +26,7 @@
       </el-table-column>
       <el-table-column prop="action" label="操作" width="160">
         <template #default="{ row }">
-          <el-tag size="small" :type="actionTag(row.action)">{{ actionLabel(row.action) }}</el-tag>
+          <el-tag size="small" effect="light" :type="actionTag(row.action)">{{ actionLabel(row.action) }}</el-tag>
         </template>
       </el-table-column>
       <el-table-column label="目标" width="140">
@@ -42,13 +46,14 @@
 
     <div class="pager">
       <el-pagination v-model:current-page="page" :page-size="50" :total="total"
-        layout="prev, pager, next" @current-change="fetchLogs" />
+        layout="prev, pager, next" background @current-change="fetchLogs" />
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { onMounted, ref, watch } from "vue";
+import { Refresh } from "@element-plus/icons-vue";
 import { apiGet, formatTime } from "../api";
 
 type AuditLog = {
@@ -121,9 +126,28 @@ function actionLabel(action: string) {
 .bar {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin-bottom: 16px;
+  gap: 10px;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
 }
+
+.bar-spacer { flex: 1; min-width: 8px; }
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 13px;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--el-text-color-secondary);
+  background: var(--hint-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.pill strong { color: var(--el-text-color-primary); font-weight: 650; }
 
 .hint {
   font-size: 13px;
@@ -131,12 +155,12 @@ function actionLabel(action: string) {
 }
 
 .muted {
-  color: var(--el-text-color-secondary);
+  color: var(--el-text-color-placeholder);
 }
 
 .pager {
   display: flex;
   justify-content: flex-end;
-  margin-top: 16px;
+  margin-top: 18px;
 }
 </style>

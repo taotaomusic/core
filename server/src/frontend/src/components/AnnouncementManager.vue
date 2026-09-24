@@ -1,21 +1,34 @@
 <template>
   <div class="manager">
     <div class="bar">
-      <el-button type="primary" @click="openCreate">发布公告</el-button>
-      <el-button :loading="loading" @click="fetchAnnouncements">刷新</el-button>
-      <span class="hint">公开接口只会返回已发布的公告。</span>
+      <el-button type="primary" @click="openCreate">
+        <el-icon><Bell /></el-icon>
+        <span>发布公告</span>
+      </el-button>
+      <el-button :loading="loading" @click="fetchAnnouncements">
+        <el-icon><Refresh /></el-icon>
+        <span>刷新</span>
+      </el-button>
+      <span class="bar-spacer"></span>
+      <span class="pill">
+        共 <strong>{{ announcements.length }}</strong> 条 · 公开接口只返回已发布的公告
+      </span>
     </div>
 
     <el-table :data="announcements" v-loading="loading" empty-text="还没有公告">
       <el-table-column prop="id" label="ID" width="80" />
-      <el-table-column prop="title" label="标题" min-width="170" show-overflow-tooltip />
+      <el-table-column label="标题" min-width="170" show-overflow-tooltip>
+        <template #default="{ row }">
+          <span class="title-cell">{{ row.title }}</span>
+        </template>
+      </el-table-column>
       <el-table-column label="置顶" width="82">
-        <template #default="{ row }"><el-tag v-if="row.pinned === 1" type="danger" size="small">置顶</el-tag></template>
+        <template #default="{ row }"><el-tag v-if="row.pinned === 1" type="danger" size="small" effect="light">置顶</el-tag></template>
       </el-table-column>
       <el-table-column prop="content" label="正文" min-width="280" show-overflow-tooltip />
       <el-table-column label="状态" width="100">
         <template #default="{ row }">
-          <el-tag :type="row.enabled === 1 ? 'success' : 'info'">{{ row.enabled === 1 ? "已发布" : "已下线" }}</el-tag>
+          <el-tag :type="row.enabled === 1 ? 'success' : 'info'" effect="light">{{ row.enabled === 1 ? "已发布" : "已下线" }}</el-tag>
         </template>
       </el-table-column>
       <el-table-column label="发布时间" width="175">
@@ -24,13 +37,13 @@
       <el-table-column label="操作" width="300" fixed="right">
         <template #default="{ row }">
           <el-button size="small" @click="openEdit(row)">编辑</el-button>
-          <el-button size="small" :type="row.pinned === 1 ? 'info' : 'primary'" @click="togglePinned(row)">
+          <el-button size="small" :type="row.pinned === 1 ? 'info' : 'primary'" plain @click="togglePinned(row)">
             {{ row.pinned === 1 ? "取消置顶" : "置顶" }}
           </el-button>
-          <el-button size="small" :type="row.enabled === 1 ? 'warning' : 'success'" @click="toggle(row)">
+          <el-button size="small" :type="row.enabled === 1 ? 'warning' : 'success'" plain @click="toggle(row)">
             {{ row.enabled === 1 ? "下线" : "发布" }}
           </el-button>
-          <el-button size="small" type="danger" @click="remove(row)">删除</el-button>
+          <el-button size="small" type="danger" plain @click="remove(row)">删除</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -50,6 +63,7 @@
 
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
+import { Bell, Refresh } from "@element-plus/icons-vue";
 import { apiDelete, apiGet, apiPostJson, formatTime } from "../api";
 
 interface Announcement {
@@ -147,6 +161,26 @@ async function remove(item: Announcement) {
 
 <style scoped>
 .manager { padding: 4px 0; }
-.bar { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+.bar { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; flex-wrap: wrap; }
+.bar-spacer { flex: 1; min-width: 8px; }
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 13px;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--el-text-color-secondary);
+  background: var(--hint-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.pill strong { color: var(--el-text-color-primary); font-weight: 650; }
+
+.title-cell { font-weight: 550; color: var(--el-text-color-primary); }
+
 .hint { font-size: 13px; color: var(--el-text-color-secondary); }
 </style>

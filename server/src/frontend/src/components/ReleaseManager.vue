@@ -1,30 +1,40 @@
 <template>
   <div class="manager">
     <div class="bar">
-      <el-button type="primary" @click="openUpload">上传新版本</el-button>
-      <el-button @click="fetchReleases" :loading="loading">刷新</el-button>
-      <span class="hint" v-if="rolledOut">
-        当前全量版本：<strong>{{ rolledOut.version_code }}</strong>（{{ rolledOut.version_name }}）
+      <el-button type="primary" @click="openUpload">
+        <el-icon><Upload /></el-icon>
+        <span>上传新版本</span>
+      </el-button>
+      <el-button @click="fetchReleases" :loading="loading">
+        <el-icon><Refresh /></el-icon>
+        <span>刷新</span>
+      </el-button>
+      <span class="bar-spacer"></span>
+      <span class="pill" v-if="rolledOut">
+        <span class="pill-dot ok"></span>
+        当前全量版本 <strong>{{ rolledOut.version_code }}</strong>（{{ rolledOut.version_name }}）
       </span>
-      <span class="hint warn" v-else>还没有放量 100% 的版本</span>
+      <span class="pill warn" v-else>
+        <span class="pill-dot warn"></span>
+        还没有放量 100% 的版本
+      </span>
     </div>
 
     <el-table :data="releases" v-loading="loading" empty-text="还没有任何发布记录">
       <el-table-column prop="version_code" label="版本号" width="90" sortable />
       <el-table-column prop="version_name" label="版本名" width="110" />
-      <el-table-column label="放量" width="150">
+      <el-table-column label="放量" width="168">
         <template #default="{ row }">
           <el-progress
             :percentage="row.rollout_percent"
             :status="row.rollout_percent === 100 ? 'success' : undefined"
-            :stroke-width="14"
-            text-inside
+            :stroke-width="10"
           />
         </template>
       </el-table-column>
       <el-table-column label="状态" width="90">
         <template #default="{ row }">
-          <el-tag :type="row.enabled === 1 ? 'success' : 'danger'" size="small">
+          <el-tag :type="row.enabled === 1 ? 'success' : 'danger'" size="small" effect="light">
             {{ row.enabled === 1 ? "启用" : "已停用" }}
           </el-tag>
         </template>
@@ -42,6 +52,7 @@
           <el-button
             size="small"
             :type="row.enabled === 1 ? 'danger' : 'success'"
+            plain
             @click="toggleEnabled(row)"
           >
             {{ row.enabled === 1 ? "停用" : "启用" }}
@@ -106,6 +117,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from "vue";
+import { Upload, Refresh } from "@element-plus/icons-vue";
 import { formatSize, formatTime, sha256Of, apiGet, apiPostJson, apiPostBytes } from "../api";
 
 /** 服务端原样返回数据库行，所以字段是下划线命名。 */
@@ -250,11 +262,64 @@ async function toggleEnabled(row: Release) {
   padding: 4px 0;
 }
 
+/*
+  工具栏：左侧动作、右侧状态摘要。`.bar-spacer` 把后面的状态指示推到右端，
+  避免状态文字紧贴在按钮后面、读起来像按钮的附属说明。
+*/
 .bar {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin-bottom: 16px;
+  gap: 10px;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+}
+
+.bar-spacer {
+  flex: 1;
+  min-width: 8px;
+}
+
+/* 状态指示胶囊：比裸文字更像「仪表盘」的一部分 */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 13px;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--el-text-color-regular);
+  background: var(--hint-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.pill strong {
+  color: var(--el-text-color-primary);
+  font-weight: 650;
+}
+
+.pill-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.pill-dot.ok {
+  background: var(--el-color-success);
+  box-shadow: 0 0 0 3px var(--el-color-success-light-9);
+}
+
+.pill.warn {
+  color: var(--el-color-warning);
+  background: var(--el-color-warning-light-9);
+  border-color: var(--el-color-warning-light-8);
+}
+
+.pill-dot.warn {
+  background: var(--el-color-warning);
+  box-shadow: 0 0 0 3px rgba(230, 162, 60, 0.18);
 }
 
 .hint {
@@ -267,8 +332,10 @@ async function toggleEnabled(row: Release) {
 }
 
 code {
-  background: var(--el-fill-color-light);
-  padding: 1px 4px;
-  border-radius: 3px;
+  background: var(--code-bg);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 12.5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 </style>

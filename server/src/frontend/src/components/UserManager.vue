@@ -7,18 +7,36 @@
         placeholder="搜索用户名、昵称或邮箱"
         @keyup.enter="search"
         @clear="search"
-      />
+        class="search-input"
+      >
+        <template #prefix><el-icon><Search /></el-icon></template>
+      </el-input>
       <el-button type="primary" @click="search">搜索</el-button>
-      <el-button :loading="loading" @click="fetchUsers">刷新</el-button>
-      <span class="hint">统计以服务端已同步的播放会话为准。</span>
+      <el-button :loading="loading" @click="fetchUsers">
+        <el-icon><Refresh /></el-icon>
+        <span>刷新</span>
+      </el-button>
+      <span class="bar-spacer"></span>
+      <span class="pill">
+        <span class="pill-dot"></span>
+        共 <strong>{{ total }}</strong> 位用户
+      </span>
     </div>
 
     <el-table :data="users" v-loading="loading" empty-text="没有匹配的用户">
       <el-table-column prop="id" label="ID" width="72" />
-      <el-table-column label="用户" min-width="190">
+      <el-table-column label="用户" min-width="200">
         <template #default="{ row }">
-          <div class="user-name">{{ row.nickname }}</div>
-          <div class="muted">@{{ row.username }}</div>
+          <!-- 服务端已下发 avatarUrl，此前一直没用上；没有头像时退回首字母色块 -->
+          <div class="user-cell">
+            <el-avatar :size="32" :src="row.avatarUrl || undefined" class="user-avatar">
+              {{ (row.nickname || row.username || "?").charAt(0).toUpperCase() }}
+            </el-avatar>
+            <div class="user-meta">
+              <div class="user-name">{{ row.nickname }}</div>
+              <div class="muted">@{{ row.username }}</div>
+            </div>
+          </div>
         </template>
       </el-table-column>
       <el-table-column prop="email" label="邮箱" min-width="210">
@@ -26,7 +44,7 @@
       </el-table-column>
       <el-table-column label="状态" width="86">
         <template #default="{ row }">
-          <el-tag :type="row.disabledAt ? 'danger' : 'success'" size="small">
+          <el-tag :type="row.disabledAt ? 'danger' : 'success'" size="small" effect="light">
             {{ row.disabledAt ? "已禁用" : "正常" }}
           </el-tag>
         </template>
@@ -64,6 +82,7 @@
         :page-size="pageSize"
         :total="total"
         layout="prev, pager, next"
+        background
         @current-change="fetchUsers"
       />
     </div>
@@ -83,10 +102,10 @@
         </el-descriptions>
 
         <el-row :gutter="12" class="stats">
-          <el-col :span="6"><el-statistic title="听过歌曲" :value="detail.stats.songCount" /></el-col>
-          <el-col :span="6"><el-statistic title="有效播放" :value="detail.stats.playCount" /></el-col>
-          <el-col :span="6"><el-statistic title="完整播放" :value="detail.stats.completedCount" /></el-col>
-          <el-col :span="6"><el-statistic title="累计听歌" :value="formatDuration(detail.stats.totalListenedMs)" /></el-col>
+          <el-col :span="6"><div class="stat-card"><el-statistic title="听过歌曲" :value="detail.stats.songCount" /></div></el-col>
+          <el-col :span="6"><div class="stat-card"><el-statistic title="有效播放" :value="detail.stats.playCount" /></div></el-col>
+          <el-col :span="6"><div class="stat-card"><el-statistic title="完整播放" :value="detail.stats.completedCount" /></div></el-col>
+          <el-col :span="6"><div class="stat-card"><el-statistic title="累计听歌" :value="formatDuration(detail.stats.totalListenedMs)" /></div></el-col>
         </el-row>
         <p class="hint detail-hint">
           首次听歌：{{ formatTime(detail.stats.firstPlayedAt) }}；最近同步：{{ formatTime(detail.stats.lastPlayedAt) }}。
@@ -95,7 +114,9 @@
 
         <h3>最近播放（最多 50 首）</h3>
         <el-table :data="detail.history.entries" size="small" empty-text="暂无已满足 3 秒条件的最近播放">
-          <el-table-column prop="source" label="来源" width="100" />
+          <el-table-column prop="source" label="来源" width="100">
+            <template #default="{ row }"><el-tag size="small" effect="plain">{{ row.source }}</el-tag></template>
+          </el-table-column>
           <el-table-column prop="songId" label="歌曲 ID" min-width="180" show-overflow-tooltip />
           <el-table-column label="播放" width="70" align="right">
             <template #default="{ row }">{{ row.playCount }}</template>
@@ -117,6 +138,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
+import { Search, Refresh } from "@element-plus/icons-vue";
 import { apiDelete, apiGet, apiPostJson, formatTime } from "../api";
 
 type UserSummary = {
@@ -124,6 +146,8 @@ type UserSummary = {
   username: string;
   nickname: string;
   email: string | null;
+  /** 服务端列表接口已下发，无头像时为 null。 */
+  avatarUrl: string | null;
   songCount: number;
   playCount: number;
   completedCount: number;
@@ -250,16 +274,94 @@ function formatDuration(milliseconds: number): string {
 
 <style scoped>
 .manager { padding: 4px 0; }
-.bar { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
-.bar :deep(.el-input) { width: min(320px, 100%); }
+
+.bar { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; flex-wrap: wrap; }
+.bar-spacer { flex: 1; min-width: 8px; }
+.search-input { width: min(320px, 100%); }
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 13px;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--el-text-color-secondary);
+  background: var(--hint-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.pill strong { color: var(--el-text-color-primary); font-weight: 650; }
+
+.pill-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--primary-color);
+  box-shadow: 0 0 0 3px var(--primary-soft);
+  flex-shrink: 0;
+}
+
+/* 用户单元格：头像 + 双行身份信息 */
+.user-cell { display: flex; align-items: center; gap: 10px; }
+
+.user-avatar {
+  flex-shrink: 0;
+  font-size: 13px;
+  font-weight: 650;
+  color: #fff;
+  background: linear-gradient(140deg, var(--primary-color), #ff9d6e);
+}
+
+.user-meta { min-width: 0; }
+
+.user-name {
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .hint, .muted { font-size: 13px; color: var(--el-text-color-secondary); }
-.user-name { font-weight: 600; }
-.pager { display: flex; align-items: center; justify-content: space-between; margin-top: 16px; color: var(--el-text-color-secondary); font-size: 13px; }
-.stats { margin: 24px 0 4px; }
-.detail-hint { margin: 14px 0 24px; line-height: 1.7; }
-h3 { margin: 0 0 12px; }
+
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 18px;
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+  flex-wrap: wrap;
+}
+
+.stats { margin: 22px 0 4px; }
+
+/* 指标卡片：让四个统计数字成为「仪表盘」而不是四行裸文字 */
+.stat-card {
+  padding: 14px 16px;
+  background: var(--hint-bg);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  height: 100%;
+  box-sizing: border-box;
+}
+
+.detail-hint { margin: 14px 0 22px; line-height: 1.7; }
+
+h3 {
+  margin: 0 0 12px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+}
+
 @media (max-width: 720px) {
-  .bar { align-items: stretch; flex-wrap: wrap; }
-  .bar :deep(.el-input) { width: 100%; }
+  .bar { align-items: stretch; }
+  .search-input { width: 100%; }
+  .stats :deep(.el-col) { margin-bottom: 10px; }
 }
 </style>

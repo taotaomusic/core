@@ -6,24 +6,37 @@
       DLL/EXE 配置 Courgette 后会优先使用 Courgette。
     </el-alert>
     <div class="bar">
-      <el-button type="primary" @click="openUpload">上传 Windows 版本</el-button>
-      <el-button :loading="loading" @click="fetchReleases">刷新</el-button>
-      <span v-if="rolledOut" class="hint">当前全量版本：{{ rolledOut.version_code }}（{{ rolledOut.version_name }}）</span>
-      <span v-else class="hint warn">还没有放量 100% 的 Windows 版本</span>
+      <el-button type="primary" @click="openUpload">
+        <el-icon><Monitor /></el-icon>
+        <span>上传 Windows 版本</span>
+      </el-button>
+      <el-button :loading="loading" @click="fetchReleases">
+        <el-icon><Refresh /></el-icon>
+        <span>刷新</span>
+      </el-button>
+      <span class="bar-spacer"></span>
+      <span v-if="rolledOut" class="pill">
+        <span class="pill-dot ok"></span>
+        当前全量版本 <strong>{{ rolledOut.version_code }}</strong>（{{ rolledOut.version_name }}）
+      </span>
+      <span v-else class="pill warn">
+        <span class="pill-dot warn"></span>
+        还没有放量 100% 的 Windows 版本
+      </span>
     </div>
 
     <el-table :data="releases" v-loading="loading" empty-text="还没有 Windows 发布记录">
       <el-table-column prop="version_code" label="版本号" width="90" sortable />
       <el-table-column prop="version_name" label="版本名" width="120" />
       <el-table-column prop="architecture" label="架构" width="120" />
-      <el-table-column label="放量" width="150">
+      <el-table-column label="放量" width="168">
         <template #default="{ row }">
-          <el-progress :percentage="row.rollout_percent" :status="row.rollout_percent === 100 ? 'success' : undefined" :stroke-width="14" text-inside />
+          <el-progress :percentage="row.rollout_percent" :status="row.rollout_percent === 100 ? 'success' : undefined" :stroke-width="10" />
         </template>
       </el-table-column>
       <el-table-column label="状态" width="90">
         <template #default="{ row }">
-          <el-tag :type="row.enabled === 1 ? 'success' : 'danger'" size="small">{{ row.enabled === 1 ? "启用" : "已停用" }}</el-tag>
+          <el-tag :type="row.enabled === 1 ? 'success' : 'danger'" size="small" effect="light">{{ row.enabled === 1 ? "启用" : "已停用" }}</el-tag>
         </template>
       </el-table-column>
       <el-table-column prop="entrypoint" label="入口模块" min-width="170" show-overflow-tooltip />
@@ -34,7 +47,7 @@
       <el-table-column label="操作" width="190" fixed="right">
         <template #default="{ row }">
           <el-button size="small" @click="openRollout(row)">调放量</el-button>
-          <el-button size="small" :type="row.enabled === 1 ? 'danger' : 'success'" @click="toggleEnabled(row)">
+          <el-button size="small" :type="row.enabled === 1 ? 'danger' : 'success'" plain @click="toggleEnabled(row)">
             {{ row.enabled === 1 ? "停用" : "启用" }}
           </el-button>
         </template>
@@ -78,6 +91,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
+import { Monitor, Refresh } from "@element-plus/icons-vue";
 import { apiGet, apiPostBytes, apiPostJson, formatSize, formatTime, sha256Of } from "../api";
 
 interface DesktopRelease {
@@ -222,10 +236,39 @@ function relativePath(file: File): string { return (file.webkitRelativePath || f
 
 <style scoped>
 .manager { padding: 4px 0; }
-.notice { margin-bottom: 16px; }
-.bar { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+.notice { margin-bottom: 18px; }
+.bar { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; flex-wrap: wrap; }
+.bar-spacer { flex: 1; min-width: 8px; }
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 13px;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--el-text-color-regular);
+  background: var(--hint-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.pill strong { color: var(--el-text-color-primary); font-weight: 650; }
+
+.pill-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.pill-dot.ok { background: var(--el-color-success); box-shadow: 0 0 0 3px var(--el-color-success-light-9); }
+.pill.warn { color: var(--el-color-warning); background: var(--el-color-warning-light-9); border-color: var(--el-color-warning-light-8); }
+.pill-dot.warn { background: var(--el-color-warning); box-shadow: 0 0 0 3px rgba(230, 162, 60, 0.18); }
+
 .hint { font-size: 13px; color: var(--el-text-color-secondary); }
-.hint.warn { color: var(--el-color-warning); }
 .hint.inline { margin-left: 10px; }
-code { background: var(--el-fill-color-light); padding: 1px 4px; border-radius: 3px; }
+
+code {
+  background: var(--code-bg);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 12.5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
 </style>

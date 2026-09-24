@@ -1,8 +1,15 @@
 <template>
   <div class="force-shell">
+    <div class="force-aurora" aria-hidden="true">
+      <span class="aurora aurora-a"></span>
+      <span class="aurora aurora-b"></span>
+    </div>
+
     <div class="force-card">
       <div class="force-header">
-        <img src="/favicon.png" class="force-logo" alt="logo" />
+        <span class="logo-badge">
+          <img src="/favicon.png" class="force-logo" alt="logo" />
+        </span>
         <h1>首次登录必须修改密码</h1>
       </div>
 
@@ -24,13 +31,31 @@
           <el-input v-model="confirmPassword" type="password" placeholder="确认新密码" size="large"
             prefix-icon="Lock" show-password @keyup.enter="handleSubmit" />
         </el-form-item>
+
+        <!-- 实时反馈长度要求，避免点提交才知道哪里不合格 -->
+        <ul class="rules">
+          <li :class="{ ok: newPassword.length >= 8 }">
+            <el-icon><component :is="newPassword.length >= 8 ? CircleCheckFilled : CircleClose" /></el-icon>
+            至少 8 位
+          </li>
+          <li :class="{ ok: Boolean(newPassword) && newPassword === confirmPassword }">
+            <el-icon>
+              <component :is="newPassword && newPassword === confirmPassword ? CircleCheckFilled : CircleClose" />
+            </el-icon>
+            两次输入一致
+          </li>
+        </ul>
+
         <el-button type="primary" size="large" :loading="loading" :disabled="!canSubmit"
           @click="handleSubmit" class="submit-btn">
           修改密码并进入后台
         </el-button>
       </el-form>
 
-      <p v-if="error" class="error-text">{{ error }}</p>
+      <p v-if="error" class="error-text">
+        <el-icon><WarningFilled /></el-icon>
+        <span>{{ error }}</span>
+      </p>
 
       <el-button link class="logout-btn" @click="emit('logout')">退出登录</el-button>
     </div>
@@ -39,7 +64,7 @@
 
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import { Lock } from "@element-plus/icons-vue";
+import { Lock, WarningFilled, CircleCheckFilled, CircleClose } from "@element-plus/icons-vue";
 import { adminChangePassword } from "../api";
 
 const props = defineProps<{ token: string }>();
@@ -88,15 +113,54 @@ async function handleSubmit() {
   display: flex;
   align-items: center;
   justify-content: center;
+  position: relative;
+  overflow: hidden;
   background: var(--bg-color);
+  padding: 24px;
+  box-sizing: border-box;
+}
+
+.force-aurora {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.aurora {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(72px);
+  opacity: 0.5;
+}
+
+.aurora-a {
+  width: 480px;
+  height: 480px;
+  top: -170px;
+  left: -130px;
+  background: radial-gradient(circle, var(--primary-color), transparent 68%);
+}
+
+.aurora-b {
+  width: 420px;
+  height: 420px;
+  bottom: -180px;
+  right: -120px;
+  background: radial-gradient(circle, #7aa8ff, transparent 68%);
+  opacity: 0.35;
 }
 
 .force-card {
-  width: 380px;
-  padding: 40px 32px;
+  position: relative;
+  width: 400px;
+  max-width: 100%;
+  padding: 40px 36px 28px;
   background: var(--card-bg);
-  border-radius: 12px;
-  box-shadow: var(--box-shadow);
+  background-image: linear-gradient(180deg, var(--primary-soft), transparent 120px);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-lg);
+  box-sizing: border-box;
 }
 
 .force-header {
@@ -104,41 +168,106 @@ async function handleSubmit() {
   margin-bottom: 20px;
 }
 
-.force-logo {
-  width: 56px;
-  height: 56px;
-  border-radius: 12px;
+.logo-badge {
+  display: inline-grid;
+  place-items: center;
+  width: 60px;
+  height: 60px;
   margin-bottom: 16px;
-  box-shadow: 0 4px 12px rgba(255, 107, 129, 0.2);
+  border-radius: 18px;
+  background: linear-gradient(140deg, var(--primary-color), #ff9d6e);
+  box-shadow: 0 10px 24px var(--primary-glow);
+}
+
+.force-logo {
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  object-fit: contain;
 }
 
 .force-header h1 {
   margin: 0;
-  font-size: 20px;
-  font-weight: 600;
+  font-size: 19px;
+  font-weight: 650;
+  color: var(--el-text-color-primary);
 }
 
 .force-hint {
   color: var(--el-text-color-secondary);
   font-size: 13px;
-  line-height: 1.6;
+  line-height: 1.65;
   margin: 0 0 20px;
+  padding: 12px 14px;
+  background: var(--hint-bg);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+}
+
+/* 密码规则实时反馈 */
+.rules {
+  list-style: none;
+  display: flex;
+  gap: 18px;
+  margin: -4px 0 14px;
+  padding: 0;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.rules li {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  transition: color var(--transition);
+}
+
+.rules li.ok {
+  color: var(--el-color-success);
 }
 
 .submit-btn {
   width: 100%;
-  margin-top: 8px;
+  height: 44px;
+  font-size: 15px;
+  margin-top: 4px;
 }
 
 .logout-btn {
   display: block;
-  margin: 16px auto 0;
+  margin: 18px auto 0;
 }
 
 .error-text {
-  color: var(--el-color-danger);
-  text-align: center;
-  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: 14px 0 0;
+  padding: 10px 14px;
   font-size: 13px;
+  line-height: 1.5;
+  color: var(--el-color-danger);
+  background: var(--el-color-danger-light-9);
+  border: 1px solid var(--el-color-danger-light-8);
+  border-radius: var(--radius-sm);
+}
+
+@media screen and (max-width: 480px) {
+  .force-card {
+    padding: 32px 22px 24px;
+    border-radius: var(--radius-lg);
+  }
+
+  .logo-badge {
+    width: 54px;
+    height: 54px;
+    border-radius: 16px;
+  }
+
+  .force-logo {
+    width: 34px;
+    height: 34px;
+  }
 }
 </style>

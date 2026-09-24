@@ -12,10 +12,10 @@
 
       <el-descriptions :column="2" border style="margin-bottom: 18px">
         <el-descriptions-item label="当前下限">
-          <strong>{{ minSupported === 0 ? "未设置" : minSupported }}</strong>
+          <strong class="value-strong">{{ minSupported === 0 ? "未设置" : minSupported }}</strong>
         </el-descriptions-item>
         <el-descriptions-item label="可作为下限的最高版本">
-          <strong v-if="rolledOut">{{ rolledOut.version_code }}（{{ rolledOut.version_name }}）</strong>
+          <strong v-if="rolledOut" class="value-strong">{{ rolledOut.version_code }}（{{ rolledOut.version_name }}）</strong>
           <span v-else class="warn">无 —— 还没有放量 100% 的版本</span>
         </el-descriptions-item>
         <el-descriptions-item label="发布记录">{{ releases.length }} 条</el-descriptions-item>
@@ -147,10 +147,7 @@ function forgetToken() {
   flex-direction: column;
   gap: 18px;
   padding: 4px 0;
-}
-
-.card {
-  border: 1px solid var(--el-border-color-light);
+  max-width: 900px;
 }
 
 .hint {
@@ -160,5 +157,13 @@ function forgetToken() {
 
 .warn {
   color: var(--el-color-warning);
+}
+
+/* 关键数值加粗等宽，在一堆描述项里一眼能定位 */
+.value-strong {
+  font-size: 15px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  color: var(--el-text-color-primary);
 }
 </style>

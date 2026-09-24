@@ -1,16 +1,31 @@
 <template>
   <div class="manager">
     <div class="bar">
-      <el-button type="primary" @click="openCreate">添加管理员</el-button>
-      <el-button @click="fetchUsers" :loading="loading">刷新</el-button>
+      <el-button type="primary" @click="openCreate">
+        <el-icon><Plus /></el-icon>
+        <span>添加管理员</span>
+      </el-button>
+      <el-button @click="fetchUsers" :loading="loading">
+        <el-icon><Refresh /></el-icon>
+        <span>刷新</span>
+      </el-button>
+      <span class="bar-spacer"></span>
+      <span class="pill">共 <strong>{{ users.length }}</strong> 位管理员</span>
     </div>
 
     <el-table :data="users" v-loading="loading" empty-text="暂无管理员">
       <el-table-column prop="id" label="ID" width="70" />
-      <el-table-column label="用户" min-width="160">
+      <el-table-column label="用户" min-width="170">
         <template #default="{ row }">
-          <div class="admin-name">{{ row.display_name || row.username }}</div>
-          <div class="muted">@{{ row.username }}</div>
+          <div class="admin-cell">
+            <el-avatar :size="30" class="admin-avatar">
+              {{ (row.display_name || row.username || "?").charAt(0).toUpperCase() }}
+            </el-avatar>
+            <div class="admin-meta">
+              <div class="admin-name">{{ row.display_name || row.username }}</div>
+              <div class="muted">@{{ row.username }}</div>
+            </div>
+          </div>
         </template>
       </el-table-column>
       <el-table-column prop="email" label="邮箱" min-width="180">
@@ -18,19 +33,19 @@
       </el-table-column>
       <el-table-column label="角色" width="120">
         <template #default="{ row }">
-          <el-tag :type="roleTag(row.role)" size="small">{{ roleLabel(row.role) }}</el-tag>
+          <el-tag :type="roleTag(row.role)" size="small" effect="light">{{ roleLabel(row.role) }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="2FA" width="80">
+      <el-table-column label="2FA" width="88">
         <template #default="{ row }">
-          <el-tag :type="row.totp_enabled ? 'success' : 'info'" size="small">
+          <el-tag :type="row.totp_enabled ? 'success' : 'info'" size="small" effect="light">
             {{ row.totp_enabled ? "已启用" : "未启用" }}
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="状态" width="80">
+      <el-table-column label="状态" width="86">
         <template #default="{ row }">
-          <el-tag :type="row.disabled_at ? 'danger' : 'success'" size="small">
+          <el-tag :type="row.disabled_at ? 'danger' : 'success'" size="small" effect="light">
             {{ row.disabled_at ? "已禁用" : "正常" }}
           </el-tag>
         </template>
@@ -84,6 +99,7 @@
 
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
+import { Plus, Refresh } from "@element-plus/icons-vue";
 import { apiGet, apiPostJson, apiPatch, apiDelete, formatTime } from "../api";
 
 type AdminUser = {
@@ -190,16 +206,52 @@ function roleLabel(role: string) {
 
 .bar {
   display: flex;
-  gap: 12px;
-  margin-bottom: 16px;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
 }
+
+.bar-spacer { flex: 1; min-width: 8px; }
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 13px;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--el-text-color-secondary);
+  background: var(--hint-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.pill strong { color: var(--el-text-color-primary); font-weight: 650; }
+
+.admin-cell { display: flex; align-items: center; gap: 10px; }
+
+.admin-avatar {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 650;
+  color: #fff;
+  background: linear-gradient(140deg, var(--primary-color), #ff9d6e);
+}
+
+.admin-meta { min-width: 0; }
 
 .admin-name {
   font-weight: 600;
+  color: var(--el-text-color-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .muted {
-  font-size: 13px;
+  font-size: 12px;
   color: var(--el-text-color-secondary);
 }
 </style>

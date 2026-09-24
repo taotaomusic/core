@@ -7,26 +7,35 @@
     </el-alert>
 
     <div class="bar">
-      <el-button type="primary" @click="openUpload">上传补丁</el-button>
-      <el-button @click="fetchPatches" :loading="loading">刷新</el-button>
+      <el-button type="primary" @click="openUpload">
+        <el-icon><Upload /></el-icon>
+        <span>上传补丁</span>
+      </el-button>
+      <el-button @click="fetchPatches" :loading="loading">
+        <el-icon><Refresh /></el-icon>
+        <span>刷新</span>
+      </el-button>
+      <span class="bar-spacer"></span>
+      <span class="pill" v-if="patches.length">
+        共 <strong>{{ patches.length }}</strong> 个补丁
+      </span>
     </div>
 
     <el-table :data="patches" v-loading="loading" empty-text="还没有任何补丁">
       <el-table-column prop="target_version_code" label="宿主版本" width="100" sortable />
       <el-table-column prop="patch_version" label="补丁版本" width="100" sortable />
-      <el-table-column label="放量" width="150">
+      <el-table-column label="放量" width="168">
         <template #default="{ row }">
           <el-progress
             :percentage="row.rollout_percent"
             :status="row.rollout_percent === 100 ? 'success' : undefined"
-            :stroke-width="14"
-            text-inside
+            :stroke-width="10"
           />
         </template>
       </el-table-column>
       <el-table-column label="状态" width="90">
         <template #default="{ row }">
-          <el-tag :type="row.enabled === 1 ? 'success' : 'danger'" size="small">
+          <el-tag :type="row.enabled === 1 ? 'success' : 'danger'" size="small" effect="light">
             {{ row.enabled === 1 ? "启用" : "已停用" }}
           </el-tag>
         </template>
@@ -44,6 +53,7 @@
           <el-button
             size="small"
             :type="row.enabled === 1 ? 'danger' : 'success'"
+            plain
             @click="toggleEnabled(row)"
           >
             {{ row.enabled === 1 ? "下架" : "启用" }}
@@ -112,6 +122,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from "vue";
+import { Upload, Refresh } from "@element-plus/icons-vue";
 import { formatSize, formatTime, sha256Of, apiGet, apiPostJson, apiPostBytes } from "../api";
 
 interface Patch {
@@ -273,8 +284,33 @@ async function toggleEnabled(row: Patch) {
 .bar {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin-bottom: 16px;
+  gap: 10px;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+}
+
+.bar-spacer {
+  flex: 1;
+  min-width: 8px;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 13px;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--el-text-color-regular);
+  background: var(--hint-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.pill strong {
+  color: var(--el-text-color-primary);
+  font-weight: 650;
 }
 
 .hint {
@@ -283,8 +319,10 @@ async function toggleEnabled(row: Patch) {
 }
 
 code {
-  background: var(--el-fill-color-light);
-  padding: 1px 4px;
-  border-radius: 3px;
+  background: var(--code-bg);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 12.5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 </style>
