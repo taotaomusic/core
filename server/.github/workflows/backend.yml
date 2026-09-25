@@ -41,7 +41,9 @@ jobs:
 
     env:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/music_verify
-      AUTH_SECRET: 0123456789012345678901234567890123456789
+      # 注意必须带引号：不带引号的纯数字串会被 YAML 解析成浮点数，
+      # 传给服务端变成科学计数法字符串，过不了「至少 32 字符」校验（实际踩过）。
+      AUTH_SECRET: "0123456789abcdefghij0123456789abcdefghij"
       ADMIN_INITIAL_PASSWORD: verify-initial-123456
       NODE_ENV: test
       PORT: "4720"
@@ -92,6 +94,7 @@ jobs:
           if [ "$ok" != "1" ]; then
             echo "服务 60 秒内未就绪，日志尾部如下："
             tail -n 12 server.log || true
+            grep -m 1 -i 'error' server.log | head -c 300 || true
             tail -n 10 server.log | while IFS= read -r line; do
               if [ -z "$line" ]; then line="(空行)"; fi
               echo "::error::${line:0:300}"
