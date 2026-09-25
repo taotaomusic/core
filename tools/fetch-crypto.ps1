@@ -24,10 +24,11 @@
             └── taotao_crypto.d.ts
 
 .PARAMETER Version
-    Release tag，例如 v0.1.0。省略则取最新的**已发布** Release。
+    Release tag。默认 `dev-latest` —— main 分支的开发构建，用占位密钥，
+    免登录就能下载，适合联调。
 
-    注意：CI 产出的 Release 默认是 draft 状态，draft 不在 latest 的范围内。
-    要先在 GitHub 上把它发布出来，或者用 -Version 配合 -Token 拉 draft。
+    生产版本传具体 tag（例如 `v0.1.0`）。正式 Release 是 draft 状态，
+    需要 -Token，或者先在 GitHub 上手动发布出来。
 
 .PARAMETER Repo
     owner/repo，默认 hdppppppp/tools。
@@ -130,11 +131,13 @@ function Resolve-Release {
     $headers = Get-AuthHeaders
     $apiBase = "https://api.github.com/repos/$Repo/releases"
 
+    # 默认取开发构建。它是个 prerelease，所以不能用 /releases/latest
+    # （那个只指向正式的最新版，而正式版目前可能还不存在）。
     if ([string]::IsNullOrWhiteSpace($Version)) {
-        $apiUrl = "$apiBase/latest"
-    } else {
-        $apiUrl = "$apiBase/tags/$Version"
+        $Version = 'dev-latest'
     }
+
+    $apiUrl = "$apiBase/tags/$Version"
 
     try {
         $release = Invoke-RestMethod -Uri $apiUrl -Headers $headers -TimeoutSec 30
@@ -145,13 +148,11 @@ function Resolve-Release {
             })
         }
     } catch {
-        if (-not [string]::IsNullOrWhiteSpace($Version)) {
-            # 指定了版本时退回直链约定。
-            $tag = if ($Version.StartsWith('v')) { $Version } else { "v$Version" }
-            Write-Warn "GitHub API 不可用（$($_.Exception.Message)），改用直链下载 $tag"
-            return @{ Tag = $tag; Assets = @() }
-        }
-        throw "无法获取 Release 信息：$($_.Exception.Message)`n如果是私有仓库或要拉 draft，请提供 -Token 或设置 GH_TOKEN。"
+        # API 不可用时退回直链约定（公开仓库的 Release assets 是直链）。
+        # 注意不要自作聪明补 `v` 前缀 —— `dev-latest` 本来就不带 v，
+        # 补上会变成 `vdev-latest` 这种不存在的 tag。
+        Write-Warn "GitHub API 不可用（$($_.Exception.Message)），改用直链下载 $Version"
+        return @{ Tag = $Version; Assets = @() }
     }
 }
 
