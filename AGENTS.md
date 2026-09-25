@@ -11,6 +11,7 @@
 - `player-ui/`：Android、Windows、Web 共用的播放主题、歌曲行、迷你播放器和布局组件。
 - `shared/`：跨平台共享的数据模型、歌词解析和音质规则，代码放在 `src/commonMain/`。
 - `patch/`、`build-logic/`：热修复补丁模块与 Gradle/字节码插桩构建逻辑。
+- `crypto/`：传输层加密层的**产物目录**，只放 `dist/`，不含源码。源码在独立仓库 `hdppppppp/tools`，编译由那边的 GitHub Actions 负责；用 `tools/fetch-crypto.ps1` 拉取产物，本地**不需要**安装 Rust / Android NDK / wasm-bindgen 等交叉编译环境。不要在这里新增 Rust 文件。
 - 根目录 Gradle 文件：定义上述客户端模块和 `:shared` 的构建关系。
 - `build/` 目录：构建生成物，只读，不手工修改。
 - `server/`：NestJS + TypeScript + PostgreSQL 的接口适配服务；服务源码必须保持可读，不得提交压缩后的源码。

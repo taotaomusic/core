@@ -26,6 +26,17 @@ taotao-release.jks
 # CodeGraph 本机索引数据库，不进入版本库
 .codegraph/
 
+# 加密层（传输层加密）源码已移出为独立仓库 hdppppppp/tools，编译由那边的
+# GitHub Actions 负责 —— 主项目这边不需要装 NDK / wasm-bindgen 等任何交叉编译环境。
+# 本目录现在只放产物，由 tools/fetch-crypto.ps1 从 GitHub Release 拉取。
+#
+# 产物是平台相关二进制且含 PSK，一律不入库。
+crypto/dist/
+
+# 历史遗留的本地构建缓存。源码移走后这些中间文件已无用途，可安全删除：
+#   Remove-Item -Recurse -Force crypto/target
+crypto/target/
+
 # AI 协作的本机工作状态（会话记忆、本地技能），不进入版本库
 .workbuddy-ai/
 
