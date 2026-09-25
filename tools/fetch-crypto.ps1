@@ -78,6 +78,25 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# 关掉进度条。这不是洁癖：Invoke-WebRequest 每写一块数据就重绘一次进度条，
+# 在控制台里会刷出几千行控制字符，既把真正的输出淹掉（重定向到文件时
+# 日志几乎全是进度条），又因为每次重绘都要写终端而明显拖慢下载速度。
+$ProgressPreference = 'SilentlyContinue'
+
+# ---- Windows PowerShell 5.1 的两处兼容性加固 ----
+#
+# ① 默认的 SecurityProtocol 是 SystemDefault，在老系统上可能协商到
+#    TLS 1.0/1.1，而 GitHub 要求 1.2+。显式设一次，代价为零。
+# ② Invoke-* 默认走 IE 解析引擎，在没有 IE 的环境（Server Core、容器、
+#    精简镜像）会直接失败。PS 6+ 已经默认 basic parsing 并移除了这个
+#    参数，所以要按版本判断 —— 传了会报「找不到参数」。
+if ($PSVersionTable.PSVersion.Major -lt 6) {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    $BasicParsing = @{ UseBasicParsing = $true }
+} else {
+    $BasicParsing = @{}
+}
+
 # 脚本在 tools/ 下，仓库根是上一级。
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 if ([string]::IsNullOrWhiteSpace($OutDir)) {
@@ -167,7 +186,6 @@ function Save-Asset {
         [switch]$UseAuth
     )
 
-    $headers = if ($UseAuth) { Get-AuthHeaders } else { @{} }
     $params = @{
         Uri         = $Url
         OutFile     = $Destination
@@ -179,7 +197,7 @@ function Save-Asset {
         # 用 application/vnd.github+json 会拿到 JSON 元数据而不是文件本身。
         $params['Headers'] = @{ 'Authorization' = "Bearer $Token" }
     }
-    Invoke-WebRequest @params | Out-Null
+    Invoke-WebRequest @params @BasicParsing | Out-Null
 }
 
 function Get-Sha256([string]$Path) {
