@@ -32,8 +32,9 @@ function Assert-LastExit([string]$Step) {
 }
 
 # 始终在仓库根目录执行，与调用时所在目录无关
-Set-Location (git rev-parse --show-toplevel).Trim()
+$topLevel = git rev-parse --show-toplevel
 Assert-LastExit "定位仓库根目录"
+Set-Location $topLevel.Trim()
 
 # 远端必须已经配置好
 git remote get-url $ServerRemoteName *> $null
@@ -57,8 +58,14 @@ Assert-LastExit "解析 server 子树"
 # client 快照树：主仓库根树去掉 server 条目后重建
 $rootEntries = git ls-tree "HEAD^{tree}"
 Assert-LastExit "读取根树"
-$clientTree = $rootEntries | Where-Object { -not $_.EndsWith("`tserver") } | git mktree
+$clientLines = @($rootEntries | Where-Object { -not $_.EndsWith("`tserver") })
+if ($clientLines.Count -lt 5) { throw "client 快照树条目异常（仅 $($clientLines.Count) 条）" }
+# 经临时文件喂给 git mktree，绕开 PowerShell 管道的编码转换（PS 5.1 管道会混入 BOM）
+$mktreeInput = Join-Path $env:TEMP "taotao-sync-mktree.txt"
+[IO.File]::WriteAllText($mktreeInput, (($clientLines -join "`n") + "`n"), (New-Object System.Text.UTF8Encoding($false)))
+$clientTree = (cmd /c "git mktree < `"$mktreeInput`"").Trim()
 Assert-LastExit "生成 client 快照树"
+Remove-Item $mktreeInput -ErrorAction SilentlyContinue
 
 # 在快照分支上追加提交：已有快照则作为父提交，形成线性历史；首次同步则从零开始
 function Add-SnapshotCommit {
