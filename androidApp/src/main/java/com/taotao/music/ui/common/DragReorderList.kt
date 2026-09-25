@@ -1,5 +1,7 @@
-package com.taotao.music.ui
+package com.taotao.music.ui.common
 
+import com.taotao.music.ui.theme.LocalReduceMotion
+import com.taotao.music.ui.theme.taotaoSettleSpring
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
@@ -21,6 +23,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
@@ -113,6 +116,10 @@ fun <T> DragReorderList(
         verticalArrangement = verticalArrangement,
     ) {
         itemsIndexed(visualRows, key = { _, rowItem -> rowItem.id }) { index, rowItem ->
+            // pointerInput 只按 rowItem.id 建协程，行换位后协程不重启；直接捕获 index
+            // 会拿到换位前的旧下标（表现为拖这行动了那行、松手后顺序被错误提交）。
+            // 用 State 转发最新下标，手势闭包每次读取都拿到当前值。
+            val liveIndex by rememberUpdatedState(index)
             val isActive = index == visualActiveIndex
             val isDragged = index == draggedIndex
             val rowOffsetY = when {
@@ -150,8 +157,8 @@ fun <T> DragReorderList(
                             detectDragGesturesAfterLongPress(
                                 onDragStart = {
                                     settleOffset = Animatable(0f)
-                                    dragStartIndex = index
-                                    draggedIndex = index
+                                    dragStartIndex = liveIndex
+                                    draggedIndex = liveIndex
                                     draggedDistance = 0f
                                     settling = false
                                     haptics.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -179,7 +186,9 @@ fun <T> DragReorderList(
                                             }
                                         }
                                     }
-                                    if (fromIndex in items.indices && toIndex in items.indices && fromIndex != toIndex) {
+                                    // visualRows 是状态读取，松手时取到的是当前行数；
+                                    // 捕获的 items 可能是手势开始前的旧列表。
+                                    if (fromIndex in visualRows.indices && toIndex in visualRows.indices && fromIndex != toIndex) {
                                         onMove(fromIndex, toIndex)
                                     }
                                 },

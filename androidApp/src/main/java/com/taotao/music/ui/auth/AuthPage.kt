@@ -1,5 +1,12 @@
-package com.taotao.music.ui
+package com.taotao.music.ui.auth
 
+import com.taotao.music.ui.common.AlbumArt
+import com.taotao.music.ui.theme.AnimationCurves
+import com.taotao.music.ui.theme.AnimationDurations
+import com.taotao.music.ui.theme.LocalReduceMotion
+import com.taotao.music.ui.theme.TaotaoCoral
+import com.taotao.music.ui.theme.TaotaoTheme
+import com.taotao.music.ui.theme.taotaoTween
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition

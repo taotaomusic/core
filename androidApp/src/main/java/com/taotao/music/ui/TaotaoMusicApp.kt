@@ -62,6 +62,53 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import coil.compose.AsyncImage
 import com.taotao.music.TaotaoApplication
+import com.taotao.music.ui.account.AccountProfilePage
+import com.taotao.music.ui.account.AnnouncementDialog
+import com.taotao.music.ui.ai.AiStudioPage
+import com.taotao.music.ui.auth.AuthPage
+import com.taotao.music.ui.auth.readableMessage
+import com.taotao.music.ui.chat.ChatPage
+import com.taotao.music.ui.common.AlbumArt
+import com.taotao.music.ui.common.DragReorderList
+import com.taotao.music.ui.common.FavoriteButton
+import com.taotao.music.ui.common.MusicSearchBar
+import com.taotao.music.ui.common.PagerDots
+import com.taotao.music.ui.common.SongRow
+import com.taotao.music.ui.common.TaotaoSnackbar
+import com.taotao.music.ui.common.VipBadge
+import com.taotao.music.ui.common.moved
+import com.taotao.music.ui.common.movedIndex
+import com.taotao.music.ui.library.DiaryRecordsPage
+import com.taotao.music.ui.library.MineLibrarySection
+import com.taotao.music.ui.library.MusicLibraryPage
+import com.taotao.music.ui.library.PlaybackHistoryPage
+import com.taotao.music.ui.library.SongDiaryPage
+import com.taotao.music.ui.player.LyricPane
+import com.taotao.music.ui.player.QualityChoice
+import com.taotao.music.ui.player.QualityChip
+import com.taotao.music.ui.player.QualitySheet
+import com.taotao.music.ui.player.SleepTimerSheet
+import com.taotao.music.ui.player.formatSleepTimerRemaining
+import com.taotao.music.ui.player.staticQualityChoices
+import com.taotao.music.ui.playlist.PlaylistDetailPage
+import com.taotao.music.ui.playlist.PlaylistEditorDialog
+import com.taotao.music.ui.playlist.PlaylistEditorMode
+import com.taotao.music.ui.playlist.PlaylistLibraryPage
+import com.taotao.music.ui.playlist.PlaylistPickerDialog
+import com.taotao.music.ui.playlist.PlaylistSongPickerDialog
+import com.taotao.music.ui.search.SearchPage
+import com.taotao.music.ui.settings.SettingsPage
+import com.taotao.music.ui.theme.AnimationDurations
+import com.taotao.music.ui.theme.LocalReduceMotion
+import com.taotao.music.ui.theme.TaotaoCoral
+import com.taotao.music.ui.theme.TaotaoTheme
+import com.taotao.music.ui.theme.contentFadeIn
+import com.taotao.music.ui.theme.contentFadeOut
+import com.taotao.music.ui.theme.pageTransition
+import com.taotao.music.ui.theme.riseIn
+import com.taotao.music.ui.theme.sinkOut
+import com.taotao.music.ui.update.ForceUpdatePage
+import com.taotao.music.ui.update.OptionalUpdateDialog
 import com.taotao.music.model.AudioQuality
 import com.taotao.music.model.LyricParser
 import com.taotao.music.model.Song
@@ -226,6 +273,8 @@ fun TaotaoMusicApp() {
     var diaryLoading by remember { mutableStateOf(false) }
     var diaryError by remember { mutableStateOf<String?>(null) }
     var diaryGeneration by remember { mutableIntStateOf(0) }
+    // 日记的「播放记录」下级页：只有在日记已打开时才有意义，返回键要先退它再退日记。
+    var showDiaryRecords by remember { mutableStateOf(false) }
     /** 云端歌单只按当前登录账号加载；详情单独缓存，避免列表页每次重组都请求网络。 */
     var playlists by remember { mutableStateOf(emptyList<TencentMusicApi.Playlist>()) }
     var playlistsLoading by remember { mutableStateOf(false) }
@@ -678,6 +727,7 @@ fun TaotaoMusicApp() {
         songDiary = null
         diaryError = null
         diaryLoading = true
+        showDiaryRecords = false
         val generation = ++diaryGeneration
         scope.launch {
             val result = runCatching { withContext(Dispatchers.IO) { musicApi.songDiary(song) } }
@@ -814,8 +864,10 @@ fun TaotaoMusicApp() {
      */
     BackHandler(enabled = showPlayerDetail || showSearchPage || showSettingsPage || showProfilePage || selectedPlaylist != null || mineLibrarySection != null || diarySong != null) {
         when {
-            // 与 currentPage 一致：详情页盖在日记之上，返回时先退详情再退日记。
+            // 与 currentPage 一致：详情页盖在日记之上，返回时先退详情再退日记；
+            // 播放记录是日记的下级页，返回时也要先退它。
             showPlayerDetail -> showPlayerDetail = false
+            showDiaryRecords -> showDiaryRecords = false
             diarySong != null -> diarySong = null
             showProfilePage -> showProfilePage = false
             showSettingsPage -> showSettingsPage = false
@@ -1542,6 +1594,7 @@ fun TaotaoMusicApp() {
                     mineLibrarySection = null
                     selectedPlaylist = null
                     diarySong = null
+                    showDiaryRecords = false
                     showPlaylistPicker = false
                     playlistPickerSong = null
                     showPlaylistSongPicker = false
@@ -1597,6 +1650,7 @@ fun TaotaoMusicApp() {
                     // 详情页是最顶层浮层：从日记页点迷你播放器要能盖在日记之上进入详情，
                     // 所以它必须排在 song-diary 前面，否则 diarySong 非空时详情永远显示不出来。
                     showPlayerDetail -> "detail"
+                    diarySong != null && showDiaryRecords -> "diary-records"
                     diarySong != null -> "song-diary"
                     showProfilePage -> "profile"
                     showSettingsPage -> "settings"
@@ -1633,7 +1687,14 @@ fun TaotaoMusicApp() {
                 transitionSpec = { pageTransition(pageReduceMotion) },
                 label = "页面切换",
             ) { page ->
-            Box(Modifier.fillMaxSize().padding(innerPadding)) {
+            // 日记两页要沉浸式绘制顶部珊瑚渐变（画到状态栏底下），顶部内边距由页面自己用
+            // statusBarsPadding 让开；其余页面维持 Scaffold 的统一顶部内边距。
+            val pagePadding = if (page == "song-diary" || page == "diary-records") {
+                PaddingValues(bottom = innerPadding.calculateBottomPadding())
+            } else {
+                innerPadding
+            }
+            Box(Modifier.fillMaxSize().padding(pagePadding)) {
             if (page == "ai") {
                 AiStudioPage(
                     signedIn = signedIn,
@@ -1848,6 +1909,16 @@ fun TaotaoMusicApp() {
                         onBack = { diarySong = null },
                         onRetry = { openSongDiary(song) },
                         onShare = { requestSongShare(song) },
+                        onOpenRecords = { showDiaryRecords = true },
+                    )
+                }
+            } else if (page == "diary-records") {
+                // 日记的「播放记录」下级页：能点进来时日记画像必然已加载，直接读它的记录。
+                diarySong?.let { song ->
+                    DiaryRecordsPage(
+                        song = song,
+                        records = songDiary?.records.orEmpty(),
+                        onBack = { showDiaryRecords = false },
                     )
                 }
             } else if (page == "mine-history") {

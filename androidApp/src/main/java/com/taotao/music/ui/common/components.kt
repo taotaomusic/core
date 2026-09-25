@@ -1,5 +1,10 @@
-package com.taotao.music.ui
+package com.taotao.music.ui.common
 
+import com.taotao.music.ui.theme.AnimationDurations
+import com.taotao.music.ui.theme.LocalReduceMotion
+import com.taotao.music.ui.theme.TaotaoCoral
+import com.taotao.music.ui.theme.taotaoSpring
+import com.taotao.music.ui.theme.taotaoTween
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap

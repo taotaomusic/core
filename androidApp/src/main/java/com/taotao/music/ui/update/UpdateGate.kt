@@ -1,5 +1,6 @@
-package com.taotao.music.ui
+package com.taotao.music.ui.update
 
+import com.taotao.music.ui.theme.TaotaoCoral
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column

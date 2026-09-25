@@ -1,5 +1,14 @@
-package com.taotao.music.ui
+package com.taotao.music.ui.search
 
+import com.taotao.music.ui.common.EmptyStateView
+import com.taotao.music.ui.common.MusicSearchBar
+import com.taotao.music.ui.common.SearchSkeletonList
+import com.taotao.music.ui.common.SongListItem
+import com.taotao.music.ui.common.dedupeSongs
+import com.taotao.music.ui.common.songKeyOf
+import com.taotao.music.ui.theme.TaotaoCoral
+import com.taotao.music.ui.theme.contentFadeIn
+import com.taotao.music.ui.theme.contentFadeOut
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.slideInVertically
 import androidx.compose.ui.platform.LocalDensity

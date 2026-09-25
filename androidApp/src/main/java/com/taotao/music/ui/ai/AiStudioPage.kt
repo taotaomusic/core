@@ -1,5 +1,9 @@
-package com.taotao.music.ui
+package com.taotao.music.ui.ai
 
+import com.taotao.music.ui.theme.AnimationCurves
+import com.taotao.music.ui.theme.AnimationDurations
+import com.taotao.music.ui.theme.LocalReduceMotion
+import com.taotao.music.ui.theme.taotaoTween
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build

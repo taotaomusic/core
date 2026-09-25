@@ -1,5 +1,14 @@
-package com.taotao.music.ui
+package com.taotao.music.ui.library
 
+import com.taotao.music.ui.common.AlbumArt
+import com.taotao.music.ui.common.EmptyStateView
+import com.taotao.music.ui.common.SongListItem
+import com.taotao.music.ui.common.SongRow
+import com.taotao.music.ui.theme.AnimationCurves
+import com.taotao.music.ui.theme.AnimationDurations
+import com.taotao.music.ui.theme.LocalReduceMotion
+import com.taotao.music.ui.theme.TaotaoCoral
+import com.taotao.music.ui.theme.taotaoTween
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.fadeIn
@@ -43,7 +52,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -51,10 +62,6 @@ import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material.icons.filled.IosShare
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
@@ -263,10 +270,11 @@ fun SongDiaryPage(
     onBack: () -> Unit,
     onRetry: () -> Unit,
     onShare: (() -> Unit)? = null,
+    onOpenRecords: (() -> Unit)? = null,
 ) {
-    var showRecords by remember(song.title, song.artist) { mutableStateOf(false) }
     Box(Modifier.fillMaxSize()) {
         // 顶部一层珊瑚色渐变，只铺满头部区域再向下淡出，营造「回顾」的氛围。
+        // 页面由宿主放开顶部内边距，渐变能画到状态栏底下实现沉浸式。
         Box(
             Modifier
                 .fillMaxWidth()
@@ -275,7 +283,7 @@ fun SongDiaryPage(
                 .background(Brush.verticalGradient(listOf(TaotaoCoral.copy(alpha = 0.22f), Color.Transparent))),
         )
         Column(Modifier.fillMaxSize()) {
-            DiaryTopBar(onBack = onBack, onShare = onShare)
+            DiaryTopBar(title = "单曲倒带日记", onBack = onBack, onShare = onShare)
             when {
                 loading && diary == null -> DiaryStatus("正在翻阅这首歌的倒带日记", loading = true)
                 diary == null -> DiaryStatus(
@@ -285,8 +293,7 @@ fun SongDiaryPage(
                 else -> SongDiaryContent(
                     song = song,
                     diary = diary,
-                    showRecords = showRecords,
-                    onToggleRecords = { showRecords = !showRecords },
+                    onOpenRecords = onOpenRecords,
                 )
             }
         }
@@ -297,14 +304,13 @@ fun SongDiaryPage(
 private fun SongDiaryContent(
     song: Song,
     diary: SongDiary,
-    showRecords: Boolean,
-    onToggleRecords: () -> Unit,
+    onOpenRecords: (() -> Unit)?,
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(horizontal = TaotaoSpacing.screenHorizontal),
         verticalArrangement = Arrangement.spacedBy(TaotaoSpacing.md),
     ) {
-        item { DiaryHeader(song = song, recordsOpen = showRecords, onToggleRecords = onToggleRecords) }
+        item { DiaryHeader(song = song, recordCount = diary.records.size, onOpenRecords = onOpenRecords) }
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(TaotaoSpacing.md)) {
                 DiaryMetricCard(
@@ -324,31 +330,88 @@ private fun SongDiaryContent(
         item { DiaryFirstEncounterCard(diary) }
         item { DiaryYearlyCard(diary) }
         item { DiaryHalfYearCard(diary) }
-        if (showRecords) {
-            item {
-                SharedSectionHeader(
-                    title = "播放记录",
-                    subtitle = if (diary.records.isEmpty()) "还没有可展示的会话" else "最近 ${diary.records.size} 次",
-                    level = SharedSectionLevel.CARD,
-                )
-            }
-            itemsIndexed(diary.records, key = { index, _ -> "diary-record-$index" }) { _, record ->
-                DiaryRecordRow(record)
-            }
-        }
         item { Spacer(Modifier.height(TaotaoSpacing.md)) }
     }
 }
 
-/** 顶部栏：返回、居中标题、分享。 */
+/**
+ * 日记的「播放记录」下级独立页：逐次列出这首歌被收听的会话。
+ * 与日记页共用珊瑚渐变和沉浸式顶栏，由宿主放开顶部内边距。
+ */
 @Composable
-private fun DiaryTopBar(onBack: () -> Unit, onShare: (() -> Unit)?) {
-    Box(Modifier.fillMaxWidth().padding(horizontal = TaotaoSpacing.xs, vertical = TaotaoSpacing.xs)) {
+fun DiaryRecordsPage(
+    song: Song,
+    records: List<SongDiaryRecord>,
+    onBack: () -> Unit,
+) {
+    Box(Modifier.fillMaxSize()) {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(240.dp)
+                .align(Alignment.TopCenter)
+                .background(Brush.verticalGradient(listOf(TaotaoCoral.copy(alpha = 0.18f), Color.Transparent))),
+        )
+        Column(Modifier.fillMaxSize()) {
+            DiaryTopBar(title = "播放记录", onBack = onBack, onShare = null)
+            if (records.isEmpty()) {
+                LibraryEmptyState(
+                    title = "还没有播放记录",
+                    description = "听满几秒后，这里会记录每一次收听",
+                    modifier = Modifier.weight(1f),
+                )
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize().padding(horizontal = TaotaoSpacing.screenHorizontal),
+                    contentPadding = PaddingValues(top = TaotaoSpacing.sm),
+                    verticalArrangement = Arrangement.spacedBy(TaotaoSpacing.md),
+                ) {
+                    item {
+                        Column {
+                            Text(
+                                song.title,
+                                style = MaterialTheme.typography.titleLarge,
+                                color = TaotaoCoral,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                "这首歌被翻开过 ${records.size} 次",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(top = TaotaoSpacing.xxs),
+                            )
+                        }
+                    }
+                    itemsIndexed(records, key = { index, _ -> "diary-record-$index" }) { _, record ->
+                        DiaryRecordRow(record)
+                    }
+                    item { Spacer(Modifier.height(TaotaoSpacing.md)) }
+                }
+            }
+        }
+    }
+}
+
+/** 顶部栏：返回、居中标题、分享；内容用 statusBarsPadding 让开状态栏，背景照常沉浸。 */
+@Composable
+private fun DiaryTopBar(
+    title: String,
+    onBack: () -> Unit,
+    onShare: (() -> Unit)?,
+) {
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .statusBarsPadding()
+            .padding(horizontal = TaotaoSpacing.xs, vertical = TaotaoSpacing.xs),
+    ) {
         IconButton(onClick = onBack, modifier = Modifier.align(Alignment.CenterStart)) {
             Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = MaterialTheme.colorScheme.onSurface)
         }
         Text(
-            "单曲倒带日记",
+            title,
             style = MaterialTheme.typography.titleLarge,
             color = MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.align(Alignment.Center),
@@ -382,9 +445,9 @@ private fun ColumnScope.DiaryStatus(text: String, loading: Boolean = false, onRe
     }
 }
 
-/** 头部：封面 + 珊瑚色标题 / 歌手 + 「播放记录」胶囊按钮。 */
+/** 头部：封面 + 珊瑚色标题 / 歌手 + 「播放记录」胶囊按钮（点开进入下级独立页）。 */
 @Composable
-private fun DiaryHeader(song: Song, recordsOpen: Boolean, onToggleRecords: () -> Unit) {
+private fun DiaryHeader(song: Song, recordCount: Int, onOpenRecords: (() -> Unit)?) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(top = TaotaoSpacing.xs, bottom = TaotaoSpacing.sm),
         verticalAlignment = Alignment.CenterVertically,
@@ -412,22 +475,28 @@ private fun DiaryHeader(song: Song, recordsOpen: Boolean, onToggleRecords: () ->
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.padding(top = TaotaoSpacing.xxs),
             )
-            Box(
-                modifier = Modifier
-                    .padding(top = TaotaoSpacing.sm)
-                    .clip(RoundedCornerShape(percent = 50))
-                    .border(1.dp, TaotaoCoral, RoundedCornerShape(percent = 50))
-                    .background(if (recordsOpen) TaotaoCoral.copy(alpha = 0.12f) else Color.Transparent)
-                    .clickable(onClick = onToggleRecords)
-                    .padding(horizontal = TaotaoSpacing.md, vertical = TaotaoSpacing.xs),
-            ) {
-                Text("播放记录", style = MaterialTheme.typography.labelLarge, color = TaotaoCoral)
+            if (onOpenRecords != null) {
+                Box(
+                    modifier = Modifier
+                        .padding(top = TaotaoSpacing.sm)
+                        .clip(RoundedCornerShape(percent = 50))
+                        .border(1.dp, TaotaoCoral, RoundedCornerShape(percent = 50))
+                        .clickable(onClick = onOpenRecords)
+                        .padding(horizontal = TaotaoSpacing.md, vertical = TaotaoSpacing.xs),
+                ) {
+                    Text(
+                        if (recordCount > 0) "播放记录 · $recordCount 次" else "播放记录",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = TaotaoCoral,
+                    )
+                }
             }
         }
     }
 }
 
-/** 通用小卡：标签 + 珊瑚色大数值 + 灰色说明。 */
+/** 通用小卡：标签 + 珊瑚色大数值 + 灰色说明。数值用 titleLarge 保证「2026年12月」这类
+ *  长时间串在半宽卡片里不被省略号截断。 */
 @Composable
 private fun DiaryMetricCard(label: String, value: String, caption: String, modifier: Modifier = Modifier) {
     SharedCard(modifier = modifier) {
@@ -435,7 +504,7 @@ private fun DiaryMetricCard(label: String, value: String, caption: String, modif
             Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(
                 value,
-                style = MaterialTheme.typography.headlineMedium,
+                style = MaterialTheme.typography.titleLarge,
                 color = TaotaoCoral,
                 fontWeight = FontWeight.Bold,
                 maxLines = 1,

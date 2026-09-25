@@ -1,5 +1,7 @@
-package com.taotao.music.ui
+package com.taotao.music.ui.player
 
+import com.taotao.music.ui.theme.AnimationDurations
+import com.taotao.music.ui.theme.taotaoTween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -48,6 +50,9 @@ data class QualityChoice(
 /** 由静态档位表生成的选项，用于设置页这种与具体歌曲无关的场景。 */
 fun staticQualityChoices(): List<QualityChoice> =
     AudioQuality.entries.map { QualityChoice(it.value, it.label) }
+
+/** 音质面板的三种用途。 */
+internal enum class QualitySheetKind { CURRENT_SONG, PLAYBACK_DEFAULT, DOWNLOAD_DEFAULT }
 
 /**
  * 音质选择面板。

@@ -1,4 +1,4 @@
-package com.taotao.music.ui
+package com.taotao.music.ui.settings
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -33,6 +33,7 @@ import com.taotao.music.playerui.SharedSectionHeader
 import com.taotao.music.playerui.SharedSectionLevel
 import com.taotao.music.playerui.theme.TaotaoShapes
 import com.taotao.music.playerui.theme.TaotaoSpacing
+import com.taotao.music.ui.player.formatSleepTimerRemaining
 
 /**
  * 设置页。

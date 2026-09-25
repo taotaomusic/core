@@ -1,4 +1,4 @@
-package com.taotao.music.ui
+package com.taotao.music.ui.account
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -29,6 +29,7 @@ import com.taotao.music.playerui.theme.TaotaoSizes
 import com.taotao.music.playerui.theme.TaotaoSpacing
 import com.taotao.music.playerui.theme.TaotaoStroke
 import com.taotao.music.playerui.theme.TaotaoTypeScale
+import com.taotao.music.ui.auth.readableMessage
 import coil.compose.AsyncImage
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers

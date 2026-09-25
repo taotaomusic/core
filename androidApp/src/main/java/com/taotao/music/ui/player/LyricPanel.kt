@@ -1,5 +1,7 @@
-package com.taotao.music.ui
+package com.taotao.music.ui.player
 
+import com.taotao.music.ui.theme.LyricDim
+import com.taotao.music.ui.theme.TaotaoCoral
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box

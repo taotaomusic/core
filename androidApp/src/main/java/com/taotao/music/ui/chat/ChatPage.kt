@@ -1,4 +1,4 @@
-package com.taotao.music.ui
+package com.taotao.music.ui.chat
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
