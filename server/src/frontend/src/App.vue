@@ -102,6 +102,12 @@
               </template>
               <SupporterKeyManager :admin-token="token" />
             </el-tab-pane>
+            <el-tab-pane name="open-api-keys" lazy>
+              <template #label>
+                <div class="tab-label"><el-icon><Postcard /></el-icon> <span v-show="!isMobile || tab === 'open-api-keys'">开放 API Key</span></div>
+              </template>
+              <OpenApiKeyManager :admin-token="token" :role="role" />
+            </el-tab-pane>
             <el-tab-pane v-if="canViewPersonalData" name="music-sources" lazy>
               <template #label>
                 <div class="tab-label"><el-icon><Headset /></el-icon> <span v-show="!isMobile || tab === 'music-sources'">音源账号</span></div>
@@ -136,7 +142,7 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, ref, onMounted, onUnmounted, watch } from "vue";
 import zhCn from "element-plus/es/locale/lang/zh-cn";
-import { Upload, Connection, Bell, User, Key, Setting, Moon, Sunny, SwitchButton, Monitor, Loading, Headset } from '@element-plus/icons-vue'
+import { Upload, Connection, Bell, User, Key, Setting, Moon, Sunny, SwitchButton, Monitor, Loading, Headset, Postcard } from '@element-plus/icons-vue'
 import { useDark, useToggle } from '@vueuse/core'
 import AdminLogin from "./components/AdminLogin.vue";
 import ForcePasswordChange from "./components/ForcePasswordChange.vue";
@@ -149,6 +155,7 @@ const DesktopReleaseManager = defineAsyncComponent(() => import("./components/De
 const AnnouncementManager = defineAsyncComponent(() => import("./components/AnnouncementManager.vue"));
 const UserManager = defineAsyncComponent(() => import("./components/UserManager.vue"));
 const SupporterKeyManager = defineAsyncComponent(() => import("./components/SupporterKeyManager.vue"));
+const OpenApiKeyManager = defineAsyncComponent(() => import("./components/OpenApiKeyManager.vue"));
 const MusicSourceManager = defineAsyncComponent(() => import("./components/MusicSourceManager.vue"));
 const SystemSettings = defineAsyncComponent(() => import("./components/SystemSettings.vue"));
 const AdminUserManager = defineAsyncComponent(() => import("./components/AdminUserManager.vue"));

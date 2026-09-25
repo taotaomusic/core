@@ -28,8 +28,32 @@ export class RateLimitService {
   private readonly attempts = new Map<string, { count: number; resetAt: number }>();
   private readonly adminLimit = adminRequestLimit();
 
+  /**
+   * 过期条目清扫的节流时间戳。
+   *
+   * `attempts` 的条目只在**同一个 key 再次命中**时才被覆盖（惰性重置），本身没有
+   * 淘汰逻辑。而 `open-api` 桶按 `sha256(调用方给的 key)` 计数 —— 这是调用方可控的
+   * 高基数值，伪造大量不同 key 会留下永不回收的条目，长期运行下 Map 单调增长。
+   * 因此每隔一个窗口做一次全量清扫，把 `resetAt` 已过期的条目删掉，兜住内存。
+   */
+  private lastSweepAt = Date.now();
+  private static readonly SWEEP_INTERVAL_MS = 5 * 60_000;
+
+  /**
+   * 清掉已过期的计数条目。节流到每 5 分钟最多一次：单次 allow 命中窗口边界时才触发，
+   * 且删除操作在 Map 迭代中是安全的（已访问/当前项可删）。
+   */
+  private sweepExpired(now: number): void {
+    if (now - this.lastSweepAt < RateLimitService.SWEEP_INTERVAL_MS) return;
+    this.lastSweepAt = now;
+    for (const [key, entry] of this.attempts) {
+      if (entry.resetAt <= now) this.attempts.delete(key);
+    }
+  }
+
   private allow(key: string, limit: number, windowMs: number): boolean {
     const now = Date.now();
+    this.sweepExpired(now);
     const current = this.attempts.get(key);
     if (!current || current.resetAt <= now) {
       this.attempts.set(key, { count: 1, resetAt: now + windowMs });

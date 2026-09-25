@@ -24,16 +24,23 @@ const MAX_PAGE_SIZE = 60;
  * 全部路由都要开放 API Key，没有免鉴权入口，因此：
  * - 类级 [Public]：跳过全局 AccessTokenGuard（开放调用方没有用户令牌）；
  * - 类级 [RateLimit]("open-api")：先按地址/key 做限流；
- * - 方法级 [ApiKeyGuard]：再校验 key 本身。
+ * - 类级 [UseGuards]([ApiKeyGuard])：再校验 key 本身。
+ *
+ * **ApiKeyGuard 刻意挂在类上而不是逐方法标注**：本控制器带类级 `@Public()`，
+ * 一旦有人新增路由却忘了挂守卫，它就同时躲过全局 AccessTokenGuard 与 key 校验，
+ * 直接对外裸奔 —— 这类「漏标注 = 漏洞」不会报错、类型检查也看不出来。挂到类上后
+ * 新增路由自动受保护。
  *
  * 这与管理端 [AdminGuarded]「不能挂类上」不冲突 —— 那条约束针对的是
- * 「同一控制器里混有公开路由」的场景，本控制器没有此类路由。
+ * 「同一控制器里混有公开路由（如 login）」的场景，本控制器没有此类路由，
+ * 全部方法都必须校验 key，正好适合类级守卫。
  *
  * 小工具（positiveIntOr / sourceOf 等）刻意在本文件内复制一份而**不 import MusicController**：
  * 跨控制器 import 私有方法会把两个不相干的路由耦合在一起，口径变化时两边都得改。
  */
 @Public()
 @RateLimit("open-api")
+@UseGuards(ApiKeyGuard)
 @Controller("open")
 export class OpenApiController {
   constructor(
@@ -49,7 +56,6 @@ export class OpenApiController {
    * 走统一信封（不标 RawResponse），`data = { songs, meta }`。
    * 返回前经 [toOpenSongs] 改写：去掉 audioUrl、lyricUrl 指向开放侧歌词路径、favorited 恒 false。
    */
-  @UseGuards(ApiKeyGuard)
   @Get("search")
   async searchSongs(
     @Res({ passthrough: true }) response: Response,
@@ -83,7 +89,6 @@ export class OpenApiController {
    * 本方法不再额外设 CORS 头。userId 传 undefined —— 开放调用方没有用户身份，
    * 收藏查询整段跳过，`favorited` 恒 false。
    */
-  @UseGuards(ApiKeyGuard)
   @RawResponse()
   @Get("search/stream")
   async searchStream(
@@ -116,7 +121,6 @@ export class OpenApiController {
    * 默认纯文本；`format=json` 时因标了 [RawResponse] 不会套信封，这里手动
    * `response.json({ code: 0, ... })` 给出与信封一致的形状。
    */
-  @UseGuards(ApiKeyGuard)
   @RawResponse()
   @Get("songs/:id/lyrics")
   async lyrics(
@@ -143,7 +147,6 @@ export class OpenApiController {
    *
    * 开放侧搜索结果不带 audioUrl，第三方拿元信息后来这里换直链。
    */
-  @UseGuards(ApiKeyGuard)
   @Get("songs/:id/link")
   async link(
     @Res({ passthrough: true }) response: Response,

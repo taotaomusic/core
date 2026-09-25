@@ -55,6 +55,18 @@ export class PlaybackController {
     return this.playback.overallStats(user.id);
   }
 
+  /** 单曲倒带日记：当前用户某一首歌的完整播放画像。source/songId 校验与上报会话一致。 */
+  @Get("diary")
+  diary(
+    @CurrentUser() user: SessionUser,
+    @Query("source") sourceParam?: string,
+    @Query("songId") songIdParam?: string,
+  ) {
+    const source = this.sourceOf(sourceParam);
+    const songId = this.identifierOf(songIdParam, "songId");
+    return this.playback.diary(user.id, source, songId);
+  }
+
   /** 只清空最近播放的可见列表，累计次数和听歌时间继续保留。 */
   @Delete("recent")
   clearRecent(@CurrentUser() user: SessionUser, @Query("marker") marker?: string) {

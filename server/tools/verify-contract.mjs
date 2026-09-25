@@ -487,6 +487,72 @@ async function main() {
     `${firstFavoritedAt} -> ${afterReAdd.data?.[0]?.firstFavoritedAt}`,
   );
 
+  section("单曲倒带日记");
+  const diarySource = "tencent";
+  const diarySongId = `diary${randomBytes(4).toString("hex")}`;
+  const diaryNow = Date.now();
+  const diaryReport = await fetch(`${base}/api/v1/playback/sessions`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({
+      sessionId: `sess${randomBytes(6).toString("hex")}`,
+      deviceId: `dev${randomBytes(4).toString("hex")}`,
+      source: diarySource,
+      songId: diarySongId,
+      startedAt: diaryNow - 5_000,
+      lastPlayedAt: diaryNow,
+      // 时长 6s → 合格阈值 min(30s, 3s)=3s；听 4s 计一次合格播放。
+      listenedMs: 4_000,
+      completed: true,
+      durationSeconds: 6,
+    }),
+  });
+  check("倒带日记：上报一次合格播放会话成功", diaryReport.status >= 200 && diaryReport.status < 300, `实际 ${diaryReport.status}`);
+
+  const diaryResponse = await fetch(
+    `${base}/api/v1/playback/diary?source=${diarySource}&songId=${diarySongId}`,
+    { headers: { authorization: `Bearer ${token}` } },
+  );
+  const diaryBody = await diaryResponse.json();
+  const diary = diaryBody.data;
+  check(
+    "倒带日记：首次邂逅/上次收听为 number，播放次数≥1",
+    diaryResponse.status === 200 &&
+      typeof diary?.firstPlayedAt === "number" &&
+      typeof diary?.lastPlayedAt === "number" &&
+      diary?.playCount >= 1,
+    `${diaryResponse.status} ${JSON.stringify(diaryBody).slice(0, 160)}`,
+  );
+  check(
+    "倒带日记：近半年/近一年计数≥1，狂热循环单日计数≥1",
+    diary?.playsLastHalfYear >= 1 && diary?.playsLastYear >= 1 && diary?.peakDay?.count >= 1,
+    JSON.stringify({ half: diary?.playsLastHalfYear, year: diary?.playsLastYear, peak: diary?.peakDay }),
+  );
+  check(
+    "倒带日记：播放记录是数组且含刚上报的会话",
+    Array.isArray(diary?.records) && diary.records.length >= 1 && typeof diary.records[0]?.startedAt === "number",
+    JSON.stringify(diary?.records).slice(0, 160),
+  );
+  check(
+    "倒带日记：yearly 是 6 个自然年且末项为今年、今年计数≥1",
+    Array.isArray(diary?.yearly) && diary.yearly.length === 6 &&
+      diary.yearly[5]?.year === new Date().getFullYear() && diary.yearly[5]?.count >= 1,
+    JSON.stringify(diary?.yearly),
+  );
+  check(
+    "倒带日记：dailyCounts 是长度 180 的逐日数组且末项≥1（含今天的播放）",
+    Array.isArray(diary?.dailyCounts) && diary.dailyCounts.length === 180 &&
+      diary.dailyCounts[179] >= 1,
+    JSON.stringify({ len: diary?.dailyCounts?.length, last: diary?.dailyCounts?.[179] }),
+  );
+  const diaryNoToken = await fetch(`${base}/api/v1/playback/diary?source=${diarySource}&songId=${diarySongId}`);
+  const diaryNoTokenBody = await diaryNoToken.json();
+  check(
+    "倒带日记：无令牌 401 且 code 4010（不能是 403）",
+    diaryNoToken.status === 401 && diaryNoTokenBody.code === 4010,
+    `${diaryNoToken.status} ${JSON.stringify(diaryNoTokenBody)}`,
+  );
+
   section("云端歌单");
   const playlistHeaders = { authorization: `Bearer ${token}`, "content-type": "application/json" };
   const createdPlaylistResponse = await fetch(`${base}/api/v1/playlists`, {
@@ -883,6 +949,24 @@ async function main() {
     openNoKey.status === 401 && openNoKeyBody.code === 4014,
     `${openNoKey.status} ${JSON.stringify(openNoKeyBody).slice(0, 160)}`,
   );
+
+  // ApiKeyGuard 挂在控制器类上，新增开放路由自动受保护。逐条探测**每个**开放端点
+  // 在无 key 时都必须 401 —— 若某条路由漏挂守卫（或类级守卫被误删），它会静默裸奔，
+  // 而单测「/open/search 无 key 401」并不能替其它路由背书。
+  const openRoutesNoKey = [
+    ["GET", "/api/v1/open/search?keyword=test"],
+    ["GET", "/api/v1/open/search/stream?keyword=test"],
+    ["GET", "/api/v1/open/songs/97773/lyrics"],
+    ["GET", "/api/v1/open/songs/97773/link?quality=10"],
+  ];
+  for (const [method, path] of openRoutesNoKey) {
+    const probe = await fetch(`${base}${path}`, { method });
+    check(
+      `无 key 访问 ${path.split("?")[0]} 必须 401（漏挂 ApiKeyGuard 即裸奔）`,
+      probe.status === 401,
+      `${probe.status}`,
+    );
+  }
 
   const openForgedKey = await fetch(`${base}/api/v1/open/search?keyword=test`, {
     headers: { "x-api-key": "tt_invalid_invalid_invalid_invalid_0000" },

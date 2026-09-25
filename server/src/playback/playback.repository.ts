@@ -51,6 +51,40 @@ export type RecentPlaybackPage = {
   revision: number;
 };
 
+/** 单曲倒带日记里的一条历史播放会话。 */
+export type SongDiaryRecord = {
+  startedAt: number;
+  lastPlayedAt: number;
+  listenedMs: number;
+  completed: boolean;
+};
+
+/** 单曲倒带日记：针对当前用户某一首歌的完整播放画像。 */
+export type SongDiary = {
+  source: string;
+  songId: string;
+  /** 首次邂逅；从未播放过为 null。 */
+  firstPlayedAt: number | null;
+  /** 上次收听（全量，不受清空最近播放影响）；从未播放过为 null。 */
+  lastPlayedAt: number | null;
+  /** 全时段合格播放次数。 */
+  playCount: number;
+  completedCount: number;
+  totalListenedMs: number;
+  /** 近一年（365 天）合格播放次数。 */
+  playsLastYear: number;
+  /** 近半年（180 天）合格播放次数。 */
+  playsLastHalfYear: number;
+  /** 狂热循环：单日播放最多的那一天；从未播放过为 null。 */
+  peakDay: { atMillis: number; count: number } | null;
+  /** 近 6 个自然年（含今年）的逐年合格播放次数，用于折线趋势。 */
+  yearly: { year: number; count: number }[];
+  /** 最近 180 天的逐日合格播放次数，从最早到今天，用于点阵热力图。 */
+  dailyCounts: number[];
+  /** 最近的播放记录明细（倒序）。 */
+  records: SongDiaryRecord[];
+};
+
 type StoredSession = {
   device_id: string;
   source: string;
@@ -282,6 +316,117 @@ export class PlaybackRepository {
         [userId],
       )
     )!;
+  }
+
+  /**
+   * 单曲倒带日记：聚合基础统计来自 user_song_stats，时间窗口计数与单日峰值现算自
+   * playback_sessions 会话流水，播放记录取最近若干条会话明细。
+   */
+  async diary(userId: number, source: string, songId: string): Promise<SongDiary> {
+    const DAY_MS = 86_400_000;
+    const now = Date.now();
+    const yearCutoff = now - 365 * DAY_MS;
+    const halfYearCutoff = now - 180 * DAY_MS;
+
+    const stats = await this.database.first<{
+      firstPlayedAt: number;
+      lastPlayedAt: number;
+      playCount: number;
+      completedCount: number;
+      totalListenedMs: number;
+    }>(
+      `SELECT first_played_at AS "firstPlayedAt",
+              last_played_at AS "lastPlayedAt",
+              play_count AS "playCount",
+              completed_count AS "completedCount",
+              total_listened_ms AS "totalListenedMs"
+       FROM user_song_stats
+       WHERE user_id = $1 AND source = $2 AND song_id = $3`,
+      [userId, source, songId],
+    );
+
+    // 时间窗口计数只统计合格会话，与 user_song_stats.play_count 的口径一致。
+    const windows = (await this.database.first<{
+      playsLastYear: number;
+      playsLastHalfYear: number;
+    }>(
+      `SELECT COALESCE(sum(CASE WHEN started_at >= $4 THEN 1 ELSE 0 END), 0)::integer AS "playsLastYear",
+              COALESCE(sum(CASE WHEN started_at >= $5 THEN 1 ELSE 0 END), 0)::integer AS "playsLastHalfYear"
+       FROM playback_sessions
+       WHERE user_id = $1 AND source = $2 AND song_id = $3 AND qualified = 1`,
+      [userId, source, songId, yearCutoff, halfYearCutoff],
+    ))!;
+
+    // 狂热循环：按 UTC 天分桶取合格播放最多的那一天。
+    const peak = await this.database.first<{ dayIndex: number; plays: number }>(
+      `SELECT floor(started_at / 86400000)::bigint AS "dayIndex", count(*)::integer AS "plays"
+       FROM playback_sessions
+       WHERE user_id = $1 AND source = $2 AND song_id = $3 AND qualified = 1
+       GROUP BY floor(started_at / 86400000)
+       ORDER BY "plays" DESC, "dayIndex" DESC
+       LIMIT 1`,
+      [userId, source, songId],
+    );
+
+    const records = await this.database.all<SongDiaryRecord>(
+      `SELECT started_at AS "startedAt", last_played_at AS "lastPlayedAt",
+              listened_ms AS "listenedMs", (completed = 1) AS "completed"
+       FROM playback_sessions
+       WHERE user_id = $1 AND source = $2 AND song_id = $3
+       ORDER BY started_at DESC
+       LIMIT 50`,
+      [userId, source, songId],
+    );
+
+    // 近年折线：按自然年分桶合格播放，随后在 JS 侧补齐最近 6 个年份的零值。
+    const yearlyRows = await this.database.all<{ year: number; count: number }>(
+      `SELECT date_part('year', to_timestamp(started_at / 1000.0))::integer AS "year",
+              count(*)::integer AS "count"
+       FROM playback_sessions
+       WHERE user_id = $1 AND source = $2 AND song_id = $3 AND qualified = 1
+       GROUP BY 1`,
+      [userId, source, songId],
+    );
+    const yearlyMap = new Map(yearlyRows.map((row) => [row.year, row.count]));
+    const currentYear = new Date(now).getFullYear();
+    const yearly = Array.from({ length: 6 }, (_, index) => {
+      const year = currentYear - 5 + index;
+      return { year, count: yearlyMap.get(year) ?? 0 };
+    });
+
+    // 近半年点阵：按天分桶合格播放，补齐最近 180 天（从最早到今天）的零值。
+    const HEATMAP_DAYS = 180;
+    const todayIndex = Math.floor(now / DAY_MS);
+    const heatmapStart = (todayIndex - (HEATMAP_DAYS - 1)) * DAY_MS;
+    const dailyRows = await this.database.all<{ dayIndex: number; count: number }>(
+      `SELECT floor(started_at / 86400000)::bigint AS "dayIndex", count(*)::integer AS "count"
+       FROM playback_sessions
+       WHERE user_id = $1 AND source = $2 AND song_id = $3 AND qualified = 1
+         AND started_at >= $4
+       GROUP BY 1`,
+      [userId, source, songId, heatmapStart],
+    );
+    const dailyMap = new Map(dailyRows.map((row) => [Number(row.dayIndex), row.count]));
+    const firstDayIndex = todayIndex - (HEATMAP_DAYS - 1);
+    const dailyCounts = Array.from({ length: HEATMAP_DAYS }, (_, index) =>
+      dailyMap.get(firstDayIndex + index) ?? 0,
+    );
+
+    return {
+      source,
+      songId,
+      firstPlayedAt: stats?.firstPlayedAt ?? null,
+      lastPlayedAt: stats?.lastPlayedAt ?? null,
+      playCount: stats?.playCount ?? 0,
+      completedCount: stats?.completedCount ?? 0,
+      totalListenedMs: stats?.totalListenedMs ?? 0,
+      playsLastYear: windows.playsLastYear,
+      playsLastHalfYear: windows.playsLastHalfYear,
+      peakDay: peak ? { atMillis: Number(peak.dayIndex) * DAY_MS, count: peak.plays } : null,
+      yearly,
+      dailyCounts,
+      records,
+    };
   }
 
   /**

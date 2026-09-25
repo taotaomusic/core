@@ -207,6 +207,10 @@ export async function runMigrations(pool: Pool): Promise<void> {
         updated_at       bigint NOT NULL,
         PRIMARY KEY (user_id, session_id)
       );
+      -- 单曲倒带日记按「用户×渠道×歌曲」查会话流水（时间窗口计数、单日峰值、播放记录），
+      -- 主键 (user_id, session_id) 覆盖不到，补一条组合索引避免全表扫描。
+      CREATE INDEX IF NOT EXISTS idx_playback_sessions_song
+        ON playback_sessions (user_id, source, song_id, started_at DESC);
 
       -- 最近播放和统计都从按歌汇总读取，避免每次打开页面扫描全部会话。
       -- last_history_at 只有单次会话听满 3 秒才更新，误触后立刻切歌不会顶到列表最前。
