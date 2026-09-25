@@ -140,6 +140,46 @@ class TencentMusicApi(
         val totalListenedMs: Long,
     )
 
+    /** 单曲倒带日记里的一条历史播放会话。 */
+    data class SongDiaryRecord(
+        val startedAtMillis: Long,
+        val lastPlayedAtMillis: Long,
+        val listenedMs: Long,
+        val completed: Boolean,
+    )
+
+    /** 近年折线的一个年份数据点。 */
+    data class SongDiaryYear(
+        val year: Int,
+        val count: Int,
+    )
+
+    /** 单曲倒带日记：当前用户对某一首歌的完整播放画像，数据由后端现算。 */
+    data class SongDiary(
+        val source: String,
+        val songId: String,
+        /** 首次邂逅；从未播放过为 null。 */
+        val firstPlayedAtMillis: Long?,
+        /** 上次收听（全量，不受清空最近播放影响）；从未播放过为 null。 */
+        val lastPlayedAtMillis: Long?,
+        val playCount: Int,
+        val completedCount: Int,
+        val totalListenedMs: Long,
+        /** 近一年（365 天）合格播放次数。 */
+        val playsLastYear: Int,
+        /** 近半年（180 天）合格播放次数。 */
+        val playsLastHalfYear: Int,
+        /** 狂热循环：单日播放最多的那一天起点；从未播放过为 null。 */
+        val peakDayAtMillis: Long?,
+        /** 狂热循环那天的播放次数。 */
+        val peakDayCount: Int,
+        /** 近 6 个自然年的逐年播放次数（用于折线趋势）。 */
+        val yearly: List<SongDiaryYear>,
+        /** 最近 180 天的逐日播放次数，从最早到今天（用于点阵热力图）。 */
+        val dailyCounts: List<Int>,
+        val records: List<SongDiaryRecord>,
+    )
+
     /** 播放占位地址中恢复出的完整路由信息。数字 ID 缺失时用 mid 继续路由。 */
     data class Placeholder(
         val remoteId: Long?,
@@ -604,6 +644,63 @@ class TencentMusicApi(
             clearedAtMillis = clearedAtMillis(),
             marker = nullableString("marker"),
         )
+
+    /** 拉取当前用户对某首歌的单曲倒带日记；songId 与播放上报使用同一稳定键。 */
+    fun songDiary(song: Song): SongDiary {
+        val source = song.source.trim().ifBlank { DEFAULT_SOURCE }
+        val songId = playlistSongId(song)
+            ?: throw IllegalArgumentException("歌曲缺少可用于查询日记的 source 或 mid")
+        return songDiary(source, songId)
+    }
+
+    fun songDiary(source: String, songId: String): SongDiary = authorized(
+        "/api/v1/playback/diary?source=${encode(source.ifBlank { DEFAULT_SOURCE })}&songId=${encode(songId)}",
+    ) { connection ->
+        val result = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+        check(result.optInt("code") == 0) { result.optString("message", "无法获取单曲日记") }
+        result.getJSONObject("data").toSongDiary(source, songId)
+    }
+
+    private fun JSONObject.toSongDiary(source: String, songId: String): SongDiary {
+        val peak = optJSONObject("peakDay")
+        val recordArray = optJSONArray("records") ?: JSONArray()
+        val records = (0 until recordArray.length()).mapNotNull { index ->
+            recordArray.optJSONObject(index)?.let { item ->
+                SongDiaryRecord(
+                    startedAtMillis = item.optLong("startedAt"),
+                    lastPlayedAtMillis = item.optLong("lastPlayedAt"),
+                    listenedMs = item.optLong("listenedMs", 0L),
+                    completed = item.optBoolean("completed", false),
+                )
+            }
+        }
+        val yearlyArray = optJSONArray("yearly") ?: JSONArray()
+        val yearly = (0 until yearlyArray.length()).mapNotNull { index ->
+            yearlyArray.optJSONObject(index)?.let { item ->
+                SongDiaryYear(year = item.optInt("year"), count = item.optInt("count", 0))
+            }
+        }
+        val dailyArray = optJSONArray("dailyCounts") ?: JSONArray()
+        val dailyCounts = (0 until dailyArray.length()).map { index -> dailyArray.optInt(index, 0) }
+        return SongDiary(
+            source = optString("source").ifBlank { source },
+            songId = optString("songId").ifBlank { songId },
+            firstPlayedAtMillis = nullableLong("firstPlayedAt"),
+            lastPlayedAtMillis = nullableLong("lastPlayedAt"),
+            playCount = optInt("playCount", 0),
+            completedCount = optInt("completedCount", 0),
+            totalListenedMs = optLong("totalListenedMs", 0L),
+            playsLastYear = optInt("playsLastYear", 0),
+            playsLastHalfYear = optInt("playsLastHalfYear", 0),
+            peakDayAtMillis = peak?.let { if (it.isNull("atMillis")) null else it.optLong("atMillis") },
+            peakDayCount = peak?.optInt("count", 0) ?: 0,
+            yearly = yearly,
+            dailyCounts = dailyCounts,
+            records = records,
+        )
+    }
+
+    private fun JSONObject.nullableLong(name: String): Long? = if (isNull(name)) null else optLong(name)
 
     /**
      * 最近播放资料只能以批量请求补全。若批次或其中的某首失败，直接给缺失项本地占位，

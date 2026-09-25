@@ -12,7 +12,6 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.animation.fadeIn
@@ -22,8 +21,6 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.background
@@ -54,15 +51,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.zIndex
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
@@ -221,6 +215,12 @@ fun TaotaoMusicApp() {
     var showSleepTimerDialog by remember { mutableStateOf(false) }
     var showProfilePage by remember { mutableStateOf(false) }
     var mineLibrarySection by remember { mutableStateOf<MineLibrarySection?>(null) }
+    // 单曲倒带日记：点开某首歌的日记时暂存目标歌曲，并缓存后端返回的画像与加载态。
+    var diarySong by remember { mutableStateOf<Song?>(null) }
+    var songDiary by remember { mutableStateOf<TencentMusicApi.SongDiary?>(null) }
+    var diaryLoading by remember { mutableStateOf(false) }
+    var diaryError by remember { mutableStateOf<String?>(null) }
+    var diaryGeneration by remember { mutableIntStateOf(0) }
     /** 云端歌单只按当前登录账号加载；详情单独缓存，避免列表页每次重组都请求网络。 */
     var playlists by remember { mutableStateOf(emptyList<TencentMusicApi.Playlist>()) }
     var playlistsLoading by remember { mutableStateOf(false) }
@@ -659,6 +659,31 @@ fun TaotaoMusicApp() {
         if (playlists.isEmpty()) refreshPlaylists()
     }
 
+    /** 打开某首歌的单曲倒带日记：先切到日记页并显示加载态，再从后端拉取画像。 */
+    fun openSongDiary(song: Song) {
+        if (!signedIn) {
+            message = "登录后才能查看单曲日记"
+            return
+        }
+        if (TencentMusicApi.playlistSongId(song) == null) {
+            message = "这首歌暂时无法生成日记"
+            return
+        }
+        diarySong = song
+        songDiary = null
+        diaryError = null
+        diaryLoading = true
+        val generation = ++diaryGeneration
+        scope.launch {
+            val result = runCatching { withContext(Dispatchers.IO) { musicApi.songDiary(song) } }
+            if (generation != diaryGeneration) return@launch
+            result
+                .onSuccess { songDiary = it }
+                .onFailure { diaryError = it.message ?: "日记加载失败" }
+            diaryLoading = false
+        }
+    }
+
     fun removeSongFromPlaylist(item: TencentMusicApi.PlaylistSong) {
         val playlist = selectedPlaylist ?: return
         if (playlistBusy) return
@@ -782,9 +807,11 @@ fun TaotaoMusicApp() {
      * 物理返回键：详情页先收起详情，搜索页先退出搜索，都不在时禁用拦截，
      * 交回系统默认行为（退出应用）—— 这样不必自己去拿 onBackPressedDispatcher。
      */
-    BackHandler(enabled = showPlayerDetail || showSearchPage || showSettingsPage || showProfilePage || selectedPlaylist != null || mineLibrarySection != null) {
+    BackHandler(enabled = showPlayerDetail || showSearchPage || showSettingsPage || showProfilePage || selectedPlaylist != null || mineLibrarySection != null || diarySong != null) {
         when {
+            // 与 currentPage 一致：详情页盖在日记之上，返回时先退详情再退日记。
             showPlayerDetail -> showPlayerDetail = false
+            diarySong != null -> diarySong = null
             showProfilePage -> showProfilePage = false
             showSettingsPage -> showSettingsPage = false
             showSearchPage -> showSearchPage = false
@@ -1509,6 +1536,7 @@ fun TaotaoMusicApp() {
                     showProfilePage = false
                     mineLibrarySection = null
                     selectedPlaylist = null
+                    diarySong = null
                     showPlaylistPicker = false
                     playlistPickerSong = null
                     showPlaylistSongPicker = false
@@ -1560,7 +1588,10 @@ fun TaotaoMusicApp() {
                     }
 
             val currentPage = when {
+                    // 详情页是最顶层浮层：从日记页点迷你播放器要能盖在日记之上进入详情，
+                    // 所以它必须排在 song-diary 前面，否则 diarySong 非空时详情永远显示不出来。
                     showPlayerDetail -> "detail"
+                    diarySong != null -> "song-diary"
                     showProfilePage -> "profile"
                     showSettingsPage -> "settings"
                     showSearchPage -> "search"
@@ -1662,7 +1693,7 @@ fun TaotaoMusicApp() {
                     onMoveQueueItem = { from, to ->
                         if (from in playbackSongs.indices && to in playbackSongs.indices && from != to) {
                             playbackSongs = playbackSongs.moved(from, to)
-                            selectedIndex = movedQueueIndex(selectedIndex, from, to)
+                            selectedIndex = movedIndex(selectedIndex, from, to)
                             audioPlayer.moveQueueItem(from, to)
                         }
                     },
@@ -1795,9 +1826,22 @@ fun TaotaoMusicApp() {
                     onToggleFavorite = { song -> toggleFavorite(song) },
                     onPlayNext = { song -> playNext(song) },
                     onAddToPlaylist = ::requestAddToPlaylist,
+                    onOpenDiary = { song -> openSongDiary(song) },
                     error = favoriteLibraryError,
                     onRetry = { refreshFavoriteLibrary() },
                 )
+            } else if (page == "song-diary") {
+                diarySong?.let { song ->
+                    SongDiaryPage(
+                        song = song,
+                        diary = songDiary,
+                        loading = diaryLoading,
+                        error = diaryError,
+                        onBack = { diarySong = null },
+                        onRetry = { openSongDiary(song) },
+                        onShare = { requestSongShare(song) },
+                    )
+                }
             } else if (page == "mine-history") {
                 LaunchedEffect(page) { refreshPlaybackHistory() }
                 PlaybackHistoryPage(
@@ -1807,6 +1851,7 @@ fun TaotaoMusicApp() {
                     onPlayNext = { song -> playNext(song) },
                     isFavorite = { song -> favoritesStore.contains(song) },
                     onToggleFavorite = { song -> toggleFavorite(song) },
+                    onOpenDiary = { song -> openSongDiary(song) },
                     onClear = {
                         playbackSync.markClearPending()
                         playbackSession = null
@@ -2181,18 +2226,6 @@ private fun Song.sameSongIdentity(other: Song): Boolean {
     }
     return left.isNotEmpty() && left.intersect(right).isNotEmpty()
 }
-
-/** 返回列表项从 [from] 移到 [to] 后，原 [index] 对应的新下标。 */
-private fun movedQueueIndex(index: Int, from: Int, to: Int): Int = when {
-    index == from -> to
-    from < to && index in (from + 1)..to -> index - 1
-    to < from && index in to until from -> index + 1
-    else -> index
-}
-
-/** 创建移动后的副本，拖动手势期间不修改播放器持有的权威列表。 */
-private fun <T> List<T>.moved(from: Int, to: Int): List<T> =
-    toMutableList().apply { add(to, removeAt(from)) }
 
 @Composable
 private fun HomeHeader(userName: String, onOpenAnnouncements: () -> Unit) {
@@ -3003,9 +3036,6 @@ private val CrashLogViewportMaxHeight = 420.dp
 
 private val PlaybackQueueContentHeight = 360.dp
 
-/** 播放队列在拖动期间使用的稳定行标识，重复歌曲也不会因为换位而丢失手势。 */
-private data class PlaybackQueueRow(val id: Long, val song: Song)
-
 @Composable
 private fun CurrentPlaybackQueue(
     queue: List<Song>,
@@ -3044,161 +3074,25 @@ private fun CurrentPlaybackQueue(
         if (queue.isEmpty()) {
             PlaybackQueueEmptyState("队列为空", Modifier.weight(1f))
         } else {
-            val initialRows = remember {
-                queue.mapIndexed { index, song -> PlaybackQueueRow(index.toLong(), song) }
-            }
-            var visualRows by remember { mutableStateOf(initialRows) }
-            var nextRowId by remember { mutableLongStateOf(initialRows.size.toLong()) }
-            var draggedIndex by remember { mutableIntStateOf(-1) }
-            var dragStartIndex by remember { mutableIntStateOf(-1) }
-            var draggedDistance by remember { mutableFloatStateOf(0f) }
-            var visualCurrentIndex by remember { mutableIntStateOf(currentIndex) }
-            var settling by remember { mutableStateOf(false) }
-            var settleOffset by remember { mutableStateOf(Animatable(0f)) }
-            var rowHeightPx by remember { mutableFloatStateOf(0f) }
-            val dragScope = rememberCoroutineScope()
-            val reduceMotion = LocalReduceMotion.current
-            val haptics = LocalHapticFeedback.current
-
-            // 非拖动阶段才接收播放器队列；拖动中完全由本地列表驱动，避免 Media3 回调打断手势帧。
-            LaunchedEffect(queue, currentIndex, draggedIndex, settling) {
-                if (draggedIndex == -1 && !settling) {
-                    val reusableRows = visualRows.toMutableList()
-                    visualRows = queue.map { song ->
-                        val matchIndex = reusableRows.indexOfFirst { row ->
-                            songKeyOf(row.song) == songKeyOf(song)
-                        }
-                        if (matchIndex >= 0) {
-                            reusableRows.removeAt(matchIndex).copy(song = song)
-                        } else {
-                            PlaybackQueueRow(nextRowId++, song)
-                        }
-                    }
-                    visualCurrentIndex = currentIndex
-                }
-            }
-
-            LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
-                itemsIndexed(visualRows, key = { _, row -> row.id }) { index, row ->
-                    val item = row.song
-                    val isCurrent = index == visualCurrentIndex
-                    val isDragged = index == draggedIndex
-                    val rowOffsetY = when {
-                        !isDragged -> 0f
-                        settling -> settleOffset.value
-                        else -> draggedDistance
-                    }
-                    SongRow(
-                        song = item,
-                        active = isCurrent,
-                        subtitle = if (isCurrent) "正在播放 · ${item.artist}" else item.artist,
-                        onClick = { onItemClick(index) },
-                        onDelete = { onRemoveItem(index) }.takeUnless { isCurrent },
-                        favorited = isFavorite(item),
-                        modifier = Modifier
-                            .onSizeChanged { size ->
-                                if (size.height > 0) rowHeightPx = size.height.toFloat()
-                            }
-                            .zIndex(if (isDragged) 1f else 0f)
-                            .animateItem(
-                                // 被拖行直接跟随手指；只让让位的相邻行补间，避免两套位移互相拉扯。
-                                placementSpec = if (isDragged || reduceMotion) {
-                                    null
-                                } else {
-                                    spring(
-                                        dampingRatio = Spring.DampingRatioNoBouncy,
-                                        stiffness = Spring.StiffnessMedium,
-                                    )
-                                },
-                            )
-                            .graphicsLayer { translationY = rowOffsetY },
-                        onToggleFavorite = onToggleFavorite.takeIf { item.remoteId?.let { it > 0L } == true || !item.mid.isNullOrBlank() }
-                            ?.let { callback -> { callback(item) } },
-                        dragHandle = { modifier ->
-                            Icon(
-                                Icons.Default.DragHandle,
-                                "长按拖动调整顺序",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = modifier.pointerInput(row.id, reduceMotion) {
-                                    detectDragGesturesAfterLongPress(
-                                        onDragStart = {
-                                            settleOffset = Animatable(0f)
-                                            dragStartIndex = index
-                                            draggedIndex = index
-                                            draggedDistance = 0f
-                                            settling = false
-                                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        },
-                                        onDragEnd = {
-                                            val fromIndex = dragStartIndex
-                                            val toIndex = draggedIndex
-                                            val fromOffset = draggedDistance
-                                            if (reduceMotion) {
-                                                draggedDistance = 0f
-                                                settling = false
-                                                draggedIndex = -1
-                                                dragStartIndex = -1
-                                            } else {
-                                                val animation = Animatable(fromOffset)
-                                                settleOffset = animation
-                                                draggedDistance = 0f
-                                                settling = true
-                                                dragScope.launch {
-                                                    animation.animateTo(0f, taotaoSettleSpring())
-                                                    if (settleOffset === animation) {
-                                                        settling = false
-                                                        draggedIndex = -1
-                                                        dragStartIndex = -1
-                                                    }
-                                                }
-                                            }
-                                            if (fromIndex in queue.indices && toIndex in queue.indices && fromIndex != toIndex) {
-                                                onMoveItem(fromIndex, toIndex)
-                                            }
-                                        },
-                                        onDragCancel = {
-                                            settleOffset = Animatable(0f)
-                                            draggedIndex = -1
-                                            dragStartIndex = -1
-                                            draggedDistance = 0f
-                                            settling = false
-                                        },
-                                    ) { change, dragAmount ->
-                                        change.consume()
-                                        if (draggedIndex !in visualRows.indices || rowHeightPx <= 0f) {
-                                            return@detectDragGesturesAfterLongPress
-                                        }
-                                        val pushingPastTop = draggedIndex == 0 && draggedDistance <= 0f && dragAmount.y < 0f
-                                        val pushingPastBottom = draggedIndex == visualRows.lastIndex &&
-                                            draggedDistance >= 0f && dragAmount.y > 0f
-                                        draggedDistance += if (pushingPastTop || pushingPastBottom) {
-                                            dragAmount.y * 0.35f
-                                        } else {
-                                            dragAmount.y
-                                        }
-                                        val reorderThresholdPx = rowHeightPx / 2f
-                                        while (kotlin.math.abs(draggedDistance) >= reorderThresholdPx) {
-                                            val direction = if (draggedDistance > 0f) 1 else -1
-                                            val destination = (draggedIndex + direction).coerceIn(visualRows.indices)
-                                            if (destination == draggedIndex) {
-                                                break
-                                            }
-                                            visualRows = visualRows.moved(draggedIndex, destination)
-                                            visualCurrentIndex = movedQueueIndex(
-                                                visualCurrentIndex,
-                                                draggedIndex,
-                                                destination,
-                                            )
-                                            draggedIndex = destination
-                                            // 基准位置换到相邻行后反向扣除完整行高，屏幕坐标保持连续。
-                                            draggedDistance -= direction * rowHeightPx
-                                        }
-                                    }
-                                },
-                            )
-                        },
-                    )
-                }
+            DragReorderList(
+                items = queue,
+                identity = ::songKeyOf,
+                onMove = onMoveItem,
+                modifier = Modifier.fillMaxWidth().weight(1f),
+                activeIndex = currentIndex,
+            ) { index, song, isActive, rowModifier, dragHandle ->
+                SongRow(
+                    song = song,
+                    active = isActive,
+                    subtitle = if (isActive) "正在播放 · ${song.artist}" else song.artist,
+                    onClick = { onItemClick(index) },
+                    onDelete = { onRemoveItem(index) }.takeUnless { isActive },
+                    favorited = isFavorite(song),
+                    modifier = rowModifier,
+                    onToggleFavorite = onToggleFavorite.takeIf { song.remoteId?.let { it > 0L } == true || !song.mid.isNullOrBlank() }
+                        ?.let { callback -> { callback(song) } },
+                    dragHandle = dragHandle,
+                )
             }
         }
     }

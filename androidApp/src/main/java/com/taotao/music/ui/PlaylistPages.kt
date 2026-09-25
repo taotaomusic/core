@@ -17,19 +17,15 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.DeleteOutline
-import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -137,7 +133,7 @@ fun PlaylistLibraryPage(
     }
 }
 
-/** 歌单详情：支持添加、播放、删除和上下移动歌曲，以及编辑歌单资料。 */
+/** 歌单详情：支持添加、播放、删除和拖动排序歌曲，以及编辑歌单资料。 */
 @Composable
 fun PlaylistDetailPage(
     playlist: TencentMusicApi.Playlist,
@@ -236,35 +232,22 @@ fun PlaylistDetailPage(
         if (songs.isEmpty()) {
             PlaylistEmptyState("歌单还是空的", null, null)
         } else {
-            LazyColumn(
+            // 与播放队列共用同一套长按拖动排序；此前的上下箭头要一格一格挪，已废弃。
+            DragReorderList(
+                items = songs,
+                identity = ::songKeyOf,
+                onMove = onMoveSong,
                 modifier = Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(TaotaoSpacing.xxs),
                 contentPadding = PaddingValues(bottom = TaotaoSpacing.xl),
-            ) {
-                itemsIndexed(playlist.songs, key = { _, item -> "${item.source}:${item.songId}" }) { index, item ->
-                    val song = songs[index]
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        SongRow(
-                            song = song,
-                            modifier = Modifier.weight(1f),
-                            onClick = { onPlaySong(songs, index) },
-                            onDelete = { onRemoveSong(item) },
-                        )
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            IconButton(
-                                onClick = { onMoveSong(index, index - 1) },
-                                enabled = index > 0,
-                                modifier = Modifier.size(TaotaoSizes.iconLg),
-                            ) { Icon(Icons.Default.ExpandLess, "上移", modifier = Modifier.size(TaotaoSizes.iconSm)) }
-                            Icon(Icons.Default.DragHandle, "歌曲顺序", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(TaotaoSizes.iconXs))
-                            IconButton(
-                                onClick = { onMoveSong(index, index + 1) },
-                                enabled = index < playlist.songs.lastIndex,
-                                modifier = Modifier.size(TaotaoSizes.iconLg),
-                            ) { Icon(Icons.Default.ExpandMore, "下移", modifier = Modifier.size(TaotaoSizes.iconSm)) }
-                        }
-                    }
-                }
+            ) { index, song, _, rowModifier, dragHandle ->
+                SongRow(
+                    song = song,
+                    modifier = rowModifier,
+                    onClick = { onPlaySong(songs, index) },
+                    onDelete = { playlist.songs.getOrNull(index)?.let(onRemoveSong) },
+                    dragHandle = dragHandle,
+                )
             }
         }
     }

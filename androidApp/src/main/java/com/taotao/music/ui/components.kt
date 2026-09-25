@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
 import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.AutoStories
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.MoreVert
@@ -123,7 +124,8 @@ fun AlbumArt(
  * 统一歌曲行。
  *
  * 搜索、收藏、本地、历史记录和播放队列都使用这个骨架，避免封面大小、行高、标题层级和
- * 选中颜色在不同页面逐渐分叉。右侧固定保留时长和更多菜单；各页面只注入可用的歌曲操作。
+ * 选中颜色在不同页面逐渐分叉。右侧固定保留时长、可选的拖动拖把和更多菜单；
+ * 各页面只注入可用的歌曲操作。
  */
 @Composable
 fun SongRow(
@@ -140,10 +142,16 @@ fun SongRow(
     onAddToPlaylist: (() -> Unit)? = null,
     /** 由平台层生成短链并打开系统分享面板。 */
     onShare: (() -> Unit)? = null,
+    /** 打开这首歌的单曲倒带日记；为空时不显示该菜单项。 */
+    onOpenDiary: (() -> Unit)? = null,
     onDelete: (() -> Unit)? = null,
     dragHandle: (@Composable (Modifier) -> Unit)? = null,
 ) {
     var showActions by remember { mutableStateOf(false) }
+    // 拖把与更多菜单并存：此前传了拖把就隐藏整个菜单，播放队列里删除、收藏的回调
+    // 传了却没有任何入口。两个都渲染；确实没有可用操作时才只显示拖把或什么都不显示。
+    val hasRowActions = onDelete != null || onPlayNext != null || onToggleFavorite != null ||
+        onAddToPlaylist != null || onShare != null || onOpenDiary != null
     SharedSongRow(
         song = song,
         active = active,
@@ -160,64 +168,64 @@ fun SongRow(
         onClick = onClick,
         modifier = modifier,
         trailingContent = {
-            if (dragHandle != null) {
-                dragHandle(Modifier.size(TaotaoSizes.iconButton))
-            } else {
-                Box {
-                    IconButton(onClick = { showActions = true }, modifier = Modifier.size(TaotaoSizes.iconButton)) {
-                        Icon(Icons.Default.MoreVert, "更多操作", tint = MaterialTheme.colorScheme.primary)
-                    }
-                    DropdownMenu(
-                        expanded = showActions,
-                        onDismissRequest = { showActions = false },
-                        containerColor = MaterialTheme.colorScheme.surface,
-                    ) {
-                        if (onDelete != null) {
-                            DropdownMenuItem(
-                                text = { Text("删除") },
-                                onClick = { showActions = false; onDelete() },
-                                leadingIcon = { Icon(Icons.Default.DeleteOutline, null) },
-                            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (dragHandle != null) {
+                    dragHandle(Modifier.size(TaotaoSizes.iconButton))
+                }
+                if (hasRowActions) {
+                    Box {
+                        IconButton(onClick = { showActions = true }, modifier = Modifier.size(TaotaoSizes.iconButton)) {
+                            Icon(Icons.Default.MoreVert, "更多操作", tint = MaterialTheme.colorScheme.primary)
                         }
-                        if (onPlayNext != null) {
-                            DropdownMenuItem(
-                                text = { Text("下一首播放") },
-                                onClick = { showActions = false; onPlayNext() },
-                                leadingIcon = { Icon(Icons.AutoMirrored.Filled.PlaylistPlay, null) },
-                            )
-                        }
-                        if (onToggleFavorite != null) {
-                            DropdownMenuItem(
-                                text = { Text(if (favorited) "取消收藏" else "收藏") },
-                                onClick = { showActions = false; onToggleFavorite() },
-                                leadingIcon = {
-                                    Icon(if (favorited) Icons.Default.Favorite else Icons.Default.FavoriteBorder, null)
-                                },
-                            )
-                        }
-                        if (onAddToPlaylist != null) {
-                            DropdownMenuItem(
-                                text = { Text("加入歌单") },
-                                onClick = { showActions = false; onAddToPlaylist() },
-                                leadingIcon = { Icon(Icons.AutoMirrored.Filled.PlaylistPlay, null) },
-                            )
-                        }
-                        if (onShare != null) {
-                            DropdownMenuItem(
-                                text = { Text("分享歌曲") },
-                                onClick = { showActions = false; onShare() },
-                                leadingIcon = { Icon(Icons.Default.Share, null) },
-                            )
-                        }
-                        if (
-                            onDelete == null && onPlayNext == null && onToggleFavorite == null &&
-                            onAddToPlaylist == null && onShare == null
+                        DropdownMenu(
+                            expanded = showActions,
+                            onDismissRequest = { showActions = false },
+                            containerColor = MaterialTheme.colorScheme.surface,
                         ) {
-                            DropdownMenuItem(
-                                text = { Text("暂无可用操作") },
-                                onClick = { showActions = false },
-                                enabled = false,
-                            )
+                            if (onDelete != null) {
+                                DropdownMenuItem(
+                                    text = { Text("删除") },
+                                    onClick = { showActions = false; onDelete() },
+                                    leadingIcon = { Icon(Icons.Default.DeleteOutline, null) },
+                                )
+                            }
+                            if (onPlayNext != null) {
+                                DropdownMenuItem(
+                                    text = { Text("下一首播放") },
+                                    onClick = { showActions = false; onPlayNext() },
+                                    leadingIcon = { Icon(Icons.AutoMirrored.Filled.PlaylistPlay, null) },
+                                )
+                            }
+                            if (onToggleFavorite != null) {
+                                DropdownMenuItem(
+                                    text = { Text(if (favorited) "取消收藏" else "收藏") },
+                                    onClick = { showActions = false; onToggleFavorite() },
+                                    leadingIcon = {
+                                        Icon(if (favorited) Icons.Default.Favorite else Icons.Default.FavoriteBorder, null)
+                                    },
+                                )
+                            }
+                            if (onAddToPlaylist != null) {
+                                DropdownMenuItem(
+                                    text = { Text("加入歌单") },
+                                    onClick = { showActions = false; onAddToPlaylist() },
+                                    leadingIcon = { Icon(Icons.AutoMirrored.Filled.PlaylistPlay, null) },
+                                )
+                            }
+                            if (onShare != null) {
+                                DropdownMenuItem(
+                                    text = { Text("分享歌曲") },
+                                    onClick = { showActions = false; onShare() },
+                                    leadingIcon = { Icon(Icons.Default.Share, null) },
+                                )
+                            }
+                            if (onOpenDiary != null) {
+                                DropdownMenuItem(
+                                    text = { Text("查看单曲日记") },
+                                    onClick = { showActions = false; onOpenDiary() },
+                                    leadingIcon = { Icon(Icons.Default.AutoStories, null) },
+                                )
+                            }
                         }
                     }
                 }
@@ -238,6 +246,7 @@ fun SongListItem(
     onPlayNext: (() -> Unit)? = null,
     onAddToPlaylist: (() -> Unit)? = null,
     onShare: (() -> Unit)? = null,
+    onOpenDiary: (() -> Unit)? = null,
     onDelete: (() -> Unit)? = null,
     onClick: () -> Unit,
 ) {
@@ -252,6 +261,7 @@ fun SongListItem(
         onPlayNext = onPlayNext,
         onAddToPlaylist = onAddToPlaylist,
         onShare = onShare,
+        onOpenDiary = onOpenDiary,
         onDelete = onDelete,
     )
 }

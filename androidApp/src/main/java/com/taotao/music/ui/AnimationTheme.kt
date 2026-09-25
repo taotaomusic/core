@@ -156,7 +156,8 @@ fun pageDepthOf(page: String): Int = when (page) {
     "search", "settings", "mine-favorites", "mine-history", "mine-local", "mine-playlists" -> 1
     // 账号管理从设置页继续进入，不能和设置页标成同层，否则会被导航策略瞬切。
     // 歌单详情从我的歌单继续进入，不能和我的歌单标成同层。
-    "profile", "detail", "playlist-detail" -> 2
+    // 单曲日记从收藏/历史等列表的歌曲菜单继续进入，同样属于更深一层。
+    "profile", "detail", "playlist-detail", "song-diary" -> 2
     else -> 0
 }
 
