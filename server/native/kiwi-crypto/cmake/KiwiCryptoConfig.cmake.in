@@ -1,8 +1,0 @@
-@PACKAGE_INIT@
-
-include(CMakeFindDependencyMacro)
-find_dependency(OpenSSL 3.6 COMPONENTS Crypto)
-find_dependency(zstd 1.5 CONFIG)
-
-include("${CMAKE_CURRENT_LIST_DIR}/KiwiCryptoTargets.cmake")
-check_required_components(KiwiCrypto)

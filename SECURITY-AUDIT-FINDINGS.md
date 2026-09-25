@@ -379,7 +379,7 @@ const limit = Number.isInteger(parsed) ? Math.min(RECENT_LIMIT, Math.max(1, pars
 
 ### 流程性问题
 
-**D13 文档缺少时效性元信息**。13 篇中仅 `00-code-index.md` 含日期，其余 12 篇既无「最后更新」也无版本号。文件最后修改时间分布显示 `08-native-crypto.md` 停留在 2026-08-24（最久未动），但本次逐项核对**其内容与代码一致**——说明「久未更新」不等于「已过期」，而缺少日期标记使得任何一方都无法自查。
+**D13 文档缺少时效性元信息**。13 篇中仅 `00-code-index.md` 含日期，其余 12 篇既无「最后更新」也无版本号。缺少日期标记使得任何一方都无法自查「久未更新」到底是「不需要改」还是「已经过期」。
 
 **D14 部署流程未定义 `NODE_ENV`**（与 S1 联动）。全部文档与示例配置中，`NODE_ENV` 仅出现在 `=test` 语境，**从未出现 `production`**。这使得 `env.validation.ts` 中唯一的生产级校验形同虚设。
 
@@ -413,6 +413,6 @@ const limit = Number.isInteger(parsed) ? Math.min(RECENT_LIMIT, Math.max(1, pars
 
 1. **依赖 CVE 未验证**。`npm audit` 在当前 registry（npmmirror）返回 `404 NOT_IMPLEMENTED`，本次未能取得依赖漏洞清单。S11 基于库的维护状态判断，而非具体 CVE。
 2. **未做动态验证**。本报告全部结论来自静态代码阅读与文档比对，未启动服务、未做渗透测试、未验证运行时行为。
-3. **未覆盖客户端与构建链路**。范围限定为 `server/src` 与 `server/wiki`；`native/kiwi-crypto` 的密码学实现仅核对了文档一致性，未做算法层审计；Android/桌面/Web 客户端与 Gradle 构建链未纳入。
+3. **未覆盖客户端与构建链路**。范围限定为 `server/src` 与 `server/wiki`；Android/桌面/Web 客户端与 Gradle 构建链未纳入。
 4. **前端审计为浅层**。管理后台前端仅检查了令牌存储方式与接口调用，未做完整 XSS/依赖审计。
 5. **`X-Admin-Token` 的实际存量使用情况未能确认**。该通道是否为现役运维脚本所依赖，需由维护者判断后再决定收敛力度。

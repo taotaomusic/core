@@ -21,7 +21,6 @@
 | [05-image-generation.md](05-image-generation.md) | gpt-image-2 任务创建、Key 池管理、额度扣减、状态轮询 | 维护 gpt-image-2、Key 池、额度和图片任务时 |
 | [06-release-deployment.md](06-release-deployment.md) | 后端构建与部署、APK 发布、灰度放量、热修复补丁、桌面发布入口 | 部署后端、发布 Android 或桌面版本、灰度或回滚时 |
 | [07-troubleshooting.md](07-troubleshooting.md) | 启动失败、连接超时、401/502 排查、热更新失效诊断 | 服务启动失败、接口异常或线上行为不符合预期时 |
-| [08-native-crypto.md](08-native-crypto.md) | Kiwi Crypto 原生加密、签名验证、时间戳防重放 | 接口需要原生加密、认证、防重放或排查 Kiwi Crypto 时 |
 | [09-wukongim.md](09-wukongim.md) | 悟空 IM 接入、TCP/WebSocket 连接、凭据签发、频道管理 | 接入悟空 IM、配置端口、排查聊天连接或凭据问题时 |
 | [10-desktop-release.md](10-desktop-release.md) | Windows 模块清单、内容寻址上传、Courgette/bsdiff 差分、灰度与最低版本 | 构建、发布或排查桌面端更新时 |
 | [11-admin-auth.md](11-admin-auth.md) | 管理员账号、数据库会话、TOTP 2FA、角色权限、IP 白名单、审计与 LDAP/SSO | 维护管理后台登录、权限或对接企业目录时 |
@@ -55,7 +54,7 @@
 3. **安全第一**：不在文档中写入真实密码、API Key、数据库连接串或签名信息
 4. **示例规范**：示例密钥只能使用明显的占位文本，例如 `替换为真实Key`
 5. **可执行性**：文档中的命令应能从标注的工作目录直接执行
-6. **加密同步**：原生加密格式或密钥规则变化时同步更新 Kiwi Crypto 专题和模块内 `SECURITY.md`
+6. **加密同步**：后端消费的加密层（独立仓库 `hdppppppp/tools` 产出的 `.node`）协议格式或密钥规则变化时，同步更新该仓库 `README.md` 的协议章节与 `SECURITY.md`；本仓库的 `crypto/dist/` 只放产物，不放文档
 7. **索引同步**：新增或删除路由、表、环境变量或模块后先刷新 CodeGraph，再更新 `00-code-index.md` 和对应专题；不要凭旧 README 猜测路由。
 
 ## 🚀 快速开始
