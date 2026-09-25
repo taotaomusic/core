@@ -296,10 +296,14 @@ internal class PlaylistState(
 
     fun moveSong(from: Int, to: Int) {
         val playlist = selected ?: return
-        if (to !in playlist.songs.indices || from !in playlist.songs.indices || busy) return
+        if (to !in playlist.songs.indices || from !in playlist.songs.indices) return
         val account = accountIdProvider() ?: return
         val reordered = playlist.songs.toMutableList().apply { add(to, removeAt(from)) }
         // 先更新界面，再把完整稳定键列表交给服务端；失败时回读详情恢复权威顺序。
+        // 不再用 busy 拦截连续拖动：拖把已经把行挪到位并回调了 onMove，这里若提前 return，
+        // 界面顺序会和权威 selected.songs 岔开，在途请求回写后被拖动的行会弹回原位。
+        // 并发安全由代次令牌兜底：beginRequest 会取消上一在途请求并递增代次，
+        // 陈旧响应一律被 isCurrentRequest 拒写；reordered 基于已乐观更新的 selected，连续拖动可叠加。
         selected = playlist.copy(songs = reordered)
         val generation = beginRequest()
         busy = true
