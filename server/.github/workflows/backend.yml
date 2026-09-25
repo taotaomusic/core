@@ -5,7 +5,11 @@
 #
 # 环境变量取值口径与 server/tools/verify-contract.mjs 文件头记录的本地验证流程一致。
 # 独立仓库里没有 Kotlin/Wasm 播放器产物，构建会自动跳过 share-player（见
-# tools/build-web-player.mjs 的跳过逻辑），这里放一个占位 JS 供缓存头断言使用。
+# tools/build-web-player.mjs 的跳过逻辑）；这里放一套占位入口文件（index.html +
+# 两个固定名入口资源，缺一则 sharePlayerVersion/静态挂载不生效）供缓存头断言使用。
+#
+# 失败可见性：Actions 日志下载需要仓库管理员令牌，匿名只能读到注解（annotations），
+# 所以启动/契约失败时把关键日志行用 `::error::` 吐成注解，便于外部工具轮询排查。
 name: 后端构建与契约验证
 
 on:
@@ -66,6 +70,9 @@ jobs:
           mkdir -p dist/share-player
           printf '/* 契约验证占位：独立后端仓库没有 Kotlin/Wasm 产物，仅用于静态缓存头断言 */\n' \
             > dist/share-player/taotao-share-player.js
+          printf 'wasm-placeholder' > dist/share-player/TaotaoMusic-webApp-wasm-js.wasm
+          printf '<!doctype html><html lang="zh-CN"><head><base href="/share/"><meta charset="utf-8"><title>占位</title></head><body>契约验证占位页面</body></html>' \
+            > dist/share-player/index.html
 
       - name: 重置验证库
         run: node tools/reset-db.mjs "$DATABASE_URL"
@@ -73,20 +80,40 @@ jobs:
       - name: 启动验证实例
         run: |
           node dist/main.js > server.log 2>&1 &
+          ok=0
           for i in $(seq 1 60); do
             if curl -sf http://127.0.0.1:4720/health | grep -q '"up"'; then
+              ok=1
               echo "服务已就绪（第 ${i}s）"
-              exit 0
+              break
             fi
             sleep 1
           done
-          echo "服务 60 秒内未就绪，日志如下："
-          cat server.log
-          exit 1
+          if [ "$ok" != "1" ]; then
+            echo "服务 60 秒内未就绪，日志尾部如下："
+            tail -n 12 server.log || true
+            tail -n 10 server.log | while IFS= read -r line; do
+              if [ -z "$line" ]; then line="(空行)"; fi
+              echo "::error::${line:0:300}"
+            done
+            exit 1
+          fi
 
       - name: 契约验证
-        run: node tools/verify-contract.mjs http://127.0.0.1:4720
+        run: node tools/verify-contract.mjs http://127.0.0.1:4720 2>&1 | tee verify.log
 
-      - name: 失败时输出服务日志
+      - name: 契约失败时输出摘要注解
         if: failure()
-        run: tail -n 100 server.log
+        run: |
+          if [ -f verify.log ]; then
+            tail -n 2 verify.log | while IFS= read -r line; do
+              echo "::error::${line:0:300}"
+            done
+            grep -v '✓' verify.log | grep -E '✗|✘|失败|Error|error' | tail -n 8 | while IFS= read -r line; do
+              echo "::error::${line:0:300}"
+            done
+          fi
+
+      - name: 失败时保留服务日志
+        if: failure()
+        run: tail -n 100 server.log || true
