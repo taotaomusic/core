@@ -469,15 +469,16 @@ fun PlaylistEditorDialog(
 
 /**
  * 歌单封面：优先展示服务端返回的封面（歌单自己的封面为空时会兜底为
- * 歌单内按曲目顺序第一张歌曲封面），没有封面时退回珊瑚色音符占位。
+ * 歌单内按曲目顺序第一张歌曲封面），没有封面时退回 primaryContainer 音符占位。
+ * 用主题容器角色而不是透明度叠加：14% 珊瑚色在亮色白底上会淡到近乎白色。
  */
 @Composable
 private fun PlaylistCover(coverUrl: String?, size: Dp, shape: Shape = TaotaoShapes.medium) {
     if (coverUrl.isNullOrBlank()) {
         Box(
-            Modifier.size(size).clip(shape).background(TaotaoCoral.copy(alpha = 0.14f)),
+            Modifier.size(size).clip(shape).background(MaterialTheme.colorScheme.primaryContainer),
             contentAlignment = Alignment.Center,
-        ) { Icon(Icons.Default.LibraryMusic, null, tint = TaotaoCoral, modifier = Modifier.size(size / 2)) }
+        ) { Icon(Icons.Default.LibraryMusic, null, tint = MaterialTheme.colorScheme.onPrimaryContainer, modifier = Modifier.size(size / 2)) }
     } else {
         AsyncImage(
             model = ImageRequest.Builder(LocalContext.current)

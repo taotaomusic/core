@@ -31,6 +31,16 @@ private val playerLightColors = lightColorScheme(
     surfaceVariant = Color(0xFFF3E7E4),
     onSurfaceVariant = Color(0xFF8A8280),
     outlineVariant = Color(0xFFEADFDC),
+    // surfaceContainer 一族必须覆盖：M3 基线默认是带紫调的灰（亮 #ECE6F0），
+    // 弹窗、下拉菜单、底部抽屉都从这族取底色，不覆盖就会和应用暖色脱离。
+    // 层级越高越深，surfaceContainerHigh 直接复用 surfaceVariant，保持 token 数量不膨胀。
+    surfaceContainerLowest = Color.White,
+    surfaceContainerLow = Color(0xFFF6EFEC),
+    surfaceContainer = Color(0xFFF3E9E6),
+    surfaceContainerHigh = Color(0xFFF3E7E4),
+    surfaceContainerHighest = Color(0xFFEDE0DC),
+    surfaceDim = Color(0xFFE9DCD8),
+    surfaceBright = Color.White,
 )
 
 private val playerDarkColors = darkColorScheme(
@@ -49,6 +59,15 @@ private val playerDarkColors = darkColorScheme(
     surfaceVariant = Color(0xFF322C2B),
     onSurfaceVariant = Color(0xFF9E9694),
     outlineVariant = Color(0xFF3B3433),
+    // 同亮色：M3 基线暗色容器是带蓝紫调的灰黑（#2B2930），压在暖色应用里会发冷。
+    // 层级越高越亮，surfaceContainerHigh 复用 surfaceVariant。
+    surfaceContainerLowest = Color(0xFF141110),
+    surfaceContainerLow = Color(0xFF211D1C),
+    surfaceContainer = Color(0xFF292422),
+    surfaceContainerHigh = Color(0xFF322C2B),
+    surfaceContainerHighest = Color(0xFF3B3433),
+    surfaceDim = Color(0xFF1A1615),
+    surfaceBright = Color(0xFF3B3433),
 )
 
 /**

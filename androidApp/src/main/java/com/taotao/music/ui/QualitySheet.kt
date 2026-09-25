@@ -118,7 +118,7 @@ fun QualitySheet(
 private fun QualityRow(choice: QualityChoice, checked: Boolean, onClick: () -> Unit) {
     val targetTint = when {
         !choice.available -> MaterialTheme.colorScheme.onSurfaceVariant
-        checked -> MaterialTheme.colorScheme.primary
+        checked -> MaterialTheme.colorScheme.onPrimaryContainer
         else -> MaterialTheme.colorScheme.onSurface
     }
     val tint by animateColorAsState(
@@ -127,7 +127,7 @@ private fun QualityRow(choice: QualityChoice, checked: Boolean, onClick: () -> U
         label = "音质选项着色",
     )
     val backgroundColor by animateColorAsState(
-        targetValue = if (checked) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f) else Color.Transparent,
+        targetValue = if (checked) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
         animationSpec = taotaoTween(AnimationDurations.MICRO),
         label = "音质选项背景",
     )
@@ -159,7 +159,7 @@ private fun QualityRow(choice: QualityChoice, checked: Boolean, onClick: () -> U
                 )
             }
         }
-        if (checked) Icon(Icons.Default.Check, "已选择", tint = MaterialTheme.colorScheme.primary)
+        if (checked) Icon(Icons.Default.Check, "已选择", tint = MaterialTheme.colorScheme.onPrimaryContainer)
     }
 }
 
@@ -182,13 +182,13 @@ fun QualityChip(quality: Int, modifier: Modifier = Modifier, local: Boolean = fa
     Box(
         modifier
             .clip(TaotaoShapes.badge)
-            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f))
+            .background(MaterialTheme.colorScheme.primaryContainer)
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
             .padding(horizontal = TaotaoSpacing.xs, vertical = TaotaoSpacing.xxs),
     ) {
         Text(
             if (local) "已下载 · ${labelOfQuality(quality)}" else labelOfQuality(quality),
-            color = MaterialTheme.colorScheme.primary,
+            color = MaterialTheme.colorScheme.onPrimaryContainer,
             style = TaotaoTypeScale.label,
         )
     }

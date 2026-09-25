@@ -158,12 +158,12 @@ private val SongRowMinHeight = TaotaoSizes.artworkRow + TaotaoSpacing.listItemVe
 fun SharedVipBadge(modifier: Modifier = Modifier) {
     Text(
         text = "VIP",
-        color = MaterialTheme.colorScheme.primary,
+        color = MaterialTheme.colorScheme.onPrimaryContainer,
         style = MaterialTheme.typography.labelSmall,
         fontWeight = FontWeight.Bold,
         modifier = modifier
             .clip(TaotaoShapes.badge)
-            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
+            .background(MaterialTheme.colorScheme.primaryContainer)
             .padding(horizontal = TaotaoSpacing.xxs, vertical = TaotaoSpacing.tightVertical),
     )
 }

@@ -304,17 +304,17 @@ fun PlayPauseIcon(isPlaying: Boolean, modifier: Modifier = Modifier, tint: Color
     )
 }
 
-/** VIP / 付费标记。 */
+/** VIP / 付费标记。容器色成对取用，避免透明度叠加在亮色白底上淡到看不见。 */
 @Composable
 fun VipBadge(modifier: Modifier = Modifier) {
     Box(
         modifier
             .clip(TaotaoShapes.badge)
-            .background(TaotaoCoral.copy(alpha = 0.14f))
+            .background(MaterialTheme.colorScheme.primaryContainer)
             // 纵向只留 1dp：徽标高度应当由行高决定，再撑开就会把整行顶高。
             .padding(horizontal = TaotaoSpacing.xxs, vertical = TaotaoSpacing.tightVertical),
     ) {
-        Text("VIP", color = TaotaoCoral, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+        Text("VIP", color = MaterialTheme.colorScheme.onPrimaryContainer, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
     }
 }
 

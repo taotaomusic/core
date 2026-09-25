@@ -168,12 +168,12 @@ private fun SettingRow(
         }
         Box(
             Modifier.clip(TaotaoShapes.small)
-                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f))
+                .background(MaterialTheme.colorScheme.primaryContainer)
                 .padding(horizontal = TaotaoSpacing.xs, vertical = TaotaoSpacing.xxs),
         ) {
             Text(
                 value,
-                color = MaterialTheme.colorScheme.primary,
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.Medium,
             )

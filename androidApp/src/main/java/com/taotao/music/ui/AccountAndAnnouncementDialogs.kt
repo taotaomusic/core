@@ -357,8 +357,7 @@ fun AnnouncementDialog(announcements: List<TencentMusicApi.Announcement>, onDism
         onDismissRequest = onDismiss,
         icon = { Icon(Icons.Default.Campaign, null) },
         title = { Text("公告") },
-        // 默认的容器 token 在本项目未覆盖时会回退为 Material 紫灰；显式绑定主题卡片色。
-        containerColor = MaterialTheme.colorScheme.surface,
+        // 容器色走主题默认：surfaceContainerHigh 已在 PlayerTheme 覆盖为暖色。
         iconContentColor = MaterialTheme.colorScheme.primary,
         titleContentColor = MaterialTheme.colorScheme.onSurface,
         textContentColor = MaterialTheme.colorScheme.onSurfaceVariant,

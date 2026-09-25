@@ -2438,10 +2438,10 @@ private fun MineLibraryShortcut(
         verticalArrangement = Arrangement.SpaceBetween,
     ) {
         Box(
-            modifier = Modifier.size(TaotaoSizes.iconButton).clip(CircleShape).background(TaotaoCoral.copy(alpha = 0.14f)),
+            modifier = Modifier.size(TaotaoSizes.iconButton).clip(CircleShape).background(MaterialTheme.colorScheme.primaryContainer),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(icon, iconDescription, tint = TaotaoCoral, modifier = Modifier.size(TaotaoSizes.iconSm))
+            Icon(icon, iconDescription, tint = MaterialTheme.colorScheme.onPrimaryContainer, modifier = Modifier.size(TaotaoSizes.iconSm))
         }
         Column {
             Text(title, style = TaotaoTypeScale.minorTitle, maxLines = 1)
