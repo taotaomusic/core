@@ -106,6 +106,6 @@ Assert-LastExit "推送 $ClientRemoteName"
 
 Write-Host ""
 Write-Host "同步完成："
-Write-Host "  server/  -> $ServerRemoteName ($ServerSyncBranch:main)  $serverCommit"
-Write-Host "  其余内容 -> $ClientRemoteName ($ClientSyncBranch:main)  $clientCommit"
+Write-Host "  server/  -> $ServerRemoteName (${ServerSyncBranch}:main)  $serverCommit"
+Write-Host "  其余内容 -> $ClientRemoteName (${ClientSyncBranch}:main)  $clientCommit"
 Write-Host "来源主仓库提交：$sourceLabel"
