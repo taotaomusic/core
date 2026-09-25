@@ -30,6 +30,14 @@
 - 只同步**已提交**内容，工作区未提交的改动不会同步出去；推送前先在主仓库提交。
 - 同步是单向的（主仓库 → GitHub），不要在镜像仓库里直接开发。
 
+### 云端构建（GitHub Actions）
+
+两个镜像仓库各带工作流，随同步推送自动触发，也可在 Actions 页手动 `workflow_dispatch`：
+
+- **music 仓库**：`.github/workflows/client.yml`（源文件在主仓库根目录同名路径）——Windows runner 上构建 `:androidApp:assembleRelease` 与 `:desktopApp:packageDesktopUpdateBundle`，APK 和含 `launcher.exe` 的更新包从 Actions Artifact 下载。必须 Windows runner：`incrementVersion` 走 `powershell` 命令。
+- **music-server 仓库**：`server/.github/workflows/backend.yml`（源文件在 `server/.github/` 内）——Ubuntu + PostgreSQL 服务容器，跑 `npm run build` 后起验证实例执行完整 `verify-contract.mjs`，**全绿才算通过**。独立仓库没有 Gradle 工程，`build:web-player` 会自动跳过（CI 里放占位 `taotao-share-player.js` 供缓存头断言）。
+- **APK 签名**：在 music 仓库 Secrets 配 `ANDROID_KEYSTORE_BASE64`（`taotao-release.jks` 的 base64）、`ANDROID_STORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD` 后出签名 Release 包；未配置时自动退回 Debug 包，仅验证工具链。
+
 ## 文档索引
 
 - [README.md](README.md)：项目总览、播放链路、开发入口。

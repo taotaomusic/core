@@ -1,0 +1,92 @@
+# 后端 CI：验证云端能完成 NestJS 构建（tsc + 产物压缩 + 管理后台 vite），
+# 并起一个验证实例跑完整契约验证（tools/verify-contract.mjs，全绿才算过）。
+# 本文件位于 server/.github/，随 tools/sync-repos.ps1 的快照成为
+# github.com/hdppppppp/music-server 根下的 .github/workflows/backend.yml。
+#
+# 环境变量取值口径与 server/tools/verify-contract.mjs 文件头记录的本地验证流程一致。
+# 独立仓库里没有 Kotlin/Wasm 播放器产物，构建会自动跳过 share-player（见
+# tools/build-web-player.mjs 的跳过逻辑），这里放一个占位 JS 供缓存头断言使用。
+name: 后端构建与契约验证
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: music_verify
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/music_verify
+      AUTH_SECRET: 0123456789012345678901234567890123456789
+      ADMIN_INITIAL_PASSWORD: verify-initial-123456
+      NODE_ENV: test
+      PORT: "4720"
+      APK_DIR: ./tmp/apk
+      EMAIL_VERIFICATION_TEST_CODE: "123456"
+      IM_ENABLED: "false"
+      ADMIN_RATE_LIMIT: "1000"
+      CORS_ALLOWED_ORIGINS: https://verify.example
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 构建（tsc + minify + copy-manifest + 管理后台 vite）
+        run: npm run build
+
+      - name: 放置分享页占位文件（缓存头断言用）
+        run: |
+          mkdir -p dist/share-player
+          printf '/* 契约验证占位：独立后端仓库没有 Kotlin/Wasm 产物，仅用于静态缓存头断言 */\n' \
+            > dist/share-player/taotao-share-player.js
+
+      - name: 重置验证库
+        run: node tools/reset-db.mjs "$DATABASE_URL"
+
+      - name: 启动验证实例
+        run: |
+          node dist/main.js > server.log 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:4720/health | grep -q '"up"'; then
+              echo "服务已就绪（第 ${i}s）"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "服务 60 秒内未就绪，日志如下："
+          cat server.log
+          exit 1
+
+      - name: 契约验证
+        run: node tools/verify-contract.mjs http://127.0.0.1:4720
+
+      - name: 失败时输出服务日志
+        if: failure()
+        run: tail -n 100 server.log
