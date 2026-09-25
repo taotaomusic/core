@@ -18,6 +18,18 @@
 - 外部参考仓库不得放在项目根目录；临时参考代码使用项目外目录，交付前清理无关仓库。
 - 新增 Kotlin 代码必须放在已有的 `com.taotao.music` 包层级下。
 
+## 双仓库同步（GitHub 镜像）
+
+主仓库（Gitee origin）仍是唯一开发主库；GitHub 侧拆成两个镜像仓库，由 `tools/sync-repos.ps1` 从主仓库 HEAD 生成**内容快照**推送。镜像里只有逐次快照的线性历史，**不含主仓库提交历史**，因此主仓库历史里的临时产物不会外泄：
+
+- `server/` → <https://github.com/hdppppppp/music-server>（远端名 `music-server`，本地快照分支 `sync/server`，server/ 内容即镜像仓库根）
+- 其余全部内容（客户端各模块与文档）→ <https://github.com/hdppppppp/music>（远端名 `music`，本地快照分支 `sync/client`）
+
+执行 `powershell -NoProfile -ExecutionPolicy Bypass -File tools\sync-repos.ps1`（加 `-DryRun` 只预览）。注意两点：
+
+- 只同步**已提交**内容，工作区未提交的改动不会同步出去；推送前先在主仓库提交。
+- 同步是单向的（主仓库 → GitHub），不要在镜像仓库里直接开发。
+
 ## 文档索引
 
 - [README.md](README.md)：项目总览、播放链路、开发入口。
