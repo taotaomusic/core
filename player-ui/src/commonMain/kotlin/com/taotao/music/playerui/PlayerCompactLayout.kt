@@ -18,6 +18,7 @@ fun PlayerCompactLayout(
     titleTrailingContent: (@Composable RowScope.() -> Unit)? = null,
     metadataTrailingContent: (@Composable RowScope.() -> Unit)? = null,
     headerActions: (@Composable RowScope.() -> Unit)? = null,
+    quickActions: (@Composable RowScope.() -> Unit)? = null,
     controlLeadingContent: (@Composable () -> Unit)? = null,
     controlTrailingContent: (@Composable () -> Unit)? = null,
 ) {
@@ -35,6 +36,7 @@ fun PlayerCompactLayout(
             titleTrailingContent = titleTrailingContent,
             metadataTrailingContent = metadataTrailingContent,
             headerActions = headerActions,
+            quickActions = quickActions,
             controlLeadingContent = controlLeadingContent,
             controlTrailingContent = controlTrailingContent,
         )

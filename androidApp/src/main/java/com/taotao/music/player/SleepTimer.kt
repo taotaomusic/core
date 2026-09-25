@@ -16,7 +16,18 @@ internal object SleepTimerContract {
     const val REMAINING_MS = "remaining_ms"
     const val ACTIVE = "active"
 
+    /**
+     * 「播完整首歌再停止播放」的开关。
+     * 作为 [SET] 的入参一起下发，也可以单独用 [SET_FLAG] 在计时中途改，
+     * 改开关不能重置已经在跑的倒计时。
+     */
+    const val WAIT_FOR_SONG_END = "wait_for_song_end"
+
+    /** 到期后已进入「等当前这首歌播完」的状态，界面上据此显示本首结束即停。 */
+    const val WAITING_SONG_END = "waiting_song_end"
+
     const val SET = "set"
+    const val SET_FLAG = "set_flag"
     const val CANCEL = "cancel"
     const val QUERY = "query"
 

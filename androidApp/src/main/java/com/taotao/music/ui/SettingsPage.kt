@@ -48,6 +48,7 @@ fun SettingsPage(
     playbackQuality: AudioQuality,
     downloadQuality: AudioQuality,
     sleepTimerRemainingMs: Long,
+    sleepTimerWaitingSongEnd: Boolean = false,
     appearance: AppearanceMode,
     profile: TencentMusicApi.UserProfile?,
     profileLoading: Boolean,
@@ -101,11 +102,11 @@ fun SettingsPage(
 
         SharedCard(title = "播放", modifier = Modifier.padding(top = TaotaoSpacing.sm)) {
             SettingRow(
-                title = "定时播放",
-                value = if (sleepTimerRemainingMs > 0L) {
-                    formatSleepTimerRemaining(sleepTimerRemainingMs)
-                } else {
-                    "关闭"
+                title = "定时关闭",
+                value = when {
+                    sleepTimerWaitingSongEnd -> "本首结束后停止"
+                    sleepTimerRemainingMs > 0L -> formatSleepTimerRemaining(sleepTimerRemainingMs)
+                    else -> "关闭"
                 },
                 description = "播放达到设定时长后自动停止；暂停会保留剩余时间，切歌不会重置。",
                 onClick = onOpenSleepTimer,

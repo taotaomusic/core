@@ -51,6 +51,12 @@ class PlaybackService : MediaSessionService() {
     /** 定时器只在播放服务中倒计时，页面退出后仍能按时停止后台播放。 */
     private var sleepTimerRemainingMs = 0L
     private var sleepTimerLastTickMs = 0L
+
+    /** 「播完整首歌再停止」的开关，由界面经 SET / SET_FLAG 命令下发。 */
+    private var sleepTimerWaitForSongEnd = false
+
+    /** 定时已到期、正在等当前这首歌自然播完；此状态下剩余时长固定为 0。 */
+    private var sleepTimerWaitingSongEnd = false
     private val sleepTimerRunnable = object : Runnable {
         override fun run() {
             tickSleepTimer()
@@ -168,6 +174,15 @@ class PlaybackService : MediaSessionService() {
                         val needsNetwork = uri == "http" || uri == "https"
                         setWakeMode(if (needsNetwork) C.WAKE_MODE_NETWORK else C.WAKE_MODE_LOCAL)
                         publishOplusLyrics(mediaItem)
+                        // 等本歌播完时，只有自然播到下一首（含单曲循环转圈）才算兑现；
+                        // 用户手动切歌不算，等新歌自然播完再停。
+                        if (
+                            sleepTimerWaitingSongEnd &&
+                            (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO ||
+                                reason == Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT)
+                        ) {
+                            finishWaitingSongEnd()
+                        }
                     }
 
                     override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -179,13 +194,19 @@ class PlaybackService : MediaSessionService() {
                         // 否则服务会在没有媒体时继续驻留。
                         // 队列自然播完同样没有后续播放，定时器不应把服务一直挂住；
                         // 用户主动暂停则保留定时器，稍后恢复播放仍会继续倒计时。
-                        if (
+                        when {
+                            // 等本歌播完时倒计时已经归零，队列被清空或最后一首自然
+                            // 播完都不会再触发切歌回调，这里兜底立即停止。
+                            sleepTimerWaitingSongEnd -> {
+                                if (player.mediaItemCount == 0 || player.playbackState == Player.STATE_ENDED) {
+                                    finishWaitingSongEnd()
+                                } else {
+                                    updateSleepTimerTicker()
+                                }
+                            }
                             sleepTimerRemainingMs > 0L &&
-                            (player.mediaItemCount == 0 || player.playbackState == Player.STATE_ENDED)
-                        ) {
-                            cancelSleepTimer()
-                        } else {
-                            updateSleepTimerTicker()
+                                (player.mediaItemCount == 0 || player.playbackState == Player.STATE_ENDED) -> cancelSleepTimer()
+                            else -> updateSleepTimerTicker()
                         }
                     }
                 })
@@ -209,7 +230,12 @@ class PlaybackService : MediaSessionService() {
     /** 任务被划掉时若已暂停就结束服务，避免留下一个不再播放的常驻通知。 */
     override fun onTaskRemoved(rootIntent: Intent?) {
         val current = player
-        if (sleepTimerRemainingMs <= 0L && (current == null || !current.playWhenReady || current.mediaItemCount == 0)) {
+        // 等本歌播完也算未完成的事：哪怕用户此刻暂停了，划掉任务也不该悄悄把歌掐了。
+        if (
+            sleepTimerRemainingMs <= 0L &&
+            !sleepTimerWaitingSongEnd &&
+            (current == null || !current.playWhenReady || current.mediaItemCount == 0)
+        ) {
             stopSelf()
         }
     }
@@ -219,6 +245,8 @@ class PlaybackService : MediaSessionService() {
         mainHandler.removeCallbacks(sleepTimerRunnable)
         sleepTimerRemainingMs = 0L
         sleepTimerLastTickMs = 0L
+        sleepTimerWaitForSongEnd = false
+        sleepTimerWaitingSongEnd = false
         lyricExecutor.shutdownNow()
         runCatching { mediaSession?.release() }
         runCatching { player?.release() }
@@ -289,9 +317,16 @@ class PlaybackService : MediaSessionService() {
                 if (durationMs !in 1L..SleepTimerContract.MAX_DURATION_MS) {
                     SessionResult(SessionResult.RESULT_ERROR_BAD_VALUE)
                 } else {
-                    setSleepTimer(durationMs)
+                    setSleepTimer(durationMs, args.getBoolean(SleepTimerContract.WAIT_FOR_SONG_END))
                     SessionResult(SessionResult.RESULT_SUCCESS, sleepTimerExtras())
                 }
+            }
+
+            SleepTimerContract.SET_FLAG -> {
+                // 只改「播完整首再停」的开关，不动正在进行的倒计时。
+                sleepTimerWaitForSongEnd = args.getBoolean(SleepTimerContract.WAIT_FOR_SONG_END)
+                publishSleepTimerState()
+                SessionResult(SessionResult.RESULT_SUCCESS, sleepTimerExtras())
             }
 
             SleepTimerContract.CANCEL -> {
@@ -308,10 +343,12 @@ class PlaybackService : MediaSessionService() {
         }
     }
 
-    /** 设置新的总时长；重新设置会从当前时刻重新计时。 */
-    private fun setSleepTimer(durationMs: Long) {
+    /** 设置新的总时长；重新设置会从当前时刻重新计时，并清掉等待播完的状态。 */
+    private fun setSleepTimer(durationMs: Long, waitForSongEnd: Boolean) {
         sleepTimerRemainingMs = durationMs.coerceIn(1L, SleepTimerContract.MAX_DURATION_MS)
         sleepTimerLastTickMs = SystemClock.elapsedRealtime()
+        sleepTimerWaitForSongEnd = waitForSongEnd
+        sleepTimerWaitingSongEnd = false
         publishSleepTimerState()
         updateSleepTimerTicker()
     }
@@ -321,6 +358,8 @@ class PlaybackService : MediaSessionService() {
         mainHandler.removeCallbacks(sleepTimerRunnable)
         sleepTimerRemainingMs = 0L
         sleepTimerLastTickMs = 0L
+        sleepTimerWaitForSongEnd = false
+        sleepTimerWaitingSongEnd = false
         publishSleepTimerState()
     }
 
@@ -353,11 +392,36 @@ class PlaybackService : MediaSessionService() {
         }
     }
 
-    /** 播放到期后真正停止 ExoPlayer、清空媒体队列并结束服务。 */
+    /**
+     * 播放到期：默认立刻停止；开了「播完整首歌再停止」且确实在放歌时，
+     * 先进入等待态，由切歌回调或队列播完事件兑现停止。
+     */
     private fun expireSleepTimer() {
         mainHandler.removeCallbacks(sleepTimerRunnable)
         sleepTimerRemainingMs = 0L
         sleepTimerLastTickMs = 0L
+        val activePlayer = player
+        if (
+            sleepTimerWaitForSongEnd &&
+            activePlayer != null &&
+            activePlayer.isPlaying &&
+            activePlayer.playbackState != Player.STATE_ENDED
+        ) {
+            sleepTimerWaitingSongEnd = true
+            publishSleepTimerState()
+            return
+        }
+        stopPlaybackForSleepTimer()
+    }
+
+    /** 等待期满：当前歌已自然播完，立即兑现停止。 */
+    private fun finishWaitingSongEnd() {
+        stopPlaybackForSleepTimer()
+    }
+
+    /** 真正停止 ExoPlayer、清空媒体队列并结束服务；到期与等播完两条路径共用。 */
+    private fun stopPlaybackForSleepTimer() {
+        sleepTimerWaitingSongEnd = false
         publishSleepTimerState()
         player?.let { activePlayer ->
             runCatching {
@@ -390,6 +454,7 @@ class PlaybackService : MediaSessionService() {
     private fun sleepTimerExtras(): Bundle = Bundle().apply {
         putBoolean(SleepTimerContract.ACTIVE, sleepTimerRemainingMs > 0L)
         putLong(SleepTimerContract.REMAINING_MS, sleepTimerRemainingMs.coerceAtLeast(0L))
+        putBoolean(SleepTimerContract.WAITING_SONG_END, sleepTimerWaitingSongEnd)
     }
 
     private fun publishSleepTimerState() {

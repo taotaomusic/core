@@ -75,6 +75,7 @@ import com.taotao.music.data.bindDownloadedSongs
 import com.taotao.music.data.GreetingFormatter
 import com.taotao.music.data.OfflineDownloadManager
 import com.taotao.music.data.QualityStore
+import com.taotao.music.data.SleepTimerStore
 import com.taotao.music.data.TencentMusicApi
 import com.taotao.music.data.SearchHistoryStore
 import com.taotao.music.data.AuthSession
@@ -161,6 +162,10 @@ fun TaotaoMusicApp() {
     }
     val appearanceStore = remember { AppearanceStore(context) }
     var appearance by remember { mutableStateOf(appearanceStore.mode()) }
+    val sleepTimerStore = remember { SleepTimerStore(context) }
+    // 「上次定时」时长与「播完整首再停」勾选跨进程记忆；勾选变化要即时下发给服务。
+    var sleepTimerLastMinutes by remember { mutableIntStateOf(sleepTimerStore.lastMinutes()) }
+    var sleepTimerWaitForSongEnd by remember { mutableStateOf(sleepTimerStore.waitForSongEnd()) }
     val scope = rememberCoroutineScope()
     var playbackSongs by remember { mutableStateOf(emptyList<Song>()) }
     var searchResults by remember { mutableStateOf(emptyList<Song>()) }
@@ -1579,12 +1584,13 @@ fun TaotaoMusicApp() {
                         hostState = snackbarHostState,
                         modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = innerPadding.calculateBottomPadding())
                     ) { snackbarData ->
-                        Snackbar(
-                            snackbarData = snackbarData,
-                            containerColor = MaterialTheme.colorScheme.surfaceVariant,
-                            contentColor = MaterialTheme.colorScheme.onSurface,
-                            actionColor = MaterialTheme.colorScheme.primary,
-                        )
+                        // 全局提示统一走胶囊样式；左右留边避免长文案顶到屏幕边缘。
+                        Box(
+                            Modifier.fillMaxWidth().padding(horizontal = TaotaoSpacing.lg),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            TaotaoSnackbar(snackbarData = snackbarData)
+                        }
                     }
 
             val currentPage = when {
@@ -1720,6 +1726,7 @@ fun TaotaoMusicApp() {
                     playbackQuality = playbackQuality.value,
                     onPickQuality = { qualitySheet = QualitySheetKind.CURRENT_SONG },
                     sleepTimerRemainingMs = audioPlayer.sleepTimerRemainingMs,
+                    sleepTimerWaitingSongEnd = audioPlayer.sleepTimerWaitingSongEnd,
                     onOpenSleepTimer = { showSleepTimerDialog = true },
                 )
             } else if (page == "search") {
@@ -1789,6 +1796,7 @@ fun TaotaoMusicApp() {
                     playbackQuality = playbackQuality,
                     downloadQuality = downloadQuality,
                     sleepTimerRemainingMs = audioPlayer.sleepTimerRemainingMs,
+                    sleepTimerWaitingSongEnd = audioPlayer.sleepTimerWaitingSongEnd,
                     appearance = appearance,
                     profile = userProfile,
                     profileLoading = profileLoading,
@@ -1979,17 +1987,27 @@ fun TaotaoMusicApp() {
             AnnouncementDialog(announcements = announcements, onDismiss = { showAnnouncementDialog = false })
         }
         if (showSleepTimerDialog) {
-            SleepTimerDialog(
+            SleepTimerSheet(
                 remainingMs = audioPlayer.sleepTimerRemainingMs,
+                waitingSongEnd = audioPlayer.sleepTimerWaitingSongEnd,
+                lastMinutes = sleepTimerLastMinutes,
+                waitForSongEnd = sleepTimerWaitForSongEnd,
                 onSet = { minutes ->
-                    audioPlayer.setSleepTimer(minutes)
+                    sleepTimerLastMinutes = minutes
+                    sleepTimerStore.setLastMinutes(minutes)
+                    audioPlayer.setSleepTimer(minutes, sleepTimerWaitForSongEnd)
                     showSleepTimerDialog = false
                     message = "已设置 ${minutes} 分钟后停止播放"
                 },
                 onCancelTimer = {
                     audioPlayer.cancelSleepTimer()
                     showSleepTimerDialog = false
-                    message = "已关闭定时播放"
+                    message = "已取消定时关闭"
+                },
+                onToggleWaitForSongEnd = { wait ->
+                    sleepTimerWaitForSongEnd = wait
+                    sleepTimerStore.setWaitForSongEnd(wait)
+                    audioPlayer.setSleepTimerWaitForSongEnd(wait)
                 },
                 onDismiss = { showSleepTimerDialog = false },
             )
@@ -2608,6 +2626,7 @@ private fun PlayerDetailPage(
     playbackQuality: Int,
     onPickQuality: () -> Unit,
     sleepTimerRemainingMs: Long,
+    sleepTimerWaitingSongEnd: Boolean,
     onOpenSleepTimer: () -> Unit,
 ) {
     // 播放器维护唯一进度源；拖动期间才暂存本地位置，松手立即交回播放器同步。
@@ -2724,13 +2743,14 @@ private fun PlayerDetailPage(
                 onClick = onOpenSleepTimer,
                 contentPadding = PaddingValues(horizontal = TaotaoSpacing.xxs),
             ) {
-                Icon(Icons.Default.Timer, "定时播放", modifier = Modifier.size(TaotaoSizes.iconSm))
+                Icon(Icons.Default.Timer, "定时关闭", modifier = Modifier.size(TaotaoSizes.iconSm))
                 Spacer(Modifier.width(TaotaoSpacing.xxs))
                 Text(
-                    if (sleepTimerRemainingMs > 0L) {
-                        "剩余 ${formatSleepTimerRemaining(sleepTimerRemainingMs)}"
-                    } else {
-                        "定时播放"
+                    when {
+                        // 到期后等当前歌播完的阶段：倒计时已归零，改说清楚还不会立刻停。
+                        sleepTimerWaitingSongEnd -> "本首结束后停止"
+                        sleepTimerRemainingMs > 0L -> "剩余 ${formatSleepTimerRemaining(sleepTimerRemainingMs)}"
+                        else -> "定时关闭"
                     },
                     style = MaterialTheme.typography.bodySmall,
                 )
@@ -2812,15 +2832,27 @@ private fun PlayerDetailPage(
                     )
                 }
             },
+            // 顶栏只保留收藏：分享、加入歌单、下载都挪到进度条上方的快捷操作行，
+            // 否则三个按钮加上 VIP 角标和音质标签，长歌名会被压到只显示一两个字。
             headerActions = {
-                IconButton(onClick = onShare) {
-                    Icon(Icons.Default.Share, "分享歌曲", tint = TaotaoCoral)
-                }
                 FavoriteButton(
                     favorited = favorited,
                     onClick = onToggleFavorite,
                     enabled = song.remoteId?.let { it > 0L } == true || !song.mid.isNullOrBlank(),
                 )
+            },
+            quickActions = {
+                // 已下载的歌不提供可点却无效果的下载入口，只留一个对勾说明在放本地文件。
+                IconButton(onClick = onDownload, enabled = !isLocalFile) {
+                    Icon(
+                        if (isLocalFile) Icons.Default.CheckCircle else Icons.Default.Download,
+                        if (isLocalFile) "已下载" else "下载歌曲",
+                        tint = if (isLocalFile) MaterialTheme.colorScheme.onSurfaceVariant else TaotaoCoral,
+                    )
+                }
+                IconButton(onClick = onShare) {
+                    Icon(Icons.Default.Share, "分享歌曲", tint = TaotaoCoral)
+                }
                 // 本地文件仍保留远端身份，可以和在线播放歌曲一样加入云端歌单。
                 if (
                     onAddToPlaylist != null &&
@@ -2837,28 +2869,6 @@ private fun PlayerDetailPage(
                 }
             },
         )
-        Spacer(Modifier.height(TaotaoSpacing.xs))
-        // 已下载的歌不再显示下载入口：可点却只会提示"已经下载过了"是白给的一次失望。
-        Row(
-            Modifier.fillMaxWidth()
-                .clip(TaotaoShapes.card)
-                .background(MaterialTheme.colorScheme.surface)
-                .then(if (isLocalFile) Modifier else Modifier.clickable(onClick = onDownload))
-                .padding(TaotaoSpacing.sm),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(
-                if (isLocalFile) Icons.Default.CheckCircle else Icons.Default.MusicNote,
-                null,
-                tint = TaotaoCoral,
-            )
-            Text(
-                if (isLocalFile) "已下载，正在播放本地文件" else "下载歌曲、封面和歌词",
-                modifier = Modifier.weight(1f).padding(start = TaotaoSpacing.sm),
-                fontWeight = FontWeight.Medium,
-            )
-            if (!isLocalFile) Icon(Icons.Default.Download, "下载", tint = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
         Spacer(Modifier.height(TaotaoSpacing.md))
     }
     if (showQueue) {

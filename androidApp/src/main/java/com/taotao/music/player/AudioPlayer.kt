@@ -117,6 +117,10 @@ class AudioPlayer(context: Context) {
     var sleepTimerRemainingMs by mutableLongStateOf(0L)
         private set
 
+    /** 定时已到期，正在等当前这首歌播完再停止；界面据此显示「本首结束后停止」。 */
+    var sleepTimerWaitingSongEnd by mutableStateOf(false)
+        private set
+
     private val controllerListener = object : MediaController.Listener {
         override fun onExtrasChanged(controller: MediaController, extras: Bundle) {
             updateSleepTimer(extras)
@@ -397,8 +401,26 @@ class AudioPlayer(context: Context) {
     }
 
     /** 设置按实际播放时长计时的定时停止。暂停会保留剩余时间，切歌不会重置。 */
-    fun setSleepTimer(minutes: Int) {
-        sendSleepTimerCommand(SleepTimerContract.SET, SleepTimerPolicy.durationForMinutes(minutes))
+    fun setSleepTimer(minutes: Int, waitForSongEnd: Boolean) {
+        submit { activeController ->
+            sendSleepTimerCommand(
+                activeController,
+                SleepTimerContract.SET,
+                SleepTimerPolicy.durationForMinutes(minutes),
+                waitForSongEnd,
+            )
+        }
+    }
+
+    /** 只切换「播完整首歌再停止」，不影响正在进行的倒计时。 */
+    fun setSleepTimerWaitForSongEnd(waitForSongEnd: Boolean) {
+        submit { activeController ->
+            sendSleepTimerCommand(
+                activeController,
+                SleepTimerContract.SET_FLAG,
+                waitForSongEnd = waitForSongEnd,
+            )
+        }
     }
 
     /** 取消定时停止，但不影响当前播放。 */
@@ -439,11 +461,15 @@ class AudioPlayer(context: Context) {
         activeController: MediaController,
         operation: String,
         durationMs: Long = 0L,
+        waitForSongEnd: Boolean = false,
     ) {
         val args = Bundle().apply {
             putString(SleepTimerContract.OPERATION, operation)
             if (operation == SleepTimerContract.SET) {
                 putLong(SleepTimerContract.DURATION_MS, durationMs)
+            }
+            if (operation == SleepTimerContract.SET || operation == SleepTimerContract.SET_FLAG) {
+                putBoolean(SleepTimerContract.WAIT_FOR_SONG_END, waitForSongEnd)
             }
         }
         val resultFuture = activeController.sendCustomCommand(SleepTimerContract.command, args)
@@ -465,6 +491,7 @@ class AudioPlayer(context: Context) {
         sleepTimerRemainingMs = extras
             .getLong(SleepTimerContract.REMAINING_MS, 0L)
             .coerceIn(0L, SleepTimerContract.MAX_DURATION_MS)
+        sleepTimerWaitingSongEnd = extras.getBoolean(SleepTimerContract.WAITING_SONG_END, false)
     }
 
     /**

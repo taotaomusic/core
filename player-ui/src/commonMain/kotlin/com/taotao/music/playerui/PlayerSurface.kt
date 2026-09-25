@@ -120,6 +120,7 @@ fun PlayerPlaybackDetails(
     titleTrailingContent: (@Composable RowScope.() -> Unit)? = null,
     metadataTrailingContent: (@Composable RowScope.() -> Unit)? = null,
     headerActions: (@Composable RowScope.() -> Unit)? = null,
+    quickActions: (@Composable RowScope.() -> Unit)? = null,
     controlLeadingContent: (@Composable () -> Unit)? = null,
     controlTrailingContent: (@Composable () -> Unit)? = null,
 ) {
@@ -138,6 +139,17 @@ fun PlayerPlaybackDetails(
                 Row(modifier = Modifier.padding(start = TaotaoSpacing.md)) {
                     headerActions()
                 }
+            }
+        }
+
+        // 快捷操作行：下载、分享这类低频动作放在进度条上方居中一排，
+        // 不进顶栏 —— 顶栏按钮多了会把歌名和歌手压到只显示一两个字。
+        if (quickActions != null) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(bottom = TaotaoSpacing.md),
+                horizontalArrangement = Arrangement.spacedBy(TaotaoSpacing.xxl, Alignment.CenterHorizontally),
+            ) {
+                quickActions()
             }
         }
 

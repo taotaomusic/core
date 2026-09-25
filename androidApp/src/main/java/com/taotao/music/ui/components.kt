@@ -36,6 +36,8 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Snackbar
+import androidx.compose.material3.SnackbarData
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -47,6 +49,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -68,6 +71,8 @@ import com.taotao.music.playerui.SharedContentStateType
 import com.taotao.music.playerui.SharedSongRow
 import com.taotao.music.playerui.theme.TaotaoShapes
 import com.taotao.music.playerui.theme.TaotaoSizes
+import com.taotao.music.playerui.theme.TaotaoElevation
+import com.taotao.music.playerui.theme.taotaoShadowColors
 import com.taotao.music.playerui.theme.TaotaoSpacing
 
 /**
@@ -451,4 +456,29 @@ fun PagerDots(current: Int, total: Int, modifier: Modifier = Modifier) {
             }
         }
     }
+}
+
+/**
+ * 全局提示条：贴底居中的胶囊。
+ *
+ * 不再走默认 Snackbar 的宽扁灰条 —— 那是观感上「像系统控件」的根源。
+ * 这里统一改成胶囊形 + `inverseSurface` 深浅反色底 + 投影：亮色主题下是深底白字，
+ * 暗色主题自动反转成浅底深字，下载、收藏、定时等所有反馈共用这一个实现。
+ */
+@Composable
+fun TaotaoSnackbar(snackbarData: SnackbarData, modifier: Modifier = Modifier) {
+    val shadow = taotaoShadowColors()
+    Snackbar(
+        snackbarData = snackbarData,
+        modifier = modifier.shadow(
+            elevation = TaotaoElevation.raised,
+            shape = TaotaoShapes.pill,
+            ambientColor = shadow.ambient,
+            spotColor = shadow.spot,
+        ),
+        shape = TaotaoShapes.pill,
+        containerColor = MaterialTheme.colorScheme.inverseSurface,
+        contentColor = MaterialTheme.colorScheme.inverseOnSurface,
+        actionColor = MaterialTheme.colorScheme.inversePrimary,
+    )
 }
