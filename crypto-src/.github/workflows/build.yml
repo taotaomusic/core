@@ -1,0 +1,575 @@
+name: 构建（可复用）
+
+# 四类产物（Android .so / Windows .dll / Node .node / Web .wasm）的唯一构建入口。
+#
+# ci.yml 与 release.yml 都调用本文件，区别**只有**是否注入真实 PSK：
+#   · ci.yml      → 占位密钥，产物 hasRealPsk()=false，可公开下载做联调
+#   · release.yml → 从 GitHub Secrets 注入真密钥，且未配置时直接失败
+#
+# 构建步骤本身只写这一遍。分成两个文件维护的典型后果是「CI 能过但发布产物
+# 编不出来」—— 两边的构建命令悄悄漂移了，而日常 CI 一直是绿的。
+#
+# ⚠️ 本文件不产出 Linux 之外的 .node。`.node` 是平台相关二进制，
+#    后端部署到 Linux 容器就必须用 Linux 上编的那份，不能拿 Windows 的顶替。
+
+on:
+  workflow_call:
+    inputs:
+      artifact-suffix:
+        description: 产物名后缀，用于区分占位构建（dev）与生产构建（prod）
+        required: false
+        type: string
+        default: dev
+      require-real-psk:
+        description: 为 true 时，TAOTAO_CRYPTO_PSK 缺失或格式不对会直接失败
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      TAOTAO_CRYPTO_PSK:
+        required: false
+      # 字符串混淆密钥。**刻意不是必填**：没配时 cryptify 退回内置固定密钥，
+      # 构建照样成功、产物照样可复现。所以它和 PSK 不同 —— 缺了不会让发布
+      # 出问题，只是攻击者少走一步（不用从二进制里挖密钥）。
+      #
+      # 也**不参与** psk-guard 那类「缺失即失败」的检查：把可选的东西做成
+      # 硬失败，会让第一次跑 CI 的人卡在一个和功能无关的配置项上。
+      CRYPTIFY_KEY:
+        required: false
+
+env:
+  # NDK 版本显式钉死，不用 runner 预装的「最新版」。两个理由：
+  #   ① 镜像升级会静默换掉工具链，同一份源码编出不同产物；
+  #   ② .cargo/config.toml 里的链接器名（aarch64-linux-android24-clang）是
+  #      NDK r29 之前才提供的 wrapper 脚本，r29+ 已移除。换到 r29 会直接
+  #      报「找不到链接器」，而不是给出可读的版本提示。
+  # 需要升级时改这里，同时改 .cargo/config.toml 里的 linker 名。
+  NDK_VERSION: 27.2.12479018
+
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 闸门：生产构建必须带真实 PSK
+  #
+  # 这一关存在的意义：release 时如果 Secrets 没配好，`secrets.X` 会安静地
+  # 求值成空字符串，构建照样成功，只是产物退化成占位密钥。
+  # 症状是「发布出去的客户端和线上服务端全部握不上手」，而所有构建日志都是绿的。
+  # ---------------------------------------------------------------------------
+  psk-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 校验生产构建的 PSK
+        if: inputs.require-real-psk
+        env:
+          PSK: ${{ secrets.TAOTAO_CRYPTO_PSK }}
+        run: |
+          set -euo pipefail
+
+          # 先打一行**非敏感指纹**，再判分支。
+          #
+          # 为什么指纹必须在分支之前打：一旦某条分支里 exit，后面就没机会打了。
+          # 而「空」和「格式错」恰恰是最需要区分的两种情况 —— 修法完全不同
+          # （前者是配置位置问题，后者是密钥本身问题），只看到「校验失败」
+          # 四个字没法定位。
+          #
+          # 指纹只含长度与字符集类别，**不含密钥值的任何片段**。
+          LEN=${#PSK}
+          if [ "$LEN" -eq 0 ]; then
+            SHAPE="空"
+          elif [[ "$PSK" =~ ^[0-9a-fA-F]{64}$ ]]; then
+            SHAPE="64 个十六进制字符（合格）"
+          elif [[ "$PSK" =~ ^[0-9a-fA-F]+$ ]]; then
+            SHAPE="纯十六进制，但长度是 $LEN（要求 64）"
+          elif [[ "$PSK" =~ ^[A-Za-z0-9+/]+={0,2}$ ]]; then
+            SHAPE="疑似 base64 —— 本项目只接受十六进制"
+          else
+            SHAPE="既不是十六进制也不是 base64"
+          fi
+          echo "TAOTAO_CRYPTO_PSK 指纹：长度 $LEN 字符，形态 $SHAPE"
+
+          if [ "$LEN" -eq 0 ]; then
+            echo "::error::require-real-psk=true，但 secrets.TAOTAO_CRYPTO_PSK 求值为空。"
+            echo "::error::接线本身是对的（release.yml 已显式传递该 secret），所以问题在仓库设置侧。"
+            echo "::error::按可能性排序，逐个排除："
+            echo "::error::  1. 配到了 Secrets and variables → Actions 的 Variables 页签。"
+            echo "::error::     代码读的是 secrets.*；Variables 走 vars.* 命名空间，读不到。"
+            echo "::error::  2. 配成了 Environment secret（需要 job 声明 environment: 才取得到）。"
+            echo "::error::  3. 配到了别的仓库。本仓库是 hdppppppp/tools，不是主项目 music。"
+            echo "::error::  4. 名字对不上：大小写敏感、不能有前后空格，必须精确为 TAOTAO_CRYPTO_PSK。"
+            echo "::error::  5. Organization secret 没有授权给这个仓库。"
+            echo "::error::注意 secret 是只写的，改完读不回来 —— 不确定就重新设一遍。"
+            exit 1
+          fi
+
+          if ! [[ "$PSK" =~ ^[0-9a-fA-F]{64}$ ]]; then
+            echo "::error::TAOTAO_CRYPTO_PSK 必须是 64 个十六进制字符（32 字节）。"
+            echo "::error::当前长度 $LEN 字符，形态：$SHAPE"
+            echo "::error::生成一个合格的：openssl rand -hex 32"
+            exit 1
+          fi
+          echo "PSK 形状校验通过（只校验长度与字符集，值本身不打印）。"
+
+  # ---------------------------------------------------------------------------
+  # 单元测试
+  # ---------------------------------------------------------------------------
+  test:
+    runs-on: ubuntu-latest
+    needs: psk-guard
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: test
+
+      - name: 格式检查
+        run: cargo fmt --all -- --check
+
+      - name: Clippy（警告即错误）
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: 单元测试
+        # 只跑 --lib：doc test 在 Windows 上会稳定撞 ERROR_NO_DATA，
+        # 而且文档示例刻意写成 text 代码块（见 core/src/lib.rs 的说明）。
+        run: cargo test --workspace --lib
+
+  # ---------------------------------------------------------------------------
+  # Android：arm64-v8a + x86_64
+  # ---------------------------------------------------------------------------
+  android:
+    runs-on: ubuntu-latest
+    needs: psk-guard
+    env:
+      TAOTAO_CRYPTO_PSK: ${{ secrets.TAOTAO_CRYPTO_PSK }}
+      # 产物混淆（字符串加密）的密钥，见 core/src/obf.rs。
+      #
+      # 这是**软**依赖：没配时 cryptify 退回它内置的固定密钥，构建照样成功、
+      # 产物照样可复现。配了它的意义是攻击者不能拿「cryptify 的公开默认密钥」
+      # 一把梭解开，必须先真的从二进制里把密钥挖出来 —— 抬高的是这一步成本。
+      CRYPTIFY_KEY: ${{ secrets.CRYPTIFY_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: android
+
+      - name: 安装 Android NDK
+        # 约 700MB，是这套流水线里最慢的一步。runner 预装的 NDK 版本会随
+        # 镜像漂移，所以宁可每次下载也要钉死版本。
+        #
+        # 刻意**不用** android-actions/setup-android：ubuntu runner 本身就预装了
+        # Android SDK 与 cmdline-tools，那个 action 是多余的。
+        #
+        # 首次 CI 里它失败了。根因是它默认要安装一个名为 `tools` 的包：
+        #     Warning: Failed to find package 'tools'
+        # 这个 legacy 包已经从当前的 SDK 仓库移除，所以只要走这个 action
+        # 就必然失败 —— 而它的报错指向 action 内部，看不出是包名问题，
+        # 排查成本很高。直接找 runner 自带的 sdkmanager 就绕开了这一整类问题。
+        #
+        # 注意：也不要给 sdkmanager 传 `cmdline-tools;latest`，同上，
+        # 镜像里已经有了，重复安装只会引入新的失败点。
+        run: |
+          set -euo pipefail
+
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          if [ ! -d "$SDK" ]; then
+            echo "::error::找不到 Android SDK。ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-<未设>} ANDROID_HOME=${ANDROID_HOME:-<未设>}"
+            exit 1
+          fi
+
+          # 不同 runner 镜像对 cmdline-tools 的 PATH 配置不一致，显式找一次。
+          CMDLINE=""
+          for d in "$SDK"/cmdline-tools/*/bin; do
+            if [ -x "$d/sdkmanager" ]; then CMDLINE="$d"; break; fi
+          done
+          if [ -z "$CMDLINE" ]; then
+            echo "::error::在 $SDK/cmdline-tools 下找不到 sdkmanager"
+            ls -R "$SDK/cmdline-tools" 2>/dev/null | head -30 || true
+            exit 1
+          fi
+          echo "使用 sdkmanager：$CMDLINE/sdkmanager"
+
+          # 先接受 license 再安装。两条都忽略退出码 —— sdkmanager 在
+          # 「已经装过」「license 已接受」等情况下的返回码并不一致，
+          # 用「NDK 目录是否真的存在」作为唯一判据更可靠。
+          yes | "$CMDLINE/sdkmanager" --licenses > /dev/null 2>&1 || true
+          "$CMDLINE/sdkmanager" --install "ndk;$NDK_VERSION" > /dev/null 2>&1 || true
+
+          NDK_ROOT="$SDK/ndk/$NDK_VERSION"
+          if [ ! -d "$NDK_ROOT" ]; then
+            echo "::error::NDK $NDK_VERSION 没有装到 $NDK_ROOT"
+            echo "--- $SDK/ndk 下现有内容 ---"
+            ls "$SDK/ndk" 2>/dev/null || echo "(目录不存在)"
+            echo "--- 可用的 NDK 版本（前 10 个）---"
+            "$CMDLINE/sdkmanager" --list 2>/dev/null | grep -E '^[[:space:]]+ndk;' | head -10 || true
+            exit 1
+          fi
+          echo "NDK_ROOT=$NDK_ROOT" >> "$GITHUB_ENV"
+          # 后续步骤（含 build.ps1 的对等逻辑）需要 sdkmanager 在 PATH 里。
+          echo "$CMDLINE" >> "$GITHUB_PATH"
+
+      - name: 配置 NDK 工具链
+        run: |
+          BIN="$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          if [ ! -d "$BIN" ]; then
+            echo "::error::NDK 工具链目录不存在：$BIN"
+            ls "$NDK_ROOT/toolchains/llvm/prebuilt" || true
+            exit 1
+          fi
+          # .cargo/config.toml 里写的是裸链接器名，所以这个目录必须进 PATH。
+          # 这里显式检查一次：如果 NDK 换到 r29+，wrapper 脚本会消失，
+          # 直接在这里报出可读错误，而不是等 cargo 抛「linker not found」。
+          for linker in aarch64-linux-android24-clang x86_64-linux-android24-clang; do
+            if [ ! -x "$BIN/$linker" ]; then
+              echo "::error::找不到链接器 $linker。NDK r29+ 移除了这些 wrapper，"
+              echo "::error::需要改 .cargo/config.toml 改用 clang --target 形式，"
+              echo "::error::或把 NDK_VERSION 降回 r28 及以下。"
+              exit 1
+            fi
+          done
+          echo "$BIN" >> "$GITHUB_PATH"
+
+      - name: 构建 arm64-v8a
+        run: cargo build --release --target aarch64-linux-android -p taotao-crypto-jni
+
+      - name: 构建 x86_64（模拟器）
+        run: cargo build --release --target x86_64-linux-android -p taotao-crypto-jni
+
+      - name: 收集产物
+        run: |
+          mkdir -p out/android/arm64-v8a out/android/x86_64
+          cp target/aarch64-linux-android/release/libtaotao_crypto_jni.so \
+             out/android/arm64-v8a/libtaotao_crypto.so
+          cp target/x86_64-linux-android/release/libtaotao_crypto_jni.so \
+             out/android/x86_64/libtaotao_crypto.so
+          ls -l out/android/*/
+
+      - name: 校验 16KB 页面对齐
+        # Google Play 从 2025-11 起对 targetSdk 35+ 强制要求 16KB 页面对齐。
+        # 漏了这条，上架被拒时只说「APK 未按 16KB 页面大小对齐」，
+        # 不会告诉你具体是哪个 .so —— 所以在构建阶段就查。
+        run: |
+          BIN="$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          for so in out/android/arm64-v8a/libtaotao_crypto.so; do
+            aligns=$("$BIN/llvm-readelf" -lW "$so" | awk '$1 == "LOAD" { print $NF }' | sort -u)
+            echo "$so 的 LOAD 段对齐值：$(echo "$aligns" | tr '\n' ' ')"
+            if ! echo "$aligns" | grep -q '0x4000'; then
+              echo "::error::$so 未按 16KB 页面大小对齐。"
+              echo "::error::检查 .cargo/config.toml 里该 target 的 -Wl,-z,max-page-size=16384。"
+              exit 1
+            fi
+          done
+
+      - name: 校验字符串混淆生效
+        # 混淆「没生效」是静默失败：构建、测试、上传全都正常，只有真正去
+        # `strings` 的人才会发现产物退回了明文。这一步把它变成构建失败。
+        # 检查范围与不查什么的理由见 tools/check-obfuscated.sh。
+        run: |
+          bash tools/check-obfuscated.sh \
+            out/android/arm64-v8a/libtaotao_crypto.so \
+            out/android/x86_64/libtaotao_crypto.so
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-${{ inputs.artifact-suffix }}
+          path: out/android
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # Windows：.dll（Compose Desktop 是 JVM，所以和 Android 共用 JNI 绑定）
+  # ---------------------------------------------------------------------------
+  windows:
+    runs-on: windows-latest
+    needs: psk-guard
+    env:
+      TAOTAO_CRYPTO_PSK: ${{ secrets.TAOTAO_CRYPTO_PSK }}
+      # 产物混淆密钥，同 android job 的说明。
+      CRYPTIFY_KEY: ${{ secrets.CRYPTIFY_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows
+
+      - name: 构建
+        run: cargo build --release --target x86_64-pc-windows-msvc -p taotao-crypto-jni
+
+      - name: 收集产物
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path out/windows | Out-Null
+          Copy-Item target/x86_64-pc-windows-msvc/release/taotao_crypto_jni.dll out/windows/taotao_crypto.dll
+          Get-Item out/windows/taotao_crypto.dll | Select-Object Name, Length
+
+      - name: 校验 JNI 导出符号
+        # `strip = "symbols"` 剥的是静态符号表，动态符号表保留 —— 但这条配置
+        # 一旦被改成 "true"/"debuginfo"，动态符号会被一起剥掉。那时的表现是
+        # 「System.loadLibrary 成功，调用方法时 UnsatisfiedLinkError」，
+        # 在安卓真机上极难定位。这里在构建期就把它挡住。
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (-not (Test-Path $vswhere)) { throw "找不到 vswhere.exe，无法定位 dumpbin" }
+          $vsPath = & $vswhere -latest -products * `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+            -property installationPath
+          if (-not $vsPath) { throw "vswhere 没找到带 C++ 工具集的 VS 安装" }
+          $dumpbin = Get-ChildItem -Path "$vsPath\VC\Tools\MSVC" -Recurse -Filter dumpbin.exe `
+            -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match 'Hostx64\\x64' } |
+            Select-Object -First 1
+          if (-not $dumpbin) { throw "在 $vsPath 下找不到 Hostx64\x64 的 dumpbin.exe" }
+
+          $exports = & $dumpbin.FullName /exports out/windows/taotao_crypto.dll
+          $count = ($exports | Select-String -SimpleMatch 'Java_com_taotao_music_crypto_NativeCrypto_').Count
+          if ($count -lt 20) {
+            throw "JNI 导出符号只有 $count 个（预期 20+）。动态符号表可能被 strip 剥掉了，检查 Cargo.toml 的 [profile.release] strip。"
+          }
+          Write-Host "找到 $count 个 JNI 导出符号"
+
+      - name: 校验字符串混淆生效
+        # windows runner 上自带 Git Bash，直接复用同一份脚本，
+        # 避免和 android job 各写一份逻辑、然后慢慢漂移。
+        shell: bash
+        run: bash tools/check-obfuscated.sh out/windows/taotao_crypto.dll
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-${{ inputs.artifact-suffix }}
+          path: out/windows
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # Node 原生扩展：Linux 与 Windows 各一份
+  #
+  # 两个都要：后端跑在 Linux 容器里，而桌面端 / 本地开发用的是 Windows。
+  # .node 是平台相关二进制，不能互相顶替 —— Windows 编的那份推到 Linux 会报
+  # 「invalid ELF header」。
+  # ---------------------------------------------------------------------------
+  node:
+    needs: psk-guard
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: node-linux-x64
+            src: target/release/libtaotao_crypto_node.so
+          - os: windows-latest
+            name: node-windows-x64
+            src: target/release/taotao_crypto_node.dll
+    runs-on: ${{ matrix.os }}
+    env:
+      TAOTAO_CRYPTO_PSK: ${{ secrets.TAOTAO_CRYPTO_PSK }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.name }}
+
+      - name: 构建
+        run: cargo build --release -p taotao-crypto-node
+
+      - name: 收集产物
+        shell: bash
+        run: |
+          mkdir -p out
+          cp "${{ matrix.src }}" out/taotao_crypto.node
+          ls -l out
+
+      - name: 端到端冒烟测试
+        # 这一步是整套流水线里唯一真正「运行」产物的地方。
+        # 它同时验证了三件事：动态符号表没被剥（否则 require 直接失败）、
+        # 协议实现可用、以及构建期 PSK 的注入状态。
+        shell: bash
+        run: |
+          if [ "${{ inputs.require-real-psk }}" = "true" ]; then
+            node tools/smoke-test.cjs out/taotao_crypto.node --expect-real-psk
+          else
+            node tools/smoke-test.cjs out/taotao_crypto.node
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}-${{ inputs.artifact-suffix }}
+          path: out
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # WebAssembly
+  # ---------------------------------------------------------------------------
+  wasm:
+    runs-on: ubuntu-latest
+    needs: psk-guard
+    env:
+      TAOTAO_CRYPTO_PSK: ${{ secrets.TAOTAO_CRYPTO_PSK }}
+      # 产物混淆密钥，同 android job 的说明。
+      CRYPTIFY_KEY: ${{ secrets.CRYPTIFY_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: wasm
+
+      - name: 读取 Cargo.lock 里锁定的 wasm-bindgen 版本
+        # ⚠️ 这是整套流水线最容易静默出错的地方。
+        #
+        # wasm-bindgen CLI 与 crate 的版本必须**严格一致**。不一致时 CLI
+        # 返回码是 0、只打一句含糊的 schema 版本警告、**一个文件都不产出**。
+        # 表现就是「构建成功，但 dist 是空的」。
+        #
+        # 所以版本不能硬编码在 YAML 里 —— 那样 Cargo.lock 一升级就漂移了。
+        # 这里直接解析 Cargo.lock（不联网，确定性解析）。
+        id: wb
+        run: |
+          VERSION=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock \
+            | grep '^version = ' | head -1 | cut -d'"' -f2)
+          if [ -z "$VERSION" ]; then
+            echo "::error::无法从 Cargo.lock 解析出 wasm-bindgen 版本"
+            exit 1
+          fi
+          echo "Cargo.lock 锁定的 wasm-bindgen 版本：$VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: 安装匹配版本的 wasm-bindgen CLI
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen@${{ steps.wb.outputs.version }}
+
+      - name: 核对 CLI 版本
+        run: |
+          CLI=$(wasm-bindgen --version | sed 's/^wasm-bindgen //')
+          echo "wasm-bindgen CLI 版本：$CLI"
+          if [ "$CLI" != "${{ steps.wb.outputs.version }}" ]; then
+            echo "::error::版本不匹配。CLI=$CLI，Cargo.lock=${{ steps.wb.outputs.version }}"
+            echo "::error::不匹配时 wasm-bindgen 会「成功」但一个文件都不产出。"
+            exit 1
+          fi
+
+      - name: 构建
+        run: cargo build --release --target wasm32-unknown-unknown -p taotao-crypto-wasm
+
+      - name: 生成绑定
+        # 两个 `--remove-*-section` 是**产物混淆**，不是可选项。
+        #
+        # wasm-bindgen 会把输入 wasm 交给 walrus 重写一遍，输出的模块里默认留着
+        # 两个自定义段（实测 0.2.128 的产物确实带着）：
+        #
+        #   · `producers` —— 逐字写着 `processed-by walrus 0.26.5
+        #     wasm-bindgen 0.2.128 (246946fdd)`。等于把工具链连同 commit
+        #     一起交给对方，省得他自己猜。
+        #   · `name` —— 函数名表。实测这一份只剩 3 条（walrus 已经把
+        #     Rust 侧的符号名剪掉了），但留着就是留着。
+        #
+        # ⚠️ 这两个 flag 只在**输出**上生效，不影响 wasm-bindgen 生成 JS 胶水
+        # 时对输入 name 段的读取 —— 所以 `taotao_crypto.js` 的导出名照旧。
+        #
+        # 详见 `docs/design.md` 第五节「抗逆向」。
+        run: |
+          wasm-bindgen --target web --out-dir out/wasm --out-name taotao_crypto \
+            --remove-name-section --remove-producers-section \
+            target/wasm32-unknown-unknown/release/taotao_crypto_wasm.wasm
+          ls -l out/wasm
+
+      - name: 校验产物完整
+        # 显式检查文件存在。wasm-bindgen 失败时最坏的形态是「退出码 0、
+        # 静默不产出」，光看退出码发现不了。
+        run: |
+          missing=0
+          for f in taotao_crypto_bg.wasm taotao_crypto.js taotao_crypto.d.ts; do
+            if [ ! -s "out/wasm/$f" ]; then
+              echo "::error::缺少产物 out/wasm/$f"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "::error::wasm-bindgen 没有产出完整文件，通常是 CLI 与 crate 版本不一致。"
+            exit 1
+          fi
+          echo "产物完整"
+
+      - name: 校验元数据已剥离
+        # 剥离自定义段属于「配置对了才生效」的那类东西：漏掉时构建全绿、
+        # 产物里却留着工具链指纹，没有任何报错。所以这里断言，而不是相信。
+        #
+        # 断言的是**段表本身**，不是字符串搜索 —— `.wasm` 的 data 段里本来就有
+        # 大量可读文本，按字符串搜会被误伤。
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import sys
+
+          path = "out/wasm/taotao_crypto_bg.wasm"
+          data = open(path, "rb").read()
+
+          if data[:4] != b"\0asm" or data[4:8] != b"\x01\0\0\0":
+              sys.exit(f"{path} 不是合法的 wasm 模块")
+
+          def leb(d, i):
+              value = shift = 0
+              while True:
+                  byte = d[i]
+                  i += 1
+                  value |= (byte & 0x7F) << shift
+                  if not byte & 0x80:
+                      return value, i
+                  shift += 7
+
+          customs = []
+          i = 8
+          while i < len(data):
+              section_id = data[i]
+              i += 1
+              size, i = leb(data, i)
+              end = i + size
+              if section_id == 0:  # 自定义段：id 之后先跟段名
+                  length, name_start = leb(data, i)
+                  customs.append(data[name_start:name_start + length].decode("utf-8", "replace"))
+              i = end
+
+          print(f"自定义段：{customs if customs else '（无）'}")
+
+          leaked = [name for name in customs if name in ("name", "producers")]
+          if leaked:
+              print(f"::error::{path} 里仍有未剥离的自定义段：{leaked}")
+              print("::error::`producers` 会写下 walrus / wasm-bindgen 的版本与 commit。")
+              print("::error::检查 wasm-bindgen 是否带了 --remove-name-section "
+                    "--remove-producers-section。")
+              sys.exit(1)
+
+          print("元数据已剥离：没有 name / producers 段")
+          PY
+
+      - name: 校验字符串混淆生效
+        # 与上一步互补：上一步管的是 wasm 的**元数据段**，这一步管的是
+        # **字符串字面量**。两者都会「配置对了才生效」，也都不会自己报错。
+        run: bash tools/check-obfuscated.sh out/wasm/taotao_crypto_bg.wasm
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wasm-${{ inputs.artifact-suffix }}
+          path: out/wasm
+          if-no-files-found: error

@@ -11,24 +11,26 @@
 - `player-ui/`：Android、Windows、Web 共用的播放主题、歌曲行、迷你播放器和布局组件。
 - `shared/`：跨平台共享的数据模型、歌词解析和音质规则，代码放在 `src/commonMain/`。
 - `patch/`、`build-logic/`：热修复补丁模块与 Gradle/字节码插桩构建逻辑。
-- `crypto/`：传输层加密层的**产物目录**，只放 `dist/`，不含源码。源码在独立仓库 `hdppppppp/tools`，编译由那边的 GitHub Actions 负责；用 `tools/fetch-crypto.ps1` 拉取产物，本地**不需要**安装 Rust / Android NDK / wasm-bindgen 等交叉编译环境。不要在这里新增 Rust 文件。
+- `crypto/`：传输层加密层的**产物目录**，只放 `dist/`（四端编译产物），用 `tools/fetch-crypto.ps1` 从 tools 仓库的 Release 拉取。本地**不需要**安装 Rust / Android NDK / wasm-bindgen 等交叉编译环境。
+- `crypto-src/`：传输层加密层的**Rust 源码**（`core/jni/node/wasm` 四 crate + 自带 `.github/workflows/`）。它由 `tools/sync-repos.ps1` 推到 GitHub `tools` 仓库，交叉编译由那边的 GitHub Actions 负责，产物发 Release 后再经 `fetch-crypto.ps1` 落回 `crypto/dist/`。改加密协议在这里改，别去 `crypto/dist/` 动产物。
 - 根目录 Gradle 文件：定义上述客户端模块和 `:shared` 的构建关系。
 - `build/` 目录：构建生成物，只读，不手工修改。
 - `server/`：NestJS + TypeScript + PostgreSQL 的接口适配服务；服务源码必须保持可读，不得提交压缩后的源码。
 - 外部参考仓库不得放在项目根目录；临时参考代码使用项目外目录，交付前清理无关仓库。
 - 新增 Kotlin 代码必须放在已有的 `com.taotao.music` 包层级下。
 
-## 双仓库同步（GitHub 正式仓库）
+## 三仓库同步（GitHub 正式仓库）
 
-GitHub 侧两个仓库（music / music-server）是**正式仓库**，由助手手动跑 `tools/sync-repos.ps1` 维护（不是自动镜像）。同步从本仓库 HEAD 生成**内容快照**推送；快照历史只有逐次快照的线性提交，不含 monorepo 提交历史，历史里的临时产物不会外泄：
+GitHub 侧三个仓库（music / music-server / tools）都是**正式仓库**，由助手手动跑 `tools/sync-repos.ps1` 维护（不是自动镜像）。gitee 的 `origin` 保留完整 monorepo 作**总备份**。同步从本仓库 HEAD 生成**内容快照**推送；快照历史只有逐次快照的线性提交，不含 monorepo 提交历史，历史里的临时产物不会外泄：
 
-- `server/` → <https://github.com/hdppppppp/music-server>（远端名 `music-server`，本地快照分支 `sync/server`，server/ 内容即镜像仓库根）
-- 其余全部内容（客户端各模块与文档）→ <https://github.com/hdppppppp/music>（远端名 `music`，本地快照分支 `sync/client`）
+- `server/` → <https://github.com/hdppppppp/music-server>（远端名 `music-server`，本地快照分支 `sync/server`，server/ 内容即镜像仓库根）——后端构建
+- `crypto-src/` → <https://github.com/hdppppppp/tools>（远端名 `tools`，本地快照分支 `sync/crypto`，crypto-src/ 内容即镜像仓库根）——加密层构建，产物发 Release
+- 其余全部内容（客户端各模块与文档）→ <https://github.com/hdppppppp/music>（远端名 `music`，本地快照分支 `sync/client`，已去掉 server/ 与 crypto-src/）——客户端构建
 
 执行 `powershell -NoProfile -ExecutionPolicy Bypass -File tools\sync-repos.ps1`（加 `-DryRun` 只预览）。注意几点：
 
 - 只同步**已提交**内容，工作区未提交的改动不会同步出去；推送前先在本仓库提交。
-- **版本号单调延续**：云端构建成功后自动把递增的 `version.properties` 提交回 music 仓库（提交信息带 `[skip ci]`）；sync 时以「本地与云端较大者」为准收编进快照并回写本仓库（单独提交，origin 不自动推送）。因此每次同步会触发一次构建、版本号 +1；本地构建出的号同样被尊重，两侧互不回退、重号风险归零。
+- **版本号单调延续**：云端构建成功后自动把递增的 `version.properties` 提交回 music 仓库（提交信息带 `[skip ci]`）；sync 时以「本地与云端较大者」为准收编进快照并回写本仓库（单独提交，origin 不自动推送）。因此每次同步会触发一次构建、版本号 +1；本地构建出的号同样被尊重，两侧互不回退、重号风险归零。tools 仓库只发 Release 产物、不回写提交，crypto 快照以远端 tip 为父保证快进推送、不覆盖其历史。
 - 同步是助手手动执行的维护动作，不要在 GitHub 仓库里绕过快照机制直接改文件（`version.properties` 除外，云端 CI 会回写）。
 
 ### 云端构建（GitHub Actions）

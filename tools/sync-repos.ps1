@@ -1,7 +1,10 @@
 ﻿# tools/sync-repos.ps1
-# 将本仓库（monorepo 工作副本）内容同步到两个 GitHub 正式仓库：
-#   - server/ 目录 -> git@github.com:hdppppppp/music-server.git（server/ 内容作为仓库根）
-#   - 其余全部内容 -> git@github.com:hdppppppp/music.git（去掉 server/ 后的主仓库根）
+# 将本仓库（monorepo 工作副本）内容同步到三个 GitHub 正式仓库：
+#   - server/ 目录     -> git@github.com:hdppppppp/music-server.git（server/ 内容作为仓库根）
+#   - crypto-src/ 目录 -> git@github.com:hdppppppp/tools.git（crypto-src/ 内容作为仓库根，加密层构建）
+#   - 其余全部内容     -> git@github.com:hdppppppp/music.git（去掉 server/ 与 crypto-src/ 后的主仓库根）
+#
+# 三个 GitHub 仓库都是「快照镜像 + 云端构建」；gitee 的 origin 保留完整 monorepo 作总备份。
 #
 # 机制说明：
 #   - 同步只取已提交内容（HEAD），工作区未提交的改动不会同步出去。
@@ -27,8 +30,10 @@ $ErrorActionPreference = "Stop"
 # GitHub 仓库远端名与本地快照分支
 $ServerRemoteName = "music-server"
 $ClientRemoteName = "music"
+$CryptoRemoteName = "tools"
 $ServerSyncBranch = "sync/server"
 $ClientSyncBranch = "sync/client"
+$CryptoSyncBranch = "sync/crypto"
 
 function Assert-LastExit([string]$Step) {
     if ($LASTEXITCODE -ne 0) { throw "$Step 失败（exit $LASTEXITCODE）" }
@@ -44,6 +49,8 @@ git remote get-url $ServerRemoteName *> $null
 if ($LASTEXITCODE -ne 0) { throw "缺少远程仓库 $ServerRemoteName，先执行 git remote add $ServerRemoteName git@github.com:hdppppppp/music-server.git" }
 git remote get-url $ClientRemoteName *> $null
 if ($LASTEXITCODE -ne 0) { throw "缺少远程仓库 $ClientRemoteName，先执行 git remote add $ClientRemoteName git@github.com:hdppppppp/music.git" }
+git remote get-url $CryptoRemoteName *> $null
+if ($LASTEXITCODE -ne 0) { throw "缺少远程仓库 $CryptoRemoteName，先执行 git remote add $CryptoRemoteName git@github.com:hdppppppp/tools.git" }
 
 $headSha = (git rev-parse HEAD).Trim()
 $headSubject = (git log -1 --format=%s HEAD).Trim()
@@ -52,10 +59,15 @@ Assert-LastExit "读取 HEAD"
 $sourceLabel = "{0} {1}" -f $headSha.Substring(0, 8), $headSubject
 $serverMessage = "sync: 同步自主仓库 server/（$sourceLabel）"
 $clientMessage = "sync: 同步自主仓库（$sourceLabel）"
+$cryptoMessage = "sync: 同步自主仓库 crypto-src/（$sourceLabel）"
 
 # server 快照树：直接复用主仓库里 server/ 的树对象
 $serverTree = (git rev-parse "HEAD:server").Trim()
 Assert-LastExit "解析 server 子树"
+
+# crypto 快照树：复用主仓库里 crypto-src/ 的树对象（加密层源码，推到 tools 仓库构建）
+$cryptoTree = (git rev-parse "HEAD:crypto-src").Trim()
+Assert-LastExit "解析 crypto-src 子树"
 
 # ---- client 快照：根树去掉 server 条目；版本号按「两边较大者」收编 ----
 
@@ -66,6 +78,15 @@ $remoteClientTip = $null
 if ($LASTEXITCODE -eq 0) {
     $remoteClientTip = (git rev-parse "FETCH_HEAD").Trim()
     Assert-LastExit "解析远端 client tip"
+}
+
+# 同理取 tools 仓库 main 的最新 tip 作为 crypto 快照父提交：以远端为父保证快进推送，
+# 不覆盖 tools 仓库既有历史（tools CI 只发 Release 产物、不回写提交，故无需版本号收编）。
+cmd /c "git fetch $CryptoRemoteName main >nul 2>&1"
+$remoteCryptoTip = $null
+if ($LASTEXITCODE -eq 0) {
+    $remoteCryptoTip = (git rev-parse "FETCH_HEAD").Trim()
+    Assert-LastExit "解析远端 crypto tip"
 }
 
 # 本地版本号读工作副本（本地构建刚递增过、还没提交时也以它为准）
@@ -95,7 +116,7 @@ else {
 
 $rootEntries = git ls-tree "HEAD^{tree}"
 Assert-LastExit "读取根树"
-$clientLines = @($rootEntries | Where-Object { -not $_.EndsWith("`tserver") })
+$clientLines = @($rootEntries | Where-Object { -not ($_.EndsWith("`tserver") -or $_.EndsWith("`tcrypto-src")) })
 
 if ($winnerContent) {
     # 经临时文件写入胜出版本内容并转成 blob，再替换快照树里的 version.properties 条目
@@ -143,6 +164,7 @@ if ($LASTEXITCODE -eq 0) { $serverParent = (git rev-parse "refs/heads/$ServerSyn
 
 $serverCommit = Add-SnapshotCommit -SyncBranch $ServerSyncBranch -Tree $serverTree -Message $serverMessage -Parent $serverParent
 $clientCommit = Add-SnapshotCommit -SyncBranch $ClientSyncBranch -Tree $clientTree -Message $clientMessage -Parent $remoteClientTip
+$cryptoCommit = Add-SnapshotCommit -SyncBranch $CryptoSyncBranch -Tree $cryptoTree -Message $cryptoMessage -Parent $remoteCryptoTip
 
 # 版本号回写本仓库：让本地构建的版本号不落后于云端（工作副本有未提交改动时跳过，尊重本地状态）
 if ($winnerContent -and -not $DryRun) {
@@ -161,7 +183,8 @@ if ($winnerContent -and -not $DryRun) {
 
 if ($DryRun) {
     Write-Host "[DryRun] $ServerSyncBranch <- server/ 快照树 $serverTree，提交 $serverCommit"
-    Write-Host "[DryRun] $ClientSyncBranch <- 根树(去 server) $clientTree，父提交 $remoteClientTip，提交 $clientCommit"
+    Write-Host "[DryRun] $ClientSyncBranch <- 根树(去 server/crypto-src) $clientTree，父提交 $remoteClientTip，提交 $clientCommit"
+    Write-Host "[DryRun] $CryptoSyncBranch <- crypto-src/ 快照树 $cryptoTree，父提交 $remoteCryptoTip，提交 $cryptoCommit"
     Write-Host "[DryRun] 未更新分支、未推送、未回写版本号"
     exit 0
 }
@@ -171,9 +194,12 @@ git push $ServerRemoteName "${ServerSyncBranch}:main"
 Assert-LastExit "推送 $ServerRemoteName"
 git push $ClientRemoteName "${ClientSyncBranch}:main"
 Assert-LastExit "推送 $ClientRemoteName"
+git push $CryptoRemoteName "${CryptoSyncBranch}:main"
+Assert-LastExit "推送 $CryptoRemoteName"
 
 Write-Host ""
 Write-Host "同步完成："
-Write-Host "  server/  -> $ServerRemoteName (${ServerSyncBranch}:main)  $serverCommit"
-Write-Host "  其余内容 -> $ClientRemoteName (${ClientSyncBranch}:main)  $clientCommit"
+Write-Host "  server/     -> $ServerRemoteName (${ServerSyncBranch}:main)  $serverCommit"
+Write-Host "  crypto-src/ -> $CryptoRemoteName (${CryptoSyncBranch}:main)  $cryptoCommit"
+Write-Host "  其余内容    -> $ClientRemoteName (${ClientSyncBranch}:main)  $clientCommit"
 Write-Host "来源主仓库提交：$sourceLabel"
