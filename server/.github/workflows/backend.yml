@@ -4,9 +4,8 @@
 # github.com/hdppppppp/music-server 根下的 .github/workflows/backend.yml。
 #
 # 环境变量取值口径与 server/tools/verify-contract.mjs 文件头记录的本地验证流程一致。
-# 独立仓库里没有 Kotlin/Wasm 播放器产物，构建会自动跳过 share-player（见
-# tools/build-web-player.mjs 的跳过逻辑）；这里放一套占位入口文件（index.html +
-# 两个固定名入口资源，缺一则 sharePlayerVersion/静态挂载不生效）供缓存头断言使用。
+# 分享播放器（Kotlin/Wasm）从 music 仓库的固定 Release（share-player-latest）拉取真实
+# 产物；拉不到时退回占位文件（见下方步骤内注释），后端 CI 不被前端仓库牵连。
 #
 # 失败可见性：Actions 日志下载需要仓库管理员令牌，匿名只能读到注解（annotations），
 # 所以启动/契约失败时把关键日志行用 `::error::` 吐成注解，便于外部工具轮询排查。
@@ -67,14 +66,27 @@ jobs:
       - name: 构建（tsc + minify + copy-manifest + 管理后台 vite）
         run: npm run build
 
-      - name: 放置分享页占位文件（缓存头断言用）
+      - name: 拉取 music 仓库最新构建的分享播放器
         run: |
-          mkdir -p dist/share-player
-          printf '/* 契约验证占位：独立后端仓库没有 Kotlin/Wasm 产物，仅用于静态缓存头断言 */\n' \
-            > dist/share-player/taotao-share-player.js
-          printf 'wasm-placeholder' > dist/share-player/TaotaoMusic-webApp-wasm-js.wasm
-          printf '<!doctype html><html lang="zh-CN"><head><base href="/share/"><meta charset="utf-8"><title>占位</title></head><body>契约验证占位页面</body></html>' \
-            > dist/share-player/index.html
+          # music 仓库的 client.yml 每次构建都会把真实 wasm 播放器发布到
+          # 固定 tag 的 Release（share-player-latest），这里免登录直接拉。
+          # 双仓同推送触发时 music 的构建更慢，拉到的通常是上一轮产物 ——
+          # 服务端启动时按内容做指纹版本化，跨批次不会混。
+          if curl -fsSL -o /tmp/share-player.zip \
+              https://github.com/hdppppppp/music/releases/download/share-player-latest/share-player.zip; then
+            rm -rf dist/share-player
+            mkdir -p dist/share-player
+            unzip -q /tmp/share-player.zip -d dist/share-player
+            echo "已拉取真实分享播放器（music 仓库 share-player-latest）"
+          else
+            echo "::warning::拉取分享播放器失败（music 仓库尚未发布过），退回占位文件，仅够缓存头断言"
+            mkdir -p dist/share-player
+            printf '/* 契约验证占位：独立后端仓库没有 Kotlin/Wasm 产物，仅用于静态缓存头断言 */\n' \
+              > dist/share-player/taotao-share-player.js
+            printf 'wasm-placeholder' > dist/share-player/TaotaoMusic-webApp-wasm-js.wasm
+            printf '<!doctype html><html lang="zh-CN"><head><base href="/share/"><meta charset="utf-8"><title>占位</title></head><body>契约验证占位页面</body></html>' \
+              > dist/share-player/index.html
+          fi
 
       - name: 重置验证库
         run: node tools/reset-db.mjs "$DATABASE_URL"

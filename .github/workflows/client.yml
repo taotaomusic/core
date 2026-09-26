@@ -98,3 +98,47 @@ jobs:
           name: desktop-update-bundle
           path: desktopApp/build/desktop-update-bundle/
           if-no-files-found: error
+
+  # Kotlin/Wasm 分享播放器单独构建并发布成固定 tag 的 Release（share-player-latest），
+  # 供 music-server 后端在构建时免登录拉取（与 tools/fetch-crypto.ps1 的流转方式同款）。
+  # 每次构建覆盖同名资产；后端在启动时对内容做指纹版本化，跨批次不会混。
+  web-player:
+    name: Web 分享播放器
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: 构建 Kotlin/Wasm 分享播放器
+        run: ./gradlew :webApp:wasmJsBrowserDistribution --no-daemon
+
+      - name: 发布到 Release share-player-latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SRC=webApp/build/dist/wasmJs/productionExecutable
+          test -f "$SRC/index.html"
+          (cd "$SRC" && zip -qr share-player.zip .)
+          gh release view share-player-latest >/dev/null 2>&1 || \
+            gh release create share-player-latest --prerelease \
+              --title "share-player 最新构建" \
+              --notes "自动构建的 Kotlin/Wasm 分享播放器，供 music-server 构建时拉取；固定 tag，资产随每次客户端构建覆盖"
+          gh release upload share-player-latest "$SRC/share-player.zip" --clobber
+          echo "已发布 share-player-latest/share-player.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: share-player
+          path: webApp/build/dist/wasmJs/productionExecutable/
+          if-no-files-found: error
