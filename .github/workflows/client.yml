@@ -199,11 +199,20 @@ jobs:
       - name: 发布到 Release latest
         env:
           GH_TOKEN: ${{ github.token }}
+          # 本 job 不做 checkout（没有 .git 上下文），gh 必须靠 GH_REPO 定位仓库
+          GH_REPO: ${{ github.repository }}
         run: |
-          gh release view latest >/dev/null 2>&1 || \
-            gh release create latest --prerelease \
+          if ! gh release view latest >/dev/null 2>&1; then
+            err=$(gh release create latest --prerelease \
               --title "最新构建产物" \
-              --notes "每次构建自动覆盖的滚动预发布版：Android APK 与 Windows 桌面更新包。正式版本化发布走服务端登记流程（见主仓库 RELEASE.md）。"
-          gh release upload latest out/* --clobber
+              --notes "每次构建自动覆盖的滚动预发布版：Android APK 与 Windows 桌面更新包。正式版本化发布走服务端登记流程（见主仓库 RELEASE.md）。" 2>&1) || {
+              echo "::error::创建 Release 失败：${err:0:300}"
+              exit 1
+            }
+          fi
+          err=$(gh release upload latest out/* --clobber 2>&1) || {
+            echo "::error::上传资产失败：${err:0:300}"
+            exit 1
+          }
           echo "已发布到 latest："
           gh release view latest --json assets -q '.assets[].name'
