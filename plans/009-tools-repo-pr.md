@@ -1,5 +1,16 @@
 # PR：传输加密引入按设备派生的会话密钥（protocol v+1）
 
+> **实现说明（最终采用，已落地在 `crypto-src/`）**：为把改动控制在最小、最可验证的范围，
+> 最终**没有改 ClientHello 的二进制布局，也没有改 AAD**。device_id 的绑定点收敛为一处：
+> **握手密钥派生**（`derive_handshake_key(psk, psk_id, device_id)`，把 device_id 折进 HKDF info）。
+> device_id 由**握手 HTTP 请求体**携带（`{clientHello, deviceId}`），两端各自折进握手密钥；
+> 不一致则握手 MAC 失配、会话建不起来——已达成「没有真机 device_id 就握不上手」。
+> `PROTOCOL_VERSION` 升到 **2**。数据帧 seal/open 与 `aad_context(method, path)` 保持不变。
+> 下文是初始规格，保留作对照；以本说明与代码为准。
+
+---
+
+
 > 贴到独立仓库 `hdppppppp/tools`。本文件是给那边的改动规格，不是本仓库代码。
 > 目标：让会话密钥按真机设备号派生，并把设备号绑进 AAD，使协议即便被逆向，
 > 攻击者仍需逐台真机提取设备号才能冒充该机。消费侧（music / music-server）

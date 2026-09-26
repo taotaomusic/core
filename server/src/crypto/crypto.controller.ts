@@ -28,7 +28,10 @@ export class CryptoController {
         if (!clientHello) {
             throw ApiErrors.badRequest(4006, "clientHello 缺失或格式错误");
         }
-        const serverHello = this.transport.handshake(clientHello);
+        // device_id 由握手请求携带（Android ANDROID_ID / Windows MachineGuid），
+        // 折进握手密钥；缺失时按空串处理（等价不绑定，握手仍可能因客户端也用空串而成立）。
+        const deviceId = typeof body?.deviceId === "string" ? body.deviceId : "";
+        const serverHello = this.transport.handshake(clientHello, deviceId);
         if (!serverHello) {
             // 握手失败通常是 device_id / PSK 不匹配或报文非法，统一按拒绝处理。
             throw ApiErrors.badRequest(4013, "握手被拒绝");

@@ -43,17 +43,22 @@ export function createCryptoMiddleware(
 
         const method = request.method;
         const pathAndQuery = request.originalUrl;
+        const aad = transport.aad(method, pathAndQuery);
+        if (aad === null) {
+            response.status(400).json({ code: 4006, message: "加密上下文构造失败" });
+            return;
+        }
 
         collectRawBody(request)
             .then((frame) => {
-                const plaintext = frame.length > 0 ? transport.open(sessionId, method, pathAndQuery, frame) : Buffer.alloc(0);
+                const plaintext = frame.length > 0 ? transport.open(sessionId, aad, frame) : Buffer.alloc(0);
                 if (plaintext === null) {
                     response.status(400).json({ code: 4006, message: "请求体解密失败" });
                     return;
                 }
                 // 把解出的明文重新塞回请求流，交给下游 body parser。
                 replaceRequestBody(request, Buffer.from(plaintext));
-                interceptResponse(response, transport, sessionId, method, pathAndQuery, logger);
+                interceptResponse(response, transport, sessionId, aad, logger);
                 next();
             })
             .catch((error: Error) => {
@@ -94,8 +99,7 @@ function interceptResponse(
     response: Response,
     transport: CryptoTransportService,
     sessionId: string,
-    method: string,
-    pathAndQuery: string,
+    aad: Uint8Array,
     logger: Logger,
 ): void {
     const chunks: Buffer[] = [];
@@ -109,7 +113,7 @@ function interceptResponse(
     (response as unknown as { end: (chunk?: unknown) => void }).end = (chunk?: unknown): void => {
         if (chunk) chunks.push(Buffer.from(chunk as Buffer));
         const plaintext = Buffer.concat(chunks);
-        const sealed = transport.seal(sessionId, method, pathAndQuery, plaintext);
+        const sealed = transport.seal(sessionId, aad, plaintext);
         if (sealed === null) {
             logger.error("响应加密失败，回退明文");
             originalWrite(plaintext);

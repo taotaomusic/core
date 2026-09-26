@@ -9,18 +9,18 @@ import { join } from "path";
  * 这里只声明服务端会用到的方法，方法名沿用 Rust 绑定的 snake_case。
  */
 export interface NativeServer {
-    /** 处理 ClientHello，返回 ServerHello。ClientHello 里携带 device_id，内部按设备现算 PSK 并把 device_id 绑定到会话。 */
-    accept(client_hello: Uint8Array, now_ms: number): Uint8Array;
     /**
-     * 解密请求体。AAD 由会话内部持有的 device_id + 传入的 method/path 现拼，
-     * 调用方不再手工构造 AAD——避免服务端拼错顺序与客户端漂移。
+     * 处理 ClientHello，返回 ServerHello。`device_id` 由握手请求携带，折进握手密钥；
+     * 与客户端不一致则 MAC 失配、握手被拒（协议 v2 的设备绑定，见 plans/009）。
      */
-    open(session_id_hex: string, method: string, path_and_query: string, frame: Uint8Array, now_ms: number): Uint8Array;
-    /** 加密响应体。AAD 同 open，由会话内部拼。 */
-    seal(session_id_hex: string, method: string, path_and_query: string, plaintext: Uint8Array, now_ms: number): Uint8Array;
+    accept(client_hello: Uint8Array, device_id: string, now_ms: number): Uint8Array;
+    /** 解密请求体。aad 由调用方用 aad_context(method, path) 构造。 */
+    open(session_id_hex: string, aad: Uint8Array, frame: Uint8Array, now_ms: number): Uint8Array;
+    /** 加密响应体。aad 同 open。 */
+    seal(session_id_hex: string, aad: Uint8Array, plaintext: Uint8Array, now_ms: number): Uint8Array;
     /** 会话是否仍有效。 */
     has_session(session_id_hex: string, now_ms: number): boolean;
-    /** 加入 / 更新一条 PSK（按 psk_id 登记原始 PSK，派生在 accept 时按报文里的 device_id 做）。 */
+    /** 加入 / 更新一条 PSK（登记原始 PSK，设备绑定在握手时按 device_id 现算）。 */
     put_psk(psk_id: string, psk_hex: string): void;
     /** 清理过期会话，返回清理数量。 */
     sweep_expired(now_ms: number): number;
@@ -33,6 +33,8 @@ export interface NativeServer {
  */
 export interface NativeCrypto {
     Server: new () => NativeServer;
+    /** 构造 AAD 上下文（method + path，绑定方法与路径，不含 device_id）。 */
+    aad_context(method: string, path_and_query: string): Uint8Array;
     /** 从 `X-Taotao-Crypto` 头值解析出 [会话ID, 序号]，非法返回 null。 */
     parse_header(value: string): [string, string] | null;
     /** 协议版本。设备绑定版本要求 >= 2。 */

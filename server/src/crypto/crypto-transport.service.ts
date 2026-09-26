@@ -49,10 +49,16 @@ export class CryptoTransportService implements OnApplicationBootstrap, OnModuleD
         if (this.sweepTimer) clearInterval(this.sweepTimer);
     }
 
-    /** 处理 ClientHello，返回 ServerHello 字节。链路未启用时返回 null。 */
-    handshake(clientHello: Uint8Array): Uint8Array | null {
+    /** 处理 ClientHello，返回 ServerHello 字节。deviceId 折进握手密钥。链路未启用时返回 null。 */
+    handshake(clientHello: Uint8Array, deviceId: string): Uint8Array | null {
         if (!this.server) return null;
-        return this.server.accept(clientHello, Date.now());
+        return this.server.accept(clientHello, deviceId, Date.now());
+    }
+
+    /** 构造 AAD（method + path）。 */
+    aad(method: string, pathAndQuery: string): Uint8Array | null {
+        if (!this.native) return null;
+        return this.native.aad_context(method, pathAndQuery);
     }
 
     /** 解析 `X-Taotao-Crypto` 头，返回 [会话ID, 序号]，非法返回 null。 */
@@ -61,16 +67,16 @@ export class CryptoTransportService implements OnApplicationBootstrap, OnModuleD
         return this.native.parse_header(value);
     }
 
-    /** 解密请求体。AAD 由会话内部按 device_id + method/path 现拼。 */
-    open(sessionId: string, method: string, pathAndQuery: string, frame: Uint8Array): Uint8Array | null {
+    /** 解密请求体。 */
+    open(sessionId: string, aad: Uint8Array, frame: Uint8Array): Uint8Array | null {
         if (!this.server) return null;
-        return this.server.open(sessionId, method, pathAndQuery, frame, Date.now());
+        return this.server.open(sessionId, aad, frame, Date.now());
     }
 
-    /** 加密响应体。AAD 同 open。 */
-    seal(sessionId: string, method: string, pathAndQuery: string, plaintext: Uint8Array): Uint8Array | null {
+    /** 加密响应体。 */
+    seal(sessionId: string, aad: Uint8Array, plaintext: Uint8Array): Uint8Array | null {
         if (!this.server) return null;
-        return this.server.seal(sessionId, method, pathAndQuery, plaintext, Date.now());
+        return this.server.seal(sessionId, aad, plaintext, Date.now());
     }
 
     /** 会话是否有效。 */
