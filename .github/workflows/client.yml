@@ -102,9 +102,11 @@ jobs:
   # Kotlin/Wasm 分享播放器单独构建并发布成固定 tag 的 Release（share-player-latest），
   # 供 music-server 后端在构建时免登录拉取（与 tools/fetch-crypto.ps1 的流转方式同款）。
   # 每次构建覆盖同名资产；后端在启动时对内容做指纹版本化，跨批次不会混。
+  # 用 Windows runner：这个任务只在本地 Windows 上被日常验证过（build:web-player），
+  # Ubuntu 上 wasm 工具链行为未验证（实际挂过两次），失败时用注解吐出错误行。
   web-player:
     name: Web 分享播放器
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     permissions:
       contents: write
     steps:
@@ -121,21 +123,42 @@ jobs:
           node-version: 22
 
       - name: 构建 Kotlin/Wasm 分享播放器
-        run: ./gradlew :webApp:wasmJsBrowserDistribution --no-daemon
+        shell: pwsh
+        run: |
+          cmd /c ".\gradlew.bat :webApp:wasmJsBrowserDistribution --no-daemon > wasm-build.log 2>&1"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "构建失败，错误摘要："
+            Select-String -Path wasm-build.log -Pattern '^e:','What went wrong','Caused by:','> Task .* FAILED' |
+              Select-Object -Last 8 | ForEach-Object {
+                $line = $_.Line
+                if ($line.Length -gt 300) { $line = $line.Substring(0, 300) }
+                Write-Output "::error::$line"
+              }
+            Get-Content wasm-build.log -Tail 40
+            exit 1
+          }
+          Get-Content wasm-build.log -Tail 15
+
+      - name: 打包 share-player.zip（tar -a 保证 zip 内是正斜杠路径）
+        shell: pwsh
+        run: |
+          $src = "webApp/build/dist/wasmJs/productionExecutable"
+          if (-not (Test-Path "$src/index.html")) { throw "构建产物缺少 index.html" }
+          tar -a -cf share-player.zip -C $src .
 
       - name: 发布到 Release share-player-latest
+        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          SRC=webApp/build/dist/wasmJs/productionExecutable
-          test -f "$SRC/index.html"
-          (cd "$SRC" && zip -qr share-player.zip .)
-          gh release view share-player-latest >/dev/null 2>&1 || \
-            gh release create share-player-latest --prerelease \
-              --title "share-player 最新构建" \
+          gh release view share-player-latest *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create share-player-latest --prerelease `
+              --title "share-player 最新构建" `
               --notes "自动构建的 Kotlin/Wasm 分享播放器，供 music-server 构建时拉取；固定 tag，资产随每次客户端构建覆盖"
-          gh release upload share-player-latest "$SRC/share-player.zip" --clobber
-          echo "已发布 share-player-latest/share-player.zip"
+          }
+          gh release upload share-player-latest share-player.zip --clobber
+          Write-Host "已发布 share-player-latest/share-player.zip"
 
       - uses: actions/upload-artifact@v4
         with:
