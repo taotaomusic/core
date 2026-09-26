@@ -1,27 +1,30 @@
 ﻿# tools/sync-repos.ps1
-# 将主仓库内容同步到两个 GitHub 镜像仓库：
-#   - server/ 目录 -> git@github.com:hdppppppp/music-server.git（server/ 内容作为镜像仓库根）
+# 将本仓库（monorepo 工作副本）内容同步到两个 GitHub 正式仓库：
+#   - server/ 目录 -> git@github.com:hdppppppp/music-server.git（server/ 内容作为仓库根）
 #   - 其余全部内容 -> git@github.com:hdppppppp/music.git（去掉 server/ 后的主仓库根）
 #
 # 机制说明：
 #   - 同步只取已提交内容（HEAD），工作区未提交的改动不会同步出去。
 #   - 每次同步在本仓库的 sync/server、sync/client 两个分支上追加一个「快照提交」，
-#     再把这两个分支推送到对应镜像的 main。镜像仓库里只有逐次快照的线性历史，
-#     不含主仓库提交历史，避免主仓库历史里的临时产物（例如已删除的构建包）外泄。
-#   - 远端名固定为 music-server 与 music（见 AGENTS.md「双仓库同步」）。
+#     再推送到对应仓库的 main。快照提交只含当次内容，不带 monorepo 提交历史。
+#   - client 快照的父提交取 GitHub main 的最新 tip：云端 CI 构建成功后会把递增的
+#     version.properties 直接提交回仓库（提交信息带 [skip ci]），同步必须把这个提交
+#     续在链上（否则非快进推送会被拒），并以「两边版本号较大者」为准收编进快照、
+#     回写本仓库工作副本 —— 保证本地与云端的版本号都单调递增、互不回退。
+#   - GitHub 仓库里只有逐次快照的线性历史，不含 monorepo 提交历史。
 #
 # 用法：
 #   powershell -NoProfile -ExecutionPolicy Bypass -File tools\sync-repos.ps1          # 同步并推送
-#   powershell -NoProfile -ExecutionPolicy Bypass -File tools\sync-repos.ps1 -DryRun  # 只预览，不推送
+#   powershell -NoProfile -ExecutionPolicy Bypass -File tools\sync-repos.ps1 -DryRun  # 只预览
 
 param(
-    # 只生成快照计划并打印，不更新分支、不推送
+    # 只生成快照计划并打印，不更新分支、不推送、不回写版本号
     [switch]$DryRun
 )
 
 $ErrorActionPreference = "Stop"
 
-# 镜像仓库远端名与本地快照分支
+# GitHub 仓库远端名与本地快照分支
 $ServerRemoteName = "music-server"
 $ClientRemoteName = "music"
 $ServerSyncBranch = "sync/server"
@@ -46,7 +49,6 @@ $headSha = (git rev-parse HEAD).Trim()
 $headSubject = (git log -1 --format=%s HEAD).Trim()
 Assert-LastExit "读取 HEAD"
 
-# 快照提交信息注明来源主仓库提交，方便在镜像仓库里追溯
 $sourceLabel = "{0} {1}" -f $headSha.Substring(0, 8), $headSubject
 $serverMessage = "sync: 同步自主仓库 server/（$sourceLabel）"
 $clientMessage = "sync: 同步自主仓库（$sourceLabel）"
@@ -55,10 +57,59 @@ $clientMessage = "sync: 同步自主仓库（$sourceLabel）"
 $serverTree = (git rev-parse "HEAD:server").Trim()
 Assert-LastExit "解析 server 子树"
 
-# client 快照树：主仓库根树去掉 server 条目后重建
+# ---- client 快照：根树去掉 server 条目；版本号按「两边较大者」收编 ----
+
+# 先取 GitHub main 的最新 tip 作为快照父提交（CI 回写版本号的提交在它上面，必须续链）
+# fetch 的进度走 stderr，PS 5.1 下用 cmd 包裹重定向（PS 管道重定向 stderr 会升级成终止错误）
+cmd /c "git fetch $ClientRemoteName main >nul 2>&1"
+$remoteClientTip = $null
+if ($LASTEXITCODE -eq 0) {
+    $remoteClientTip = (git rev-parse "FETCH_HEAD").Trim()
+    Assert-LastExit "解析远端 client tip"
+}
+
+# 本地版本号读工作副本（本地构建刚递增过、还没提交时也以它为准）
+$localVersionText = [IO.File]::ReadAllText("version.properties")
+$localCode = 0
+if ($localVersionText -match 'VERSION_CODE=(\d+)') { $localCode = [int]$Matches[1] }
+
+# 远端版本号读 GitHub main 上的 version.properties
+$remoteCode = -1
+$remoteVersionLines = $null
+if ($remoteClientTip) {
+    $remoteVersionLines = git show "${remoteClientTip}:version.properties"
+    Assert-LastExit "读取远端 version.properties"
+    $remoteVersionText = $remoteVersionLines -join "`n"
+    if ($remoteVersionText -match 'VERSION_CODE=(\d+)') { $remoteCode = [int]$Matches[1] }
+}
+
+# 胜出内容：只有远端版本号更大时才需要替换快照里的 version.properties 条目
+$winnerContent = $null
+if ($remoteCode -gt $localCode) {
+    $winnerContent = ($remoteVersionLines -join "`n") + "`n"
+    Write-Host "版本号收编：云端 code $remoteCode > 本地 code $localCode，快照采用云端版本并回写本仓库"
+}
+else {
+    Write-Host "版本号以本地为准（code $localCode；远端 code $remoteCode）"
+}
+
 $rootEntries = git ls-tree "HEAD^{tree}"
 Assert-LastExit "读取根树"
 $clientLines = @($rootEntries | Where-Object { -not $_.EndsWith("`tserver") })
+
+if ($winnerContent) {
+    # 经临时文件写入胜出版本内容并转成 blob，再替换快照树里的 version.properties 条目
+    $tmpVersion = Join-Path $env:TEMP "taotao-sync-version.properties"
+    [IO.File]::WriteAllText($tmpVersion, $winnerContent, (New-Object System.Text.UTF8Encoding($false)))
+    $winnerBlob = (git hash-object -w $tmpVersion).Trim()
+    Assert-LastExit "写入胜出版本 blob"
+    $clientLines = @($clientLines | ForEach-Object {
+        if ($_ -match '^(100644 blob )([0-9a-f]+)(\tversion\.properties)$') { "$($Matches[1])$winnerBlob$($Matches[3])" }
+        else { $_ }
+    })
+    Remove-Item $tmpVersion -ErrorAction SilentlyContinue
+}
+
 if ($clientLines.Count -lt 5) { throw "client 快照树条目异常（仅 $($clientLines.Count) 条）" }
 # 经临时文件喂给 git mktree，绕开 PowerShell 管道的编码转换（PS 5.1 管道会混入 BOM）
 $mktreeInput = Join-Path $env:TEMP "taotao-sync-mktree.txt"
@@ -67,18 +118,16 @@ $clientTree = (cmd /c "git mktree < `"$mktreeInput`"").Trim()
 Assert-LastExit "生成 client 快照树"
 Remove-Item $mktreeInput -ErrorAction SilentlyContinue
 
-# 在快照分支上追加提交：已有快照则作为父提交，形成线性历史；首次同步则从零开始
+# 在快照分支上追加提交：client 以远端 tip 为父（无远端时退回本地快照分支），server 以本地快照分支为父
 function Add-SnapshotCommit {
-    param([string]$SyncBranch, [string]$Tree, [string]$Message)
+    param([string]$SyncBranch, [string]$Tree, [string]$Message, [string]$Parent)
 
-    git rev-parse -q --verify "refs/heads/$SyncBranch" *> $null
-    if ($LASTEXITCODE -eq 0) {
-        $parent = (git rev-parse "refs/heads/$SyncBranch").Trim()
-        $commit = (git commit-tree $Tree -p $parent -m $Message).Trim()
+    if (-not $Parent) {
+        git rev-parse -q --verify "refs/heads/$SyncBranch" *> $null
+        if ($LASTEXITCODE -eq 0) { $Parent = (git rev-parse "refs/heads/$SyncBranch").Trim() }
     }
-    else {
-        $commit = (git commit-tree $Tree -m $Message).Trim()
-    }
+    if ($Parent) { $commit = (git commit-tree $Tree -p $Parent -m $Message).Trim() }
+    else { $commit = (git commit-tree $Tree -m $Message).Trim() }
     Assert-LastExit "生成快照提交 $SyncBranch"
 
     if (-not $DryRun) {
@@ -88,17 +137,36 @@ function Add-SnapshotCommit {
     return $commit
 }
 
-$serverCommit = Add-SnapshotCommit -SyncBranch $ServerSyncBranch -Tree $serverTree -Message $serverMessage
-$clientCommit = Add-SnapshotCommit -SyncBranch $ClientSyncBranch -Tree $clientTree -Message $clientMessage
+$serverParent = $null
+git rev-parse -q --verify "refs/heads/$ServerSyncBranch" *> $null
+if ($LASTEXITCODE -eq 0) { $serverParent = (git rev-parse "refs/heads/$ServerSyncBranch").Trim() }
+
+$serverCommit = Add-SnapshotCommit -SyncBranch $ServerSyncBranch -Tree $serverTree -Message $serverMessage -Parent $serverParent
+$clientCommit = Add-SnapshotCommit -SyncBranch $ClientSyncBranch -Tree $clientTree -Message $clientMessage -Parent $remoteClientTip
+
+# 版本号回写本仓库：让本地构建的版本号不落后于云端（工作副本有未提交改动时跳过，尊重本地状态）
+if ($winnerContent -and -not $DryRun) {
+    $dirty = git status --porcelain -- version.properties
+    if ($dirty) {
+        Write-Host "::警告：本仓库 version.properties 有未提交改动，跳过版本号回写"
+    }
+    else {
+        [IO.File]::WriteAllText("version.properties", $winnerContent, (New-Object System.Text.UTF8Encoding($false)))
+        git add version.properties
+        git commit -m "ci: 收编云端递增的版本号（code $remoteCode）"
+        Assert-LastExit "提交版本号回写"
+        Write-Host "已在主仓库提交版本号回写（origin 未自动推送，记得 git push）"
+    }
+}
 
 if ($DryRun) {
     Write-Host "[DryRun] $ServerSyncBranch <- server/ 快照树 $serverTree，提交 $serverCommit"
-    Write-Host "[DryRun] $ClientSyncBranch <- 主仓库根树(去 server) $clientTree，提交 $clientCommit"
-    Write-Host "[DryRun] 未更新分支、未推送"
+    Write-Host "[DryRun] $ClientSyncBranch <- 根树(去 server) $clientTree，父提交 $remoteClientTip，提交 $clientCommit"
+    Write-Host "[DryRun] 未更新分支、未推送、未回写版本号"
     exit 0
 }
 
-# 推送：本地快照分支 -> 镜像仓库 main
+# 推送：本地快照分支 -> GitHub main
 git push $ServerRemoteName "${ServerSyncBranch}:main"
 Assert-LastExit "推送 $ServerRemoteName"
 git push $ClientRemoteName "${ClientSyncBranch}:main"
