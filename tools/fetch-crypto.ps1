@@ -27,8 +27,8 @@
     Release tag。默认 `dev-latest` —— main 分支的开发构建，用占位密钥，
     免登录就能下载，适合联调。
 
-    生产版本传具体 tag（例如 `v0.1.0`）。正式 Release 是 draft 状态，
-    需要 -Token，或者先在 GitHub 上手动发布出来。
+    生产版本传具体 tag（例如 `v2.0.0`）。正式 Release 自动发布（非 draft），
+    公开仓库可直链下载；私有仓库需 -Token。
 
 .PARAMETER Repo
     owner/repo，默认 hdppppppp/tools。
@@ -53,12 +53,12 @@
 
 .EXAMPLE
     # 拉指定版本，只取 Web 和后端用的两份
-    pwsh tools/fetch-crypto.ps1 -Version v0.1.0 -Only wasm,node-linux-x64
+    pwsh tools/fetch-crypto.ps1 -Version v2.0.0 -Only wasm,node-linux-x64
 
 .EXAMPLE
     # 私有仓库
     $env:GH_TOKEN = 'ghp_xxx'
-    pwsh tools/fetch-crypto.ps1 -Version v0.1.0
+    pwsh tools/fetch-crypto.ps1 -Version v2.0.0
 #>
 [CmdletBinding()]
 param(
