@@ -23,6 +23,8 @@ concurrency:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     services:
       postgres:
         image: postgres:16
@@ -116,6 +118,19 @@ jobs:
 
       - name: 契约验证
         run: node tools/verify-contract.mjs http://127.0.0.1:4720 2>&1 | tee verify.log
+
+      - name: 发布 dist 到 Release server-dist-latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # 契约全绿才走到这里；dist 含管理后台与分享播放器，可直接部署。
+          zip -qr server-dist.zip dist
+          gh release view server-dist-latest >/dev/null 2>&1 || \
+            gh release create server-dist-latest --prerelease \
+              --title "后端 dist 最新构建" \
+              --notes "npm run build 的完整产物（tsc + 压缩 + 管理后台 vite + 分享播放器），契约验证通过后发布。部署：解压后按 server/README.md 安装生产依赖并启动。"
+          gh release upload server-dist-latest server-dist.zip --clobber
+          echo "已发布 server-dist-latest/server-dist.zip"
 
       - name: 契约失败时输出摘要注解
         if: failure()

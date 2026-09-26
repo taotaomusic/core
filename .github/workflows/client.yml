@@ -74,7 +74,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: android-apk
-          path: androidApp/build/outputs/apk/**/*.apk
+          path: |
+            androidApp/build/outputs/apk/**/*.apk
+            androidApp/build/outputs/apk/**/output-metadata.json
           if-no-files-found: error
 
   desktop-exe:
@@ -165,3 +167,43 @@ jobs:
           name: share-player
           path: webApp/build/dist/wasmJs/productionExecutable/
           if-no-files-found: error
+
+  # 汇总发布：把本轮 APK 与桌面包发到固定 tag 的滚动预发布版 latest（每次覆盖同名资产），
+  # 免登录即可下载（Actions Artifact 要登录还有 90 天有效期）。
+  # 正式的版本化发布仍走服务端登记流程（见主仓库 RELEASE.md），这里的 Release 是公开镜像。
+  publish-release:
+    name: 发布构建产物
+    runs-on: ubuntu-latest
+    needs: [android-apk, desktop-exe]
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: 整理产物（版本号取 output-metadata.json，铁律①）
+        run: |
+          mkdir -p out
+          apk=$(find artifacts/android-apk -name '*.apk' | head -n 1)
+          meta=$(find artifacts/android-apk -name 'output-metadata.json' | head -n 1)
+          vn=$(jq -r '.elements[0].versionName' "$meta")
+          case "$(basename "$apk")" in
+            *release*) kind=release ;;
+            *) kind=debug ;;
+          esac
+          cp "$apk" "out/TaotaoMusic-${vn}-${kind}.apk"
+          (cd artifacts/desktop-update-bundle && zip -qr "$OLDPWD/out/taotao-music-desktop-bundle.zip" .)
+          ls -la out
+
+      - name: 发布到 Release latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view latest >/dev/null 2>&1 || \
+            gh release create latest --prerelease \
+              --title "最新构建产物" \
+              --notes "每次构建自动覆盖的滚动预发布版：Android APK 与 Windows 桌面更新包。正式版本化发布走服务端登记流程（见主仓库 RELEASE.md）。"
+          gh release upload latest out/* --clobber
+          echo "已发布到 latest："
+          gh release view latest --json assets -q '.assets[].name'

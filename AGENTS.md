@@ -34,8 +34,8 @@
 
 两个镜像仓库各带工作流，随同步推送自动触发，也可在 Actions 页手动 `workflow_dispatch`：
 
-- **music 仓库**：`.github/workflows/client.yml`（源文件在主仓库根目录同名路径）——Windows runner 上构建 `:androidApp:assembleRelease` 与 `:desktopApp:packageDesktopUpdateBundle`，APK 和含 `launcher.exe` 的更新包从 Actions Artifact 下载。必须 Windows runner：`incrementVersion` 走 `powershell` 命令。另有 `web-player` job 在 Ubuntu 上构建 `:webApp:wasmJsBrowserDistribution`，产物发布到本仓库固定 tag 的 **Release `share-player-latest`**（每次覆盖同名资产），供后端仓库免登录拉取。
-- **music-server 仓库**：`server/.github/workflows/backend.yml`（源文件在 `server/.github/` 内）——Ubuntu + PostgreSQL 服务容器，构建时从 `share-player-latest` 拉取真实分享播放器放进 `dist/share-player/`（拉不到退回占位文件），然后起验证实例执行完整 `verify-contract.mjs`，**全绿才算通过**。独立仓库没有 Gradle 工程，`build:web-player` 会自动跳过（见 `build-web-player.mjs`）。
+- **music 仓库**：`.github/workflows/client.yml`（源文件在主仓库根目录同名路径）——Windows runner 上构建 `:androidApp:assembleRelease` 与 `:desktopApp:packageDesktopUpdateBundle`，APK 和含 `launcher.exe` 的更新包从 Actions Artifact 下载。必须 Windows runner：`incrementVersion` 走 `powershell` 命令。另有 `web-player` job 在 Windows 上构建 `:webApp:wasmJsBrowserDistribution`。三个构建成功后由 `publish-release` job 汇总发到固定 tag 的滚动预发布版 **Release `latest`**（`TaotaoMusic-<版本>-<release|debug>.apk` + 桌面包 zip，每次覆盖），免登录可下载。
+- **music-server 仓库**：`server/.github/workflows/backend.yml`（源文件在 `server/.github/` 内）——Ubuntu + PostgreSQL 服务容器，构建时从 `share-player-latest` 拉取真实分享播放器放进 `dist/share-player/`（拉不到退回占位文件），然后起验证实例执行完整 `verify-contract.mjs`，**全绿才算通过**，通过后把完整 dist 发布到固定 tag 预发布版 **Release `server-dist-latest`**。独立仓库没有 Gradle 工程，`build:web-player` 会自动跳过（见 `build-web-player.mjs`）。
 - **APK 签名**：在 music 仓库 Secrets 配 `ANDROID_KEYSTORE_BASE64`（`taotao-release.jks` 的 base64）、`ANDROID_STORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD` 后出签名 Release 包；未配置时自动退回 Debug 包，仅验证工具链。
 
 ## 文档索引
