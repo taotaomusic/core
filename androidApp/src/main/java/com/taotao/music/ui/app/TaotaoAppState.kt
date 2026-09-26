@@ -15,6 +15,8 @@ import com.taotao.music.TaotaoApplication
 import com.taotao.music.data.AppearanceMode
 import com.taotao.music.data.AppearanceStore
 import com.taotao.music.data.AuthSession
+import com.taotao.music.data.crypto.HardwareDeviceId
+import com.taotao.music.crypto.CryptoTransport
 import com.taotao.music.data.DeviceIdStore
 import com.taotao.music.data.DownloadNotifier
 import com.taotao.music.data.FavoritesStore
@@ -71,9 +73,19 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
     // ---- 平台依赖：与原主入口的 remember { ... } 一一对应 ----
     val authSession = AuthSession(context)
     val audioPlayer = AudioPlayer(context)
+    /**
+     * 传输加密封装（`plans/009`）：设备号取硬件 ANDROID_ID，内嵌 PSK 在 `.so` 里。
+     * 灰度总开关默认关闭，接线就绪后改 `cryptoEnabled = true` 即可启用收藏列表加密。
+     */
+    private val cryptoTransport = CryptoTransport(
+        endpoint = TencentMusicApi.ENDPOINT,
+        deviceIdProvider = { HardwareDeviceId(context.contentResolver).deviceId() },
+    )
     val musicApi = TencentMusicApi(
         authSession,
         context.packageManager.getPackageInfo(context.packageName, 0).longVersionCode,
+        cryptoTransport = cryptoTransport,
+        cryptoEnabled = false,
     )
     val downloadManager = OfflineDownloadManager(context, authSession)
     val playbackStateStore = PlaybackStateStore(context)

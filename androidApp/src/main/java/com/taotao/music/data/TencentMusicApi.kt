@@ -1,6 +1,7 @@
 package com.taotao.music.data
 
 import com.taotao.music.data.im.ImConversationSync
+import com.taotao.music.crypto.CryptoTransport
 import com.taotao.music.model.AudioQuality
 import com.taotao.music.model.Song
 import kotlinx.coroutines.Dispatchers
@@ -21,6 +22,13 @@ import android.net.Uri
 class TencentMusicApi(
     private val tokenProvider: TokenProvider,
     private val appVersionCode: Long = 0L,
+    /**
+     * 传输加密封装（`plans/009`）。为 null 或 [cryptoEnabled] 为 false 时全程走明文。
+     * 本轮仅对灰度白名单内的接口（收藏列表）生效。
+     */
+    private val cryptoTransport: CryptoTransport? = null,
+    /** 加密灰度总开关。默认关闭——打开前需确认后端已配 PSK 且产物为协议 v2。 */
+    private val cryptoEnabled: Boolean = false,
 ) {
     /** 波点搜索首页热词；点击时 [keyword] 可直接进入普通搜索。 */
     data class HotSearchItem(
@@ -460,9 +468,9 @@ class TencentMusicApi(
         song.mid?.trim()?.takeIf { it.isNotBlank() }?.let { add("$source:$it") }
     }
 
-    private fun favoriteSongIds(): List<String> = authorized("/api/v1/favorites") { connection ->
-        val result = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
-        val favorites = result.optJSONArray("data") ?: return@authorized emptyList()
+    private fun favoriteSongIds(): List<String> = authorizedRaw("/api/v1/favorites") { bytes ->
+        val result = JSONObject(String(bytes, Charsets.UTF_8))
+        val favorites = result.optJSONArray("data") ?: return@authorizedRaw emptyList()
         (0 until favorites.length()).mapNotNull { index ->
             val item = favorites.optJSONObject(index) ?: return@mapNotNull null
                 item.optString("songId").takeIf { it.isNotBlank() }?.let {
@@ -1194,6 +1202,57 @@ class TencentMusicApi(
         throw SessionExpiredException()
     }
 
+    /**
+     * 与 [authorized] 同样带令牌续期，但**响应体以字节返回**并按需解密。
+     *
+     * 仅当 [cryptoEnabled] 且 [cryptoTransport] 可用时才加密：给请求加
+     * `X-Taotao-Crypto` 头（GET 无体，只带头），响应读原始帧后 `openResponse` 解密。
+     * 任一环节不满足或失败，都透明回退到明文——读到的字节与明文请求一字不差。
+     *
+     * 服务端返回 409（会话失效，code 4091）时作废本地会话并重握手重放一次。
+     */
+    private fun <T> authorizedRaw(path: String, method: String = "GET", read: (ByteArray) -> T): T {
+        val transport = cryptoTransport
+        val useCrypto = cryptoEnabled && transport != null && transport.enabled
+        if (!useCrypto) {
+            return authorized(path, method) { connection -> read(connection.inputStream.readBytes()) }
+        }
+
+        var token = tokenProvider.validToken() ?: throw SessionExpiredException()
+        var rehandshaked = false
+        // 额外一次余量给 409 重握手：401 续期 + 409 重握手最多各一次。
+        repeat(MAX_AUTH_ATTEMPTS + 1) {
+            val sealed = transport!!.seal(method, path, ByteArray(0))
+                ?: return authorized(path, method) { connection -> read(connection.inputStream.readBytes()) }
+
+            val connection = open(path, method, token).apply {
+                setRequestProperty(CRYPTO_HEADER, sealed.header)
+            }
+            val code = connection.responseCode
+            when {
+                code == HttpURLConnection.HTTP_UNAUTHORIZED -> {
+                    runCatching { connection.errorStream?.close() }
+                    token = tokenProvider.renewToken(token) ?: throw SessionExpiredException()
+                }
+                code == HttpURLConnection.HTTP_CONFLICT && !rehandshaked -> {
+                    // 会话失效：作废后下次 seal 会重新握手。
+                    runCatching { connection.errorStream?.close() }
+                    rehandshaked = true
+                    transport.invalidateSession()
+                }
+                code in 200..299 -> {
+                    noteLatestVersion(connection)
+                    val frame = connection.inputStream.readBytes()
+                    val plaintext = transport.openResponse(method, path, frame)
+                        ?: throw IllegalStateException("响应解密失败")
+                    return read(plaintext)
+                }
+                else -> error(messageOf(connection, "请求失败：HTTP $code"))
+            }
+        }
+        throw SessionExpiredException()
+    }
+
     /** 把响应头里的最新版本号交给观察者。解析失败或没有这个头时什么都不做。 */
     private fun noteLatestVersion(connection: HttpURLConnection) {
         connection.getHeaderField(HEADER_LATEST_VERSION)?.toLongOrNull()?.takeIf { it > 0 }
@@ -1377,6 +1436,8 @@ class TencentMusicApi(
     companion object {
         /** 后端地址。热更新模块也要用，因此对包内公开，保持单一来源。 */
         const val ENDPOINT = "https://music.xydaigua.cn"
+        /** 传输加密头名（`plans/009`）。带此头的请求才走加密路径。 */
+        private const val CRYPTO_HEADER = "X-Taotao-Crypto"
         private const val MAX_AUTH_ATTEMPTS = 2
         private const val FAVORITE_INFO_CONCURRENCY = 4
         private const val BATCH_INFO_SIZE = 60

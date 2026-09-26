@@ -40,6 +40,12 @@ android { namespace = "com.taotao.music"; compileSdk = 35
         }
     }
     buildTypes { release { isMinifyEnabled = false; signingConfig = signingConfigs.getByName("release") } }
+
+    // 传输加密 native 库（`plans/009`）。产物由 tools 仓库云端交叉编译，经
+    // tools/fetch-crypto.ps1 落到 crypto/dist/android/<abi>/libtaotao_crypto.so。
+    // 目录结构即 jniLibs 约定（<srcDir>/<abi>/lib*.so），abiFilters 只保留 arm64-v8a
+    // 时也只打包对应那份。产物缺失时不阻断构建，运行时由 NativeCrypto.available 兜底降级明文。
+    sourceSets["main"].jniLibs.srcDir(rootProject.file("crypto/dist/android"))
 }
 
 tasks.matching { it.name == "assembleDebug" || it.name == "assembleRelease" }.configureEach {
