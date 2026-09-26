@@ -18,17 +18,18 @@
 - 外部参考仓库不得放在项目根目录；临时参考代码使用项目外目录，交付前清理无关仓库。
 - 新增 Kotlin 代码必须放在已有的 `com.taotao.music` 包层级下。
 
-## 双仓库同步（GitHub 镜像）
+## 双仓库同步（GitHub 正式仓库）
 
-主仓库（Gitee origin）仍是唯一开发主库；GitHub 侧拆成两个镜像仓库，由 `tools/sync-repos.ps1` 从主仓库 HEAD 生成**内容快照**推送。镜像里只有逐次快照的线性历史，**不含主仓库提交历史**，因此主仓库历史里的临时产物不会外泄：
+GitHub 侧两个仓库（music / music-server）是**正式仓库**，由助手手动跑 `tools/sync-repos.ps1` 维护（不是自动镜像）。同步从本仓库 HEAD 生成**内容快照**推送；快照历史只有逐次快照的线性提交，不含 monorepo 提交历史，历史里的临时产物不会外泄：
 
 - `server/` → <https://github.com/hdppppppp/music-server>（远端名 `music-server`，本地快照分支 `sync/server`，server/ 内容即镜像仓库根）
 - 其余全部内容（客户端各模块与文档）→ <https://github.com/hdppppppp/music>（远端名 `music`，本地快照分支 `sync/client`）
 
-执行 `powershell -NoProfile -ExecutionPolicy Bypass -File tools\sync-repos.ps1`（加 `-DryRun` 只预览）。注意两点：
+执行 `powershell -NoProfile -ExecutionPolicy Bypass -File tools\sync-repos.ps1`（加 `-DryRun` 只预览）。注意几点：
 
-- 只同步**已提交**内容，工作区未提交的改动不会同步出去；推送前先在主仓库提交。
-- 同步是单向的（主仓库 → GitHub），不要在镜像仓库里直接开发。
+- 只同步**已提交**内容，工作区未提交的改动不会同步出去；推送前先在本仓库提交。
+- **版本号单调延续**：云端构建成功后自动把递增的 `version.properties` 提交回 music 仓库（提交信息带 `[skip ci]`）；sync 时以「本地与云端较大者」为准收编进快照并回写本仓库（单独提交，origin 不自动推送）。因此每次同步会触发一次构建、版本号 +1；本地构建出的号同样被尊重，两侧互不回退、重号风险归零。
+- 同步是助手手动执行的维护动作，不要在 GitHub 仓库里绕过快照机制直接改文件（`version.properties` 除外，云端 CI 会回写）。
 
 ### 云端构建（GitHub Actions）
 
