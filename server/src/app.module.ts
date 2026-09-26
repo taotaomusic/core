@@ -28,6 +28,7 @@ import { ReleaseModule } from "./release/release.module";
 import { SongShareModule } from "./shares/song-share.module";
 import { MusicSourceAdminModule } from "./upstream/music-source-admin.module";
 import { UserAdminModule } from "./user-admin/user-admin.module";
+import { CryptoModule } from "./crypto/crypto.module";
 
 /**
  * 根模块。
@@ -58,6 +59,7 @@ import { UserAdminModule } from "./user-admin/user-admin.module";
     SongShareModule,
     UserAdminModule,
     MusicSourceAdminModule,
+    CryptoModule,
   ],
   controllers: [HealthController],
   providers: [

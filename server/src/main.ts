@@ -11,6 +11,8 @@ import { AppModule } from "./app.module";
 import { rewriteShareIndexHtml, sharePlayerVersion } from "./common/share-player-assets";
 import { sharePlayerCacheHeaders } from "./common/static-cache-policy";
 import { AppConfigService } from "./config/app-config.service";
+import { CryptoTransportService } from "./crypto/crypto-transport.service";
+import { createCryptoMiddleware } from "./crypto/crypto.middleware";
 
 /**
  * 请求体是原始字节、必须绕开 JSON 解析的路由。
@@ -97,6 +99,18 @@ async function bootstrap(): Promise<void> {
 
   const parseJson = json({ limit: "16kb" });
   const parseDesktopManifest = json({ limit: "1mb" });
+
+  // 传输加密中间件：必须在 body parser 之前拿原始字节解密。对无加密头的请求完全透明。
+  // 排除静态资源、音频流与大文件上传（这些不加密，见 plans/009）。
+  const cryptoTransport = app.get(CryptoTransportService);
+  app.use(createCryptoMiddleware(cryptoTransport, (request) => {
+    if (!request.path.startsWith("/api/v1/")) return true;
+    if (RAW_BODY_PATHS.has(request.path) || request.path === DESKTOP_MANIFEST_PATH) return true;
+    // 音频流走 /songs/:id/play，逐块 AEAD 得不偿失，明确排除。
+    if (/^\/api\/v1\/.*\/play$/.test(request.path)) return true;
+    return false;
+  }));
+
   app.use((request: Request, response: Response, next: NextFunction) => {
     if (request.method === "POST" && request.path === DESKTOP_MANIFEST_PATH) {
       return parseDesktopManifest(request, response, next);

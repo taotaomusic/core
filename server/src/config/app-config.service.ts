@@ -134,6 +134,14 @@ export class AppConfigService {
   readonly emailVerificationTestCode: string | null;
 
   /**
+   * 传输加密的内嵌 PSK（`plans/009`）。`CRYPTO_PSK_ID` 是密钥标识，
+   * `CRYPTO_PSK_HEX` 是 64 位十六进制原始 PSK。二者缺一则握手全部失败、链路保持明文。
+   * per-device 派生在握手时按 ClientHello 里的 device_id 现算，不在这里配置。
+   */
+  readonly cryptoPskId: string;
+  readonly cryptoPskHex: string;
+
+  /**
    * 上游接口基地址。
    * 搜索与播放链接用 v3（v3 的路径里不带版本号前缀），歌词仍用 v2 ——
    * v2 的歌词接口同时给出 lrc、逐字 yrc、翻译和音译，v3 没有等价接口。
@@ -204,6 +212,8 @@ export class AppConfigService {
     this.imApiToken = String(config.get("IM_API_TOKEN") ?? "");
     this.imSessionLifetimeSeconds = Number(config.get("IM_SESSION_LIFETIME_SECONDS") ?? 900);
     this.emailVerificationTestCode = String(config.get("EMAIL_VERIFICATION_TEST_CODE") ?? "") || null;
+    this.cryptoPskId = String(config.get("CRYPTO_PSK_ID") ?? "");
+    this.cryptoPskHex = String(config.get("CRYPTO_PSK_HEX") ?? "");
     this.totpIssuer = String(config.get("TOTP_ISSUER") ?? "桃桃音乐管理后台");
     this.adminInitialPassword = String(config.get("ADMIN_INITIAL_PASSWORD") ?? "");
     this.ldapUrl = String(config.get("LDAP_URL") ?? "");
