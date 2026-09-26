@@ -2,7 +2,7 @@
 
 [返回文档中心](README.md)
 
-本页是后端源码、接口和数据库文档的导航基准。内容在 2026-09-17 按 `server/.codegraph` 索引和源码逐项核对，索引快照包含 **131 个文件、2,653 个节点、6,455 条边、104 条路由**。路由清单中的路径是 Controller 相对路径，除 `/health` 外实际都要加全局前缀 `/api/v1`。
+本页是后端源码、接口和数据库文档的导航基准。内容在 2026-09-26 按源码逐项核对（上一版 2026-09-17）。路由清单中的路径是 Controller 相对路径，除 `/health` 外实际都要加全局前缀 `/api/v1`；文件/节点/路由的具体数量以 `codegraph status` 与 `codegraph query` 实测为准，不要引用本文历史快照的数字。
 
 ## 1. 如何刷新索引
 
@@ -12,7 +12,7 @@ CodeGraph 数据库是本机生成物，不应提交 `codegraph.db`。源码变�
 codegraph index server
 codegraph status server --json
 
-# 查看所有路由（输出 104 条左右，数量变化意味着需要同步本页）
+# 查看所有路由（输出 120+ 条，数量变化意味着需要同步本页）
 codegraph query --path server --kind route --limit 200 --json ""
 ```
 
@@ -22,11 +22,12 @@ codegraph query --path server --kind route --limit 200 --json ""
 
 | 目录/文件 | 责任边界 | 主要依赖或持久化 |
 | --- | --- | --- |
-| `src/main.ts` | Nest 启动、按路由解析请求体、静态管理后台与分享页、全局前缀 | Express |
+| `src/main.ts` | Nest 启动、传输加密中间件挂载（先于 body parser）、按路由解析请求体、静态管理后台与分享页、全局前缀 | Express |
 | `src/app.module.ts` | 组装全部业务模块和全局 Provider | Guard、Interceptor、Filter |
 | `src/config/` | 环境变量加载、校验、类型化配置 | `@nestjs/config` |
 | `src/common/` | 业务异常、鉴权、限流、信封、响应头、通用工具 | 进程内状态 |
 | `src/database/` | PostgreSQL 连接池、INT8 解析、启动迁移、事务辅助 | PostgreSQL |
+| `src/crypto/`（`CryptoModule`） | 传输层加密：`crypto.controller.ts` 的 `POST /crypto/handshake` 握手、`crypto.middleware.ts` 的 AEAD 逐块解密（挂载在 body parser 之前）、`crypto-transport.service.ts`（原生引擎加载、PSK 登记、会话清理）、`native-loader.ts` | `crypto/dist` 原生产物、`CRYPTO_PSK_ID/HEX` |
 | `src/auth/` | 注册、邮箱验证码、登录、令牌轮换、资料和头像 | `users`、`refresh_tokens`、Lsky、SMTP |
 | `src/mail/` | 验证码邮件发送与模板 | SMTP |
 | `src/announcement/` | 公告读取、后台上下线和置顶 | `app_announcement` |
@@ -35,7 +36,7 @@ codegraph query --path server --kind route --limit 200 --json ""
 | `src/playlists/` | 云端歌单、快照、排序和完整替换 | `playlists`、`playlist_songs` |
 | `src/music/` | 搜索、歌曲信息、直链、音频代理、歌词 | 上游 Client、`favorites` |
 | `src/open-api/`（`OpenApiModule`） | 开放搜歌 API Key 鉴权与第三方搜歌端点：`open-api.module.ts`、`open-api-key.repository.ts`、`open-api-key.service.ts`（`OpenApiKeyService`）、`open-api-key.guard.ts`（`ApiKeyGuard`）、`open-api.controller.ts`（`OpenApiController`）、`open-api-key-admin.controller.ts`（管理端 key CRUD） | `open_api_key` 表（只存 `sha256(key)`），imports `MusicModule` + `UpstreamModule` + `AdminAuthModule` |
-| `src/upstream/` | 腾讯/网易协议适配和错误收敛 | 外部音乐 API |
+| `src/upstream/` | 多音源协议适配和错误收敛：腾讯/网易/酷我客户端、波点（Bodian）客户端与 KPK 签名复刻、`music-source-account.repository.ts` 音源账号凭据、`music-source.registry.ts` 注册表分派、`music-source-admin.controller.ts` 音源账号后台管理 | 外部音乐 API、`music_source_account` |
 | `src/shares/` | 歌曲短链、公开元数据、试听转发 | `song_share`、`StreamService` |
 | `src/image-generation/` | 图片任务、Key 池、额度预扣和状态轮询 | `api_key`、`image_generation_task`、ApiSweet |
 | `src/release/` | Android APK/补丁、灰度、最低版本和远程配置 | `app_release`、`app_patch`、`app_channel`、`app_config` |
@@ -84,6 +85,8 @@ API Key，失败一律 401/4014（**不能 403**）。用户访问令牌（`payl
   → NestFactory.create({ bodyParser: false })
   → DatabaseService 等待 PostgreSQL（最多 10 次，每次 1 秒）
   → pg_advisory_xact_lock(913720001) + 幂等迁移
+  → 挂载传输加密中间件（带 X-Taotao-Crypto 头的请求先做 AEAD 解密；必须先于 body parser，
+    否则拿到的是密文；无加密头请求完全透明。排除 RAW_BODY_PATHS 与 */play 音频流）
   → 挂载按路由分流的 JSON parser（普通 16KB、桌面清单 1MB、原始上传跳过）
   → /api/v1 全局前缀（/health 例外）
   → 全局 ValidationPipe(transform=true)
@@ -120,15 +123,13 @@ POST /api/v1/desktop/admin/artifacts
 
 ## 4. 完整路由索引
 
-以下路径均省略 `/api/v1` 前缀；`/health` 是唯一例外。总数由 CodeGraph 当前索引统计为 104，
-加上开放搜歌 API 新增的 8 条（4 条 `/open/**` + 4 条 `/app/admin/open-api-keys`）后应为 112，
-下次刷新索引时以实际查询结果为准。
+以下路径均省略 `/api/v1` 前缀；`/health` 是唯一例外。总数以 CodeGraph 实测为准（2026-09-26 核对约 125 条），不要引用历史快照数字。
 
 ### 公开公告（1）
 
 - `GET /announcements`：读取最新可见公告，置顶优先，最多 20 条。
 
-### Android/后台聚合接口（30）
+### Android/后台聚合接口（39）
 
 - `GET /app/bootstrap`：公开更新检查、补丁和远程配置。
 - `GET /app/apk/:versionCode`、`HEAD /app/apk/:versionCode`：APK Range 下载/探测。
@@ -142,6 +143,7 @@ POST /api/v1/desktop/admin/artifacts
 - `GET /app/admin/announcements`、`POST /app/admin/announcements`、`POST /app/admin/announcements/:id`、`POST /app/admin/announcements/:id/enabled`、`POST /app/admin/announcements/:id/pinned`、`DELETE /app/admin/announcements/:id`：公告管理。
 - `GET /app/admin/users`、`GET /app/admin/users/:id/playback`、`POST /app/admin/users/:id/disabled`、`DELETE /app/admin/users/:id`：用户与播放统计管理。
 - `GET /app/admin/open-api-keys`、`POST /app/admin/open-api-keys`、`PATCH /app/admin/open-api-keys/:id`、`DELETE /app/admin/open-api-keys/:id`：开放 API Key 列表、创建（明文只返回一次）、启停和吊销；走管理员会话，读 `READ_ROLES`，写 `WRITE_ROLES`。
+- `GET /app/admin/music-sources`、`GET /app/admin/music-sources/available`、`POST /app/admin/music-sources`、`PATCH /app/admin/music-sources/:id`、`PUT /app/admin/music-sources/:id/enabled`、`POST /app/admin/music-sources/:id/probe`、`DELETE /app/admin/music-sources/:id`、`POST /app/admin/music-sources/sms`、`POST /app/admin/music-sources/login`：音源账号（酷我/波点）后台管理。清单属 `PRIVILEGED_READ_ROLES`（凭据属个人信息），可用项与读写按 `READ_ROLES`/`WRITE_ROLES`；写操作记 `music_source.*` 审计；token/手机号只进不出，响应只回掩码。
 
 ### 认证与资料（13）
 
@@ -177,9 +179,11 @@ POST /api/v1/desktop/admin/artifacts
 - `POST /desktop/admin/rollout`：桌面版本灰度/启用。
 - `POST /desktop/admin/min-version`：桌面最低支持版本。
 
-### 音乐与图片（8）
+### 音乐与图片（10）
 
 - `GET /search`：裸 NDJSON 搜索。
+- `GET /search/suggestions`：搜索联想词（默认酷我源）。
+- `GET /search/hot`：热搜词（默认酷我源）。
 - `GET /songs/:id/link`、`GET /songs/:id/info`、`GET /songs/batch-info`：直链、音质和批量信息。
 - `GET /songs/:id/play`：Range 音频代理。
 - `GET /songs/:id/lyrics`：纯文本或 `format=json` 歌词。
@@ -194,11 +198,15 @@ POST /api/v1/desktop/admin/artifacts
 - `GET /open/songs/:id/lyrics`：默认 `text/plain`，`format=json` 走信封。
 - `GET /open/songs/:id/link`：信封，`data = { songId, url, quality, requestedQuality, kbps, fallback }`。
 
-### 收藏、歌单、播放（20）
+### 收藏、歌单、播放（21）
 
 - 收藏：`GET /favorites`、`POST /favorites/:source/:songId`、`DELETE /favorites/:source/:songId`。
 - 歌单：`GET /playlists`、`POST /playlists`、`GET /playlists/:playlistId`、`GET /playlists/:playlistId/songs`、`PATCH/PUT /playlists/:playlistId`、`DELETE /playlists/:playlistId`、`POST /playlists/:playlistId/songs`、`DELETE /playlists/:playlistId/songs/:source/:songId`、`PATCH/PUT /playlists/:playlistId/songs/order`、`PUT /playlists/:playlistId/songs`。
-- 播放：`POST /playback/sessions`、`GET /playback/recent`、`GET /playback/recent/state`、`GET /playback/stats`、`DELETE /playback/recent`。
+- 播放：`POST /playback/sessions`、`GET /playback/recent`、`GET /playback/recent/state`、`GET /playback/stats`、`GET /playback/diary`（单曲倒带日记：按天峰值、年度/半年会话数、最近会话明细）、`DELETE /playback/recent`。
+
+### 传输加密（1）
+
+- `POST /crypto/handshake`：`@Public()` 握手，交换加密会话。未启用（产物缺失或协议版本过低）固定 503/5031；被拒绝（PSK 未配置、设备不匹配、报文非法）400/4013。请求/响应头与加密会话语义见 [03-api-contracts.md](03-api-contracts.md) 的传输加密章节。
 
 ### 分享与 IM（10）
 
@@ -228,12 +236,15 @@ POST /api/v1/desktop/admin/artifacts
 | 管理后台其它接口 | 管理员会话 `Authorization: Bearer` | 默认无独立桶；再按角色判 403/4030 |
 | 开放搜歌 `/open/**` | 不要求桃桃访问令牌；用 `X-API-Key` 或 `Bearer tt_...`（`ApiKeyGuard`） | `open-api` 桶：每 key 120 次 + 每来源地址 600 次/15 分钟；失败 401/4014，超限 429/4290 |
 | 开放 API Key 管理 `/app/admin/open-api-keys` | 管理员会话；读 `READ_ROLES`，写 `WRITE_ROLES` | 同管理端 `admin` 桶（每 IP 60 次/15 分钟）；写操作记 `open_api_key.*` 审计 |
+| 音源账号管理 `/app/admin/music-sources*` | 管理员会话；清单 `PRIVILEGED_READ_ROLES`，可用项 `READ_ROLES`，写 `WRITE_ROLES` | 同管理端 `admin` 桶；写操作记 `music_source.*` 审计 |
+| 音源短信登录 `/app/admin/music-sources/sms` | 管理员会话，`WRITE_ROLES` | `music-source-sms` 桶：每 IP 5 次 + 每手机号 3 次/15 分钟 |
+| 传输加密握手 `/crypto/handshake` | `@Public()` | 无独立限流；未启用固定 503/5031 |
 
 限流器是进程内滑动窗口，重启清空，多实例不共享。不能把它当成跨实例的安全配额。
 
 ## 6. 数据模型速览
 
-迁移当前创建 25 张表：
+迁移当前创建 26 张表：
 
 ```text
 users                         refresh_tokens
@@ -245,7 +256,7 @@ app_announcement              api_key                    image_generation_task
 im_device_session             app_patch                  desktop_release
 desktop_jar                   desktop_patch
 admin_users                   admin_sessions            admin_audit_log
-open_api_key
+open_api_key                  music_source_account
 ```
 
 主要外键和删除语义：
@@ -256,6 +267,7 @@ open_api_key
 - 播放清空只推进 `playback_history_state.revision`，不删除累计统计；每个 marker 另存于 `playback_history_clear_operation` 保证重试幂等。
 - `admin_sessions.admin_id` 随 `admin_users` 级联删除；`admin_audit_log.admin_id` 与 `admin_users.created_by` 是 `ON DELETE SET NULL`，管理员被删后审计仍保留、只是变成无归属。
 - `open_api_key` 只存 `sha256(key)`，明文 key 只在创建响应里返回一次；列表接口只回传 `keyPrefix`。
+- `music_source_account` 刻意**没有外键**：凭据生命周期完全由应用层管理（音源下线不牵连用户数据）。`(source, uid)` 有部分唯一索引（`WHERE uid <> ''`），token/uid 只写不读，对外只出掩码手机号。
 
 所有 `Date.now()` 语义的字段使用 `bigint`，版本/大小/百分比使用 `integer`，历史布尔值使用 `smallint` 0/1。SQL 返回 TypeScript camelCase 时必须给别名加双引号。
 
@@ -277,6 +289,10 @@ open_api_key
 | `SEARCH_CONCURRENCY` | `8` | 配置字段仍保留；当前搜索实现不读取它，不要误以为能改变请求并发 |
 | `APISWEET_BASE_URL` | `https://apisweet.com` | 图片上游 |
 | `LSKY_UPLOAD_URL` / `LSKY_API_KEY` | URL 有默认，Key 空 | 头像上传 |
+| `LSKY_PUBLIC_HOSTS` | 空 | 头像图床公网域白名单；上传返回的 URL 必须落在白名单内才入库 |
+| `CRYPTO_PSK_ID` / `CRYPTO_PSK_HEX` | 空 | 传输加密 PSK 标识与 32 字节 hex 密钥；缺任一项握手全部 503/5031，链路保持明文 |
+| `ADMIN_RATE_LIMIT` | `60` | 管理端 `admin` 限流桶每 15 分钟次数；仅供契约验证调大，生产勿设 |
+| `BODIAN_DEVICE_ID` | `md5("taotao-music-server")` | 波点客户端设备号覆盖项 |
 | `SMTP_HOST` | 空 | SMTP 主机 |
 | `SMTP_PORT` | `587` | SMTP 端口 |
 | `SMTP_USER` | 空 | SMTP 用户 |
@@ -304,7 +320,7 @@ open_api_key
 ```powershell
 cd server
 npm run build
-node tools/verify-contract.mjs http://127.0.0.1:4720 verify-token
+node tools/verify-contract.mjs http://127.0.0.1:4720
 npx tsc -p tsconfig.json --noEmit
 git diff --check
 ```

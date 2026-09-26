@@ -61,6 +61,9 @@ GPTIMAGE2
 - `POST /api/v1/app/admin/image-keys`：新增或更新额度，Key 长度 8–512，额度 0–1,000,000。
 - `DELETE /api/v1/app/admin/image-keys/{id}`：仍被任务引用时受数据库外键限制，返回 404/4042。
 
+管理后台前端有独立管理页 `SupporterKeyManager.vue`（`src/frontend/src/components/`），调用的
+正是上述 `/app/admin/image-keys` 接口；写操作记 `image_key.*` 审计，明文不回传。
+
 ## 4. Key 池
 
 ### 字段

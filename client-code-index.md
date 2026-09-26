@@ -6,31 +6,36 @@
 
 ## 1. 当前快照
 
-本页在 2026-09-17 按根目录索引核对，状态命令为 `codegraph status . --json`：
+本页在 2026-09-26 重建根索引后核对（此前的 `.codegraph/` 曾丢失，`codegraph init .` + `codegraph index .` 重建），状态命令为 `codegraph status . --json`：
 
 | 项目 | 当前值 |
 | --- | ---: |
 | CodeGraph 版本 | 1.0.1 |
-| 最后索引时间 | 2026-09-17T10:49:07.036Z |
-| 根索引记录文件 | 260 |
-| 根索引节点 | 5,825 |
-| 根索引关系 | 14,931 |
-| 客户端文件（排除 `server/`） | 129 |
-| 客户端节点（排除 `server/`） | 3,172 |
+| 最后索引时间 | 2026-09-26T16:31:07Z |
+| 根索引记录文件 | 343 |
+| 根索引节点 | 7,992 |
+| 根索引关系 | 21,521 |
+| 客户端文件（排除 `server/`） | 149 |
+| 客户端节点（排除 `server/`） | 3,970 |
 | 待同步新增/修改/删除 | 0 / 0 / 0 |
 | 是否建议重建 | 否 |
 
-客户端语言统计如下。前两列是索引记录文件数和由文件聚合出的节点数；根目录的 Gradle、脚本和版本配置也会被记录，因此总数不只包含业务 Kotlin。
+根索引语言统计如下（含服务端）。根目录的 Gradle、脚本、工作流和版本配置也会被记录，因此总数不只包含业务源码。
 
-| 语言 | 文件 | 节点 | 说明 |
-| --- | ---: | ---: | --- |
-| Kotlin | 118 | 3,097 | Android、KMP、桌面、Wasm、构建逻辑和补丁 |
-| Java | 2 | 45 | `desktopLauncher`、`desktopUpdater` |
-| XML | 3 | 3 | Android Manifest 和资源配置 |
-| Python | 3 | 27 | 根目录维护脚本，不属于运行时客户端 |
-| Properties | 3 | 0 | Gradle/版本配置，不产生语义节点 |
+| 语言 | 文件 | 说明 |
+| --- | ---: | --- |
+| Kotlin | 147 | Android、KMP、桌面、Wasm、构建逻辑和补丁 |
+| TypeScript | 137 | `server/` 源码与工具 |
+| Rust | 18 | `crypto-src/` 加密层四 crate |
+| Vue | 15 | 服务端管理后台前端 |
+| JavaScript | 9 | 服务端构建与契约工具 |
+| YAML | 5 | GitHub Actions 工作流 |
+| Python | 4 | 根目录维护脚本 |
+| XML | 3 | Android Manifest 和资源配置 |
+| Properties | 3 | Gradle/版本配置 |
+| Java | 2 | `desktopLauncher`、`desktopUpdater` |
 
-根索引还包含 131 个服务端文件、2,653 个服务端节点；后端路由、数据库和配置请以 [server/wiki/00-code-index.md](server/wiki/00-code-index.md) 为准，不要把本页的根索引统计当成后端独立快照。
+根索引还包含 194 个服务端相关文件（server/ 源码、前端、工具与工作流）；后端路由、数据库和配置请以 [server/wiki/00-code-index.md](server/wiki/00-code-index.md) 为准，不要把本页的根索引统计当成后端独立快照。
 
 ## 2. 模块地图
 
@@ -38,13 +43,13 @@
 
 | 模块 | 文件/节点 | 主要职责 | 关键入口或文件 |
 | --- | ---: | --- | --- |
-| `androidApp` | 68 / 1,781 | Android 生命周期、Compose 页面、账号与本地 Store、网络适配、Media3 播放、IM、热修复和更新 | `MainActivity.kt`、`TaotaoMusicApp.kt`、`TencentMusicApi.kt`、`AudioPlayer.kt`、`PlaybackService.kt` |
+| `androidApp` | 85 / 2,439 | Android 生命周期、Compose 页面、账号与本地 Store、网络适配、Media3 播放、IM、热修复和更新。`ui/` 已拆 15 个功能子包（account/ai/app/auth/chat/common/home/library/mine/player/playlist/search/settings/theme/update），全局状态在 `ui/app/` 状态容器（`TaotaoAppState`、`SearchState`、`PlaylistState`、`AppEffects`、`AppDialogs`、`AppPageRouter`、`AppContent`） | `MainActivity.kt`、`TaotaoMusicApp.kt`、`TencentMusicApi.kt`、`AudioPlayer.kt`、`PlaybackService.kt` |
 | `shared` | 6 / 52 | Kotlin Multiplatform 纯模型和规则：歌曲、歌词、音质与解析器 | `MusicModels.kt`、`Lyric.kt`、`AudioQuality.kt` |
-| `player-ui` | 13 / 231 | Android、Windows、Web 共用的播放主题、歌曲行、迷你播放器、播放布局和状态视图 | `SharedMiniPlayer.kt`、`PlayerSurface.kt`、`SharedMainLayout.kt` |
-| `desktopApp` | 16 / 836 | Windows Compose Desktop 应用、搜索/歌单/收藏/历史、JVM 播放、持久化、同步、系统媒体和定时播放 | `Main.kt`、`DesktopShell.kt`、`DesktopPlayer.kt`、`DesktopMusicApi.kt` |
+| `player-ui` | 23 / 381 | Android、Windows、Web 共用的播放主题、歌曲行、迷你播放器、播放布局和状态视图；`theme/` 是 Taotao 设计 token 与组件，`layout/` 承载主布局骨架 | `SharedMiniPlayer.kt`、`PlayerSurface.kt`、`layout/SharedMainLayout.kt`、`theme/AppleStyleTheme.kt` |
+| `desktopApp` | 17 / 853 | Windows Compose Desktop 应用、搜索/歌单/收藏/历史、JVM 播放、持久化、同步、系统媒体和定时播放 | `Main.kt`、`DesktopShell.kt`、`DesktopPlayer.kt`、`DesktopMusicApi.kt` |
 | `desktopLauncher` | 2 / 23 | Windows 发布包的轻量启动器 | `LauncherMain.java` |
 | `desktopUpdater` | 2 / 24 | Windows 模块更新器和启动/替换流程 | `UpdaterMain.java` |
-| `webApp` | 4 / 104 | Kotlin/Wasm 分享播放器，只负责公开试听页和浏览器音频适配 | `Main.kt`、`WebAudioController.kt` |
+| `webApp` | 4 / 106 | Kotlin/Wasm 分享播放器，只负责公开试听页和浏览器音频适配 | `Main.kt`、`WebAudioController.kt` |
 
 ### 客户端构建与发布支撑
 
@@ -87,6 +92,10 @@ desktopApp
 - `player-ui` 只提供界面骨架和可插槽的回调；实际封面、歌词、队列、下载和播放引擎仍由各端注入。
 - Android 与 Windows 共用歌曲身份 `source + songId`、音质枚举和云端歌单契约，但本地缓存、播放引擎和生命周期状态分别由平台持有。
 - Web 分享播放器只处理公开分享和试听，不接入 Android 的账号、IM、AI、下载和队列能力。
+- **传输加密（协议 v2，握手绑定设备号）**：`androidApp/.../data/crypto/HardwareDeviceId.kt`（ANDROID_ID）与
+  `desktopApp/.../crypto/MachineGuid.kt`（注册表 MachineGuid）提供设备号来源；四端编译产物在
+  `crypto/dist/`（源码在 `crypto-src/`，经 tools 仓库交叉编译）。当前只有服务端消费产物
+  （`server/src/crypto/native-loader.ts`），客户端 JNI 绑定尚未进构建路径，Web 端不接入。
 - `build-logic` 与 `patch` 参与构建和热修复，不属于业务运行时依赖；修改包名或插桩键前必须阅读 [RELEASE.md](RELEASE.md) 和 [HOT_UPDATE.md](HOT_UPDATE.md)。
 
 ## 4. 关键符号导航
@@ -96,11 +105,16 @@ desktopApp
 | 领域 | 符号 | 文件 | 作用 |
 | --- | --- | --- | --- |
 | Android 入口 | `MainActivity` | `androidApp/src/main/java/com/taotao/music/MainActivity.kt` | 生命周期和 Compose 根入口 |
-| Android 组合根 | `TaotaoMusicApp` | `androidApp/src/main/java/com/taotao/music/ui/TaotaoMusicApp.kt` | 全局状态组装、导航、播放队列和页面协调 |
+| Android 组合根 | `TaotaoMusicApp` | `androidApp/src/main/java/com/taotao/music/ui/TaotaoMusicApp.kt` | 组合根入口；全局状态组装已拆到 `ui/app/`（`TaotaoAppState` 等 7 个文件） |
 | Android 网络 | `TencentMusicApi` | `androidApp/src/main/java/com/taotao/music/data/TencentMusicApi.kt` | 音乐、账号、歌单、播放、IM 等后端调用和错误/续期处理 |
 | Android 播放 | `AudioPlayer` / `PlaybackService` | `androidApp/src/main/java/com/taotao/music/player/` | Media3 播放控制、媒体会话和后台生命周期 |
+| Android 定时关闭 | `SleepTimer` 系列 | `androidApp/.../player/SleepTimer.kt`、`SleepTimerPolicy.kt`、`ui/player/SleepTimerDialog.kt` | 播完整首再停的等待态、底部弹层与持久化 |
+| Android 拖动排序 | `DragReorderList` / `TaotaoSnackbar` | `androidApp/.../ui/common/DragReorderList.kt`、`ui/common/components.kt` | 播放队列与歌单共用的统一拖动组件、全局 Snackbar |
+| Android 播放记录与日记 | `PlaybackHistoryPage` / `SongDiaryPage` / `DiaryRecordsPage` | `androidApp/.../ui/library/MineLibraryPages.kt` | 播放记录独立下级页与单曲倒带日记（路由 key `diary-records`） |
+| Android 设备号 | `HardwareDeviceId` | `androidApp/.../data/crypto/HardwareDeviceId.kt` | ANDROID_ID 设备号来源，供传输加密协议 v2 绑定 |
 | Android 更新 | `UpdateManager` | `androidApp/src/main/java/com/taotao/music/update/UpdateManager.kt` | 版本检查、下载、校验和安装协调 |
 | Android 热修复 | `PatchDispatcher` / `PatchEntry` | `androidApp/src/main/java/com/taotao/music/hotfix/` | 补丁入口、分发和诊断 |
+| Windows 设备号 | `MachineGuid` | `desktopApp/src/main/kotlin/com/taotao/music/desktop/crypto/MachineGuid.kt` | 读注册表 MachineGuid 作设备号来源 |
 | 共享模型 | `Song` | `shared/src/commonMain/kotlin/com/taotao/music/model/MusicModels.kt` | 被 Android、Windows、播放 UI 等 30 个文件引用的歌曲模型 |
 | 歌词规则 | `LyricParser` | `shared/src/commonMain/kotlin/com/taotao/music/model/Lyric.kt` | LRC/YRC 解析、逐字进度和时间映射 |
 | 音质规则 | `AudioQuality` | `shared/src/commonMain/kotlin/com/taotao/music/model/AudioQuality.kt` | STANDARD/HIGH/LOSSLESS/HIRES/MASTER 及标签映射 |
@@ -146,6 +160,7 @@ codegraph impact -p . "com.taotao.music.model::Song"
 2. `pendingChanges.added/modified/removed` 全为 `0`。
 3. `index.currentExtractionVersion` 与 `index.builtWithExtractionVersion` 相等，`reindexRecommended=false`。
 4. 发现新的模块、源文件类型或 CodeGraph 升级后，先执行 `codegraph sync .`；若版本提示需要重建，再执行 `codegraph index .`。
+5. 克隆本仓库后首次使用时 `.codegraph/` 不存在（它不进版本库），需先 `codegraph init .` 再 `codegraph index .`；直接跑 `index` 会报 "not initialized"。
 
 CodeGraph 只提供结构索引，不替代 Kotlin 编译器、Gradle、Android Lint 或设备测试。生成代码、`build/`、`.gradle/`、依赖缓存和其他 `.gitignore` 路径被刻意排除；涉及类型推导、资源合并、Manifest 合并或平台运行时行为时，必须回到对应构建和测试命令验证。
 

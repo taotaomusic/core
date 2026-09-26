@@ -256,10 +256,10 @@ node server\tools\min-version.mjs --version 55
 | `update/AppUpdateApi.kt` | `bootstrap` 请求。`HttpURLConnection` 风格对齐 `TencentMusicApi`；令牌可选，不复用 `authorized()` 的强制鉴权与重放逻辑 |
 | `update/UpdateDownloader.kt` | 断点续传下载到 `filesDir/update/<versionCode>.apk.part`，校验 sha256 后 rename；复用 `OfflineDownloadManager` 的 `.part` + rename 惯例 |
 | `update/UpdateInstaller.kt` | 检查 `canRequestPackageInstalls()`，通过 FileProvider 生成 content URI，唤起系统安装器 |
-| `update/UpdateState.kt` | 状态机与数据模型 |
+| `update/UpdateModels.kt` + `update/UpdateManager.kt` | 状态机与数据模型（原计划的 `UpdateState.kt` 落地时拆成了两个文件） |
 | `data/DeviceIdStore.kt` | 首次启动生成并持久化匿名设备号，用于灰度分桶 |
 | `data/RemoteConfigStore.kt` | 缓存远程配置到 SharedPreferences，提供带默认值的类型化读取 |
-| `ui/UpdateGate.kt` | 强制更新拦截页 + 可选更新对话框 |
+| `ui/update/UpdateGate.kt` | 强制更新拦截页 + 可选更新对话框 |
 
 ### 4.2 状态机
 

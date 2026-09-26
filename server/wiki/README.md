@@ -8,7 +8,7 @@
 
 | 文档 | 核心内容 | 适用场景 |
 | --- | --- | --- |
-| [00-code-index.md](00-code-index.md) | CodeGraph 基准、模块地图、完整 104 条路由、24 张表、配置与同步规则 | 先确认源码当前形状、查路由或判断文档应该改在哪里 |
+| [00-code-index.md](00-code-index.md) | CodeGraph 基准、模块地图、路由与表清单（以实测为准）、配置与同步规则 | 先确认源码当前形状、查路由或判断文档应该改在哪里 |
 | [01-architecture.md](01-architecture.md) | 模块结构、请求链路、全局守卫与拦截器、静态资源处理 | 第一次接触项目、准备新增模块、需要理解请求链路时 |
 | [02-development.md](02-development.md) | 本地环境搭建、启动命令、热重载、调试、测试执行 | 搭建本地环境、运行、构建、调试和执行测试时 |
 | [03-api-contracts.md](03-api-contracts.md) | 响应信封、错误码、不能破坏的客户端契约、NDJSON 流 | 新增或修改接口、与客户端联调、处理错误码时 |
@@ -54,7 +54,7 @@
 3. **安全第一**：不在文档中写入真实密码、API Key、数据库连接串或签名信息
 4. **示例规范**：示例密钥只能使用明显的占位文本，例如 `替换为真实Key`
 5. **可执行性**：文档中的命令应能从标注的工作目录直接执行
-6. **加密同步**：后端消费的加密层（独立仓库 `hdppppppp/tools` 产出的 `.node`）协议格式或密钥规则变化时，同步更新该仓库 `README.md` 的协议章节与 `SECURITY.md`；本仓库的 `crypto/dist/` 只放产物，不放文档
+6. **加密同步**：加密层源码在 monorepo 的 `crypto-src/`（Rust，core/jni/node/wasm 四 crate），由 `tools/sync-repos.ps1` 快照推到 GitHub `hdppppppp/tools` 仓库交叉编译，产物发 Release 后经 `tools/fetch-crypto.ps1` 落回本仓库 `crypto/dist/`。改协议格式或密钥规则去 `crypto-src/` 改，同步更新它的 `README.md` 与 `SECURITY.md`；`crypto/dist/` 只放产物，不放文档、不手改
 7. **索引同步**：新增或删除路由、表、环境变量或模块后先刷新 CodeGraph，再更新 `00-code-index.md` 和对应专题；不要凭旧 README 猜测路由。
 
 ## 🚀 快速开始
@@ -103,8 +103,8 @@ npm run build:frontend
 # 管理后台独立开发服务器（Vite，端口 5173）
 npm run dev:frontend
 
-# 契约验证（以脚本实际输出为准，须全绿）
-node tools/verify-contract.mjs http://127.0.0.1:4720 verify-token
+# 契约验证（以脚本实际输出为准，须全绿；需先 npm run build:frontend 与 build:web-player，并调大 ADMIN_RATE_LIMIT）
+node tools/verify-contract.mjs http://127.0.0.1:4720
 
 # 重置验证数据库
 node tools/reset-db.mjs postgres://postgres:密码@localhost:5432/music_verify

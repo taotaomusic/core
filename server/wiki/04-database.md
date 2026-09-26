@@ -157,12 +157,38 @@ CREATE TABLE image_generation_task (
 
 任务引用 Key 使用 `ON DELETE RESTRICT`，避免删除仍需轮询的 Key。
 
+### `music_source_account`
+
+音源账号凭据（酷我/波点等需要登录态的音源），由管理后台维护、播放链路按 `source` 取用。
+字段见 `src/database/migrations.ts`，读取层见 `src/upstream/music-source-account.repository.ts`：
+
+| 字段 | 说明 |
+| --- | --- |
+| `id` | identity 主键 |
+| `source` | 音源标识，`CHECK (source ~ '^[a-z0-9_-]{2,32}$')` |
+| `label` / `phone` / `remark` | 展示与备注文本，默认空串 |
+| `token` / `uid` | 登录凭据 |
+| `enabled` | `smallint` 0/1（沿用全库布尔约定） |
+| `last_status` | `CHECK (last_status IN ('unknown', 'ok', 'invalid'))`，最近一次探测结果 |
+| `last_error` / `last_note` | 最近一次失败原因 / 探测到的真实音质 |
+| `last_checked_at` | 可空 bigint |
+
+全表无外键。部分唯一索引 `(source, uid) WHERE uid <> ''` 保证同一音源同一份登录凭据只有一条；
+uid 为空表示尚未登录的占位记录，被索引跳过。
+
+**token 与 uid 只写不读**：管理接口一律只回掩码手机号，明文既不进响应体也不进审计表。
+任何把它们写进审计 `detail` 或查询结果的改动都是泄漏。
+
 ### `song_share`
 
 保存分享 token、用户、来源、稳定歌曲身份和元数据快照。`token` 为 8–24 位短码，
 `(user_id, source, song_id)` 唯一；**不存任何音频文件路径** —— 试听是转发上游音频，不是缓存，
 也不能保存上游限时直链（旧库的 `preview_file` 已在迁移里删除）。
 `access_count`、`enabled` 和时间字段用于公开分享统计与失效控制。
+
+`source` 的 CHECK 已扩到 `('tencent', 'netease', 'kuwo')`。旧库的约束是建表时的旧白名单，
+`CREATE TABLE IF NOT EXISTS` 改不动它 —— 迁移里用条件 DO 块查 `pg_constraint`，确认旧定义
+确实不含 `kuwo` 时才 `DROP` 后重建。这是 §9「修改已有表约束」ALTER 范例的第二个实际用例。
 
 ### `app_announcement`
 
@@ -508,5 +534,8 @@ ORDER BY api_key_id;
 | `idx_admin_sessions_active`（部分） | 按 `admin_id` 查未撤销会话；`WHERE revoked_at IS NULL` |
 | `idx_admin_audit_admin` | 审计按管理员和时间倒序读取 |
 | `idx_admin_audit_action` | 审计按 action 和时间倒序筛选 |
+| `idx_music_source_account_identity`（部分唯一） | 同一音源同一凭据 uid 去重；`WHERE uid <> ''` 跳过未登录占位行 |
+| `idx_music_source_account_enabled` | 播放链路按音源取启用账号 |
+| `idx_open_api_key_enabled` | 开放 API Key 按 `enabled, created_at DESC` 读取 |
 
 新增查询先确认过滤列和排序列是否匹配现有索引；不要为低频管理查询盲目增加索引。

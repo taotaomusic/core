@@ -48,6 +48,8 @@ GitHub 侧三个仓库（music / music-server / tools）都是**正式仓库**�
 - **[RELEASE.md](RELEASE.md)：发布与热更新流程、版本号铁律、不能破的客户端契约。改后端或推版本前必读。**
 - [server/README.md](server/README.md)：后端接口、数据层规矩、契约验证。
 - [HOT_UPDATE.md](HOT_UPDATE.md)：热更新的设计动机（部分内容已被实现取代，文内有标注）。
+- [MUSIC_CROSS_PLATFORM.md](MUSIC_CROSS_PLATFORM.md)：Android/Windows 双端功能边界、定时播放与云端歌单契约。
+- [server/wiki/README.md](server/wiki/README.md)：后端专题文档中心（架构、契约、数据库、部署、排障、管理后台认证等 12 篇）。
 
 ## 文档语言
 
@@ -94,7 +96,7 @@ GitHub 侧三个仓库（music / music-server / tools）都是**正式仓库**�
 ## 后端开发
 
 - 构建必须用 `tsc`，开发用 `ts-node`。**不能用 esbuild 或 tsx** —— 它们不支持 `emitDecoratorMetadata`，NestJS 的构造器注入会拿不到 `design:paramtypes`。
-- 数据层改动后必须跑 `server/tools/verify-contract.mjs`（检查项数量随脚本版本变化，以实际输出为准；本次索引时为 155 项，须全绿），用独立的验证库而不是正式库。
+- 数据层改动后必须跑 `server/tools/verify-contract.mjs`（检查项数量随脚本版本变化，以实际输出为准；当前约 300 项，须全绿），用独立的验证库而不是正式库。
 - 新增路由默认就受全局访问令牌守卫保护；公开路由必须显式标 `@Public()`。漏标只会让接口意外要求登录（能立刻发现），不会意外裸奔。
 - 数据层与客户端之间有一组不能破的契约（401 不能变 403、`/search` 必须是裸 NDJSON、SQL 别名必须加双引号等），逐条列在 [RELEASE.md](RELEASE.md) 里。
 

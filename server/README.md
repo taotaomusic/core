@@ -26,7 +26,8 @@ npm run build
 ```
 
 产物是 `dist/` 目录树（不是单文件）。`npm run build` 会先用 `tsc` 编译后端，再用 Terser
-压缩 `dist/` 内的服务端 JavaScript 并移除注释，最后由 `vite build` 把管理后台产到
+压缩 `dist/` 内的服务端 JavaScript 并移除注释，随后 `node tools/copy-manifest.mjs` 生成
+生产依赖清单 `dist/package.json`，最后由 `vite build` 把管理后台产到
 `dist/public/`。源码始终保持正常缩进和注释，压缩只发生在构建产物中。**部署步骤**：
 
 1. 上传 `dist/` 整个目录和 `package-lock.json` 到服务器（`dist/public/` 是管理后台，访问路径是 `/admin/`；不带上去后台会 404，接口不受影响）
@@ -59,12 +60,14 @@ src/
     filters/                统一错误信封
     interceptors/           统一成功信封、安全响应头
     decorators/             @Public @RawResponse @RateLimit @CurrentUser
-    guards/                 管理令牌校验
     rate-limit/             按用途划分的进程内滑动窗口限流桶
     semaphore.ts            并发上限
 
   config/                 环境变量读取与校验
   database/               PostgreSQL 连接池与建表迁移
+  crypto/                 传输加密：握手控制器、AEAD 中间件、会话管理与原生产物加载（native-loader）
+  admin-auth/             管理员账号、数据库会话、TOTP 2FA、角色守卫与审计日志
+  ldap/                   可选的企业目录（LDAP/SSO）对接，原生 net/tls 实现
   auth/                   注册、登录、令牌轮换、访问令牌守卫
   mail/                   验证码邮件和模板
   announcement/           公告读取、置顶和后台管理
@@ -72,26 +75,30 @@ src/
   playlists/              云端歌单与歌曲顺序
   playback/               最近播放、播放会话与听歌统计
   shares/                 分享短链、公开元数据与 60 秒低码率试听
-  upstream/               第三方接口适配（成功码、字段名、音质降级都收敛在此）
+  upstream/               第三方接口适配：腾讯/网易/酷我(波点)客户端、KPK 签名复刻、
+                          音源账号凭据仓储与后台管理控制器（成功码、字段名、音质降级也收敛在此）
   music/                  搜索、播放转发、歌词
   open-api/               开放搜歌：API Key 鉴权（ApiKeyGuard）、第三方搜歌/歌词/直链端点与后台 key 管理
   image-generation/       gpt-image-2 图片生成任务适配
-  release/                热更新：客户端引导、安装包分发、发布管理
+  release/                热更新：客户端引导、安装包分发、发布管理，以及 x-latest-version-code
+                          响应头缓存（latest-version.cache.ts，LatestVersionModule）
   desktop-release/        Windows 模块清单、内容寻址对象和差分发布
   im/                     悟空 IM 会话、同步、撤回和已读代理
   user-admin/              后台用户、禁用和播放统计
-  health/                 健康检查
+  health/                 健康检查（HealthController 直接注册在 AppModule，无独立模块）
 
   frontend/               管理后台（Vue 3 + Element Plus，浏览器入口）
     index.html              vite 入口，tsconfig 刻意 exclude 掉整个目录
+    public/theme-bootstrap.js  主题初始化脚本（CSP `script-src 'self'` 禁内联脚本，故外置）
     src/api.ts              信封拆解、sha256、上传原始字节
-    src/App.vue             令牌输入与管理标签页
-    src/components/         发布、补丁、公告、用户统计、AI 密钥与系统设置
+    src/App.vue             登录/改密入口与管理标签页
+    src/components/         管理页组件（发布、补丁、公告、用户、AI 密钥、音源账号、系统设置等，见下文清单）
 ```
 
 根目录的 `webApp/` 是 Kotlin/Wasm 分享播放器，复用 `player-ui` 的歌曲信息、进度和播放控制。
 执行 `npm run build:web-player` 会构建它并复制到 `dist/share-player/`；完整的 `npm run build`
-会同时生成 NestJS、管理后台和分享播放器三类产物。
+会同时生成 NestJS、管理后台和分享播放器三类产物。独立 server 镜像仓库没有 Gradle 工程，
+`build:web-player` 会自动跳过（见 `tools/build-web-player.mjs`），不影响其余产物。
 
 ### 管理后台
 
@@ -135,9 +142,15 @@ IP 白名单、会话撤销与审计归属。脚本化调用请从后台登录�
 
 管理后台使用 Vite 生产压缩；Element Plus 通过 `unplugin-vue-components` 与
 `unplugin-auto-import` 按实际使用的组件、服务和样式自动导入，入口禁止重新使用
-`app.use(ElementPlus)` 或导入 `element-plus/dist/index.css`，否则会退化成整包构建。五个管理
-标签页使用异步组件，未打开的模块不进入首屏主包。用户统计读取服务端已同步的
-`user_song_stats`，可查看歌曲数、有效播放、完整播放、累计听歌时长和最近播放明细。
+`app.use(ElementPlus)` 或导入 `element-plus/dist/index.css`，否则会退化成整包构建。管理标签页
+（登录、强制改密、管理员、审计日志、IP 白名单、音源账号、开放 Key、赞助 Key、桌面发布、
+Android 发布、补丁、公告、用户与统计、系统设置，以 `server/src/frontend/src/components/`
+实际文件为准）使用异步组件，未打开的模块不进入首屏主包；观察者（`viewer`）登录后部分页签
+会被隐藏。用户统计读取服务端已同步的 `user_song_stats`，可查看歌曲数、有效播放、完整播放、
+累计听歌时长和最近播放明细。
+
+后台 CSP 是 `script-src 'self'`，`index.html` 里不允许任何内联 `<script>` —— 主题初始化
+脚本因此外置在 `src/frontend/public/theme-bootstrap.js`，随构建进入 `dist/public/`。
 
 ```powershell
 npm run build:frontend    # 产出 dist/public/
@@ -182,8 +195,10 @@ npm run dev:frontend      # 独立开发服务器（5173），API 代理到本�
 | 变量 | 说明 |
 | --- | --- |
 | `PORT` | 监听端口，默认 `4500` |
+| `NODE_ENV` | 运行环境：`development` / `production` / `test`。`production` 目前只是语义标记，服务端没有基于它的额外强制校验；`EMAIL_VERIFICATION_TEST_CODE` 只允许在 `test` 下使用 |
 | `DATABASE_URL` | PostgreSQL 连接串，如 `postgres://postgres:密码@localhost:5432/music`。**没有默认值**，缺失或不是 `postgres://` 开头会启动即失败 |
 | `AUTH_SECRET` | 访问令牌签名密钥，生产环境必须为至少 32 位随机值（启动时校验） |
+| `CRYPTO_PSK_ID` / `CRYPTO_PSK_HEX` | 传输加密 PSK 的标识与 32 字节 hex 原始密钥（可选）。二者缺一时握手全部失败，链路保持明文，不影响其它功能 |
 | `ADMIN_INITIAL_PASSWORD` | 默认超级管理员的初始口令。留空则启动时随机生成并只打印一次；设置时至少 12 字符。两种情况下该账号首次登录都必须改密 |
 | `APK_DIR` | APK 存放目录，默认 `./data/apk` |
 | `DESKTOP_RELEASE_DIR` | Windows 模块和差分对象目录，默认 `./data/desktop` |
@@ -203,9 +218,11 @@ npm run dev:frontend      # 独立开发服务器（5173），API 代理到本�
 | `LDAP_USER_SEARCH_BASE` / `LDAP_USER_SEARCH_FILTER` | LDAP 用户搜索配置，过滤器支持 `{{username}}` 占位符 |
 | `LDAP_GROUP_SEARCH_BASE` / `LDAP_GROUP_SEARCH_FILTER` | LDAP 组搜索配置，过滤器支持 `{{userDn}}` 占位符 |
 | `LDAP_ROLE_MAPPING` | LDAP 组到管理员角色的映射（JSON 对象：组 DN → 角色）；写坏了只退化成空映射并告警，不会拦住服务启动 |
-| `LDAP_TLS_REJECT_UNAUTHORIZED` | LDAPS 是否校验证书，默认 `true`。内网自签证书才显式设 `false` |
+| `LDAP_TLS_REJECT_UNAUTHORIZED` | LDAPS 是否校验证书，默认 `true`。内网自签证书才显式设 `false`；服务端目前不按 `NODE_ENV` 强制约束本变量 |
 | `LDAP_TIMEOUT_MS` | LDAP 连接与单次操作的超时，默认 `10000` |
 | `TRUST_PROXY` | 是否采信 `X-Forwarded-For` 作为客户端地址，默认**关闭**。只有确实部署在可信反向代理之后才设 `1` |
+| `ADMIN_RATE_LIMIT` | 可选：管理端限流桶的额度覆盖，默认 60 次/15 分钟。仅供契约验证脚本调大，**生产环境不要设置** |
+| `BODIAN_DEVICE_ID` | 可选：波点客户端设备号覆盖项，默认 `md5("taotao-music-server")` |
 
 > **LDAP 登录的回落规则**：目录明确拒绝（口令错、已被禁用）时不回落，直接 401；
 > 目录已用用户 DN 绑定成功但后续同步失败时返回 502，同样不回落；未配置、目录不可达、
@@ -234,6 +251,10 @@ npm run dev:frontend      # 独立开发服务器（5173），API 代理到本�
 
 ## 接口
 
+### 健康检查
+
+- `GET /health`：健康探针，**不在 `/api/v1` 前缀下**，反向代理需单独转发。
+
 ### 公告
 
 - `GET /api/v1/announcements`：公开读取最新 20 条已发布公告，置顶公告始终排在最前。
@@ -257,6 +278,7 @@ npm run dev:frontend      # 独立开发服务器（5173），API 代理到本�
 - `POST /api/v1/auth/logout`，JSON：`{"refreshToken":"刷新令牌"}`，返回 **204** 空体
 - `GET /api/v1/auth/me`，需要访问令牌
 - `GET /api/v1/auth/profile`：读取当前账号的昵称、头像和邮箱；`PATCH /api/v1/auth/profile`：更新 `nickname` 与 `avatarUrl`（头像可传 `null` 清除）
+- `POST /api/v1/auth/avatar`：multipart 字段 `file` 上传头像，≤5MB，按文件头嗅探真实格式后转存兰空图床；返回的图床地址会过 `LSKY_PUBLIC_HOSTS` 白名单（配置了的话）
 
 密码使用随机盐和高成本 scrypt 哈希，不保存明文。新注册账号必须完成 QQ 邮箱（`qq.com` 或 `foxmail.com`）验证码校验，验证码仅保存于服务进程内存、10 分钟过期、校验成功即删除；服务重启后未使用验证码也会失效。发码按来源地址限流，单邮箱 60 秒内不能重复发码。访问令牌有效期 15 分钟，刷新令牌 30 天；刷新令牌只保存 SHA-256 哈希，**刷新时轮换**，注销后立即失效。登录和注册按来源地址限流。
 
@@ -279,7 +301,8 @@ npm run dev:frontend      # 独立开发服务器（5173），API 代理到本�
 换设备时客户端可以先展示云端内容，再按歌曲来源补全最新信息。普通成功响应仍使用
 `{ code: 0, message: "success", data: ... }` 信封。
 
-当前歌单来源只接受 `tencent` 和 `netease`，必须与音乐路由支持的来源一致。
+当前歌单来源白名单是 `tencent`、`netease`、`kuwo`（直接取上游适配层的 `MUSIC_SOURCES`，
+不另立清单），必须与音乐路由支持的来源一致。
 `songId` 一律按字符串传输；腾讯搜索返回 `id=0` 时，调用方必须同时提供非空 `mid`，
 服务端会用 `mid` 作为稳定键，不会把所有这类歌曲折叠成同一个数字 ID。
 
@@ -289,6 +312,7 @@ npm run dev:frontend      # 独立开发服务器（5173），API 代理到本�
 - `PATCH /api/v1/playlists/{playlistId}`（也接受 `PUT`），JSON 可更新 `name`、`description`、`coverUrl`
 - `DELETE /api/v1/playlists/{playlistId}`：删除歌单及其中歌曲，HTTP 204
 - `POST /api/v1/playlists/{playlistId}/songs`：添加歌曲；重复键只更新快照，不生成重复项
+- `GET /api/v1/playlists/{playlistId}/songs`：读取歌单内歌曲集合
 - `DELETE /api/v1/playlists/{playlistId}/songs/{source}/{songId}`：移除歌曲并自动压紧顺序
 - `PATCH /api/v1/playlists/{playlistId}/songs/order`（也接受 `PUT`），JSON
   `{"songs":[{"source":"tencent","songId":"105648974"},...]}`：重排歌曲（`songIds`、`order` 也是兼容字段）
@@ -307,6 +331,9 @@ npm run dev:frontend      # 独立开发服务器（5173），API 代理到本�
   直接转发（支持 Range），**不裁剪也不落盘** —— 音乐不进服务器磁盘，返回的就是完整音频；
   「最多 60 秒」由分享页 `webApp` 自己守（`previewDurationSeconds` 只是告知）。
 - `GET /s/{token}`：Kotlin/Wasm 分享页，循环播放这一首试听，不包含播放列表和下载歌曲能力。
+- 分享页静态资源托管在 `/share/`、`/share/index.html` 与版本化路径 `/share/v/<内容指纹>/`：
+  版本化目录内容不可变，整目录 `immutable` 长缓存；入口 `index.html` 的 `<base>` 改写为
+  版本化路径并每次协商，避免新旧批次 JS/wasm 混用。
 
 生产环境应显式配置 `PUBLIC_BASE_URL`，否则短链会按请求的 Host 和代理协议头推导。
 
@@ -318,6 +345,7 @@ npm run dev:frontend      # 独立开发服务器（5173），API 代理到本�
 - `GET /api/v1/playback/recent/state`：读取 `{revision, clearedAt, clearedBefore, marker}`；`revision`
   是清空的权威代际，`clearedAt` 是服务端接收清空请求的时间，`clearedBefore` 仅为旧客户端兼容
 - `GET /api/v1/playback/stats`：读取账号累计歌曲数、播放次数和听歌时间
+- `GET /api/v1/playback/diary`：单曲倒带日记（按 `source` + `songId` 回看播放记录）
 - `DELETE /api/v1/playback/recent?marker=<uuid>`：服务端递增 `revision` 并返回同一状态对象；
   新客户端须持久化 UUID 形式的 `marker` 并在网络重试时原样带回，同 marker 始终返回第一次
   清空的结果，不会重复推进版本；清空最近播放的可见列表，累计统计仍保留
@@ -339,14 +367,22 @@ npm run dev:frontend      # 独立开发服务器（5173），API 代理到本�
 
 ### 搜索、播放与歌词（需要访问令牌）
 
-搜索默认并发聚合 QQ 音乐与网易云音乐；可传 `source=tencent` 或 `source=netease` 只查询一个
-音源。所有搜索结果均携带 `source`，同一首歌的后续播放、歌词、详情、收藏和播放记录必须使用该
+搜索默认并发聚合 QQ 音乐与网易云音乐（聚合 `all` 固定只含这两家，酷我不参与聚合）；可传
+`source=tencent`、`source=netease` 或 `source=kuwo` 只查询一个音源。所有搜索结果均携带 `source`，
+同一首歌的后续播放、歌词、详情、收藏和播放记录必须使用该
 来源，不能仅按数字 ID 匹配，否则两个平台恰好相同的 ID 会串歌。`audioUrl`、`lyricUrl` 已经带上
-对应来源，旧客户端可以直接播放。其它音乐接口默认仍是 QQ 音乐，传 `source=netease` 切换网易云。
+对应来源，旧客户端可以直接播放。其它音乐接口默认仍是 QQ 音乐，传 `source=netease` 或
+`source=kuwo` 切换对应音源。
 
 `GET /api/v1/search?keyword=歌曲名&page=1&num=60&quality=10&source=netease`
 
 `num` 范围 1–60（也接受 `limit`），默认 60，`quality` 范围 0–18。返回 NDJSON 流，每行一个 `{"type":"song","data":{...}}`，末行为 `{"type":"end","meta":{...}}`。
+
+搜索的三个配套端点：
+
+- `GET /api/v1/search/suggestions?keyword=&limit=&source=kuwo`：搜索框联想词，普通信封的字符串数组；当前只有酷我提供此能力，默认 `source=kuwo`
+- `GET /api/v1/search/hot?limit=&source=kuwo`：官方热搜词，同样默认酷我
+- `GET /api/v1/songs/batch-info?ids=&mids=&source=`：一次最多 60 首的批量资料补全，供最近播放等列表补齐标题封面；单首上游失败不让整批失败，缺失项由客户端占位展示
 
 **搜索只返回元信息，不解析播放地址。** 早先每首歌都要额外向上游要一次播放链接、还要探测首字节，20 首约 1.8 秒，60 首最坏能打 240 次上游请求；而客户端拿到后又会把这个地址丢掉，改用自己拼的播放地址 —— 那些请求换来的只是「把拿不到地址的歌过滤掉」。现在改成客户端点播时再走 `/songs/{id}/link` 单独解析，搜索只剩一次上游请求，**60 首实测 130–900ms**（取决于上游缓存）。
 
@@ -386,6 +422,26 @@ npm run dev:frontend      # 独立开发服务器（5173），API 代理到本�
 鉴权用 `X-API-Key: tt_...`（优先）或 `Authorization: Bearer tt_...`；缺失、无效、禁用或吊销一律 **401/4014**（新码，绝不能 403）。用户 access token（不以 `tt_` 开头）不能当开放 key。开放侧 Song 的 `favorited` 恒为 `false`，**不下发 `audioUrl`**（外部改用 `/open/songs/{id}/link` 换直链），`lyricUrl` 指向 `/api/v1/open/songs/...`；开放 JSON 端点下发 `access-control-allow-origin: *`（不带 credentials）。限流用独立的 `open-api` 桶：每 key 120 次 + 每来源地址 600 次 / 15 分钟，超限 429/4290。
 
 管理端（需管理员会话）：`GET/POST /api/v1/app/admin/open-api-keys`、`PATCH/DELETE /api/v1/app/admin/open-api-keys/{id}`；读用 `READ_ROLES`，写用 `WRITE_ROLES`，创建返回的明文 key 只出现一次（列表只有 `keyPrefix`），写操作记 `open_api_key.*` 审计。详见 [wiki/03-api-contracts.md](wiki/03-api-contracts.md) §17。
+
+### 传输加密
+
+- `POST /api/v1/crypto/handshake`：公开握手（免登录，客户端尚无会话）。加密链路未启用（产物缺失、协议版本过低等）时返回 503/5031，客户端据此回退明文；`clientHello` 缺失或格式错误返回 400/4006；`device_id` 与 PSK 派生不匹配或报文非法被拒时返回 400/4013。未配置 `CRYPTO_PSK_ID` / `CRYPTO_PSK_HEX` 时握手全部失败，链路保持明文。
+- 加密中间件挂在 body parser **之前**，对 `/api/v1/*` 中携带 `X-Taotao-Crypto` 头的请求解出明文再交给下游（响应侧重新加密回帧）；`RAW_BODY_PATHS` 原始字节上传与 `*/play` 音频流明确排除，无加密头的请求完全透明，既有契约（裸 NDJSON、401 语义等）不因加密层变形。
+- 加密头格式、AAD 上下文构造或请求体解密失败统一返回 400/4006；加密会话不存在或已过期返回 409/4091，客户端应重新握手。
+
+握手协议与会话细节以 `server/src/crypto/` 下 `crypto.controller.ts` / `crypto.middleware.ts` / `crypto-transport.service.ts` / `native-loader.ts` 的实际实现为准。
+
+### 音源账号管理（酷我/波点，需管理员会话）
+
+酷我等需要登录态的音源由后台维护账号凭据，播放链路按 `source` 取用：
+
+- `GET /api/v1/app/admin/music-sources`：账号列表（含掩码手机号与最近探测结果，属 `PRIVILEGED_READ_ROLES`，观察者不可见）
+- `GET /api/v1/app/admin/music-sources/available`：各音源的能力标记（是否支持后台登录、uid 是否必须纯数字）
+- `POST /api/v1/app/admin/music-sources`、`PATCH /api/v1/app/admin/music-sources/{id}`：新增与编辑凭据
+- `PUT /api/v1/app/admin/music-sources/{id}/enabled`：启用/停用；`POST /api/v1/app/admin/music-sources/{id}/probe`：连通性探测（结果落库为 `last_status` / `last_note`）；`DELETE /api/v1/app/admin/music-sources/{id}`：删除
+- `POST /api/v1/app/admin/music-sources/sms`、`POST /api/v1/app/admin/music-sources/login`：后台短信登录取凭据
+
+token 与 uid **只进不出**：响应只回掩码手机号，凭据明文既不进响应体也不进审计表；写操作记 `music_source.*` 审计。
 
 ### 图片生成（需要访问令牌）
 
@@ -450,6 +506,11 @@ ON CONFLICT (channel, key) DO UPDATE SET quota = excluded.quota;
 状态查询独立限流：按用户 300 次、来源地址 1800 次/15 分钟。第三方返回 404 时映射为
 本服务的 404/4042；第三方 401 仍转换为 502，不能触发客户端令牌续期。
 
+Key 也可以从管理后台维护（SQL 直插不再是唯一途径）：`GET/POST /api/v1/app/admin/image-keys`
+与 `DELETE /api/v1/app/admin/image-keys/{id}`。列表只回 `maskedKey` 不回明文，写操作记
+`image_key.*` 审计，详见 [wiki/05-image-generation.md](wiki/05-image-generation.md)。
+删除仍被任务引用的 Key 受外键限制，返回 404/4042。
+
 ### 上游接口与音质降级
 
 搜索与播放链接用 v3（`https://api.vkeys.cn/music/tencent`，路径里不带版本号前缀），歌词用 v2（`https://api.vkeys.cn/v2/music/tencent`）—— 只有 v2 的歌词接口同时给出逐字时间轴与翻译。
@@ -497,6 +558,8 @@ ON CONFLICT (channel, key) DO UPDATE SET quota = excluded.quota;
 
   内置守卫：必须已存在放量 100% 且版本号不低于目标下限的发布，否则返回 409。这是为了堵住变砖路径 —— 被判定为强制更新的客户端只会收到全量版本，若不存在这样的版本，它们会被拦在门外却拿不到升级包。
 
+- `GET /api/v1/app/admin/patches`、`POST /api/v1/app/admin/patches`：按宿主版本的补丁列表与登记（上传同样是原始字节，在 `main.ts` 的 RAW_BODY_PATHS 白名单内）；`POST /api/v1/app/admin/patch-rollout` 调整补丁放量
+
 - `GET /api/v1/app/admin/config`
 - `POST /api/v1/app/admin/config`，JSON `{"key":"feedback.enabled","value":"true","minVersionCode":70}`，`value` 传 `null` 表示删除
 
@@ -515,9 +578,15 @@ ON CONFLICT (channel, key) DO UPDATE SET quota = excluded.quota;
 | 登录 / 注册 | 按来源地址 10 次 / 15 分钟 |
 | 客户端引导与安装包下载 | 按设备号 60 次 + 按来源地址 900 次 / 15 分钟 |
 | 发布管理 | 按来源地址 60 次 / 15 分钟 |
+| 管理端登录 | 按来源地址 30 次 / 15 分钟 |
+| 验证码邮件发码 | 按来源地址 5 次 / 15 分钟 |
+| 管理端接口（`/app/admin/**`、`/desktop/admin/**`、`/admin/auth/**` 等） | 按来源地址 60 次 / 15 分钟，`ADMIN_RATE_LIMIT` 可覆盖（仅供契约验证调大，生产勿设） |
 | 图片任务创建 | 按用户 10 次 + 按来源地址 60 次 / 15 分钟 |
 | 图片任务轮询 | 按用户 300 次 + 按来源地址 1800 次 / 15 分钟 |
 | 开放搜歌 `/api/v1/open/**` | 按 key 120 次 + 按来源地址 600 次 / 15 分钟 |
+| IM 会话 | 按用户 30 次 + 按来源地址 180 次 / 15 分钟 |
+| IM 同步（含撤回、已读） | 按用户 300 次 + 按来源地址 1800 次 / 15 分钟 |
+| 音源短信验证码（`music-source-sms`） | 每来源地址 5 次 + 每手机号 3 次 / 15 分钟 |
 
 外层阈值放得宽，因为校园网、办公网等 NAT 环境下大量用户共用一个出口地址，按 IP 收紧会互相挤占。状态在进程内存中，重启即清空，也不跨实例共享。
 
@@ -534,13 +603,15 @@ $env:PORT="4720"; $env:APK_DIR="./tmp/apk"
 $env:AUTH_SECRET="0123456789012345678901234567890123456789"; $env:ADMIN_INITIAL_PASSWORD="verify-initial-123456"
 $env:NODE_ENV="test"; $env:EMAIL_VERIFICATION_TEST_CODE="123456"
 $env:IM_ENABLED="false"; $env:CORS_ALLOWED_ORIGINS="https://verify.example"
+$env:ADMIN_RATE_LIMIT="1000"
 npm run build:frontend   # /admin 下的 CSP 与主题脚本断言需要 dist/public
+npm run build:web-player # 分享播放器的缓存头断言需要 dist/share-player（无 Gradle 工程时自动跳过）
 npm run dev
 # 另一个终端
 node tools/verify-contract.mjs http://127.0.0.1:4720
 ```
 
-启动环境的四个必填项，缺一个就会有成片断言失败：
+启动环境的必填项，缺一个就会有成片断言失败：
 
 - `ADMIN_INITIAL_PASSWORD` 必须与脚本读到的**同一个值**：脚本要用它完成默认管理员的首次登录与
   强制改密，拿不到管理会话后面所有管理端断言会连锁失败。
@@ -549,19 +620,22 @@ node tools/verify-contract.mjs http://127.0.0.1:4720
 - `CORS_ALLOWED_ORIGINS` 要包含 `https://verify.example`，否则「白名单来源回显自身 Origin」
   会失败（默认不下发任何 CORS 头，失败恰好证明这一点）。
 - `EMAIL_VERIFICATION_TEST_CODE` 要同时给**脚本自己**的环境，脚本会读它做断言。
+- `ADMIN_RATE_LIMIT` 要调大（如 `1000`）：脚本一次运行要打上百次管理接口，不调大时管理端
+  限流桶（默认 60 次/15 分钟）会在中途命中 4290，失败位置随请求顺序漂移，看起来像业务坏了。
 
 另外两个容易踩的坑：**每次运行前必须重置验证库**（版本/rollout 类断言依赖空库），以及
 **桌面发布目录要清空**（`data/desktop`）。内容寻址存储在命中
 已有对象时会走「删除临时文件」的分支，上一轮留下的对象会让上传路径和首次运行时不同。
 
-以脚本实际输出为准，所有契约必须全绿（当前为 **259 项**）。脚本会核对状态码、业务码、信封形状、
+以脚本实际输出为准，所有契约必须全绿 —— 检查项数量随脚本版本变化（当前运行约 300 项），以实际输出为准。
+脚本会核对状态码、业务码、信封形状、
 NDJSON 行格式、字段类型（`data.id` 必须是 number、`songId` 必须是字符串、`createdAt` /
 `configVersion` / `apkSize` 必须是 number）、纯文本歌词、Range 行为，以及「无效令牌访问
 bootstrap 仍返回 200」这类红线。
 
 管理端部分另有三组断言：**强制改密与 Bearer 会话准备**（初始口令登录 → 4031 拦截 → 改密 204 →
-新口令重登 → 旧口令失效）、**39 条管理路由逐条无凭据探测**（全部 401/4013，漏标
-`@AdminGuarded()` 即裸奔）、**账号退避 429/4291**（与来源地址限流的 4290 区分开，否则断言会
+新口令重登 → 旧口令失效）、**脚本内 `guardedAdminRoutes` 清单逐条无凭据探测**（全部 401/4013，
+漏标 `@AdminGuarded()` 即裸奔；清单随路由增删，以脚本内实际列表为准）、**账号退避 429/4291**（与来源地址限流的 4290 区分开，否则断言会
 因 IP 限流先命中而变成假阳性）。
 
 后面三组分别覆盖：PostgreSQL 迁移的四条硬规矩（并发注册、并发刷新同一令牌、停用版本不可下载、灰度分桶稳定）；搜索拆分后的新契约（60 首的耗时、`X-Accel-Buffering`、`favorited` / `vip` / `mid` 字段、批量收藏查询、`/link` 给的是上游直链、请求不存在的档位会降级、`/info` 过滤掉不存在的档位）；以及参数健壮性（`page=abc` 不会拼出 `page=NaN`、`quality=` 空串回落到 10 而不是 0）。
@@ -569,6 +643,15 @@ bootstrap 仍返回 200」这类红线。
 `reset-db.mjs` 会 `DROP SCHEMA public CASCADE`，所以它拒绝库名里不含 `verify` / `test` 的连接串 —— SQLite 时代「删掉那个文件」就够了，现在需要一个显式且带护栏的动作。
 
 类型检查能抓住绝大部分同步改异步的漏改（漏 `await` 会得到 `Promise<T>` 与 `T` 不匹配），但**抓不住 `.find()` / `.map()` 回调里的漏改**，改动数据层后除了 `npx tsc --noEmit` 还要人工看一遍这些回调。
+
+### 云端构建
+
+GitHub 镜像仓库 [hdppppppp/music-server](https://github.com/hdppppppp/music-server) 带有
+`backend.yml` 工作流（源文件在本仓库 `server/.github/workflows/`，随快照同步）：Ubuntu runner
++ PostgreSQL 16 服务容器，构建时从 music 仓库的固定 Release `share-player-latest` 拉取真实
+分享播放器放进 `dist/share-player/`（拉不到时退回占位文件，仅够缓存头断言），然后起验证实例
+执行完整 `verify-contract.mjs`，**全绿才算通过**；通过后把完整 `dist/` 发布到固定 tag 预发布
+Release `server-dist-latest`。三仓快照由项目根的 `tools/sync-repos.ps1` 维护，见根目录 `AGENTS.md` 的「三仓库同步」。
 
 ### Windows 桌面更新
 

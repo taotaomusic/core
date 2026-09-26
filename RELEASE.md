@@ -10,7 +10,7 @@
 
 | | 整包更新 | 热修复补丁 |
 | --- | --- | --- |
-| 内容 | 完整 APK（约 14MB） | 只含改动方法的 DEX（几 KB） |
+| 内容 | 完整 APK（约 19-20MB） | 只含改动方法的 DEX（几 KB） |
 | 生效 | 用户确认安装 → 重启 | **立即生效，不用重启** |
 | 能改什么 | 全部 | **只有 `data` / `player` / `update` 包** |
 | 用在 | 功能、界面、依赖升级 | 逻辑 bug 的紧急止血 |
@@ -58,6 +58,8 @@ node -e "const d=require('./androidApp/build/outputs/apk/release/output-metadata
 登记错了的后果是客户端陷入死循环:提示有新版本 → 装完发现自己版本号就是那个 → 还提示有新版本。
 
 ### ② 绝不能回滚 `version.properties`
+
+**云端同样在递增这个号。** GitHub Actions 构建成功后会把递增的 `version.properties` 回写到 music 仓库（`[skip ci]` 提交），`tools/sync-repos.ps1` 同步时收编「本地与云端较大者」回写本地。因此版本号是**双侧单调延续**的：本地构建、云端构建、sync 收编三方产出的号互不回退，任何一侧都不要手工往回拨，否则下一次本地构建就可能产出重号。
 
 `incrementVersion` 对 **debug 构建也生效**,所以这个文件天然会跑在已发布版本前面,看起来"多跳了几号"是正常的,不要手工改回去,也不要 `git checkout` 它。
 
@@ -150,7 +152,7 @@ curl.exe "https://music.xydaigua.cn/api/v1/app/bootstrap?versionCode=<上一个�
 ```powershell
 curl.exe -X POST "https://music.xydaigua.cn/api/v1/app/admin/min-version" `
   -H "content-type: application/json" -H "Authorization: Bearer $env:ADMIN_SESSION_TOKEN" `
-  -d '{"versionCode":63}'
+  -d '{"versionCode":218}'
 ```
 
 接口内置守卫:**必须已经存在放量 100% 且版本号不低于该下限的发布**,否则返回 409/4091。这是为了堵住一条变砖路径 —— 强制更新的客户端只会收到全量版本,若不存在这样的版本,它们会被拦在门外却拿不到升级包。
@@ -271,11 +273,15 @@ SecurityException: Writable dex file '...' is not allowed
 
 ```powershell
 cd server
-npm run build          # 先 tsc 再 vite build，两个产物都进 dist/
+npm run build          # rimraf → tsc → Terser 压缩 → copy-manifest → vite build → web 播放器
 # 上传 dist/ 与 package-lock.json，在 dist 同级执行：
 npm install --omit=dev
 node dist/main.js
 ```
+
+`build:web-player` 会从 GitHub 拉取 `share-player-latest`（拉不到退回占位文件），需要网络；
+独立 server 仓库没有 Gradle 工程时该步自动跳过。生产机另需 `crypto/dist/node/<平台>/taotao_crypto.node`
+加密产物（缺失只 WARN 降级明文，不阻断启动）。
 
 几条容易忘的:
 
@@ -290,7 +296,7 @@ node dist/main.js
   psql -U postgres -c "CREATE DATABASE music_verify"   # 只需一次
   node tools/reset-db.mjs postgres://postgres:密码@localhost:5432/music_verify
   # 用验证库起一个实例后：
-  node tools/verify-contract.mjs http://127.0.0.1:4720 verify-token
+  node tools/verify-contract.mjs http://127.0.0.1:4720
   ```
 
   **重置数据库后必须重启服务**:建表只在启动时执行一次,先重置再让旧进程继续跑,会得到一堆"关系不存在"。
@@ -356,3 +362,50 @@ $env:ADMIN_SESSION_TOKEN = "<管理员会话令牌，取法见第一节>"
 ### 3. 客户端回滚
 
 更新器替换前把 `current/` 移到 `backup/` 并在注册表 `HKCU\\Software\\TaotaoMusic\UpdateAttempts` 写入 1；启动器发现启动未稳定完成时自动恢复 `backup/`。应用稳定运行后会清零计数。不要手工删除 `backup/` 或更新计划文件，排障时先停用对应发布再保留现场文件。
+
+---
+
+## 十、云端构建与三仓库同步
+
+GitHub 侧三个正式仓库（music / music-server / tools）由助手手动执行
+`powershell -NoProfile -ExecutionPolicy Bypass -File tools\sync-repos.ps1`（加 `-DryRun` 只预览）维护：
+从本仓库 HEAD 生成**内容快照**推送——`server/` → music-server、`crypto-src/` → tools、其余全部 → music，
+快照分支分别为 `sync/server`、`sync/crypto`、`sync/client`。gitee 的 `origin` 保留完整 monorepo 作总备份。
+只同步**已提交**内容，推送前先在本仓库提交。
+
+随同步推送自动触发的云端构建：
+
+| 仓库 | 工作流 | 内容 | 产物 |
+| --- | --- | --- | --- |
+| music | `.github/workflows/client.yml` | Windows runner：`:androidApp:assembleRelease` + `:desktopApp:packageDesktopUpdateBundle` + `:webApp:wasmJsBrowserDistribution` | 滚动预发布 Release `latest`（APK + 桌面包 zip，每次覆盖）；Web 播放器另发 `share-player-latest` |
+| music-server | `server/.github/workflows/backend.yml` | Ubuntu + PostgreSQL 服务容器，完整 `verify-contract.mjs` **全绿才算通过** | Release `server-dist-latest`（完整 dist） |
+
+要点：
+
+- **版本号单调延续**：云端构建成功后自动回写递增的 `version.properties`（`[skip ci]` 提交）；
+  sync 时收编「本地与云端较大者」并回写本仓库（单独提交，origin 不自动推送）。本地构建出的号
+  同样被尊重，两侧互不回退、重号风险归零。每次同步会触发一次构建、版本号 +1。
+- **APK 签名**：music 仓库 Secrets 配 `ANDROID_KEYSTORE_BASE64`、`ANDROID_STORE_PASSWORD`、
+  `ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD` 后出签名 Release 包；未配置时自动退回 Debug 包。
+- 不要在 GitHub 仓库里绕过快照机制直接改文件（`version.properties` 除外，云端 CI 会回写）。
+
+## 十一、加密层产物与协议 v2
+
+传输加密层的 Rust 源码在 `crypto-src/`（core/jni/node/wasm 四 crate），本机**不编译**：
+
+```
+改协议在 crypto-src/ 改
+  → tools/sync-repos.ps1 推到 GitHub tools 仓库
+  → 那边的 GitHub Actions 交叉编译四端产物并发 Release
+  → tools/fetch-crypto.ps1 拉回 crypto/dist/（带 SHA256SUMS 校验）
+```
+
+发布相关的影响：
+
+- **协议 v2 = 握手密钥绑定设备号**（Android `ANDROID_ID` / Windows `MachineGuid`）。
+  改协议时四端产物必须同步重编，只升一端会出现握手不匹配。
+- 服务端新增配置 `CRYPTO_PSK_ID` / `CRYPTO_PSK_HEX`；未配置或产物缺失时握手返回 503/5031，
+  全链路**透明降级为明文**，不阻断功能 —— 加密发布事故的表现是「退回明文」而不是「服务不可用」，
+  排障时先查启动日志的加密 WARN。
+- 客户端现状：两端设备号来源已落地，JNI 绑定尚未进构建路径；`crypto/dist/` 当前只有服务端消费。
+- 接口语义见 [server/wiki/03-api-contracts.md](server/wiki/03-api-contracts.md) §18。

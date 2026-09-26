@@ -183,12 +183,13 @@ TOTP 发行者名称由 `TOTP_ISSUER` 配置，默认“桃桃音乐管理后台
 | `WRITE_ROLES` | `super_admin` / `admin` | 业务管理接口的写接口 |
 | `PRIVILEGED_READ_ROLES` | `super_admin` / `admin` | 后台自身 + 个人数据的读接口 |
 
-`READ_ROLES` 与 `PRIVILEGED_READ_ROLES` 必须分开。后者覆盖三处：
+`READ_ROLES` 与 `PRIVILEGED_READ_ROLES` 必须分开。后者覆盖四处：
 
 - **审计日志**会暴露「谁在什么时候改了什么」。
 - **管理员列表**会带出 `ip_whitelist` 与 `last_login_ip`。
 - **用户接口**返回的是个人数据：`GET /app/admin/users` 带 `email` 与听歌统计，
   `GET /app/admin/users/:id/playback` 带逐首歌的播放次数和时间戳。
+- **音源账号清单**会带出音源账号的凭据状态与手机号掩码。
 
 观察者能进后台是为了看发布状态这类运营数据，不是来看别人的个人信息和操作记录。
 `/app/admin/users` 下的**读写**都要求 `admin` 及以上，前端「用户与统计」页签对观察者隐藏。
@@ -269,6 +270,9 @@ IPv4-mapped 前缀的归一化。写白名单时要填写服务端实际看到�
 | `announcement.create` / `update` / `set_enabled` / `set_pinned` / `delete` | 公告生命周期（`announcement`） |
 | `user.set_disabled` / `user.delete` | 禁用与删除普通用户（`user`） |
 | `image_key.import` / `image_key.delete` | 图片 Key 导入与删除（`image_key`） |
+| `open_api_key.create` / `set_enabled` / `revoke` | 开放 API Key 生命周期（`open_api_key`，只记 `keyPrefix`） |
+| `music_source.create` / `update` / `enable` / `disable` / `probe` / `delete` | 音源账号生命周期（`music_source_account`） |
+| `music_source.sms` / `music_source.login` | 音源短信与登录；`sms` 的 `target_id` 为空、只记掩码手机号 |
 
 注意 `logout` **不写审计** —— 退出接口没有凭据也能调用，记一条没有操作人的记录没有意义。
 
@@ -289,6 +293,20 @@ await this.audit.record(request, "release.rollout", "release", `${channel}#${bod
 `GET /admin/auth/audit-log` 支持 `adminId`、`action`、`limit` 查询参数，按时间倒序返回。
 `admin_id` 为 `null` 表示**原管理员已被删除**（外键是 `ON DELETE SET NULL`，历史审计必须保留），
 这是当前唯一会产生无归属记录的原因。
+
+### 审计日志界面（中文化）
+
+`AuditLogViewer.vue` 负责把库里「域名.动作」式的英文 action 翻译成中文展示：
+
+- `ACTION_GROUPS` 按域分组（登录与账号 / 管理员 / 公告 / 客户端版本 / 桌面版本 / 音源账号 /
+  密钥 / 用户），既是筛选下拉的数据源，也派生出整张动作名翻译表；未收录的 action 回退显示原文。
+- `TARGET_TYPE_LABELS` 翻译 `target_type`（如 `music_source_account` → 音源账号）。
+- `DETAIL_KEY_LABELS` / `DETAIL_VALUE_LABELS` 把 `detail` JSON 还原成「中文键名：中文值」
+  一行文本（布尔转是/否、字节数转 MB、放量加 %），非法 JSON 原样展示。
+
+**维护规则：后端新增审计 action 时，必须同步在前端 `ACTION_GROUPS` 补一行**，否则界面上
+只会显示英文原文。`actionTag()` 按 delete/revoke/remove/disable 等关键词上色，新动作自然落入
+默认样式，无需单独登记。
 
 **审计写入失败不能把主流程带崩。** 登录、改密码这些操作先完成业务动作再写日志；日志表故障时
 应该只影响审计完整性，不应该让管理员登不进来。
@@ -344,6 +362,8 @@ await this.audit.record(request, "release.rollout", "release", `${channel}#${bod
 | Windows 发布 | `/desktop/admin`（releases、artifacts、rollout、min-version） | `READ_ROLES` | `WRITE_ROLES` |
 | 公告 | `/app/admin/announcements` | `READ_ROLES` | `WRITE_ROLES` |
 | 图片 Key | `/app/admin/image-keys` | `READ_ROLES` | `WRITE_ROLES` |
+| 开放 API Key | `/app/admin/open-api-keys` | `READ_ROLES` | `WRITE_ROLES` |
+| 音源账号 | `/app/admin/music-sources*`（清单、可用项、增删改、启停、探测、短信、登录） | 清单 `PRIVILEGED_READ_ROLES`（凭据属个人信息），其余 `READ_ROLES` | `WRITE_ROLES` |
 | 用户 | `/app/admin/users` | `PRIVILEGED_READ_ROLES` | `WRITE_ROLES` |
 
 **守卫一律逐个方法挂，任何控制器都不例外。** 早期文档把守卫的挂法分成两类（「全是管理接口的
@@ -459,8 +479,11 @@ Vue 管理后台在 `src/frontend/`，构建产物输出到 `dist/public`，由 
   第一步，而不是停在动态码输入框反复失败。
 - `ForcePasswordChange.vue`：`must_change_password` 为真时的全屏强制改密页，在 `App.vue`
   里优先于后台主体渲染，没有跳过入口。
-- `AdminUserManager.vue`、`AuditLogViewer.vue`、`IpWhitelistManager.vue` 都调用
-  `/admin/auth/**` 下的路径。改后端路由时必须同步这三处，否则页面表现为 404/4040。
+- `AdminUserManager.vue`、`AuditLogViewer.vue`、`IpWhitelistManager.vue` 调用 `/admin/auth/**` 下的路径；
+  业务管理页 `ReleaseManager.vue`、`PatchManager.vue`、`DesktopReleaseManager.vue`、
+  `AnnouncementManager.vue`、`UserManager.vue`、`MusicSourceManager.vue`、`OpenApiKeyManager.vue`、
+  `SupporterKeyManager.vue`（图片 Key 管理页）各自调用对应 `/app/admin/**`、`/desktop/admin/**`
+  路径。改后端路由时必须同步对应组件，否则页面表现为 404/4040。
 
 注意 `IpWhitelistManager.vue` 当前没有任何页面引用它，是孤儿组件。
 
@@ -493,7 +516,8 @@ object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
 1. **「管理端会话准备：强制改密与 Bearer 会话」**（必须在所有管理端断言之前跑）：用
    `ADMIN_INITIAL_PASSWORD` 首次登录 → 断言 `must_change_password === true` → 断言改密前访问
    其它管理接口是 403/4031 → 改密 204 → 新口令重登成功且不再要求改密 → 初始口令失效 4011。
-2. **「管理路由逐条无凭据探测」**：枚举全部 39 条受保护管理路由，逐条断言无凭据时返回
+2. **「管理路由逐条无凭据探测」**：枚举脚本内 `guardedAdminRoutes` 清单的全部受保护管理路由
+   （随音源账号、开放 Key 等新模块增长，当前约 48 条，以脚本清单为准），逐条断言无凭据时返回
    **401/4013**；再断言 4 条公开路由不会被管理员守卫拦下。期望 4013 而不是 4010 是有意的：
    4013 说明 `AdminAuthGuard` 确实跑了，若有人把 `@Public()` 摘掉，全局访问令牌守卫会抢先
    返回 4010，断言同样会失败。
@@ -506,7 +530,8 @@ object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
    导入图片 Key 五个写接口一律 403/4030；发布、Windows 发布、公告、图片 Key 四个域的读接口对
    viewer 返回 200（不能顺手把只读账号锁死）；**用户列表与听歌历史对 viewer 返回 403/4030，
    对 `admin` 返回 200/404**；`admin` 角色能发布公告；该公告在 `admin_audit_log` 里查得到且
-   `admin_id` 记的是发布者本人。
+   `admin_id` 记的是发布者本人。另有「音源账号（后台）与酷我音源接入」「单曲倒带日记」等新段落
+   覆盖音源账号的角色边界（viewer 读清单 403/4030）与日记接口契约。
 
 另有「安全响应头与跨域」一节断言 CSP 与 CORS，以及「头像上传：按文件头判定格式」一节断言
 上传的魔数校验（见 [03-api-contracts.md](03-api-contracts.md)）。
@@ -527,6 +552,7 @@ object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
   因为它对应的读接口本身就不放行，留着只会点进一片报错。
 - 审计写入与业务操作不在同一个事务里：先做业务、后写日志。日志表故障时接口会报错，
   但业务动作已经生效，客户端重试可能造成重复操作。
-- `admin_audit_log` 没有留存或归档策略，19 个写操作持续写入，表只增不减。
+- `admin_audit_log` 没有留存或归档策略，全部管理端写操作（业务域加后台自身共 30+ 个 action）
+  持续写入，表只增不减。
 - 退避只按账号计数，不按「账号 + 来源地址」：同一 NAT 出口下的其它管理员不受影响，
   但一个被锁的账号会让所有试图登录它的人一起等 —— 这是有意的取舍（防止换 IP 绕过）。

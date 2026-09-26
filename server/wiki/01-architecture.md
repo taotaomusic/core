@@ -4,20 +4,23 @@
 
 ## 1. 服务边界
 
-桃桃音乐后端是 NestJS + TypeScript 接口适配服务，负责业务鉴权、上游协议收敛、状态持久化、Android 热更新、Windows 桌面模块更新和悟空 IM 业务代理。
+桃桃音乐后端是 NestJS + TypeScript 接口适配服务，负责业务鉴权、传输层加密、上游协议收敛、状态持久化、Android 热更新、Windows 桌面模块更新和悟空 IM 业务代理。
 
 服务负责：
 
 - 用户注册、登录、访问令牌和刷新令牌轮换。
 - 收藏数据持久化。
 - 用户云端歌单、歌曲快照与顺序持久化。
-- 收藏、最近播放、听歌统计和歌曲分享短链。
-- 腾讯/网易音乐搜索、歌曲信息、播放链接和歌词适配。
+- 收藏、最近播放、听歌统计、单曲倒带日记和歌曲分享短链。
+- 多音源（腾讯/网易/酷我、波点）音乐搜索、歌曲信息、播放链接和歌词适配。
+- 音源账号（酷我/波点）后台管理与短信登录，凭据只进不出。
 - APK 登记、灰度、下载、最低版本和远程配置。
 - Windows 模块清单、内容寻址文件、差分和灰度发布。
 - ApiSweet `gpt-image-2` 任务创建、Key 配额与状态轮询。
+- 传输层加密：握手、AEAD 逐块加解密（协议 v2，握手密钥绑定设备号；未配置 PSK 时明文降级）。
 - 悟空 IM 会话凭据、联系人、会话/频道同步、撤回和已读代理。
 - 公告、后台用户管理、邮箱验证码和头像上传。
+- 面向第三方的开放搜歌 API 与密钥管理。
 - 管理后台账号、数据库会话、TOTP 双因素、角色权限、IP 白名单和操作审计。
 - LDAP/SSO 目录对接与角色映射（可选，未配置时只用本地管理员账号）。
 
@@ -48,6 +51,14 @@ flowchart TD
     App --> Im["ImModule"]
     App --> UserAdmin["UserAdminModule"]
     App --> AdminAuth["AdminAuthModule"]
+    App --> Crypto["CryptoModule"]
+    App --> OpenApi["OpenApiModule"]
+    App --> MusicSourceAdmin["MusicSourceAdminModule"]
+    OpenApi --> Music
+    OpenApi --> Upstream
+    OpenApi --> AdminAuth
+    MusicSourceAdmin --> Upstream
+    MusicSourceAdmin --> AdminAuth
     AdminAuth --> Ldap["LdapModule"]
     AdminAuth --> Database
     Ldap --> Database
@@ -94,8 +105,10 @@ src/
 ├─ playback/
 ├─ playlists/
 ├─ health/
+├─ crypto/
 ├─ image-generation/
 ├─ music/
+├─ open-api/
 ├─ release/
 ├─ desktop-release/
 ├─ im/
@@ -111,12 +124,15 @@ src/
 ### `main.ts`
 
 - 关闭 NestJS 默认 body parser。
+- 挂载传输加密中间件（`crypto.middleware.ts`）：**必须先于 body parser**，带 `X-Taotao-Crypto`
+  头的请求按 AAD（method+path+query）逐块 AEAD 解密出原始字节，无加密头的请求完全透明。
+  `RAW_BODY_PATHS` 白名单与 `*/play` 音频流不参与解密。
 - 对 APK、Android 补丁和桌面 artifact 原始字节上传路由跳过 JSON 解析。
 - 普通路由挂载 16KB JSON parser，桌面发布清单单独使用 1MB parser。
 - 注册全局 `ValidationPipe`。
 - 设置 `/api/v1` 前缀，并排除 `/health`。
 
-修改 body parser 时必须保留 APK 上传例外，否则大文件会被缓存在内存中或直接返回 413。
+修改 body parser 时必须保留 APK 上传例外，否则大文件会被缓存在内存中或直接返回 413；调整中间件挂载顺序时，加密解密必须保持在 body parser 之前。
 
 ### `app.module.ts`
 
@@ -138,7 +154,11 @@ src/
 
 ### `upstream/`
 
-第三方接口的不一致统一在这里收敛。腾讯音乐和网易云音乐的成功码、字段名、音质阶梯和歌词格式不能散落到 Controller。
+第三方接口的不一致统一在这里收敛。各音源（腾讯/网易/酷我/波点）的成功码、字段名、音质阶梯和歌词格式不能散落到 Controller；`music-source.registry.ts` 按注册表分派，音源账号凭据由 `music-source-account.repository.ts` 管理（token 只写不读），后台接口在 `music-source-admin.controller.ts`。
+
+### `crypto/`
+
+传输层加密：`crypto.controller.ts` 暴露公开握手 `POST /crypto/handshake`；`crypto.middleware.ts` 在 body parser 之前做 AEAD 解密；`crypto-transport.service.ts` 在 `onApplicationBootstrap` 加载 `crypto/dist` 的原生产物（协议版本须 ≥2）、登记 PSK 并启动每分钟的过期会话清理；`native-loader.ts` 负责跨平台产物查找，缺失时只 WARN 并降级为明文链路。
 
 ### `image-generation/`
 
@@ -165,7 +185,7 @@ src/
   且漏标一个方法就等于那条路由裸奔。见 `admin-auth/admin-guarded.decorator.ts`。
   写操作标 `@RequireRole(...WRITE_ROLES)` 并调 `AdminAuditService` 留痕；读操作标 `@RequireRole(...READ_ROLES)`，
   **但返回个人数据的读接口要用 `PRIVILEGED_READ_ROLES`** —— 目前是 `user-admin` 的两个读接口
-  （`email` 与逐首歌的听歌历史），观察者看不到。改这类接口要同时改 `App.vue` 的页签可见性。
+  （`email` 与逐首歌的听歌历史）和音源账号清单（凭据属个人信息），观察者看不到。改这类接口要同时改 `App.vue` 的页签可见性。
 - `admin-auth/` 拥有管理后台的身份与权限：账号、会话、2FA、角色守卫、IP 白名单和审计。它对外只暴露 `AdminAuthGuard` 与角色常量（`admin-roles.ts`），并提供 `AdminAuditService` 给业务控制器写审计，其它模块不应自己实现管理员鉴权。
 - `ldap/` 只做目录协议（Bind、Search、过滤器编解码）和角色映射，不直接签发会话；`authenticate()` 返回 `success`/`denied`/`skipped` 三态，由 `admin-auth/` 决定是否回落本地口令。
 
@@ -184,6 +204,7 @@ sequenceDiagram
     participant U as 第三方上游
 
     C->>A: HTTP 请求
+    Note over C,A: 带 X-Taotao-Crypto 头的请求先经加密中间件 AEAD 解密（在 Guard 之前）
     A->>A: 校验访问令牌
     A->>R: 已认证请求
     R->>R: 检查对应限流桶
@@ -272,7 +293,8 @@ sequenceDiagram
   → app.listen(PORT)
       ├─ app.init()
       │    ├─ onModuleInit：DatabaseService 等待 PostgreSQL → 顾问锁 → 幂等 DDL
-      │    └─ onApplicationBootstrap：AdminBootstrapService 创建默认管理员
+      │    └─ onApplicationBootstrap：AdminBootstrapService 创建默认管理员；
+      │         CryptoTransportService 加载加密原生产物（协议 ≥2）、登记 PSK、启动会话清理定时器
       └─ 端口开始接受连接
 ```
 

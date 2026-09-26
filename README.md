@@ -9,10 +9,12 @@ Kotlin Multiplatform 音乐播放器 + 自建后端。当前提供 Android、Win
 | [AGENTS.md](AGENTS.md) | 开发规范：代码风格、模块划分、测试、签名 | 日常开发、代码审查 |
 | **[RELEASE.md](RELEASE.md)** | 发布与热更新流程、版本号铁律、不能破的契约 | **推版本前必读** |
 | [server/README.md](server/README.md) | 后端架构、接口文档、数据层规则、契约验证 | 后端开发、接口对接 |
-| [server/wiki/00-code-index.md](server/wiki/00-code-index.md) | CodeGraph 后端代码索引、104 条路由、24 张表与配置快照 | 核对源码、路由和文档是否漂移 |
+| [server/wiki/00-code-index.md](server/wiki/00-code-index.md) | CodeGraph 后端代码索引、模块地图、路由与表清单（以实测为准） | 核对源码、路由和文档是否漂移 |
 | [client-code-index.md](client-code-index.md) | CodeGraph 客户端索引、模块边界、关键符号与刷新状态 | 客户端架构定位、跨模块调用和文档同步 |
 | [MUSIC_CROSS_PLATFORM.md](MUSIC_CROSS_PLATFORM.md) | Android/Windows 音乐功能、定时播放、云端歌单契约 | 双端开发、联调和验收 |
 | [HOT_UPDATE.md](HOT_UPDATE.md) | 热更新设计动机与边界 | 理解热更新能力范围 |
+| [crypto-src/README.md](crypto-src/README.md) | 传输加密层（Rust）协议与交叉编译说明 | 改加密协议、拉取编译产物时 |
+| [SECURITY-AUDIT-FINDINGS.md](SECURITY-AUDIT-FINDINGS.md) / [IM-AUDIT-FINDINGS.md](IM-AUDIT-FINDINGS.md) | 安全审计与 IM 适配的审计记录（含修复状态） | 回溯问题结论、避免重复排查 |
 
 > **⚠️ 重要提醒**：发布新版本或修改后端接口前，务必先阅读 [RELEASE.md](RELEASE.md)，其中包含多条不能违反的铁律和契约。
 
@@ -34,7 +36,7 @@ desktopApp/   Windows 应用
               └─ 离线下载和本地设置
 
 webApp/       Kotlin/Wasm 分享播放器
-              ├─ 循环播放一首 60 秒低码率试听
+              ├─ 播放最多 60 秒的试听片段（客户端计时截断，禁用循环防后台节流）
               └─ 复用 player-ui，不包含队列和歌曲下载
 
 player-ui/    Android、Windows、Web 共用的播放界面层
@@ -52,21 +54,36 @@ shared/       跨平台共享层（Kotlin Multiplatform）
 
 server/       NestJS 后端服务（TypeScript + PostgreSQL）
               ├─ 用户认证与会话管理
-              ├─ 收藏、播放历史、听歌统计
-              ├─ QQ 音乐 / 网易云音乐上游适配
+              ├─ 收藏、播放历史、听歌统计与单曲倒带日记
+              ├─ 多音源上游适配（腾讯/网易/酷我/波点）与音源账号管理
               ├─ 热更新版本管理与灰度分发
-              ├─ 分享短链、试听缓存与公告
+              ├─ 分享短链、试听转发与公告
               ├─ Windows 模块清单、内容寻址对象与差分发布
               ├─ 悟空 IM 会话与同步代理
               ├─ 邮箱验证码、头像上传与后台用户管理
-              ├─ AI 图片生成任务代理
-              └─ 管理后台（Vue 3 + Element Plus）
+              ├─ AI 图片生成任务代理与开放搜歌 API（密钥管理）
+              ├─ 传输层加密（握手 + AEAD 中间件，协议 v2 绑定设备号）
+              └─ 管理后台（Vue 3 + Element Plus，TOTP/LDAP/审计/IP 白名单）
+
+desktopLauncher/  Windows 发布包启动器
+desktopUpdater/   Windows 模块化更新器
 
 patch/        热修复补丁模块
               └─ 独立编译的 DEX 文件（几 KB），不打入 APK
 
+crypto/       传输加密层的四端编译产物（dist/），用 tools/fetch-crypto.ps1 从
+              tools 仓库 Release 拉取；只放产物，不手改
+
+crypto-src/   传输加密层的 Rust 源码（core/jni/node/wasm 四 crate），
+              经 tools/sync-repos.ps1 推到 GitHub tools 仓库交叉编译
+
 build-logic/  Gradle 插件
               └─ 编译期字节码插桩：为逻辑层方法注入补丁拦截入口
+
+tools/        仓库同步与产物拉取脚本（sync-repos.ps1 / fetch-crypto.ps1）
+
+.github/workflows/client.yml     客户端云端构建（APK / 桌面包 / Web 播放器）
+server/.github/workflows/backend.yml   后端云端构建与契约验证
 ```
 
 ### 架构原则
@@ -75,9 +92,10 @@ build-logic/  Gradle 插件
 - **后端以接口适配为主**，不保存完整媒体内容：
   - **实时转发**：音频流、图片、歌词
   - **持久化**：用户账号、令牌哈希、收藏记录、歌单、播放统计、发布清单
-  - **试听例外**：分享短链会缓存最多 60 秒、64 kbps 的服务端裁剪 MP3
+  - **试听转发**：分享短链按 Range 转发上游完整音频，服务端不裁剪、不落盘；「最多 60 秒」由分享页自己守
   - **不存储**：完整歌曲文件、封面图片、上游 API 响应（除必要的元数据）
-- **播放音频直连 CDN**：客户端从后端获取上游直链后，直接从 QQ 音乐 CDN 拉流，音频字节不经过自建服务器
+- **播放音频直连 CDN**：客户端从后端获取上游直链后，按音源分派直连对应 CDN（腾讯/网易/酷我）拉流，音频字节不经过自建服务器
+- **传输可选加密**：客户端可经 `/crypto/handshake` 建立加密会话（协议 v2 绑定设备号），未启用时全链路明文透明降级
 
 ## 🎵 完整播放链路详解
 
@@ -86,7 +104,7 @@ build-logic/  Gradle 插件
 ### 1️⃣ 搜索阶段
 
 ```
-客户端 → GET /api/v1/search?keyword=歌名&num=60&quality=10
+客户端 → GET /api/v1/search?keyword=歌名&num=60&quality=10&source=kuwo
          ↓
 后端打一次上游获取列表
          ↓
@@ -94,6 +112,8 @@ build-logic/  Gradle 插件
          ↓
 客户端收到一行渲染一行（增量显示，无需等待全部结果）
 ```
+
+**音源分派**：`source` 可指定 `tencent` / `netease` / `kuwo`（酷我，即波点同源）；不指定时聚合搜索只覆盖腾讯与网易。Android 搜索页固定使用酷我源，界面不暴露音源选择。
 
 **性能数据**：
 - 本机实测：130–900ms（取决于上游缓存命中）
@@ -165,7 +185,7 @@ GET /api/v1/songs/{id}/link?quality=10&mid=&type=
 
 **音质降级机制**：
 - 上游不会自动降级（付费歌请求高音质可能返回错误）
-- 后端实现音质阶梯：`[18, 14, 11, 10, 8, 4, 0]`
+- 后端按音源实现音质阶梯（腾讯：`[14, 11, 10, 8, 4, 0]`；酷我另有独立档位表）
 - 先查询 `/song/info` 获取该歌真实存在的档位，直接挑一个可用的
 - `info` 失败时才退回阶梯逐档尝试，最多试 4 档
 - `fallback: true` 表示发生了降级，客户端据此提示用户
@@ -179,7 +199,7 @@ GET /api/v1/songs/{id}/link?quality=10&mid=&type=
 ```
 ExoPlayer 用真实 CDN 地址拉流
     ↓
-直接连接 QQ 音乐 / 网易云 CDN
+直接连接上游 CDN（按音源分派：腾讯 / 网易 / 酷我）
     ↓
 音频字节不经过自建服务器（节省带宽，降低延迟）
 ```
@@ -294,7 +314,7 @@ GET /api/v1/songs/{id}/lyrics?format=json
 - 下载前预览体积，避免下到一半发现太大
 
 **降级策略**（后端实现）：
-- 音质阶梯：`[18, 14, 11, 10, 8, 4, 0]`
+- 音质阶梯按音源分别定义（腾讯：`[14, 11, 10, 8, 4, 0]`；酷我独立档位表）
 - 先查 `info` 挑可用档，`info` 失败时逐档尝试
 - 最多试 4 档，每档都会探测首字节
 - 跳过 `kbps=0kbps` 的死链
@@ -356,9 +376,9 @@ GET /api/v1/songs/{id}/lyrics?format=json
 
 **管理后台**：
 - 浏览器打开 `/admin/` 路径（如 `https://music.xydaigua.cn/admin/`），服务根路径不是后台入口
-- 首次进入用管理员账号密码登录，会话令牌存在浏览器 localStorage，有效期 24 小时
+- 企业级认证：账号密码登录、可选 TOTP 两步验证、可选 LDAP/SSO 目录对接、三种角色（super_admin/admin/viewer）、IP 白名单、操作审计；静态令牌通道已移除，只认数据库会话 `Authorization: Bearer`
 - 首次部署由服务端创建 `admin` 账号：设了 `ADMIN_INITIAL_PASSWORD`（至少 12 位）就用它，否则随机生成并在启动日志里打印一次。**两种情况首次登录都会被强制改密**（403/4031）
-- 功能：发布列表与放量、补丁列表与放量、强制更新下限、公告管理、用户统计
+- 功能：发布列表与放量、补丁列表与放量、强制更新下限、公告管理、用户统计、桌面版本发布、音源账号管理（酷我/波点短信登录）、开放 API Key 管理、审计日志查看
 
 ### 💥 崩溃日志
 
@@ -413,7 +433,7 @@ GET /api/v1/songs/{id}/lyrics?format=json
 
 ### Windows 客户端开发
 
-Windows 版本当前优先覆盖音乐功能：账号、双源搜索、播放队列、逐行/逐字歌词、收藏、最近播放、离线下载、主题和音质设置。两端均支持云端歌单（创建、改名、删除、歌曲增删与排序）和按实际播放时间倒计时的定时停止；后端虽已提供 AI 图片与 IM 接口，Android/Windows 客户端当前暂不接入。完整的接口字段、同步边界和定时器行为见 [MUSIC_CROSS_PLATFORM.md](MUSIC_CROSS_PLATFORM.md)。
+Windows 版本当前优先覆盖音乐功能：账号、酷我主源搜索、播放队列、逐行/逐字歌词、收藏、最近播放、离线下载、主题和音质设置。两端均支持云端歌单（创建、改名、删除、歌曲增删与排序）和按实际播放时间倒计时的定时停止；Android 另有单曲倒带日记。后端虽已提供 AI 图片与 IM 接口，Android/Windows 客户端当前暂不接入。完整的接口字段、同步边界和定时器行为见 [MUSIC_CROSS_PLATFORM.md](MUSIC_CROSS_PLATFORM.md)。
 
 ```powershell
 # 运行桌面客户端
@@ -427,6 +447,9 @@ Windows 版本当前优先覆盖音乐功能：账号、双源搜索、播放队
 
 # 生成 EXE / MSI（需要 WiX Toolset 3.11）
 .\gradlew.bat :desktopApp:packageDistributionForCurrentOS
+
+# 生成含 launcher.exe 的模块化更新包（云端构建用）
+.\gradlew.bat :desktopApp:packageDesktopUpdateBundle
 ```
 
 便携产物位于 `desktopApp/build/compose/jars/`，本地数据位于 `%APPDATA%\TaotaoMusic`。登录令牌使用 Windows Java Preferences 存储，不写入项目文件。
@@ -496,10 +519,13 @@ npm run build
 npm run build
 # - 先用 tsc 编译后端到 dist/
 # - 再用 Terser 压缩 dist/ 内的 JS 并移除注释
+# - 复制生产清单（copy-manifest）
 # - 再用 vite build 把管理后台产到 dist/public/
 # - 最后构建 Kotlin/Wasm 分享播放器到 dist/share-player/
 
 # 2. 上传 dist/ 整个目录和 package-lock.json 到服务器
+#    生产机还需要 crypto/dist/node/<平台>/taotao_crypto.node 加密产物
+#    （缺失只 WARN 降级明文，不阻断启动）
 
 # 3. 在 dist/ 同级执行
 npm install --omit=dev
@@ -526,6 +552,9 @@ $env:ADMIN_INITIAL_PASSWORD="verify-initial-123456"
 $env:CORS_ALLOWED_ORIGINS="https://verify.example"
 $env:NODE_ENV="test"; $env:EMAIL_VERIFICATION_TEST_CODE="123456"
 $env:IM_ENABLED="false"
+$env:ADMIN_RATE_LIMIT="1000"   # 不调大会在验证中途吃 4290 假失败
+npm run build:frontend     # /admin 的 CSP 断言需要 dist/public
+npm run build:web-player   # 分享页缓存头断言需要 dist/share-player
 npm run dev
 
 # 4. 另一个终端运行契约脚本（以脚本实际输出为准，须全绿）
@@ -537,6 +566,35 @@ node tools/verify-contract.mjs http://127.0.0.1:4720
 - 部署前**备份线上现有产物**（`bootstrap` 异常立刻回滚）
 - 线上有装机客户端，破坏契约会悄无声息地让功能失效
 - 改动后必须逐条核对 [RELEASE.md](RELEASE.md) 的"绝对不能破的客户端契约"
+
+### 三仓库同步与云端构建
+
+GitHub 侧三个正式仓库（music / music-server / tools）由助手手动跑 `tools/sync-repos.ps1` 维护：
+从本仓库 HEAD 生成**内容快照**推送（`server/` → music-server、`crypto-src/` → tools、其余 → music，
+快照分支 `sync/server` / `sync/crypto` / `sync/client`），gitee `origin` 保留完整 monorepo 作总备份。
+
+- **客户端构建**（[.github/workflows/client.yml](.github/workflows/client.yml)）：Windows runner 上构建
+  `:androidApp:assembleRelease`、`:desktopApp:packageDesktopUpdateBundle` 与 `:webApp:wasmJsBrowserDistribution`，
+  成功后发到滚动预发布 Release `latest`；Web 播放器另发 `share-player-latest` 供后端构建拉取。
+- **后端构建**（server/.github/workflows/backend.yml）：Ubuntu + PostgreSQL 服务容器，完整契约验证
+  全绿后把 dist 发布到 Release `server-dist-latest`。
+- **版本号单调延续**：云端构建成功后自动回写递增的 `version.properties`（`[skip ci]`），sync 时
+  收编本地与云端较大者；本地构建出的号同样被尊重，两侧互不回退、重号风险归零。每次同步会触发
+  一次构建、版本号 +1。
+- **APK 签名**：在 music 仓库 Secrets 配 `ANDROID_KEYSTORE_BASE64` 等四项出签名 Release 包，
+  未配置时自动退回 Debug 包。
+
+### 传输加密层
+
+传输层加密源码在 `crypto-src/`（Rust，core/jni/node/wasm 四 crate），本机**不需要** Rust 交叉编译
+环境：改协议在 `crypto-src/` 里改 → `tools/sync-repos.ps1` 推到 tools 仓库 → GitHub Actions 交叉编译
+发 Release → `tools/fetch-crypto.ps1` 拉回 `crypto/dist/` 供四端消费。
+
+- **协议 v2**：握手密钥绑定设备号（Android `ANDROID_ID` / Windows `MachineGuid`），服务端配置
+  `CRYPTO_PSK_ID` / `CRYPTO_PSK_HEX`。
+- **降级策略**：产物缺失或未配置 PSK 时握手返回 503/5031，全链路保持明文，不阻断功能。
+- **服务端接入**：AEAD 解密中间件挂在 body parser 之前，带 `X-Taotao-Crypto` 头才生效；
+  详见 [server/wiki/03-api-contracts.md](server/wiki/03-api-contracts.md) §18。
 
 ## ⚠️ 反复踩过的坑（必读）
 
@@ -732,7 +790,8 @@ node -e "const d=require('./androidApp/build/outputs/apk/release/output-metadata
 | Kotlin Coroutines | 异步编程 | Flow + StateFlow 状态管理 |
 | OkHttp | HTTP 客户端 | 网络请求与流式响应 |
 | Coil | 图片加载 | 异步加载封面图 |
-| AndroidX DataStore | 数据持久化 | 替代 SharedPreferences |
+| SharedPreferences | Android 数据持久化 | 登录状态与本地设置 |
+| Kotlin/Wasm | Web 分享播放器 | 复用 player-ui 与 shared |
 
 ### 后端
 
@@ -745,6 +804,8 @@ node -e "const d=require('./androidApp/build/outputs/apk/release/output-metadata
 | Vue 3 | 管理后台前端 | Composition API |
 | Element Plus | UI 组件库 | 管理后台样式 |
 | Vite | 前端构建工具 | 管理后台打包 |
+| Rust + napi-rs / wasm-bindgen / JNI | 传输加密层 | `crypto-src/` 四 crate，云端交叉编译 |
+| bsdiff-wasm / Courgette | 桌面差分 | Windows 模块更新 |
 
 ### 开发工具
 
@@ -754,10 +815,11 @@ node -e "const d=require('./androidApp/build/outputs/apk/release/output-metadata
 | Android Studio | Android 开发 IDE |
 | VS Code | 后端开发推荐 |
 | PowerShell | 脚本与命令执行 |
+| GitHub Actions | 云端构建与版本号回写 |
 
 ## 🔗 相关链接
 
-- **上游音乐接口**：QQ 音乐 API v3、网易云音乐 API（通过第三方聚合服务）
+- **上游音乐接口**：多音源适配（腾讯/网易/酷我/波点，通过第三方聚合服务）
 - **管理后台**：浏览器访问 `/admin/` 路径（如 `https://music.xydaigua.cn/admin/`）
 - **热更新设计**：参见 [HOT_UPDATE.md](HOT_UPDATE.md)
 - **发布流程**：参见 [RELEASE.md](RELEASE.md)

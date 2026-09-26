@@ -4,6 +4,8 @@
 
 桌面发布由 `src/desktop-release/` 实现，与 Android `src/release/` 分开保存版本记录和最低支持版本。两者共享 `AdminAuthGuard`（只接受管理员会话 `Authorization: Bearer`）、灰度哈希和 `app_config`，但 **不能共用 versionCode 表或最低版本字段**。当前默认架构是 `windows-x64`。
 
+桌面端消费的加密产物是 `crypto/dist/windows/taotao_crypto.dll`（JNI，随桌面应用打包），它属于客户端运行时，与本文描述的服务端 `/api/v1/desktop/*` 接口无关，也不影响本发布流程；服务端用的 Node 产物见 [06-release-deployment.md](06-release-deployment.md) 的部署文件一节。
+
 ## 1. 发布对象
 
 一个桌面版本由一份发布记录和 1 至 512 个模块文件组成：

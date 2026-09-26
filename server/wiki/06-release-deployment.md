@@ -34,6 +34,11 @@ dist/
 package-lock.json
 ```
 
+另外要**拉取加密产物**：从 tools 仓库的 Release 取 `crypto/dist/node/<linux-x64|windows-x64>/taotao_crypto.node`，
+按运行平台放到服务器上（loader 从 `cwd/../crypto/dist` 或 `cwd/crypto/dist` 查找，见
+`server/src/crypto/native-loader.ts`）。产物缺失只会打一条 WARN 并把传输加密降级为明文，
+**不会阻断启动**；需要加密链路时必须就位。
+
 目标服务器在 `dist` 同级目录执行：
 
 ```powershell
@@ -49,6 +54,7 @@ node dist/main.js
 | --- | --- |
 | `DATABASE_URL` | 明确指向正式 PostgreSQL，不能使用验证库 |
 | `AUTH_SECRET` | 至少 32 字符随机值。**没有开发兜底值**，缺失或过短会直接拒绝启动 |
+| `CRYPTO_PSK_ID` / `CRYPTO_PSK_HEX` | **生产必配**：传输加密 PSK 的标识与 32 字节 hex 原始密钥，二者缺一则握手全部失败、链路保持明文 |
 | `CORS_ALLOWED_ORIGINS` | 只在确有第三方网页要跨域读接口时才配置；默认留空即不下发任何 CORS 头 |
 | `ADMIN_INITIAL_PASSWORD` | 建议显式设置且足够强（至少 12 字符）；留空则随机生成并只在首次启动日志里打印一次。两种来源都强制首登改密 |
 | `TOTP_ISSUER` | 可选；管理员 2FA 在验证器里显示的名称 |
@@ -116,10 +122,10 @@ curl.exe https://你的域名/health
 
 ```powershell
 npm run build
-node tools/verify-contract.mjs http://127.0.0.1:4720 verify-token
+node tools/verify-contract.mjs http://127.0.0.1:4720
 ```
 
-以验证脚本的实际汇总数量为准，必须全部通过。数据层修改还要执行对应专项验证，例如 Key 并发扣额、失败退额和任务结果回写。
+脚本只读取第二个参数（base URL），不需要也不接受其它参数。以验证脚本的实际汇总数量为准，必须全部通过。数据层修改还要执行对应专项验证，例如 Key 并发扣额、失败退额和任务结果回写。
 
 ## 7. APK 构建
 
@@ -281,6 +287,9 @@ curl.exe -i "$origin/api/v1/app/bootstrap?versionCode=1&sdk=36&deviceId=deploy-c
 # 4. bootstrap 带假令牌仍不能 401
 curl.exe -i "$origin/api/v1/app/bootstrap?versionCode=1&sdk=36&deviceId=deploy-check" `
   -H "Authorization: Bearer expired.token"
+
+# 5. 未配置加密时握手应返回 503/5031（证明明文链路健在、加密层按预期降级）
+curl.exe -i -X POST "$origin/api/v1/crypto/handshake" -H "content-type: application/json" -d "{}"
 ```
 
 涉及真实账号、图片生成和发布管理的冒烟测试应使用专用测试账号，并避免在命令历史里写入令牌或 Key。
@@ -335,3 +344,17 @@ curl.exe -i -H "Range: bytes=0-99" "$origin/api/v1/public/shares/替换为真实
 
 若只发布了 Android，仍应检查桌面 bootstrap 返回结构不会 5xx；若启用了 IM，再追加真实账号的会话和
 同步验证。所有后台接口失败时先确认 401/4013 管理令牌，再排查业务码。
+
+## 19. CI 云端构建与三仓同步
+
+正式构建在 GitHub 侧由三仓快照触发的云端工作流承担：
+
+- **music-server 仓库**：`server/.github/workflows/backend.yml`（源文件在本仓库同名路径）——
+  Ubuntu runner + PostgreSQL 16 服务容器，`npm run build` 后从 music 仓库的固定 Release
+  `share-player-latest` 拉取真实分享播放器放进 `dist/share-player/`（拉不到时退回占位文件，
+  仅够缓存头断言），然后起验证实例执行完整 `verify-contract.mjs`，**全绿才算通过**；通过后
+  把完整 `dist/` 发布到固定 tag 预发布 Release `server-dist-latest`。
+- **三仓同步**：GitHub 侧 music / music-server / tools 三个正式仓库由项目根的
+  `tools/sync-repos.ps1` 手动维护，从本仓库 HEAD 生成内容快照推送：`server/` →
+  music-server、`crypto-src/` → tools、其余全部 → music。只同步已提交内容，推送前先在本仓库
+  提交；快照机制与版本号收编规则见根目录 `AGENTS.md` 的「三仓库同步」。

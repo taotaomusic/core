@@ -74,6 +74,13 @@
 **没有凭据是 401，凭据有效但角色不够才是 403**。不要为了省事把权限不足改成 401 —— 前端收到
 401 会清本地会话并跳登录页，把一次“换个超管账号再来”变成“整个后台被登出”。
 
+传输加密层复用了部分既有业务码（见 §18）：
+
+- `503/5031`：传输加密未启用（原生产物缺失或协议版本过低），客户端据此回退明文。
+- `400/4013`：握手被拒绝（PSK 未配置、device_id 与 PSK 不匹配或报文非法）。
+- `400/4006`：加密头格式错误、加密上下文构造失败或请求体解密失败。
+- `409/4091`：加密会话失效，客户端应重新握手。
+
 新增业务码前先搜索现有使用点，不能复用语义不同的旧码。
 
 歌单接口使用 4045 表示歌单不存在或不属于当前账号，4004 表示歌曲身份、来源或排序集合
@@ -85,7 +92,7 @@
 `source + songId` 组成，`songId` 传字符串以兼容数字 ID 与上游 `mid`。服务端同时保存展示
 快照，歌单详情返回按 `position` 升序的歌曲数组。
 
-目前 `source` 仅允许 `tencent` 和 `netease`。当腾讯歌曲的数字 `id` 为 `0` 或缺失时，
+目前 `source` 允许 `tencent`、`netease` 和 `kuwo`。当腾讯歌曲的数字 `id` 为 `0` 或缺失时，
 必须传非空 `mid`；服务端以 `mid` 代替无效数字 ID 建立稳定键。
 
 | 方法 | 路径 | 说明 |
@@ -376,7 +383,7 @@ APK 下载必须支持：
 | `/search`、`/songs/**` | 必须 | 不使用 | 音乐业务接口 |
 | `/draw/**` | 必须 | 不使用 | 图片任务属于当前登录用户调用会话，但任务表当前不存 user_id |
 | `/app/bootstrap`、`/app/apk/**`、`/app/patch/**` | 不要求 | 不要求 | Android 热更新通道必须公开 |
-| `/app/admin/**` | 不使用 | 管理员会话 | `AdminAuthGuard` + `RolesGuard`；读 `READ_ROLES`，写 `WRITE_ROLES`（观察者 403/4030），写操作另写审计。`/app/admin/users/**` 的**读**用 `PRIVILEGED_READ_ROLES`（返回 email 与听歌历史）。`/app/admin/open-api-keys` 同走管理员会话：读 `READ_ROLES`，写 `WRITE_ROLES` |
+| `/app/admin/**` | 不使用 | 管理员会话 | `AdminAuthGuard` + `RolesGuard`；读 `READ_ROLES`，写 `WRITE_ROLES`（观察者 403/4030），写操作另写审计。`/app/admin/users/**` 的**读**用 `PRIVILEGED_READ_ROLES`（返回 email 与听歌历史）。`/app/admin/open-api-keys` 同走管理员会话：读 `READ_ROLES`，写 `WRITE_ROLES`。`/app/admin/music-sources` 的清单读也是 `PRIVILEGED_READ_ROLES`（见音源账号章节） |
 | `/open/**` | 不要求（用 `X-API-Key` 或 `Authorization: Bearer tt_...`） | 不使用 | 开放搜歌，`ApiKeyGuard`，鉴权失败 401/4014；与用户访问令牌、管理员会话三套凭据互相独立。详见 §17 |
 | `/admin/auth/login`、`/totp-verify`、`/logout` | 不要求 | 不要求 | 显式公开；2FA 第二步额外要求 `temp_token` |
 | `/admin/auth/**`（其余） | 不使用 | 管理员会话 | 由 AdminAuthGuard + RolesGuard 校验；角色不足为 403/4030 |
@@ -386,6 +393,7 @@ APK 下载必须支持：
 | `/shares/songs` | 必须 | 不使用 | 创建短链 |
 | `/playback/**`、`/favorites/**`、`/playlists/**` | 必须 | 不使用 | 用户云端数据 |
 | `/im/**` | 必须 | 不使用 | IM 会话和同步代理；未启用时返回 503/5031 |
+| `/crypto/handshake` | 不要求 | 不要求 | 显式公开（握手时客户端尚无会话）；未启用固定 503/5031，见 §18 |
 
 当前图片任务表没有 `user_id` 字段，因此知道合法 taskId 的任意已登录用户都能查询该任务。若产品需要任务归属隔离，必须先给任务表增加 `user_id` 外键，并在创建和查询路径同时校验，不能只在客户端隐藏 taskId。
 
@@ -464,7 +472,8 @@ Controller 不应返回 HTTP 200 加错误业务码；失败应同时使用正�
 ### 收藏
 
 `GET /favorites` 返回当前有效收藏数组（不是分页对象）。`POST` 和 `DELETE`
-`/favorites/{source}/{songId}` 不需要请求体；来源只允许 `tencent`/`netease`，歌曲 ID 按字符串
+`/favorites/{source}/{songId}` 不需要请求体；来源按格式校验（`tencent`/`netease`/`kuwo`），
+歌曲 ID 按字符串
 校验。删除是软删除并返回 `{removed}`，重新收藏保留 `createdAt`，只更新当前轮次的
 `favoritedAt`。搜索通过一次批量查询填充 `favorited`，不能在循环里逐首读取收藏。
 
@@ -536,6 +545,27 @@ Controller 不应返回 HTTP 200 加错误业务码；失败应同时使用正�
 - `POST /auth/avatar` 使用 multipart 字段 `file`，仅接受图片 MIME，最大 5 MiB；服务端把文件转发
   到 Lsky，客户端只能拿到 HTTPS 图片地址。`PATCH /auth/profile` 的 `avatarUrl` 也只接受 HTTPS。
 
+### 单曲倒带日记
+
+`GET /playback/diary?source=&songId=` 需要访问令牌，返回一首歌的回访画像：基础累计统计、
+近一年/近半年的合格会话数（口径与播放会话有效性一致）、按天的播放峰值（`peakDay`）和
+最近若干条会话明细。歌曲身份校验与播放会话相同；无数据时返回零值而不是 404。
+
+### 音源账号管理（酷我/波点）
+
+`/app/admin/music-sources*` 维护服务端自有的音源账号凭据（酷我/波点），共 9 条路由：
+清单 `GET /`（`PRIVILEGED_READ_ROLES`，凭据属个人信息）、可用项 `GET /available`（`READ_ROLES`）、
+新建 `POST /`、编辑 `PATCH /:id`、启停 `PUT /:id/enabled`、探测 `POST /:id/probe`、删除
+`DELETE /:id`、发短信 `POST /sms`、短信登录 `POST /login`（写均 `WRITE_ROLES`）。
+
+红线：
+
+- **token 与完整手机号只进不出**：所有响应只回掩码手机号；审计也只记掩码（`music_source.sms`）。
+- 酷我 `uid` 必须是纯数字，写入时 400/4007 拦截，否则播放链路取址会失败。
+- 探测失败落库 `last_status=invalid` 并把错误写 `last_error`；`last_note` 存探测到的真实音质。
+- 写操作审计 action：`music_source.create` / `update` / `enable` / `disable` / `probe` /
+  `delete` / `sms` / `login`。
+
 ### 管理后台认证
 
 `/api/v1/admin/auth/**` 是管理后台自己的登录体系，和 `/app/admin/**` 的静态令牌互不影响。
@@ -595,6 +625,7 @@ Content-Type: application/json
 | `im-session` | 每用户 30 次 + 每 IP 180 次 |
 | `im-sync` | 每用户 300 次 + 每 IP 1,800 次 |
 | `open-api` | 每 key 120 次 + 每来源地址 600 次 |
+| `music-source-sms` | 每 IP 5 次 + 每手机号 3 次（音源短信登录） |
 
 限流是进程内状态，重启清空且多实例不共享。客户端收到 429/4290 时应退避，不能把它当成登录失效。
 
@@ -681,3 +712,44 @@ NDJSON 每行形状（`/open/search/stream`，与内部 `/search` 同格式）�
 审计只记 `keyPrefix`，不记明文。模块在 `server/src/open-api/`（`OpenApiModule`，imports
 `MusicModule` + `UpstreamModule` + `AdminAuthModule`），表 `open_api_key` 只存 `sha256(key)`，建表在
 `migrations.ts`。
+
+## 18. 传输加密握手
+
+> 本节沿用 §17 的追加体例：§1–§17 的既有编号保持不变，传输加密追加为 §18。
+
+`/api/v1/crypto/handshake` 是传输层加密的唯一入口（`server/src/crypto/`），保护范围覆盖
+`/api/v1/**`：带 `X-Taotao-Crypto` 头的请求在 body parser 之前由中间件逐块 AEAD 解密，
+无加密头的请求完全透明（明文链路始终可用，加密是可选增强而非强依赖）。
+
+### 握手
+
+```http
+POST /api/v1/crypto/handshake
+Content-Type: application/json
+
+{ "clientHello": "<base64>", "deviceId": "<设备号>" }
+```
+
+- `@Public()` 显式公开：握手时客户端尚无会话，不能要求登录。
+- 成功 HTTP 200：`{ "serverHello": "<base64>" }`。
+- `deviceId` 折进握手密钥（协议 v2，握手密钥绑定设备号）：Android 取 `ANDROID_ID`、
+  Windows 取 `MachineGuid`；缺失按空串处理（等价不绑定）。
+- 走 JSON 而不是裸字节：握手请求本身不加密、量小，base64 让它在既有 JSON 中间件里通行无阻。
+
+### 失败语义
+
+| 场景 | 响应 | 客户端行为 |
+| --- | --- | --- |
+| 服务端未启用（产物缺失或协议版本 <2） | 503/5031「传输加密未启用」 | 回退明文，不阻断功能 |
+| `clientHello` 缺失或非法 base64 | 400/4006 | 修正报文 |
+| PSK 未配置、device_id 与 PSK 不匹配、报文非法 | 400/4013「握手被拒绝」 | 检查 PSK 配置与设备号来源 |
+| 加密会话过期或序号不连续（请求阶段） | 409/4091「加密会话失效，请重新握手」 | 重新握手后重放请求 |
+
+### 中间件约束
+
+- AAD 绑定 `method + path + query`，改路由形状会直接导致解密失败（400/4006）。
+- `RAW_BODY_PATHS` 白名单（APK/补丁/桌面上传）与 `*/play` 音频流不参与解密。
+- 服务端会话在内存中管理，每分钟清理过期会话；重启后客户端需重新握手（409/4091 引导）。
+
+配置见 `CRYPTO_PSK_ID` / `CRYPTO_PSK_HEX`（[00-code-index.md](00-code-index.md) §7）；
+本地开发与产物获取见 [02-development.md](02-development.md) 的「传输加密本地开发」。

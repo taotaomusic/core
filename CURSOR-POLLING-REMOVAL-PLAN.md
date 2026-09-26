@@ -1,5 +1,9 @@
 # 移除无效游标轮询机制 - 执行计划
 
+> **✅ 本计划已于 2026-08-28 全部执行完毕**（服务端 3 处、Android 2 处、API 声明 1 处，
+> 含最后的审计文档更新）。全仓已无 `readed_to_msg_seq` / `read-state` 残留，执行结论沉淀在
+> [IM-AUDIT-FINDINGS.md](IM-AUDIT-FINDINGS.md)。本文仅作历史记录保留。
+
 ## 背景
 
 审计确认 `readed_to_msg_seq` 是 WuKongIM v3 的计划新特性，当前部署的 v2.x 服务端（114.66.23.232:5001）**不返回此字段**。

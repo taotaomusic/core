@@ -368,7 +368,7 @@ WKSyncExtraMsg().apply {
 | 2 | ~~`/conversation/sync` 的 `uid` 参数语义未确认~~ | ~~可能暴露其他用户会话状态~~ | ~~🔴 高~~ | ✅ 已解决 |
 | 3 | ~~三种已读机制并存~~ | ~~状态来源混乱~~ | ~~🟡 中~~ | ✅ 已解决 |
 | 4 | `header.syncOnce` 改动未验证 | 可能导致离线命令丢失或重复 | 🟡 中 | ⚠️ 待验证 |
-| 5 | `persistMessageExtra()` 在 SDK 写入前调用 | revoke 状态可能未持久化 | 🟡 中 | ⚠️ 待优化 |
+| 5 | `persistMessageExtra()` 在 SDK 写入前调用 | revoke 状态可能未持久化 | 🟡 中 | ✅ 已修复（`markMessageRevoked()` 现在先 `updateContentAndRefresh()` 再 `persistMessageExtra()`） |
 | 6 | ~~`messageSeq` 类型不匹配~~ | ~~编译失败~~ | ~~🟢 低~~ | ✅ 已修复 |
 
 **2026-08-28 更新**：风险 #1、#2、#3、#6 已在本次审计中解决。

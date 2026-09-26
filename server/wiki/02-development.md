@@ -44,6 +44,9 @@ PUBLIC_BASE_URL=http://127.0.0.1:4500
 APISWEET_BASE_URL=https://apisweet.com
 LSKY_UPLOAD_URL=https://img.kiwiyyds.cn/api/index.php
 LSKY_API_KEY=
+# 可选：传输加密 PSK。缺任一项握手全部 503/5031，链路保持明文（本地开发可不配）。
+# CRYPTO_PSK_ID=dev-psk
+# CRYPTO_PSK_HEX=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 SMTP_HOST=
 SMTP_PORT=587
 SMTP_USER=
@@ -86,6 +89,10 @@ TOTP_ISSUER=桃桃音乐管理后台
 | `APISWEET_BASE_URL` | `https://apisweet.com` | 否 | 图片生成上游地址 |
 | `LSKY_UPLOAD_URL` | `https://img.kiwiyyds.cn/api/index.php` | 否 | 头像图床地址 |
 | `LSKY_API_KEY` | 空 | 头像上传必需 | 只在服务端使用 |
+| `LSKY_PUBLIC_HOSTS` | 空 | 否 | 头像图床公网域白名单；上传返回的 URL 必须落在白名单内才入库 |
+| `CRYPTO_PSK_ID` / `CRYPTO_PSK_HEX` | 空 | 否 | 传输加密 PSK 标识与 32 字节 hex 密钥；缺任一项握手全 503/5031、链路明文 |
+| `ADMIN_RATE_LIMIT` | `60` | 否 | 管理端 `admin` 限流桶每 15 分钟次数；仅供契约验证调大，生产勿设 |
+| `BODIAN_DEVICE_ID` | `md5("taotao-music-server")` | 否 | 波点客户端设备号覆盖项 |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASSWORD` / `SMTP_FROM` | 空/587 | 发码时必需 | 注册、绑定和换绑邮箱验证码 |
 | `IM_ENABLED` | `false` | 否 | 是否启用悟空 IM |
 | `IM_INTERNAL_API_BASE_URL` | `http://127.0.0.1:5001` | IM 启用时必需 | 悟空 IM 产品 HTTP API |
@@ -120,7 +127,11 @@ npm run build
 npm start
 
 # 对已启动的验证实例执行契约测试
-npm run verify -- http://127.0.0.1:4720 verify-token
+npm run verify -- http://127.0.0.1:4720
+
+# 酷我 KPK 原生签名向量与波点逐字歌词解析自检
+npm run verify:kpk
+npm run verify:lrcx
 
 # 单独构建管理后台和分享播放器
 npm run build:frontend
@@ -241,7 +252,9 @@ $env:AUTH_SECRET="0123456789012345678901234567890123456789"
 $env:ADMIN_INITIAL_PASSWORD="verify-initial-123456"
 $env:NODE_ENV="test"; $env:EMAIL_VERIFICATION_TEST_CODE="123456"
 $env:IM_ENABLED="false"; $env:CORS_ALLOWED_ORIGINS="https://verify.example"
-npm run build:frontend   # /admin 下的 CSP 与主题脚本断言需要 dist/public
+$env:ADMIN_RATE_LIMIT="1000"   # 不调大会在验证中途吃 4290 假失败
+npm run build:frontend     # /admin 下的 CSP 与主题脚本断言需要 dist/public
+npm run build:web-player   # 分享页缓存头断言需要 dist/share-player
 npm run dev
 ```
 
@@ -391,3 +404,15 @@ curl.exe -i -X POST "http://127.0.0.1:4500/api/v1/admin/auth/login" `
 
 如果**所有**登录请求都是 401/4013，第一嫌疑是 `@UseGuards` 被挂到了控制器类上 —— 类级守卫
 连 `login` 一起拦，谁也进不去。详细排查见 [07-troubleshooting.md](07-troubleshooting.md)。
+
+### 传输加密本地开发
+
+本机**不需要** Rust / Android NDK / wasm-bindgen 交叉编译环境。在项目根目录执行
+`powershell tools/fetch-crypto.ps1`，从 GitHub `hdppppppp/tools` 仓库的 Release 拉取对应平台
+产物到 `crypto/dist/node/<platform>/taotao_crypto.node`（带 SHA256 校验）。产物缺失时服务只是
+启动 WARN 并按明文链路运行，不阻断启动。
+
+要在本地验证加密链路，配置 `CRYPTO_PSK_ID` / `CRYPTO_PSK_HEX`（两值需与客户端侧一致），
+然后 `POST /api/v1/crypto/handshake` 应返回 `serverHello`；未配置时该接口固定 503/5031，
+可用于证明明文链路健在。改加密协议去 `crypto-src/` 改（经 `tools/sync-repos.ps1` 推到 tools
+仓库交叉编译），不要动 `crypto/dist/` 里的产物。
