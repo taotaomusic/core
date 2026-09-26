@@ -1,0 +1,14 @@
+# Docker 构建上下文里要排除的东西。镜像只需要 package*.json 与已构建的 dist/。
+node_modules
+src
+tools
+frontend
+wiki
+.github
+*.log
+tmp
+server-dist.zip
+.env
+.env.*
+tsconfig*.json
+vite.config.*
