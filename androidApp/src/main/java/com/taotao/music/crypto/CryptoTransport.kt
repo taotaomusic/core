@@ -131,7 +131,8 @@ class CryptoTransport(
             throw CryptoException("获取 PSK 失败：HTTP $code")
         }
         val body = connection.inputStream.bufferedReader().use { it.readText() }
-        val json = JSONObject(body)
+        // 后端全局 EnvelopeInterceptor 把响应包成 {code,message,data}，取 data 层。
+        val json = JSONObject(body).let { it.optJSONObject("data") ?: it }
         val id = json.optString("pskId")
         val hex = json.optString("pskHex")
         if (id.isBlank() || hex.isBlank()) throw CryptoException("PSK 响应缺少字段")
@@ -171,7 +172,9 @@ class CryptoTransport(
             throw CryptoException("握手请求失败：HTTP $code")
         }
         val body = connection.inputStream.bufferedReader().use { it.readText() }
-        val serverHelloB64 = JSONObject(body).optString("serverHello")
+        // 同 /crypto/psk：响应经 EnvelopeInterceptor 包成 {code,message,data}。
+        val json = JSONObject(body).let { it.optJSONObject("data") ?: it }
+        val serverHelloB64 = json.optString("serverHello")
         if (serverHelloB64.isBlank()) throw CryptoException("握手响应缺少 serverHello")
         return Base64.decode(serverHelloB64, Base64.DEFAULT)
     }
