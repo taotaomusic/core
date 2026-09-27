@@ -85,7 +85,10 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
         authSession,
         context.packageManager.getPackageInfo(context.packageName, 0).longVersionCode,
         cryptoTransport = cryptoTransport,
-        cryptoEnabled = false,
+        // 灰度打开传输加密：目前只对白名单接口（收藏列表 /api/v1/favorites）生效，
+        // 其余接口仍明文。服务端未配 PSK / 未加载 .node 时 CryptoTransport.enabled=false，
+        // 客户端自动回退明文，不影响功能。
+        cryptoEnabled = true,
     )
     val downloadManager = OfflineDownloadManager(context, authSession)
     val playbackStateStore = PlaybackStateStore(context)
