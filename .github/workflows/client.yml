@@ -236,6 +236,7 @@ jobs:
           path: artifacts
 
       - name: 整理产物（版本号取 output-metadata.json，铁律①）
+        id: prep
         run: |
           mkdir -p out
           apk=$(find artifacts/android-apk -name '*.apk' | head -n 1)
@@ -247,9 +248,27 @@ jobs:
           esac
           cp "$apk" "out/TaotaoMusic-${vn}-${kind}.apk"
           (cd artifacts/desktop-update-bundle && zip -qr "$OLDPWD/out/taotao-music-desktop-bundle.zip" .)
+          echo "vn=$vn" >> "$GITHUB_OUTPUT"
+          echo "kind=$kind" >> "$GITHUB_OUTPUT"
           ls -la out
 
-      - name: 发布到 Release latest
+      - name: 发布版本化 Release（每版一条，保留历史）
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VN: ${{ steps.prep.outputs.vn }}
+          KIND: ${{ steps.prep.outputs.kind }}
+        run: |
+          # 每个版本号一个不可变 Release（tag=v<版本>），APK 与桌面包历史可追。
+          TAG="v$VN"
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --title "客户端 $VN（$KIND）" \
+              --notes "Android APK 与 Windows 桌面更新包。构建版本 $VN。" || true
+          fi
+          gh release upload "$TAG" out/* --clobber
+          echo "已发布版本化 Release $TAG"
+
+      - name: 更新滚动 latest（指向最新一版，方便直链下载）
         env:
           GH_TOKEN: ${{ github.token }}
           # 本 job 不做 checkout（没有 .git 上下文），gh 必须靠 GH_REPO 定位仓库

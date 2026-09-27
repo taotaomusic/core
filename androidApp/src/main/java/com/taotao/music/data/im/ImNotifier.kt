@@ -7,11 +7,17 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.media.RingtoneManager
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import androidx.core.graphics.drawable.toBitmap
+import coil.imageLoader
+import coil.request.ImageRequest
+import coil.request.SuccessResult
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * IM 消息通知器。
@@ -42,7 +48,7 @@ class ImNotifier(private val context: Context) {
             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
             PackageManager.PERMISSION_GRANTED
 
-    fun showMessage(peerName: String, content: String) {
+    suspend fun showMessage(peerName: String, content: String, avatarUrl: String? = null) {
         if (!canNotify()) return
         val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)?.apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -58,6 +64,7 @@ class ImNotifier(private val context: Context) {
             .setSmallIcon(android.R.drawable.ic_dialog_email)
             .setContentTitle(peerName)
             .setContentText(content)
+            .setLargeIcon(loadAvatarBitmap(avatarUrl))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setAutoCancel(true)
             .setContentIntent(pendingIntent)
@@ -68,8 +75,29 @@ class ImNotifier(private val context: Context) {
         runCatching { manager.notify(NOTIFICATION_ID++, notification) }
     }
 
+    /**
+     * 通知大图标：限时加载并压到通知尺寸，失败退回 null（默认无图标样式）。
+     * 调用方在 IM 事件队列（IO 线程）里，阻塞加载不影响界面。
+     */
+    private suspend fun loadAvatarBitmap(url: String?): Bitmap? {
+        if (url.isNullOrBlank()) return null
+        return runCatching {
+            withTimeoutOrNull(NOTIFY_ICON_TIMEOUT_MS) {
+                val request = ImageRequest.Builder(context)
+                    .data(url)
+                    .size(NOTIFY_ICON_PIXELS)
+                    .build()
+                (context.imageLoader.execute(request) as? SuccessResult)?.drawable?.toBitmap()
+            }
+        }.getOrNull()
+    }
+
     private companion object {
         const val CHANNEL_ID = "im_message"
         var NOTIFICATION_ID = 5001
+
+        /** 通知头像解码上限（像素）与加载时限；超时就放弃大图标，不让通知迟到。 */
+        const val NOTIFY_ICON_PIXELS = 256
+        const val NOTIFY_ICON_TIMEOUT_MS = 1_500L
     }
 }

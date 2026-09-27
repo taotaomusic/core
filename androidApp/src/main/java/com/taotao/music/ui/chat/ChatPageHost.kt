@@ -28,6 +28,7 @@ internal fun ChatPageHost(
 ) {
     val messages by client.messages.collectAsState()
     val peerContacts by client.peerContacts.collectAsState()
+    val syncedPeers by client.syncedPeers.collectAsState()
     val haptic = LocalHapticFeedback.current
 
     // 消息流每次发射都会重组宿主；撤回回调必须保持同一实例，
@@ -44,6 +45,7 @@ internal fun ChatPageHost(
         connection = connection,
         messages = messages,
         savedPeers = savedPeers,
+        syncedPeers = syncedPeers,
         peerContacts = peerContacts,
         ownAvatarUrl = ownAvatarUrl,
         onSend = { peerUid, content ->

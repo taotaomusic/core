@@ -67,6 +67,12 @@ class WukongImClient(
     private val confirmedReadMessageIds = ConcurrentHashMap.newKeySet<String>()
     private val confirmedRevokedMessageIds = ConcurrentHashMap.newKeySet<String>()
 
+    /** 正在补拉资料的 uid，避免消息风暴里对同一个对端重复请求。 */
+    private val pendingContactUids = ConcurrentHashMap.newKeySet<String>()
+
+    /** 确认查不到资料的 uid（如管理端工具用的非真实账号），不再为它反复发请求。 */
+    private val unknownContactUids = ConcurrentHashMap.newKeySet<String>()
+
     /** 页面订阅的连接状态；不会暴露悟空 IM Token。 */
     val connection: StateFlow<ImConnectionInfo> = _connection.asStateFlow()
 
@@ -168,13 +174,61 @@ class WukongImClient(
         }
     }
 
-    private fun enqueueImEvent(block: () -> Unit) {
+    private fun enqueueImEvent(block: suspend () -> Unit) {
         imEventScope.launch {
             imEventMutex.withLock { block() }
         }
     }
 
-    private fun handleNewMessages(received: List<WKMsg>) {
+    /**
+     * 为消息流里出现的对端补拉资料（昵称与头像）。
+     *
+     * 此前只有「选中会话」和「抽屉可见列表」两条路径会拉联系人：从后台同步恢复的
+     * 会话、对端直接发来的消息（例如从管理端手动发送的消息）都没人解析，界面就一直
+     * 显示 UID 前缀和占位头像。这里按 uid 去重补拉；确认查不到的不再反复请求。
+     */
+    private fun ensurePeerContacts(uids: Collection<String>) {
+        val candidates = uids.map { it.trim().lowercase() }
+            .filter { UUID_PATTERN.matches(it) }
+            .filterNot { _peerContacts.value.containsKey(it) || it in pendingContactUids || it in unknownContactUids }
+            .distinct()
+        if (candidates.isEmpty()) return
+        candidates.forEach(pendingContactUids::add)
+        syncScope.launch {
+            val fetched = runCatching { api.imContacts(candidates) }.getOrNull()
+            if (fetched == null) {
+                // 网络失败不算查不到：允许下一条消息再触发重试。
+                candidates.forEach(pendingContactUids::remove)
+                return@launch
+            }
+            val resolved = fetched.associate { it.uid to it }
+            if (resolved.isNotEmpty()) _peerContacts.value = _peerContacts.value + resolved
+            candidates.forEach { uid ->
+                pendingContactUids.remove(uid)
+                if (uid !in resolved) unknownContactUids.add(uid)
+            }
+        }
+    }
+
+    /**
+     * 后台通知展示前解析对端资料，让通知带上真实昵称与头像。
+     * 已知资料直接返回；未知的现场拉取一次，查不到就返回 null 由调用方按 UID 降级。
+     * imContacts 是阻塞实现，靠 HTTP 自身超时兜底；同一 uid 只会现场拉一次。
+     */
+    private suspend fun awaitPeerContact(peerUid: String): TencentMusicApi.ImContact? {
+        _peerContacts.value[peerUid]?.let { return it }
+        if (!UUID_PATTERN.matches(peerUid) || peerUid in unknownContactUids) return null
+        val fetched = withContext(Dispatchers.IO) { runCatching { api.imContacts(listOf(peerUid)) }.getOrNull() }
+        val contact = fetched?.firstOrNull { it.uid == peerUid }
+        if (contact != null) {
+            _peerContacts.value = _peerContacts.value + (contact.uid to contact)
+        } else {
+            unknownContactUids.add(peerUid)
+        }
+        return contact
+    }
+
+    private suspend fun handleNewMessages(received: List<WKMsg>) {
         val currentUid = _connection.value.uid?.trim()?.lowercase() ?: return
         val newlyReadIds = ArrayList<String>()
         val added = received.mapNotNull { message ->
@@ -185,8 +239,9 @@ class WukongImClient(
             val peerUid = if (fromUid == currentUid) message.channelID else fromUid
             if (fromUid != currentUid) {
                 if (!isAppInForeground) {
-                    val peerName = _peerContacts.value[peerUid]?.nickname ?: peerUid.take(8)
-                    notifier.showMessage(peerName, content)
+                    // 通知先把对端的昵称与头像解析出来再展示；查不到时按 UID 前缀降级。
+                    val contact = awaitPeerContact(peerUid)
+                    notifier.showMessage(contact?.nickname ?: peerUid.take(8), content, contact?.avatarUrl)
                 }
                 if (isAppInForeground && peerUid == activePeerUid) {
                     (message.messageID ?: message.clientMsgNO)?.takeIf { it.isNotBlank() }
@@ -199,6 +254,8 @@ class WukongImClient(
         // 双方都在线时历史加载不会再次发生；这里对正在看的会话即时确认已读。
         val activePeer = activePeerUid
         if (activePeer != null && isAppInForeground) sendReadReceipt(activePeer, newlyReadIds)
+        // 无论消息从哪条链路到达（包括后台手动发送），对端资料都要自动补齐。
+        ensurePeerContacts(added.map { it.peerUid })
     }
 
     private fun handleSentMessage(message: WKMsg) {
@@ -404,6 +461,8 @@ class WukongImClient(
         synchronized(messageStateLock) { _messages.value = emptyList() }
         _syncedPeers.value = emptyList()
         _peerContacts.value = emptyMap()
+        pendingContactUids.clear()
+        unknownContactUids.clear()
         activePeerUid = null
         confirmedReadMessageIds.clear()
         confirmedRevokedMessageIds.clear()
@@ -500,6 +559,8 @@ class WukongImClient(
         if (restored.isEmpty()) return 0
         mergeMessages(restored)
         _syncedPeers.value = ( _syncedPeers.value + restored.map { it.peerUid } ).distinct().sorted()
+        // 冷启动从后台同步恢复的会话同样要解析对端资料，否则历史气泡只有占位头像。
+        ensurePeerContacts(restored.map { it.peerUid })
         return restored.size
     }
 

@@ -162,6 +162,17 @@ jobs:
           gh release upload server-dist-latest server-dist.zip --clobber
           echo "已发布 server-dist-latest/server-dist.zip"
 
+          # 版本化发布：每个 package.json 版本一个不可变 Release（tag=server-v<版本>），
+          # 保留历史、可回滚。要发新版本先改 package.json 的 version。
+          VER=$(node -p "require('./package.json').version")
+          TAG="server-v$VER"
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --title "后端 $VER" \
+              --notes "契约验证通过的完整 dist（含两平台 taotao_crypto.node）。扁平布局：解压即得 main.js 与 crypto/。" || true
+          fi
+          gh release upload "$TAG" server-dist.zip --clobber
+          echo "已发布版本化 Release $TAG"
+
       - name: 构建并推送 Docker 镜像到 ghcr.io
         # 只在 push 到 main 时推镜像；手动触发（workflow_dispatch）只验证不推。
         # 走到这一步说明契约已全绿，dist/ 是验证过的那份，Dockerfile 直接复用它。

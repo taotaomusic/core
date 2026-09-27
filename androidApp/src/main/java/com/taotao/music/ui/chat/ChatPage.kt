@@ -1,5 +1,7 @@
 package com.taotao.music.ui.chat
 
+import android.graphics.drawable.BitmapDrawable
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -36,18 +38,25 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import coil.compose.AsyncImage
+import androidx.core.graphics.drawable.toBitmap
+import coil.imageLoader
+import coil.request.ImageRequest
+import coil.request.SuccessResult
 import com.taotao.music.data.TencentMusicApi
 import com.taotao.music.data.im.ImChatMessage
 import com.taotao.music.data.im.ImConnectionInfo
@@ -67,6 +76,7 @@ fun ChatPage(
     connection: ImConnectionInfo,
     messages: List<ImChatMessage>,
     savedPeers: List<String>,
+    syncedPeers: List<String>,
     peerContacts: Map<String, TencentMusicApi.ImContact>,
     ownAvatarUrl: String?,
     onSend: (peerUid: String, content: String) -> Unit,
@@ -77,7 +87,11 @@ fun ChatPage(
     onMessage: (String) -> Unit,
     onNewMessage: () -> Unit = {},
 ) {
-    var peerUid by remember(savedPeers) { mutableStateOf(savedPeers.firstOrNull().orEmpty()) }
+    // 抽屉合并「本地保存的会话」与「本进程同步到的会话」：对端（或后台）先发来的
+    // 新会话不会进本地存储，不合并的话那条消息在界面上无路可达。
+    val knownPeers = remember(savedPeers, syncedPeers) { (savedPeers + syncedPeers).distinct().sorted() }
+    // 选中会话不 keyed 在列表实例上：同步刷新会让列表换新实例，重置会把用户拽回第一个会话。
+    var peerUid by remember { mutableStateOf(savedPeers.firstOrNull().orEmpty()) }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     val messageListState = rememberLazyListState()
@@ -102,22 +116,38 @@ fun ChatPage(
         }
     }
     DisposableEffect(Unit) { onDispose { onPeerActiveChanged(null) } }
-    LaunchedEffect(savedPeers) { onPeersVisible(savedPeers) }
-    // 切换会话或收到新消息时滚动到底部
+    // 没有选中会话时（本地还没有保存记录）取第一个已知会话，并把可见会话交给客户端解析昵称。
+    LaunchedEffect(knownPeers) {
+        if (peerUid.isBlank()) peerUid = knownPeers.firstOrNull().orEmpty()
+        onPeersVisible(knownPeers)
+    }
+    // 1:1 聊天全程只有两张头像图片，页面级各加载一次；气泡里只画缓存位图。
+    // 此前每个气泡各自挂 AsyncImage，快速滑动时每个新气泡都要走一遍图片请求管线，
+    // 动图头像还会逐帧解码 —— 这是滑动卡顿的主因。
+    val peerAvatar = rememberAvatarImage(peerContacts[peerUid.trim().lowercase()]?.avatarUrl)
+    val ownAvatar = rememberAvatarImage(ownAvatarUrl)
+    // 首次进入会话滚到最新一条；之后仅当本来就在底部时才跟随新消息，
+    // 用户上滑翻历史时不再被强制拽回底部。
+    var pendingInitialScroll by remember(peerUid) { mutableStateOf(true) }
     LaunchedEffect(peerUid, peerMessages.size) {
-        if (peerMessages.isNotEmpty()) {
+        if (peerMessages.isEmpty()) return@LaunchedEffect
+        val layoutInfo = messageListState.layoutInfo
+        val lastVisibleIndex = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+        val nearBottom = lastVisibleIndex >= layoutInfo.totalItemsCount - 2
+        if (pendingInitialScroll || nearBottom) {
             messageListState.scrollToItem(peerMessages.lastIndex)
+            pendingInitialScroll = false
         }
     }
 
     ModalNavigationDrawer(drawerState = drawerState, drawerContent = {
         ModalDrawerSheet {
             Text("聊天", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, modifier = Modifier.padding(TaotaoSpacing.xl))
-            if (savedPeers.isEmpty()) {
+            if (knownPeers.isEmpty()) {
                 Text("还没有聊天。发送第一条消息后，好友会显示在这里。", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = TaotaoSpacing.xl))
             } else {
-                val peerItems = remember(savedPeers, peerContacts, peerUid) {
-                    savedPeers.map { savedUid ->
+                val peerItems = remember(knownPeers, peerContacts, peerUid) {
+                    knownPeers.map { savedUid ->
                         Triple(savedUid, peerContacts[savedUid]?.nickname ?: "加载昵称…", peerContacts[savedUid]?.avatarUrl)
                     }
                 }
@@ -129,7 +159,7 @@ fun ChatPage(
                             scope.launch { drawerState.close() }
                         }.padding(horizontal = TaotaoSpacing.xl, vertical = TaotaoSpacing.sm),
                     ) {
-                        ChatAvatar(avatarUrl, size = ConversationAvatarSize)
+                        ChatAvatar(rememberAvatarImage(avatarUrl), size = ConversationAvatarSize)
                         Spacer(Modifier.size(TaotaoSpacing.sm))
                         Text(
                             text = displayName,
@@ -162,9 +192,6 @@ fun ChatPage(
             if (peerUid.isBlank()) {
                 Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) { Text("从左上角打开聊天列表", color = MaterialTheme.colorScheme.onSurfaceVariant) }
             } else {
-                // 对端头像按当前会话只取一次：items 的内容 lambda 因此只捕获稳定值，
-                // 没变化的列表项可以被 Compose 整项跳过，而不是每条消息都重新组合头像和气泡。
-                val peerAvatarUrl = peerContacts[peerUid.trim().lowercase()]?.avatarUrl
                 LazyColumn(
                     state = messageListState,
                     modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -173,8 +200,8 @@ fun ChatPage(
                     items(peerMessages, key = { it.id }) { message ->
                         ChatBubble(
                             message = message,
-                            peerAvatarUrl = peerAvatarUrl,
-                            ownAvatarUrl = ownAvatarUrl,
+                            peerAvatar = peerAvatar,
+                            ownAvatar = ownAvatar,
                             onRevoke = onRevoke,
                         )
                     }
@@ -207,8 +234,8 @@ private fun ConnectionBadge(state: ImConnectionState) {
 @Composable
 private fun ChatBubble(
     message: ImChatMessage,
-    peerAvatarUrl: String?,
-    ownAvatarUrl: String?,
+    peerAvatar: ImageBitmap?,
+    ownAvatar: ImageBitmap?,
     onRevoke: (ImChatMessage) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -228,7 +255,7 @@ private fun ChatBubble(
             horizontalArrangement = if (message.isMine) Arrangement.End else Arrangement.Start,
         ) {
             // 微信式布局：对方消息头像在左、自己的在右，头像与气泡顶部对齐。
-            if (!message.isMine) ChatAvatar(peerAvatarUrl, size = BubbleAvatarSize)
+            if (!message.isMine) ChatAvatar(peerAvatar, size = BubbleAvatarSize)
             Column(
                 horizontalAlignment = if (message.isMine) Alignment.End else Alignment.Start,
                 // fill = false：气泡随内容收缩，长文本最多占到头像以外的剩余宽度。
@@ -255,14 +282,14 @@ private fun ChatBubble(
                     }
                 }
             }
-            if (message.isMine) ChatAvatar(ownAvatarUrl, size = BubbleAvatarSize)
+            if (message.isMine) ChatAvatar(ownAvatar, size = BubbleAvatarSize)
         }
     }
 }
 
-/** 聊天头像：有头像地址就圆形加载，缺省退回人形占位（与「我的」页一致）。 */
+/** 聊天头像：直接绘制页面级加载好的位图，缺省退回人形占位（与「我的」页一致）。 */
 @Composable
-private fun ChatAvatar(avatarUrl: String?, size: Dp, modifier: Modifier = Modifier) {
+private fun ChatAvatar(avatar: ImageBitmap?, size: Dp, modifier: Modifier = Modifier) {
     Box(
         modifier = modifier
             .size(size)
@@ -270,17 +297,45 @@ private fun ChatAvatar(avatarUrl: String?, size: Dp, modifier: Modifier = Modifi
             .background(MaterialTheme.colorScheme.secondaryContainer),
         contentAlignment = Alignment.Center,
     ) {
-        if (avatarUrl.isNullOrBlank()) {
+        if (avatar == null) {
             Icon(Icons.Default.Person, null, tint = MaterialTheme.colorScheme.onSecondaryContainer, modifier = Modifier.size(TaotaoSizes.iconSm))
         } else {
-            AsyncImage(
-                model = avatarUrl,
+            Image(
+                bitmap = avatar,
                 contentDescription = "聊天头像",
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
             )
         }
     }
+}
+
+/**
+ * 页面级头像加载：一个地址只发起一次请求、解码一次，结果随状态流共享。
+ *
+ * 气泡列表里直接画返回的位图，而不是每个气泡各自挂 AsyncImage —— 后者会让
+ * 滑动时新进入屏幕的气泡逐个走图片请求管线，动图头像更会被逐帧解码，滑动就卡。
+ * 请求显式限定解码尺寸并开启硬件位图，头像画成静帧，不再承担动画成本。
+ */
+@Composable
+private fun rememberAvatarImage(url: String?): ImageBitmap? {
+    val context = LocalContext.current
+    return produceState<ImageBitmap?>(initialValue = null, url) {
+        if (url.isNullOrBlank()) return@produceState
+        val request = ImageRequest.Builder(context)
+            .data(url)
+            .size(AVATAR_DECODE_PIXELS)
+            .allowHardware(true)
+            .build()
+        runCatching { context.imageLoader.execute(request) }
+            .onSuccess { result ->
+                val drawable = (result as? SuccessResult)?.drawable ?: return@onSuccess
+                value = when (drawable) {
+                    is BitmapDrawable -> drawable.bitmap.asImageBitmap()
+                    else -> drawable.toBitmap().asImageBitmap()
+                }
+            }
+    }.value
 }
 
 /**
@@ -309,6 +364,9 @@ private fun ChatInputBar(
 /** 气泡旁的头像直径与会话列表头像直径。 */
 private val BubbleAvatarSize = 36.dp
 private val ConversationAvatarSize = 44.dp
+
+/** 头像解码上限（像素）：4 倍直径的余量，避免相册原图整幅解码。 */
+private const val AVATAR_DECODE_PIXELS = 144
 
 private val UUID_PATTERN = Regex("^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 private val MESSAGE_TIME_FORMAT = SimpleDateFormat("MM-dd HH:mm", Locale.CHINA)

@@ -57,9 +57,11 @@ $headSubject = (git log -1 --format=%s HEAD).Trim()
 Assert-LastExit "读取 HEAD"
 
 $sourceLabel = "{0} {1}" -f $headSha.Substring(0, 8), $headSubject
-$serverMessage = "sync: 同步自主仓库 server/（$sourceLabel）"
-$clientMessage = "sync: 同步自主仓库（$sourceLabel）"
-$cryptoMessage = "sync: 同步自主仓库 crypto-src/（$sourceLabel）"
+# 镜像仓库的提交信息直接沿用主仓库那次提交的标题（附短哈希），让镜像历史读起来
+# 就是真实提交记录，而不是一堆「sync: 同步自主仓库…」噪声。
+$serverMessage = $sourceLabel
+$clientMessage = $sourceLabel
+$cryptoMessage = $sourceLabel
 
 # server 快照树：直接复用主仓库里 server/ 的树对象
 $serverTree = (git rev-parse "HEAD:server").Trim()
@@ -203,17 +205,28 @@ if ($DryRun) {
     exit 0
 }
 
-# 推送：本地快照分支 -> GitHub main
-git push $ServerRemoteName "${ServerSyncBranch}:main"
-Assert-LastExit "推送 $ServerRemoteName"
-git push $ClientRemoteName "${ClientSyncBranch}:main"
-Assert-LastExit "推送 $ClientRemoteName"
-git push $CryptoRemoteName "${CryptoSyncBranch}:main"
-Assert-LastExit "推送 $CryptoRemoteName"
+# 推送：本地快照分支 -> GitHub main。**按需构建**：新快照树与远端当前树一致时
+# 跳过推送，避免「改一处三仓全构建」。远端 tip 为空（首次）时一律推送。
+function Push-IfChanged {
+    param([string]$RemoteName, [string]$SyncBranch, [string]$RemoteTip, [string]$NewTree, [string]$Label)
+    if ($RemoteTip) {
+        $remoteTree = (git rev-parse "$RemoteTip^{tree}" 2>$null)
+        if ($LASTEXITCODE -eq 0 -and $remoteTree.Trim() -eq $NewTree) {
+            Write-Host "  $Label 内容未变，跳过推送（不触发构建）"
+            return $false
+        }
+    }
+    git push $RemoteName "${SyncBranch}:main"
+    Assert-LastExit "推送 $RemoteName"
+    Write-Host "  $Label 已推送 -> 触发构建"
+    return $true
+}
 
 Write-Host ""
-Write-Host "同步完成："
-Write-Host "  server/     -> $ServerRemoteName (${ServerSyncBranch}:main)  $serverCommit"
-Write-Host "  crypto-src/ -> $CryptoRemoteName (${CryptoSyncBranch}:main)  $cryptoCommit"
-Write-Host "  其余内容    -> $ClientRemoteName (${ClientSyncBranch}:main)  $clientCommit"
+Write-Host "同步结果："
+Push-IfChanged -RemoteName $ServerRemoteName -SyncBranch $ServerSyncBranch -RemoteTip $remoteServerTip -NewTree $serverTree -Label "server/     -> $ServerRemoteName" | Out-Null
+Push-IfChanged -RemoteName $ClientRemoteName -SyncBranch $ClientSyncBranch -RemoteTip $remoteClientTip -NewTree $clientTree -Label "其余内容    -> $ClientRemoteName" | Out-Null
+Push-IfChanged -RemoteName $CryptoRemoteName -SyncBranch $CryptoSyncBranch -RemoteTip $remoteCryptoTip -NewTree $cryptoTree -Label "crypto-src/ -> $CryptoRemoteName" | Out-Null
+
+Write-Host ""
 Write-Host "来源主仓库提交：$sourceLabel"
