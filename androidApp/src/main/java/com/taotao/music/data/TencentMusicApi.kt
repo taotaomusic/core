@@ -1,5 +1,6 @@
 package com.taotao.music.data
 
+import com.taotao.music.AppHttp
 import com.taotao.music.data.im.ImConversationSync
 import com.taotao.music.crypto.CryptoTransport
 import com.taotao.music.model.AudioQuality
@@ -1394,7 +1395,7 @@ class TencentMusicApi(
             connectTimeout = 15_000
             readTimeout = 60_000
             setRequestProperty("Accept", "application/x-ndjson, application/json")
-            setRequestProperty("User-Agent", "TaotaoMusic/1.0")
+            setRequestProperty("User-Agent", AppHttp.USER_AGENT)
             // 明文上报机型/系统版本，供服务端审计日志看出是什么设备（非硬件唯一标识）。
             setRequestProperty(HEADER_DEVICE_INFO, deviceInfoHeader)
             appVersionCode.takeIf { it > 0 }?.let { setRequestProperty(HEADER_APP_VERSION, it.toString()) }
@@ -1582,7 +1583,7 @@ class TencentMusicApi(
                     readTimeout = 30_000
                     setRequestProperty("Accept", "application/json")
                     setRequestProperty("Authorization", "Bearer $accessToken")
-                    setRequestProperty("User-Agent", "TaotaoMusic/1.0")
+                    setRequestProperty("User-Agent", AppHttp.USER_AGENT)
                 }
                 connection.responseCode
                 runCatching { connection.errorStream?.close() }
@@ -1619,7 +1620,7 @@ class TencentMusicApi(
                 doOutput = true
                 setRequestProperty("Content-Type", "application/json")
                 setRequestProperty("Accept", "application/json")
-                setRequestProperty("User-Agent", "TaotaoMusic/1.0")
+                setRequestProperty("User-Agent", AppHttp.USER_AGENT)
             }
 
         /** 优先展示服务端返回的中文提示，取不到时退回默认文案。 */

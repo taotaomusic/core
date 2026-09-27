@@ -1,5 +1,6 @@
 package com.taotao.music.update
 
+import com.taotao.music.AppHttp
 import com.taotao.music.data.TencentMusicApi
 import com.taotao.music.data.TokenProvider
 import org.json.JSONObject
@@ -22,7 +23,7 @@ class AppUpdateApi(private val tokenProvider: TokenProvider?) {
             connectTimeout = 10_000
             readTimeout = 20_000
             setRequestProperty("Accept", "application/json")
-            setRequestProperty("User-Agent", "TaotaoMusic/1.0")
+            setRequestProperty("User-Agent", AppHttp.USER_AGENT)
             tokenProvider?.currentToken()?.takeIf { it.isNotBlank() }?.let { setRequestProperty("Authorization", "Bearer $it") }
         }
         val code = connection.responseCode

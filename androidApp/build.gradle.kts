@@ -20,6 +20,7 @@ val appVersionCode = versionProperties.getProperty("VERSION_CODE").toInt()
 val appVersionName = versionProperties.getProperty("VERSION_NAME")
 
 android { namespace = "com.taotao.music"; compileSdk = 35
+    buildFeatures { buildConfig = true }  // 用 BuildConfig.VERSION_NAME 拼真实版本进 User-Agent
     defaultConfig {
         applicationId = "com.taotao.music"
         minSdk = 24

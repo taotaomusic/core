@@ -1,5 +1,6 @@
 package com.taotao.music.crypto
 
+import com.taotao.music.AppHttp
 import android.os.Build
 import android.util.Base64
 import android.util.Log
@@ -130,7 +131,7 @@ class CryptoTransport(
             readTimeout = 15_000
             setRequestProperty("Accept", "application/json")
             setRequestProperty("Authorization", "Bearer $token")
-            setRequestProperty("User-Agent", "TaotaoMusic/1.0")
+            setRequestProperty("User-Agent", AppHttp.USER_AGENT)
             setRequestProperty("X-Taotao-Device", deviceInfo)
         }
         val code = connection.responseCode
@@ -170,7 +171,7 @@ class CryptoTransport(
             doOutput = true
             setRequestProperty("Content-Type", "application/json")
             setRequestProperty("Accept", "application/json")
-            setRequestProperty("User-Agent", "TaotaoMusic/1.0")
+            setRequestProperty("User-Agent", AppHttp.USER_AGENT)
             setRequestProperty("X-Taotao-Device", deviceInfo)
         }
         connection.outputStream.use { it.write(payload.toByteArray()) }

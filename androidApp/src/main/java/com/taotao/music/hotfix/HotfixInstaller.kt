@@ -1,5 +1,6 @@
 package com.taotao.music.hotfix
 
+import com.taotao.music.AppHttp
 import android.content.Context
 import android.util.Log
 import com.taotao.music.update.AvailablePatch
@@ -132,7 +133,7 @@ class HotfixInstaller(context: Context) {
             requestMethod = "GET"
             connectTimeout = 15_000
             readTimeout = 30_000
-            setRequestProperty("User-Agent", "TaotaoMusic/1.0")
+            setRequestProperty("User-Agent", AppHttp.USER_AGENT)
         }
         val code = connection.responseCode
         check(code in 200..299) { "下载补丁失败：HTTP $code" }

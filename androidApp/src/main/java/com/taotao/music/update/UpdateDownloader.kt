@@ -1,5 +1,6 @@
 package com.taotao.music.update
 
+import com.taotao.music.AppHttp
 import android.content.Context
 import java.io.File
 import java.net.HttpURLConnection
@@ -44,7 +45,7 @@ class UpdateDownloader(context: Context) {
             requestMethod = "GET"
             connectTimeout = 15_000
             readTimeout = 30_000
-            setRequestProperty("User-Agent", "TaotaoMusic/1.0")
+            setRequestProperty("User-Agent", AppHttp.USER_AGENT)
             if (downloaded > 0L) setRequestProperty("Range", "bytes=$downloaded-")
         }
         val code = connection.responseCode
