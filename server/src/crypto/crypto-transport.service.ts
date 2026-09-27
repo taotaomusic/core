@@ -61,10 +61,19 @@ export class CryptoTransportService implements OnApplicationBootstrap, OnModuleD
         if (this.sweepTimer) clearInterval(this.sweepTimer);
     }
 
-    /** 处理 ClientHello，返回 ServerHello 字节。deviceId 折进握手密钥。链路未启用时返回 null。 */
+    /** 处理 ClientHello，返回 ServerHello 字节。deviceId 折进握手密钥。链路未启用/失败时返回 null。 */
     handshake(clientHello: Uint8Array, deviceId: string): Uint8Array | null {
         if (!this.server) return null;
-        return this.server.accept(clientHello, deviceId, Date.now());
+        try {
+            return this.server.accept(clientHello, deviceId, Date.now());
+        } catch (err) {
+            // 诊断用：握手失败时把非敏感线索打出来（deviceId 不是密钥，可记录）。
+            // MAC 失配最常见的成因是 deviceId 两端不一致或 PSK 版本不同。
+            this.logger.warn(
+                `握手失败：${(err as Error).message}；deviceId="${deviceId}"(len=${deviceId.length})，helloLen=${clientHello.length}`,
+            );
+            return null;
+        }
     }
 
     /** 构造 AAD（method + path）。 */
