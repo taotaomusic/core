@@ -14,7 +14,8 @@
     "verify": "node tools/verify-contract.mjs",
     "verify:totp": "ts-node --project tools/tsconfig.json tools/verify-totp.ts",
     "verify:kpk": "ts-node --project tools/tsconfig.json tools/verify-kpk.ts",
-    "verify:lrcx": "ts-node --project tools/tsconfig.json tools/verify-lrcx.ts"
+    "verify:lrcx": "ts-node --project tools/tsconfig.json tools/verify-lrcx.ts",
+    "backfill:covers": "node dist/tools/backfill-playlist-covers.js"
   },
   "engines": {
     "node": ">=20"

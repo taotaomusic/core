@@ -47,6 +47,7 @@ codegraph query --path server --kind route --limit 200 --json ""
 | `src/admin-auth/` | 管理后台账号、数据库会话、TOTP 2FA、角色守卫、IP 白名单和审计 | `admin_users`、`admin_sessions`、`admin_audit_log` |
 | `src/ldap/` | LDAP/SSO 目录对接：Bind、Search、过滤器编解码、角色映射 | 企业目录、`admin_users` 同步 |
 | `src/frontend/` | Vue 管理后台；发布时产到 `dist/public` | Vite、Element Plus |
+| `src/tools/` | 独立维护工具（随 tsc 编进 dist，服务器上 `node dist/tools/…` 执行）：`backfill-playlist-covers.ts` 按音源回填 `playlist_songs.cover_url`，幂等、只补空值 | `playlist_songs`、`MusicSourceRegistry`、上游 API |
 
 全局 Provider 的实际职责如下：
 

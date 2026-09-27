@@ -357,3 +357,20 @@ curl.exe -i -H "Range: bytes=0-99" "$origin/api/v1/public/shares/替换为真实
   `tools/sync-repos.ps1` 手动维护，从本仓库 HEAD 生成内容快照推送：`server/` →
   music-server、`crypto-src/` → tools、其余全部 → music。只同步已提交内容，推送前先在本仓库
   提交；快照机制与版本号收编规则见根目录 `AGENTS.md` 的「三仓库同步」。
+
+## 20. 歌单封面回填工具
+
+`playlist_songs` 的封面快照从 2026-09 的客户端才开始写入，此前的行 `cover_url` 全为空；
+而歌单列表封面的兜底逻辑（取歌单内第一张非空歌曲封面）只能用库里已有的图。
+`src/tools/backfill-playlist-covers.ts` 按 `source + 歌曲身份` 逐行调用上游
+`requestSongInfo` 把真实封面补进存量数据：
+
+```bash
+# 在部署目录（.env 所在位置）执行；新 dist 部署后无需重启服务即可运行
+node dist/tools/backfill-playlist-covers.js               # 实际回填
+node dist/tools/backfill-playlist-covers.js --dry-run     # 只探测不写库
+node dist/tools/backfill-playlist-covers.js --playlist=1  # 只处理指定歌单
+```
+
+只更新 `cover_url` 为空的行，幂等可重复执行；不改 `revision` / `updated_at`（封面兜底是
+读取期计算，客户端刷新歌单列表即可看到）。上游偶发失败属正常，重跑即可补齐。
