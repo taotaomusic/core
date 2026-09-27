@@ -366,10 +366,11 @@ curl.exe -i -H "Range: bytes=0-99" "$origin/api/v1/public/shares/替换为真实
 `requestSongInfo` 把真实封面补进存量数据：
 
 ```bash
-# 在部署目录（.env 所在位置）执行；新 dist 部署后无需重启服务即可运行
-node dist/tools/backfill-playlist-covers.js               # 实际回填
-node dist/tools/backfill-playlist-covers.js --dry-run     # 只探测不写库
-node dist/tools/backfill-playlist-covers.js --playlist=1  # 只处理指定歌单
+# 在部署目录（.env 所在位置）执行；新 dist 部署后无需重启服务即可运行。
+# 扁平布局（server-dist.zip 解压后）工具在 tools/ 下；仓库本地开发在 dist/tools/ 下。
+node tools/backfill-playlist-covers.js               # 实际回填
+node tools/backfill-playlist-covers.js --dry-run     # 只探测不写库
+node tools/backfill-playlist-covers.js --playlist=1  # 只处理指定歌单
 ```
 
 只更新 `cover_url` 为空的行，幂等可重复执行；不改 `revision` / `updated_at`（封面兜底是
