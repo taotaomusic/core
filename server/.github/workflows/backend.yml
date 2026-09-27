@@ -92,6 +92,22 @@ jobs:
               > dist/share-player/index.html
           fi
 
+      - name: 拉取加密层 Linux 产物（供传输加密，缺失则明文降级）
+        run: |
+          # 与客户端拉 .so 同款流转：从 tools 固定版本 Release 取 linux-x64 的
+          # taotao_crypto.node，放到 native-loader 会找的 crypto/dist/node/linux-x64/。
+          # 打进 server-dist.zip 与 Docker 镜像，部署方无需手动放置；PSK 仍走运行时
+          # 环境变量（CRYPTO_PSK_*），密钥不进产物。拉不到不阻断，加密自动降级明文。
+          mkdir -p crypto/dist/node/linux-x64
+          if curl -fsSL -o /tmp/node-linux.zip \
+              https://github.com/hdppppppp/tools/releases/download/v2.1.0/node-linux-x64.zip; then
+            unzip -qo /tmp/node-linux.zip -d crypto/dist/node/linux-x64
+            echo "已拉取 taotao_crypto.node（linux-x64, v2.1.0）"
+            ls -l crypto/dist/node/linux-x64
+          else
+            echo "::warning::拉取加密 .node 失败，传输加密保持明文降级"
+          fi
+
       - name: 重置验证库
         run: node tools/reset-db.mjs "$DATABASE_URL"
 
@@ -125,8 +141,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # 契约全绿才走到这里；dist 含管理后台与分享播放器，可直接部署。
-          zip -qr server-dist.zip dist
+          # 契约全绿才走到这里；dist 含管理后台与分享播放器，
+          # crypto/ 含 linux-x64 的 taotao_crypto.node（若拉到），一并打包可直接部署。
+          zip -qr server-dist.zip dist crypto
           gh release view server-dist-latest >/dev/null 2>&1 || \
             gh release create server-dist-latest --prerelease \
               --title "后端 dist 最新构建" \

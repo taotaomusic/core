@@ -18,6 +18,11 @@ RUN npm ci --omit=dev && npm cache clean --force
 # 复用 CI 已构建并验证过的产物。
 COPY dist ./dist
 
+# 传输加密的 Linux 原生扩展（若 CI 拉到）。放到 native-loader 会查的
+# crypto/dist/node/<平台>/ 下（相对 WORKDIR=/app 的 cwd）。PSK 不在这里，
+# 由运行时环境变量 CRYPTO_PSK_ID / CRYPTO_PSK_HEX 提供；缺失则加密自动降级明文。
+COPY crypto ./crypto
+
 # 与 backend.yml / server 默认端口一致；实际端口由运行时 PORT 环境变量决定。
 EXPOSE 4720
 

@@ -25,6 +25,21 @@ export function createCryptoMiddleware(
 
     return (request: Request, response: Response, next: NextFunction): void => {
         const header = request.headers[CRYPTO_HEADER];
+        const hasHeader = typeof header === "string" && header.length > 0;
+
+        // 请求加密可观测性：对 /api/v1 请求打一行「明文 / 加密」，便于确认客户端是否
+        // 真的走了加密链路。默认开启；量大时可设 CRYPTO_REQUEST_LOG=off 关闭。
+        if (process.env.CRYPTO_REQUEST_LOG !== "off" && request.path.startsWith("/api/v1/")) {
+            const tag = !hasHeader
+                ? "明文"
+                : !transport.enabled
+                  ? "带加密头但服务端未启用加密（按明文处理）"
+                  : isExcludedPath(request)
+                    ? "带加密头但路径在排除表（按明文处理）"
+                    : "加密";
+            logger.log(`${request.method} ${request.originalUrl} → ${tag}`);
+        }
+
         // 无头 = 明文客户端，直接透明放行。
         if (!header || typeof header !== "string") return next();
         if (!transport.enabled || isExcludedPath(request)) return next();
