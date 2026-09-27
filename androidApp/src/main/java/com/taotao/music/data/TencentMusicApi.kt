@@ -1205,15 +1205,17 @@ class TencentMusicApi(
     /**
      * 与 [authorized] 同样带令牌续期，但**响应体以字节返回**并按需解密。
      *
-     * 仅当 [cryptoEnabled] 且 [cryptoTransport] 可用时才加密：给请求加
+     * 仅当 [cryptoEnabled] 且注入了 [cryptoTransport] 时启用加密：给请求加
      * `X-Taotao-Crypto` 头（GET 无体，只带头），响应读原始帧后 `openResponse` 解密。
-     * 任一环节不满足或失败，都透明回退到明文——读到的字节与明文请求一字不差。
+     *
+     * **强制加密**：一旦 [cryptoEnabled]，白名单接口**不再静默回退明文**——加密不可用
+     * 或握手失败会直接抛错（服务端也对这些接口拒绝明文降级）。未启用时才走明文。
      *
      * 服务端返回 409（会话失效，code 4091）时作废本地会话并重握手重放一次。
      */
     private fun <T> authorizedRaw(path: String, method: String = "GET", read: (ByteArray) -> T): T {
         val transport = cryptoTransport
-        val useCrypto = cryptoEnabled && transport != null && transport.enabled
+        val useCrypto = cryptoEnabled && transport != null
         if (!useCrypto) {
             return authorized(path, method) { connection -> read(connection.inputStream.readBytes()) }
         }
@@ -1222,8 +1224,9 @@ class TencentMusicApi(
         var rehandshaked = false
         // 额外一次余量给 409 重握手：401 续期 + 409 重握手最多各一次。
         repeat(MAX_AUTH_ATTEMPTS + 1) {
+            // 强制加密：封帧失败不回退明文，直接抛错（服务端也会拒绝明文）。
             val sealed = transport!!.seal(method, path, ByteArray(0))
-                ?: return authorized(path, method) { connection -> read(connection.inputStream.readBytes()) }
+                ?: throw IllegalStateException("加密不可用，且该接口已启用强制加密")
 
             val connection = open(path, method, token).apply {
                 setRequestProperty(CRYPTO_HEADER, sealed.header)

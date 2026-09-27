@@ -109,6 +109,10 @@ async function bootstrap(): Promise<void> {
     // 音频流走 /songs/:id/play，逐块 AEAD 得不偿失，明确排除。
     if (/^\/api\/v1\/.*\/play$/.test(request.path)) return true;
     return false;
+  }, (request) => {
+    // 强制加密白名单：已接入加密的接口拒绝明文降级。目前只有收藏列表读取
+    // （客户端 GET /api/v1/favorites 走加密）。随客户端逐个接入再往这里加。
+    return request.method === "GET" && request.path === "/api/v1/favorites";
   }));
 
   app.use((request: Request, response: Response, next: NextFunction) => {

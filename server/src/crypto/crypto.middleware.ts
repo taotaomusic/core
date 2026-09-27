@@ -16,10 +16,14 @@ const CRYPTO_HEADER = "x-taotao-crypto";
  * 401 不变 403 等）不因加密层变形。
  *
  * @param isExcludedPath 判定路径是否绕开加密（静态资源、音频流、大文件上传）。
+ * @param isMandatoryEncrypted 判定路径是否**强制加密**：命中且链路已启用时，
+ *   无加密头的明文请求会被拒绝（防降级）。仅覆盖已接入加密的白名单接口，
+ *   其余接口仍对明文透明，不影响 Web / 旧客户端 / 未接入的接口。
  */
 export function createCryptoMiddleware(
     transport: CryptoTransportService,
     isExcludedPath: (request: Request) => boolean,
+    isMandatoryEncrypted: (request: Request) => boolean = () => false,
 ) {
     const logger = new Logger("CryptoMiddleware");
 
@@ -40,8 +44,15 @@ export function createCryptoMiddleware(
             logger.log(`${request.method} ${request.originalUrl} → ${tag}`);
         }
 
-        // 无头 = 明文客户端，直接透明放行。
-        if (!header || typeof header !== "string") return next();
+        if (!header || typeof header !== "string") {
+            // 无头 = 明文请求。强制加密白名单内的接口（且链路已启用）直接拒绝，
+            // 防止降级攻击；其余接口透明放行。
+            if (transport.enabled && !isExcludedPath(request) && isMandatoryEncrypted(request)) {
+                response.status(426).json({ code: 4007, message: "此接口要求加密访问，请升级客户端" });
+                return;
+            }
+            return next();
+        }
         if (!transport.enabled || isExcludedPath(request)) return next();
 
         const parsed = transport.parseHeader(header);
