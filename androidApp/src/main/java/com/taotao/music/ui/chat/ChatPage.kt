@@ -42,6 +42,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -77,7 +78,6 @@ fun ChatPage(
     onNewMessage: () -> Unit = {},
 ) {
     var peerUid by remember(savedPeers) { mutableStateOf(savedPeers.firstOrNull().orEmpty()) }
-    var draft by remember { mutableStateOf("") }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     val messageListState = rememberLazyListState()
@@ -162,6 +162,9 @@ fun ChatPage(
             if (peerUid.isBlank()) {
                 Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) { Text("从左上角打开聊天列表", color = MaterialTheme.colorScheme.onSurfaceVariant) }
             } else {
+                // 对端头像按当前会话只取一次：items 的内容 lambda 因此只捕获稳定值，
+                // 没变化的列表项可以被 Compose 整项跳过，而不是每条消息都重新组合头像和气泡。
+                val peerAvatarUrl = peerContacts[peerUid.trim().lowercase()]?.avatarUrl
                 LazyColumn(
                     state = messageListState,
                     modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -170,20 +173,21 @@ fun ChatPage(
                     items(peerMessages, key = { it.id }) { message ->
                         ChatBubble(
                             message = message,
-                            peerAvatarUrl = peerContacts[message.peerUid]?.avatarUrl,
+                            peerAvatarUrl = peerAvatarUrl,
                             ownAvatarUrl = ownAvatarUrl,
                             onRevoke = onRevoke,
                         )
                     }
                 }
             }
-            Row(verticalAlignment = Alignment.Bottom) {
-                OutlinedTextField(value = draft, onValueChange = { draft = it }, label = { Text("消息") }, modifier = Modifier.weight(1f), maxLines = 4)
-                Spacer(Modifier.size(TaotaoSpacing.xs))
-                Button(enabled = peerUid.isNotBlank() && draft.isNotBlank() && connection.state == ImConnectionState.CONNECTED, onClick = {
-                    runCatching { onSend(peerUid, draft) }.onSuccess { draft = "" }.onFailure { onMessage(it.message ?: "消息发送失败") }
-                }) { Icon(Icons.AutoMirrored.Filled.Send, "发送") }
-            }
+            ChatInputBar(
+                enabled = peerUid.isNotBlank() && connection.state == ImConnectionState.CONNECTED,
+                onSend = { content ->
+                    runCatching { onSend(peerUid, content) }
+                        .onFailure { onMessage(it.message ?: "消息发送失败") }
+                        .isSuccess
+                },
+            )
         }
     }
 }
@@ -269,8 +273,36 @@ private fun ChatAvatar(avatarUrl: String?, size: Dp, modifier: Modifier = Modifi
         if (avatarUrl.isNullOrBlank()) {
             Icon(Icons.Default.Person, null, tint = MaterialTheme.colorScheme.onSecondaryContainer, modifier = Modifier.size(TaotaoSizes.iconSm))
         } else {
-            AsyncImage(model = avatarUrl, contentDescription = "聊天头像", modifier = Modifier.fillMaxSize())
+            AsyncImage(
+                model = avatarUrl,
+                contentDescription = "聊天头像",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
         }
+    }
+}
+
+/**
+ * 输入栏自持草稿，发送成功才清空。
+ *
+ * 草稿是打字期间唯一高频变化的状态，收在栏内让每次按键只重组输入栏本身；
+ * 之前草稿放在页面顶层，每敲一个字抽屉、标题栏和整条消息列表都跟着重组一遍，
+ * 头像进列表后这条路径明显变卡。
+ */
+@Composable
+private fun ChatInputBar(
+    enabled: Boolean,
+    onSend: (content: String) -> Boolean,
+    modifier: Modifier = Modifier,
+) {
+    var draft by remember { mutableStateOf("") }
+    Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
+        OutlinedTextField(value = draft, onValueChange = { draft = it }, label = { Text("消息") }, modifier = Modifier.weight(1f), maxLines = 4)
+        Spacer(Modifier.size(TaotaoSpacing.xs))
+        Button(enabled = enabled && draft.isNotBlank(), onClick = {
+            if (onSend(draft)) draft = ""
+        }) { Icon(Icons.AutoMirrored.Filled.Send, "发送") }
     }
 }
 

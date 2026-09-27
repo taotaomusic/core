@@ -3,9 +3,11 @@ package com.taotao.music.ui.chat
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import com.taotao.music.data.ImPeerStore
+import com.taotao.music.data.im.ImChatMessage
 import com.taotao.music.data.im.ImConnectionInfo
 import com.taotao.music.data.im.WukongImClient
 
@@ -28,6 +30,16 @@ internal fun ChatPageHost(
     val peerContacts by client.peerContacts.collectAsState()
     val haptic = LocalHapticFeedback.current
 
+    // 消息流每次发射都会重组宿主；撤回回调必须保持同一实例，
+    // 否则全部气泡的「参数未变即跳过」比对都会因 lambda 换新而失效，列表被无谓重画。
+    val handleRevoke = remember(client, onMessage) {
+        { chatMessage: ImChatMessage ->
+            runCatching { client.revokeMessage(chatMessage) }
+                .onFailure { error -> onMessage("撤回失败: ${error.message}") }
+            Unit
+        }
+    }
+
     ChatPage(
         connection = connection,
         messages = messages,
@@ -41,10 +53,7 @@ internal fun ChatPageHost(
         onPeerSelected = client::loadRecentMessages,
         onPeerActiveChanged = client::setActivePeer,
         onPeersVisible = client::loadPeerNames,
-        onRevoke = { chatMessage ->
-            runCatching { client.revokeMessage(chatMessage) }
-                .onFailure { error -> onMessage("撤回失败: ${error.message}") }
-        },
+        onRevoke = handleRevoke,
         onMessage = onMessage,
         onNewMessage = {
             runCatching { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove) }
