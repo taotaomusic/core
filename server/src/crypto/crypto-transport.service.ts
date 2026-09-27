@@ -32,14 +32,14 @@ export class CryptoTransportService implements OnApplicationBootstrap, OnModuleD
         const pskId = this.config.cryptoPskId;
         const pskHex = this.config.cryptoPskHex;
         if (pskId && pskHex) {
-            this.server.put_psk(pskId, pskHex);
+            this.server.putPsk(pskId, pskHex);
         } else {
             this.logger.warn("未配置 CRYPTO_PSK_ID / CRYPTO_PSK_HEX，握手将全部失败，链路保持明文");
         }
 
         // 每分钟清理过期会话，避免长期运行内存里堆积死会话。
         this.sweepTimer = setInterval(() => {
-            const removed = this.server?.sweep_expired(Date.now()) ?? 0;
+            const removed = this.server?.sweepExpired(Date.now()) ?? 0;
             if (removed > 0) this.logger.debug(`清理过期加密会话 ${removed} 条`);
         }, 60_000);
         this.sweepTimer.unref();
@@ -58,13 +58,13 @@ export class CryptoTransportService implements OnApplicationBootstrap, OnModuleD
     /** 构造 AAD（method + path）。 */
     aad(method: string, pathAndQuery: string): Uint8Array | null {
         if (!this.native) return null;
-        return this.native.aad_context(method, pathAndQuery);
+        return this.native.aadContext(method, pathAndQuery);
     }
 
     /** 解析 `X-Taotao-Crypto` 头，返回 [会话ID, 序号]，非法返回 null。 */
     parseHeader(value: string): [string, string] | null {
         if (!this.native) return null;
-        return this.native.parse_header(value);
+        return this.native.parseHeader(value);
     }
 
     /** 解密请求体。 */
@@ -82,6 +82,6 @@ export class CryptoTransportService implements OnApplicationBootstrap, OnModuleD
     /** 会话是否有效。 */
     hasSession(sessionId: string): boolean {
         if (!this.server) return false;
-        return this.server.has_session(sessionId, Date.now());
+        return this.server.hasSession(sessionId, Date.now());
     }
 }
