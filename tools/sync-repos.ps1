@@ -89,6 +89,16 @@ if ($LASTEXITCODE -eq 0) {
     Assert-LastExit "解析远端 crypto tip"
 }
 
+# 同理取 music-server 仓库 main 的最新 tip 作为 server 快照父提交：以远端为父
+# 保证快进推送。此前 server 快照用本地分支做父，一旦远端被直接改过（比如在
+# GitHub 网页上加文件）就非快进推送失败——与 client/crypto 对齐后不再有这个坑。
+cmd /c "git fetch $ServerRemoteName main >nul 2>&1"
+$remoteServerTip = $null
+if ($LASTEXITCODE -eq 0) {
+    $remoteServerTip = (git rev-parse "FETCH_HEAD").Trim()
+    Assert-LastExit "解析远端 server tip"
+}
+
 # 本地版本号读工作副本（本地构建刚递增过、还没提交时也以它为准）
 $localVersionText = [IO.File]::ReadAllText("version.properties")
 $localCode = 0
@@ -158,9 +168,13 @@ function Add-SnapshotCommit {
     return $commit
 }
 
-$serverParent = $null
-git rev-parse -q --verify "refs/heads/$ServerSyncBranch" *> $null
-if ($LASTEXITCODE -eq 0) { $serverParent = (git rev-parse "refs/heads/$ServerSyncBranch").Trim() }
+# server 快照父提交：优先跟随远端 music-server tip（快进、保留远端已有提交历史），
+# 远端不可达时退回本地快照分支。
+$serverParent = $remoteServerTip
+if (-not $serverParent) {
+    git rev-parse -q --verify "refs/heads/$ServerSyncBranch" *> $null
+    if ($LASTEXITCODE -eq 0) { $serverParent = (git rev-parse "refs/heads/$ServerSyncBranch").Trim() }
+}
 
 $serverCommit = Add-SnapshotCommit -SyncBranch $ServerSyncBranch -Tree $serverTree -Message $serverMessage -Parent $serverParent
 $clientCommit = Add-SnapshotCommit -SyncBranch $ClientSyncBranch -Tree $clientTree -Message $clientMessage -Parent $remoteClientTip
