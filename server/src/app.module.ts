@@ -13,6 +13,7 @@ import { RateLimitService } from "./common/rate-limit/rate-limit.service";
 import { AppConfigModule } from "./config/config.module";
 import { DatabaseModule } from "./database/database.module";
 import { DesktopReleaseModule } from "./desktop-release/desktop-release.module";
+import { FilesModule } from "./files/files.module";
 import { FavoritesModule } from "./favorites/favorites.module";
 import { HealthController } from "./health/health.controller";
 import { ImageGenerationModule } from "./image-generation/image-generation.module";
@@ -47,6 +48,7 @@ import { CryptoModule } from "./crypto/crypto.module";
     AuthModule,
     AdminAuthModule,
     AnnouncementModule,
+    FilesModule,
     FavoritesModule,
     PlaybackModule,
     PlaylistsModule,

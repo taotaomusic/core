@@ -350,8 +350,7 @@ async function main() {
   const token = rotated.body.data.accessToken;
 
   // 头像上传：格式判定必须看文件头，不能信请求里的 Content-Type。
-  // 验证环境没配 LSKY_API_KEY，所以「魔数正确」的那条会停在「服务未配置」——
-  // 这正好把两条路径区分开：假图片在格式判定就被拒，真图片才走到图床调用。
+  // 头像由服务器自存（Postgres bytea），真图片上传应直接成功，不再依赖任何外部图床。
   section("头像上传：按文件头判定格式");
   const notAnImage = await fetch(`${base}/api/v1/auth/avatar`, {
     method: "POST",
@@ -374,25 +373,38 @@ async function main() {
     String(notAnImageBody.message ?? "").includes("PNG"),
     String(notAnImageBody.message ?? ""),
   );
+  // 只有 PNG 魔数，没有完整像素数据。魔数校验过关后应直接落库成功。
+  const realPng = Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    Buffer.alloc(32),
+  ]);
   const realPngHeader = await fetch(`${base}/api/v1/auth/avatar`, {
     method: "POST",
     headers: { authorization: `Bearer ${token}` },
     body: (() => {
       const form = new FormData();
-      // 只有 PNG 魔数，没有完整像素数据。魔数校验过关后才会走到图床调用。
-      const png = Buffer.concat([
-        Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-        Buffer.alloc(32),
-      ]);
-      form.append("file", new Blob([png], { type: "application/octet-stream" }), "real.png");
+      form.append("file", new Blob([realPng], { type: "application/octet-stream" }), "real.png");
       return form;
     })(),
   });
   const realPngHeaderBody = await realPngHeader.json();
   check(
-    "PNG 魔数通过格式判定（即使 Content-Type 声明成 octet-stream）",
-    realPngHeader.status === 400 && String(realPngHeaderBody.message ?? "").includes("未配置"),
+    "PNG 魔数通过格式判定（即使 Content-Type 声明成 octet-stream）且上传成功",
+    realPngHeader.status === 201 && Boolean(realPngHeaderBody.data?.avatarUrl),
     `${realPngHeader.status} ${JSON.stringify(realPngHeaderBody)}`,
+  );
+  const avatarUrl = String(realPngHeaderBody.data?.avatarUrl ?? "");
+  check(
+    "返回的头像地址指向本服务公开下载端点",
+    avatarUrl.startsWith(`${base}/api/v1/files/avatars/`),
+    avatarUrl,
+  );
+  const servedAvatar = await fetch(avatarUrl);
+  const servedBytes = Buffer.from(await servedAvatar.arrayBuffer());
+  check(
+    "头像地址匿名可读，字节与 Content-Type 都与上传一致",
+    servedAvatar.status === 200 && servedBytes.equals(realPng) && servedAvatar.headers.get("content-type") === "image/png",
+    `${servedAvatar.status} ${servedAvatar.headers.get("content-type")} ${servedBytes.length}字节`,
   );
 
   section("鉴权门禁");

@@ -530,8 +530,9 @@ Courgette 失败会回退 bsdiff-wasm；两者都失败或差分过大时返回�
 
 ### 头像上传失败
 
-`POST /auth/avatar` 必须是 multipart 字段 `file`，MIME 以 `image/` 开头且不超过 5 MiB；服务端必须
-配置 `LSKY_API_KEY`。Lsky 非 2xx 或返回结构不完整会映射为 400/4000，不能把图床令牌错误当成用户 401。
+`POST /auth/avatar` 必须是 multipart 字段 `file`，按文件头嗅探 PNG / JPEG / GIF / WebP，≤5 MiB。
+头像存在 `user_avatars` 表（bytea），下载走公开的 `GET /files/avatars/:token`；上传成功但头像
+不显示时先确认返回的 URL 与 `PUBLIC_BASE_URL`（或请求推导的来源）一致、再查该表有没有对应行。
 
 ### 注册验证码发送失败
 

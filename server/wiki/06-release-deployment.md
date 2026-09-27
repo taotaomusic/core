@@ -65,7 +65,6 @@ node dist/main.js
 | `COURGETTE_PATH` | 可选；PE 模块差分工具 |
 | `PUBLIC_BASE_URL` | 外部 HTTPS 地址 |
 | `APISWEET_BASE_URL` | 默认 `https://apisweet.com` |
-| `LSKY_API_KEY` | 开启头像上传时必填，不能写进前端 |
 | `SMTP_HOST/PORT/USER/PASSWORD/FROM` | 注册、绑定、换绑验证码发信配置必须完整 |
 | `IM_ENABLED` | 不启用 IM 时保持 `false` |
 | `IM_INTERNAL_API_BASE_URL` | IM 启用时指向悟空 IM HTTP API（默认 5001，仅内网） |

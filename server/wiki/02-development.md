@@ -42,8 +42,6 @@ COURGETTE_PATH=
 DEFAULT_CHANNEL=release
 PUBLIC_BASE_URL=http://127.0.0.1:4500
 APISWEET_BASE_URL=https://apisweet.com
-LSKY_UPLOAD_URL=https://img.kiwiyyds.cn/api/index.php
-LSKY_API_KEY=
 # 可选：传输加密 PSK。缺任一项握手全部 503/5031，链路保持明文（本地开发可不配）。
 # CRYPTO_PSK_ID=dev-psk
 # CRYPTO_PSK_HEX=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
@@ -87,9 +85,6 @@ TOTP_ISSUER=桃桃音乐管理后台
 | `PUBLIC_BASE_URL` | 按请求推导 | 生产建议 | APK 和播放占位地址的外部基地址 |
 | `SEARCH_CONCURRENCY` | `8` | 否 | 类型化配置仍保留；当前搜索实现不读取该字段 |
 | `APISWEET_BASE_URL` | `https://apisweet.com` | 否 | 图片生成上游地址 |
-| `LSKY_UPLOAD_URL` | `https://img.kiwiyyds.cn/api/index.php` | 否 | 头像图床地址 |
-| `LSKY_API_KEY` | 空 | 头像上传必需 | 只在服务端使用 |
-| `LSKY_PUBLIC_HOSTS` | 空 | 否 | 头像图床公网域白名单；上传返回的 URL 必须落在白名单内才入库 |
 | `CRYPTO_PSK_ID` / `CRYPTO_PSK_HEX` | 空 | 否 | 传输加密 PSK 标识与 32 字节 hex 密钥；缺任一项握手全 503/5031、链路明文 |
 | `ADMIN_RATE_LIMIT` | `60` | 否 | 管理端 `admin` 限流桶每 15 分钟次数；仅供契约验证调大，生产勿设 |
 | `BODIAN_DEVICE_ID` | `md5("taotao-music-server")` | 否 | 波点客户端设备号覆盖项 |

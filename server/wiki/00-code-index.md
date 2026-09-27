@@ -28,10 +28,11 @@ codegraph query --path server --kind route --limit 200 --json ""
 | `src/common/` | 业务异常、鉴权、限流、信封、响应头、通用工具 | 进程内状态 |
 | `src/database/` | PostgreSQL 连接池、INT8 解析、启动迁移、事务辅助 | PostgreSQL |
 | `src/crypto/`（`CryptoModule`） | 传输层加密：`crypto.controller.ts` 的 `POST /crypto/handshake` 握手、`crypto.middleware.ts` 的 AEAD 逐块解密（挂载在 body parser 之前）、`crypto-transport.service.ts`（原生引擎加载、PSK 登记、会话清理）、`native-loader.ts` | `crypto/dist` 原生产物、`CRYPTO_PSK_ID/HEX` |
-| `src/auth/` | 注册、邮箱验证码、登录、令牌轮换、资料和头像 | `users`、`refresh_tokens`、Lsky、SMTP |
+| `src/auth/` | 注册、邮箱验证码、登录、令牌轮换、资料和头像 | `users`、`refresh_tokens`、SMTP |
 | `src/mail/` | 验证码邮件发送与模板 | SMTP |
 | `src/announcement/` | 公告读取、后台上下线和置顶 | `app_announcement` |
 | `src/favorites/` | 收藏软删除、恢复和批量查询 | `favorites` |
+| `src/files/`（`FilesModule`） | 用户文件公开下载：头像存取与匿名只读端点 | `user_avatars`、`AvatarStoreService` |
 | `src/playback/` | 播放会话幂等、最近播放、听歌统计和清空代际 | 4 张 playback 表 |
 | `src/playlists/` | 云端歌单、快照、排序和完整替换 | `playlists`、`playlist_songs` |
 | `src/music/` | 搜索、歌曲信息、直链、音频代理、歌词 | 上游 Client、`favorites` |
@@ -150,7 +151,7 @@ POST /api/v1/desktop/admin/artifacts
 - `POST /auth/email-verification`、`POST /auth/register`：邮箱验证码和注册。
 - `POST /auth/login`、`POST /auth/refresh`、`POST /auth/logout`：会话生命周期。
 - `GET /auth/me`、`GET /auth/profile`、`PATCH /auth/profile`：当前用户与资料。
-- `POST /auth/avatar`：5 MiB 以内图片上传到 Lsky。
+- `POST /auth/avatar`：5 MiB 以内图片按文件头嗅探后存入 `user_avatars`。
 - `POST /auth/email/bind-verification`、`POST /auth/email/bind`：首次绑定邮箱。
 - `POST /auth/email/change-verification`、`POST /auth/email/change`：换绑邮箱。
 
@@ -288,8 +289,6 @@ open_api_key                  music_source_account
 | `PUBLIC_BASE_URL` | 空（按请求推导） | 公开下载/分享地址 |
 | `SEARCH_CONCURRENCY` | `8` | 配置字段仍保留；当前搜索实现不读取它，不要误以为能改变请求并发 |
 | `APISWEET_BASE_URL` | `https://apisweet.com` | 图片上游 |
-| `LSKY_UPLOAD_URL` / `LSKY_API_KEY` | URL 有默认，Key 空 | 头像上传 |
-| `LSKY_PUBLIC_HOSTS` | 空 | 头像图床公网域白名单；上传返回的 URL 必须落在白名单内才入库 |
 | `CRYPTO_PSK_ID` / `CRYPTO_PSK_HEX` | 空 | 传输加密 PSK 标识与 32 字节 hex 密钥；缺任一项握手全部 503/5031，链路保持明文 |
 | `ADMIN_RATE_LIMIT` | `60` | 管理端 `admin` 限流桶每 15 分钟次数；仅供契约验证调大，生产勿设 |
 | `BODIAN_DEVICE_ID` | `md5("taotao-music-server")` | 波点客户端设备号覆盖项 |
@@ -313,7 +312,7 @@ open_api_key                  music_source_account
 | `LDAP_TIMEOUT_MS` | `10000` | 单次 LDAP 操作超时；连接和搜索都受它约束 |
 | `TRUST_PROXY` | 关闭 | 只有 `1`/`true` 才采信 `X-Forwarded-For`；否则用 `socket.remoteAddress` |
 
-`BSDIFF_BIN` 在 `AppConfigService` 中仍有兼容字段，但当前差分实现直接使用 `bsdiff-wasm`；不要把它写成部署必需项。生产配置不要提交 SMTP 密码、Lsky Key、IM Token 或数据库凭据。
+`BSDIFF_BIN` 在 `AppConfigService` 中仍有兼容字段，但当前差分实现直接使用 `bsdiff-wasm`；不要把它写成部署必需项。生产配置不要提交 SMTP 密码、IM Token 或数据库凭据。
 
 ## 8. 构建、验证和文档同步
 
