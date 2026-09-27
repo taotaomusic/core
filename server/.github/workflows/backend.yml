@@ -142,13 +142,21 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          # 版本号单一来源：package.json 的 version（手动 SemVer 维护）。
+          # 镜像同时打三个 tag：版本号（人读、可回滚到具体版本）、
+          # sha 前 12 位（精确可追溯到提交）、latest（部署默认拉取）。
+          VERSION=$(node -p "require('./package.json').version")
           # ghcr 镜像名必须全小写；仓库名已是小写，这里再兜底转一次。
           IMAGE="ghcr.io/$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')"
           echo "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
-          docker build -t "$IMAGE:latest" -t "$IMAGE:${GITHUB_SHA::12}" .
+          docker build \
+            -t "$IMAGE:latest" \
+            -t "$IMAGE:$VERSION" \
+            -t "$IMAGE:${GITHUB_SHA::12}" .
           docker push "$IMAGE:latest"
+          docker push "$IMAGE:$VERSION"
           docker push "$IMAGE:${GITHUB_SHA::12}"
-          echo "已推送镜像：$IMAGE:latest 与 $IMAGE:${GITHUB_SHA::12}"
+          echo "已推送镜像：$IMAGE 的 latest / $VERSION / ${GITHUB_SHA::12}"
 
       - name: 契约失败时输出摘要注解
         if: failure()

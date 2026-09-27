@@ -84,6 +84,23 @@ jobs:
             .\gradlew.bat :androidApp:assembleDebug
           }
 
+      - name: 核对 APK 签名指纹（签名包才验，best-effort）
+        if: steps.signing.outputs.signed == 'true'
+        shell: pwsh
+        run: |
+          # 从 Android SDK build-tools 里找 apksigner，打印签名证书指纹存进日志，
+          # 便于外部核对「云端签的就是这把 key」。找不到工具或验证失败都不阻断构建。
+          $apk = Get-ChildItem -Recurse androidApp/build/outputs/apk/release -Filter *.apk |
+            Select-Object -First 1
+          if (-not $apk) { Write-Host "未找到 release APK，跳过验签"; exit 0 }
+          $sdk = if ($env:ANDROID_HOME) { $env:ANDROID_HOME } else { $env:ANDROID_SDK_ROOT }
+          $signer = Get-ChildItem -Path "$sdk/build-tools" -Recurse -Filter apksigner.bat -ErrorAction SilentlyContinue |
+            Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $signer) { Write-Host "未找到 apksigner，跳过验签"; exit 0 }
+          Write-Host "用 $($signer.FullName) 验证 $($apk.Name)"
+          & $signer.FullName verify --print-certs $apk.FullName
+          Write-Host "（验签失败不阻断构建，仅作记录）"
+
       - name: 回写递增后的版本号（云端构建版本延续）
         shell: pwsh
         run: |
@@ -97,7 +114,9 @@ jobs:
           git commit -m "ci: 云端构建递增版本号 [skip ci]"
           git push origin HEAD:main
           if ($LASTEXITCODE -ne 0) {
-            Write-Host "::warning::版本号回写推送失败（远端已前进），由下次同步收编"
+            # 远端在本次构建期间已前进（常见于并发 sync）：这是预期情况，
+            # 版本号会由下次同步收编。用普通日志而非 ::warning::，避免 run 显黄点。
+            Write-Host "版本号回写推送跳过：远端已前进，由下次同步收编"
             exit 0
           }
 
@@ -244,6 +263,14 @@ jobs:
               exit 1
             }
           fi
+          # 先删掉历史 APK 资产：文件名带版本号，--clobber 只能覆盖同名，
+          # 否则旧包（1.0.212…）会一直堆积。滚动版只保留本次构建这一个 APK。
+          gh release view latest --json assets -q '.assets[].name' 2>/dev/null \
+            | grep -E '^TaotaoMusic-.*\.apk$' \
+            | while read -r old; do
+                echo "删除旧 APK 资产：$old"
+                gh release delete-asset latest "$old" -y || true
+              done
           err=$(gh release upload latest out/* --clobber 2>&1) || {
             echo "::error::上传资产失败：${err:0:300}"
             exit 1

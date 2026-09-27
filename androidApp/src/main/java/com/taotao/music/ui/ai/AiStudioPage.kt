@@ -31,7 +31,7 @@ import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.PushPin
-import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -262,7 +262,7 @@ fun AiStudioPage(
                 val prompt = draft.trim(); if (prompt.isBlank()) return@IconButton
                 replaceSelected(messages + AiChatMessage(AiChatRole.USER, prompt) + AiChatMessage(AiChatRole.ASSISTANT, "正在提交创作请求…"), prompt.take(16))
                 draft = ""; onGenerate(model.apiName, prompt, ratio, imageSize, quality.apiName, thinking)
-            }, enabled = signedIn && draft.isNotBlank() && !submitting, modifier = Modifier.padding(start = TaotaoSpacing.xs).background(MaterialTheme.colorScheme.primary, TaotaoShapes.large)) { Icon(Icons.Default.Send, "发送", tint = MaterialTheme.colorScheme.onPrimary) }
+            }, enabled = signedIn && draft.isNotBlank() && !submitting, modifier = Modifier.padding(start = TaotaoSpacing.xs).background(MaterialTheme.colorScheme.primary, TaotaoShapes.large)) { Icon(Icons.AutoMirrored.Filled.Send, "发送", tint = MaterialTheme.colorScheme.onPrimary) }
         }
         saveMessage?.let { text ->
             Text(

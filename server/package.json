@@ -1,5 +1,6 @@
 {
   "name": "taotao-music-proxy",
+  "version": "1.0.0",
   "private": true,
   "scripts": {
     "dev": "node --watch --require ts-node/register src/main.ts",
