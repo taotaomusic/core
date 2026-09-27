@@ -102,7 +102,7 @@ jobs:
           for plat in linux-x64 windows-x64; do
             mkdir -p "crypto/dist/node/$plat"
             if curl -fsSL -o "/tmp/node-$plat.zip" \
-                "https://github.com/hdppppppp/tools/releases/download/v2.1.0/node-$plat.zip"; then
+                "https://github.com/hdppppppp/tools/releases/download/v2.2.0/node-$plat.zip"; then
               unzip -qo "/tmp/node-$plat.zip" -d "crypto/dist/node/$plat"
               echo "已拉取 taotao_crypto.node（$plat, v2.1.0）"
             else

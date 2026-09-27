@@ -67,7 +67,7 @@ jobs:
           # 拉不到不阻断构建——运行时 NativeCrypto.available 会兜底降级明文。
           # 版本随加密层发布单调更新（规则见 tools 仓库 docs/versioning.md）。
           try {
-            & .\tools\fetch-crypto.ps1 -Version v2.1.0 -Only android
+            & .\tools\fetch-crypto.ps1 -Version v2.2.0 -Only android
             Write-Host "已拉取加密层 Android 产物 v2.1.0"
           } catch {
             Write-Host "::warning::拉取加密层产物失败（$($_.Exception.Message)），APK 将不含 .so，加密静默关闭"
