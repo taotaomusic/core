@@ -41,7 +41,10 @@ export function createCryptoMiddleware(
                   : isExcludedPath(request)
                     ? "带加密头但路径在排除表（按明文处理）"
                     : "加密";
-            logger.log(`${request.method} ${request.originalUrl} → ${tag}`);
+            // 客户端以明文头上报机型/系统版本（X-Taotao-Device），便于审计看出是什么设备。
+            const dev = request.headers["x-taotao-device"];
+            const devTag = typeof dev === "string" && dev.length > 0 ? ` [${dev}]` : "";
+            logger.log(`${request.method} ${request.originalUrl} → ${tag}${devTag}`);
         }
 
         if (!header || typeof header !== "string") {

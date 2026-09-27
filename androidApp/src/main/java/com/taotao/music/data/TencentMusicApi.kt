@@ -17,6 +17,7 @@ import java.net.URL
 import java.net.URLDecoder
 import java.util.Locale
 import android.net.Uri
+import android.os.Build
 
 /** 桃桃音乐后端客户端：移动端不直接请求第三方音乐接口。 */
 class TencentMusicApi(
@@ -1381,6 +1382,12 @@ class TencentMusicApi(
         return read(connection)
     }
 
+    /** 明文上报的机型/系统版本（过滤成可打印 ASCII，避免非法头值）。计算一次。 */
+    private val deviceInfoHeader: String = run {
+        val raw = "${Build.MANUFACTURER} ${Build.MODEL}; Android ${Build.VERSION.RELEASE} (SDK ${Build.VERSION.SDK_INT})"
+        raw.filter { it.code in 0x20..0x7e }.take(120).ifBlank { "unknown-device" }
+    }
+
     private fun open(path: String, method: String, token: String?): HttpURLConnection =
         (URL(ENDPOINT + path).openConnection() as HttpURLConnection).apply {
             requestMethod = method
@@ -1388,6 +1395,8 @@ class TencentMusicApi(
             readTimeout = 60_000
             setRequestProperty("Accept", "application/x-ndjson, application/json")
             setRequestProperty("User-Agent", "TaotaoMusic/1.0")
+            // 明文上报机型/系统版本，供服务端审计日志看出是什么设备（非硬件唯一标识）。
+            setRequestProperty(HEADER_DEVICE_INFO, deviceInfoHeader)
             appVersionCode.takeIf { it > 0 }?.let { setRequestProperty(HEADER_APP_VERSION, it.toString()) }
             token?.takeIf { it.isNotBlank() }?.let { setRequestProperty("Authorization", "Bearer $it") }
         }
@@ -1467,6 +1476,8 @@ class TencentMusicApi(
         const val HEADER_LATEST_VERSION = "x-latest-version-code"
         const val HEADER_LATEST_PATCH = "x-latest-patch-version"
         const val HEADER_APP_VERSION = "x-app-version-code"
+        /** 明文机型/系统版本头，供服务端审计。 */
+        const val HEADER_DEVICE_INFO = "X-Taotao-Device"
 
         /**
          * 队列里存的占位地址。

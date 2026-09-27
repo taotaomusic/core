@@ -1,5 +1,6 @@
 package com.taotao.music.crypto
 
+import android.os.Build
 import android.util.Base64
 import android.util.Log
 import org.json.JSONObject
@@ -41,6 +42,12 @@ class CryptoTransport(
     /** 后端下发并缓存的 PSK；null 表示尚未取到。 */
     private var pskId: String? = null
     private var pskHex: String? = null
+
+    /** 明文机型/系统版本头值（过滤成可打印 ASCII）。 */
+    private val deviceInfo: String = run {
+        val raw = "${Build.MANUFACTURER} ${Build.MODEL}; Android ${Build.VERSION.RELEASE} (SDK ${Build.VERSION.SDK_INT})"
+        raw.filter { it.code in 0x20..0x7e }.take(120).ifBlank { "unknown-device" }
+    }
 
     /** 加密链路是否具备可用前提：库已加载、协议 >= 2。PSK 在握手时向后端拉取。 */
     val enabled: Boolean
@@ -124,6 +131,7 @@ class CryptoTransport(
             setRequestProperty("Accept", "application/json")
             setRequestProperty("Authorization", "Bearer $token")
             setRequestProperty("User-Agent", "TaotaoMusic/1.0")
+            setRequestProperty("X-Taotao-Device", deviceInfo)
         }
         val code = connection.responseCode
         if (code !in 200..299) {
@@ -163,6 +171,7 @@ class CryptoTransport(
             setRequestProperty("Content-Type", "application/json")
             setRequestProperty("Accept", "application/json")
             setRequestProperty("User-Agent", "TaotaoMusic/1.0")
+            setRequestProperty("X-Taotao-Device", deviceInfo)
         }
         connection.outputStream.use { it.write(payload.toByteArray()) }
 

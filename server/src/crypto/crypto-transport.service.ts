@@ -72,7 +72,10 @@ export class CryptoTransportService implements OnApplicationBootstrap, OnModuleD
     handshake(clientHello: Uint8Array, deviceId: string): Uint8Array | null {
         if (!this.server) return null;
         try {
-            return this.server.accept(clientHello, deviceId, Date.now());
+            const response = this.server.accept(clientHello, deviceId, Date.now());
+            // 审计：记录握手成功的设备号（ANDROID_ID / MachineGuid），便于按设备反查流量。
+            this.logger.log(`握手成功：deviceId="${deviceId}"`);
+            return response;
         } catch (err) {
             // 诊断用：握手失败时把非敏感线索打出来（deviceId 不是密钥，可记录）。
             // MAC 失配最常见的成因是 deviceId 两端不一致或 PSK 版本不同。
