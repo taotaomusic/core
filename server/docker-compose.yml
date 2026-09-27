@@ -1,0 +1,54 @@
+# 桃桃音乐后端 Docker Compose。
+#
+# 镜像由 music-server 仓库 CI 构建并推到 ghcr.io，已内置 v2.x 的传输加密
+# taotao_crypto.node（Linux/Windows 两平台），无需再手动放置。
+#
+# 用法：
+#   1. 复制 .env.example 为 .env 并填好值（至少 AUTH_SECRET / 各密码 / CRYPTO_PSK_HEX）
+#   2. docker compose up -d
+#   3. curl http://localhost:4720/health 返回含 "up" 即正常
+#
+# 镜像已设为**公开**，无需 docker login 即可 pull。若首次仍报 401/denied，
+# 说明包还是私有：到 GitHub → 头像 → Packages → music-server → Package settings
+# → Danger Zone → Change visibility → Public（一次性）。
+#
+# 升级：docker compose pull app && docker compose up -d app（数据在卷里，不受影响）
+
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-taotao}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?必须在 .env 里设置}
+      POSTGRES_DB: ${POSTGRES_DB:-music}
+    volumes:
+      - taotao-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "${POSTGRES_USER:-taotao}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  app:
+    image: ghcr.io/hdppppppp/music-server:latest
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: "4720"
+      DATABASE_URL: postgres://${POSTGRES_USER:-taotao}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-music}
+      AUTH_SECRET: ${AUTH_SECRET:?必须在 .env 里设置（≥32 字符）}
+      ADMIN_INITIAL_PASSWORD: ${ADMIN_INITIAL_PASSWORD:?必须在 .env 里设置（≥12 位）}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
+      # 传输加密：PSK 由后端动态下发给已登录客户端。配一个固定值（生产必须），
+      # 否则每次重启随机生成、已连客户端需重新握手。生成：openssl rand -hex 32
+      CRYPTO_PSK_ID: ${CRYPTO_PSK_ID:-prod-v1}
+      CRYPTO_PSK_HEX: ${CRYPTO_PSK_HEX:-}
+    ports:
+      - "${APP_PORT:-4720}:4720"
+
+volumes:
+  taotao-db:
