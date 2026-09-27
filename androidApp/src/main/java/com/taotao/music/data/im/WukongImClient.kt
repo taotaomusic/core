@@ -57,7 +57,7 @@ class WukongImClient(
     private val _connection = MutableStateFlow(ImConnectionInfo())
     private val _messages = MutableStateFlow(emptyList<ImChatMessage>())
     private val _syncedPeers = MutableStateFlow(emptyList<String>())
-    private val _peerNames = MutableStateFlow<Map<String, String>>(emptyMap())
+    private val _peerContacts = MutableStateFlow<Map<String, TencentMusicApi.ImContact>>(emptyMap())
     private val _syncDetail = MutableStateFlow("等待悟空 IM 同步")
     private val messageStateLock = Any()
     /**
@@ -75,7 +75,8 @@ class WukongImClient(
 
     /** 最近同步到的私聊对端，供页面恢复离线会话入口。 */
     val syncedPeers: StateFlow<List<String>> = _syncedPeers.asStateFlow()
-    val peerNames: StateFlow<Map<String, String>> = _peerNames.asStateFlow()
+    /** 最近同步到的私聊对端资料（昵称与头像），供页面渲染会话与气泡。 */
+    val peerContacts: StateFlow<Map<String, TencentMusicApi.ImContact>> = _peerContacts.asStateFlow()
 
     /** 同步诊断，避免网络或协议错误被误显示为「没有消息」。 */
     val syncDetail: StateFlow<String> = _syncDetail.asStateFlow()
@@ -184,7 +185,7 @@ class WukongImClient(
             val peerUid = if (fromUid == currentUid) message.channelID else fromUid
             if (fromUid != currentUid) {
                 if (!isAppInForeground) {
-                    val peerName = _peerNames.value[peerUid] ?: peerUid.take(8)
+                    val peerName = _peerContacts.value[peerUid]?.nickname ?: peerUid.take(8)
                     notifier.showMessage(peerName, content)
                 }
                 if (isAppInForeground && peerUid == activePeerUid) {
@@ -304,7 +305,7 @@ class WukongImClient(
         activePeerUid = normalizedPeerUid
         syncScope.launch {
             runCatching { api.imContacts(listOf(normalizedPeerUid)) }.onSuccess { contacts ->
-                _peerNames.value = _peerNames.value + contacts.associate { it.uid to it.nickname }
+                _peerContacts.value = _peerContacts.value + contacts.associate { it.uid to it }
             }
         }
         syncScope.launch { runCatching { api.markImConversationRead(normalizedPeerUid) } }
@@ -359,7 +360,7 @@ class WukongImClient(
         if (normalized.isEmpty()) return
         syncScope.launch {
             runCatching { api.imContacts(normalized) }.onSuccess { contacts ->
-                _peerNames.value = _peerNames.value + contacts.associate { it.uid to it.nickname }
+                _peerContacts.value = _peerContacts.value + contacts.associate { it.uid to it }
             }
         }
     }
@@ -402,7 +403,7 @@ class WukongImClient(
         _connection.value = ImConnectionInfo()
         synchronized(messageStateLock) { _messages.value = emptyList() }
         _syncedPeers.value = emptyList()
-        _peerNames.value = emptyMap()
+        _peerContacts.value = emptyMap()
         activePeerUid = null
         confirmedReadMessageIds.clear()
         confirmedRevokedMessageIds.clear()

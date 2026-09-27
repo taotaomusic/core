@@ -1,6 +1,6 @@
 import { Injectable } from "@nestjs/common";
 import { createHash, randomBytes } from "node:crypto";
-import { UsersRepository } from "../auth/users.repository";
+import { ImContact, UsersRepository } from "../auth/users.repository";
 import { ApiErrors } from "../common/api.exception";
 import { AppConfigService } from "../config/app-config.service";
 import { ImRepository } from "./im.repository";
@@ -117,7 +117,7 @@ export class ImService {
     await this.wukong.revokeMessage({ uid: await this.users.ensureImUid(userId), ...input });
   }
 
-  async contacts(userId: number, uids: string[]): Promise<{ uid: string; nickname: string }[]> {
+  async contacts(userId: number, uids: string[]): Promise<ImContact[]> {
     this.requireEnabled();
     const selfUid = await this.users.ensureImUid(userId);
     return this.users.imContactsByUid(uids.filter((uid) => uid !== selfUid));

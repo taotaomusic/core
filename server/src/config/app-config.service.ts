@@ -50,18 +50,6 @@ export class AppConfigService {
 
   /** ApiSweet 图片生成服务地址。API Key 存在数据库的 api_key 表中。 */
   readonly apiSweetBaseUrl: string;
-  /** 兰空图床上传配置，仅服务端使用，绝不下发客户端。 */
-  readonly lskyUploadUrl: string;
-  readonly lskyApiKey: string;
-  /**
-   * 允许写入 `avatar_url` 的图床主机白名单（小写，可带端口）。
-   *
-   * 头像地址是**由上游响应决定**的，不是用户填的，所以更要校验：图床被劫持或
-   * 配置写错时，返回的可能是任意域名的 URL，落库后就会出现在别人客户端的
-   * 头像请求里（等于把每个用户的 IP 送给第三方）。留空表示只做「必须是 https
-   * 且能解析成合法 URL」的基础校验。
-   */
-  readonly lskyPublicHosts: string[];
 
   /**
    * 允许跨域读取接口响应的来源白名单（形如 `https://a.example`）。
@@ -194,9 +182,6 @@ export class AppConfigService {
       /\/+$/,
       "",
     );
-    this.lskyUploadUrl = String(config.get("LSKY_UPLOAD_URL") ?? "https://img.kiwiyyds.cn/api/index.php");
-    this.lskyApiKey = String(config.get("LSKY_API_KEY") ?? "");
-    this.lskyPublicHosts = splitCommaList(config.get("LSKY_PUBLIC_HOSTS"));
     this.corsAllowedOrigins = splitCommaList(config.get("CORS_ALLOWED_ORIGINS"));
     this.smtpHost = String(config.get("SMTP_HOST") ?? "");
     this.smtpPort = Number(config.get("SMTP_PORT") ?? 587);

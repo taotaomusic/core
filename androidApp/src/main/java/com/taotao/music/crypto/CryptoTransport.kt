@@ -17,17 +17,18 @@ import java.net.URL
  * - **线程安全**：句柄与会话状态用 [lock] 串行化；网络握手在锁内完成，简单可靠
  *   （握手很短，且并发首个请求本就该等同一次握手）。
  *
- * PSK 标识 [pskId] 必须与后端 `CRYPTO_PSK_ID` 一致；真实 PSK 只存在于 `.so` 里，
- * 不经这里传递（见 [NativeCrypto.clientNewEmbedded]）。
+ * PSK 由**后端动态下发**（`GET /api/v1/crypto/psk`，需登录令牌），客户端不再内嵌密钥：
+ * 两端用同一把（后端那把），密钥天然一致；`.so` 混淆强度有限、易被提取的问题也随之消除。
+ * **安全权衡**：PSK 经 HTTPS + 登录令牌下发，此层不再独立于 TLS，主要提供设备绑定与抗篡改。
  *
  * @param endpoint 后端根地址，如 `https://music.xydaigua.cn`。
  * @param deviceIdProvider 硬件设备号来源（[com.taotao.music.data.crypto.HardwareDeviceId]）。
- * @param pskId 内嵌 PSK 的标识，与后端登记的一致。
+ * @param tokenProvider 取当前登录访问令牌（Bearer）；无令牌时返回 null，则不下发 PSK、回退明文。
  */
 class CryptoTransport(
     private val endpoint: String,
     private val deviceIdProvider: () -> String,
-    private val pskId: String = DEFAULT_PSK_ID,
+    private val tokenProvider: () -> String?,
 ) {
     /** 单次可加密请求的产物：`header` 进 `X-Taotao-Crypto`，`frame` 作为请求体（GET 可忽略）。 */
     data class Sealed(val header: String, val frame: ByteArray)
@@ -37,11 +38,14 @@ class CryptoTransport(
     /** 客户端句柄；0 表示尚未创建或已释放。 */
     private var handle: Long = 0L
 
-    /** 加密链路是否具备可用前提：库已加载、协议 >= 2、且注入了真实 PSK。 */
+    /** 后端下发并缓存的 PSK；null 表示尚未取到。 */
+    private var pskId: String? = null
+    private var pskHex: String? = null
+
+    /** 加密链路是否具备可用前提：库已加载、协议 >= 2。PSK 在握手时向后端拉取。 */
     val enabled: Boolean
         get() = NativeCrypto.available &&
-            runCatching { NativeCrypto.nativeVersion() >= 2 && NativeCrypto.nativeHasRealPsk() }
-                .getOrDefault(false)
+            runCatching { NativeCrypto.nativeVersion() >= 2 }.getOrDefault(false)
 
     // PLACEHOLDER_APPEND
     /**
@@ -95,15 +99,44 @@ class CryptoTransport(
         // needs rekey 或无句柄：重建。
         freeHandleLocked()
 
-        val newHandle = NativeCrypto.clientNewEmbedded(pskId, deviceIdProvider())
+        // 取后端下发的 PSK（首次拉取后缓存），用它构造客户端引擎。
+        ensurePskLocked()
+        val device = deviceIdProvider()
+        val newHandle = NativeCrypto.clientNew(pskId!!, pskHex!!, device)
         if (newHandle == 0L) throw CryptoException("创建客户端引擎失败")
         handle = newHandle
 
         val hello = NativeCrypto.clientHandshake(handle, now)
-        val serverHello = postHandshake(hello, deviceIdProvider())
+        val serverHello = postHandshake(hello, device)
         if (!NativeCrypto.clientFinish(handle, serverHello, now)) {
             throw CryptoException("finish 未能建立会话")
         }
+    }
+
+    /** 确保已从后端取到 PSK（缓存）。必须在 [lock] 内调用。 */
+    private fun ensurePskLocked() {
+        if (pskId != null && pskHex != null) return
+        val token = tokenProvider() ?: throw CryptoException("未登录，无法获取 PSK")
+        val connection = (URL("$endpoint/api/v1/crypto/psk").openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 15_000
+            readTimeout = 15_000
+            setRequestProperty("Accept", "application/json")
+            setRequestProperty("Authorization", "Bearer $token")
+            setRequestProperty("User-Agent", "TaotaoMusic/1.0")
+        }
+        val code = connection.responseCode
+        if (code !in 200..299) {
+            runCatching { connection.errorStream?.close() }
+            throw CryptoException("获取 PSK 失败：HTTP $code")
+        }
+        val body = connection.inputStream.bufferedReader().use { it.readText() }
+        val json = JSONObject(body)
+        val id = json.optString("pskId")
+        val hex = json.optString("pskHex")
+        if (id.isBlank() || hex.isBlank()) throw CryptoException("PSK 响应缺少字段")
+        pskId = id
+        pskHex = hex
     }
 
     /** 释放句柄。必须在 [lock] 内调用。 */
@@ -145,12 +178,6 @@ class CryptoTransport(
 
     companion object {
         private const val TAG = "CryptoTransport"
-
-        /**
-         * 内嵌 PSK 的标识，必须与后端 `CRYPTO_PSK_ID` 一致。
-         * 灰度期固定；将来轮换由服务端多登记一条、客户端换这个常量并发版完成。
-         */
-        const val DEFAULT_PSK_ID = "prod-v1"
     }
 }
 

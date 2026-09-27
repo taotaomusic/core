@@ -590,6 +590,19 @@ export async function runMigrations(pool: Pool): Promise<void> {
         revoked_at   bigint
       );
       CREATE INDEX IF NOT EXISTS idx_open_api_key_enabled ON open_api_key (enabled, created_at DESC);
+
+      -- 头像二进制。此前转存第三方图床，图床可用性与外链寿命都不可控，改为服务器自存。
+      -- 存 Postgres bytea 而不是磁盘文件：运行时镜像无状态（没有挂卷），容器更新
+      -- 不能丢用户数据。每次上传生成新 token 并覆盖旧行：token 变化即 URL 变化，
+      -- 客户端与代理对旧地址的缓存天然失效，也避免磁盘上无限堆积历史头像。
+      CREATE TABLE IF NOT EXISTS user_avatars (
+        id           text PRIMARY KEY,
+        user_id      integer NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+        content_type text NOT NULL,
+        bytes        bytea NOT NULL,
+        byte_size    integer NOT NULL,
+        created_at   bigint NOT NULL
+      );
     `);
     await client.query("COMMIT");
   } catch (error) {

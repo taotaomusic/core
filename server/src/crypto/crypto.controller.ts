@@ -1,4 +1,4 @@
-import { Body, Controller, HttpCode, HttpStatus, Post } from "@nestjs/common";
+import { Body, Controller, Get, HttpCode, HttpStatus, Post } from "@nestjs/common";
 import { ApiErrors } from "../common/api.exception";
 import { Public } from "../common/decorators/public.decorator";
 import { CryptoTransportService } from "./crypto-transport.service";
@@ -16,6 +16,20 @@ import { CryptoTransportService } from "./crypto-transport.service";
 @Controller("crypto")
 export class CryptoController {
     constructor(private readonly transport: CryptoTransportService) {}
+
+    /**
+     * 下发当前 PSK 给**已登录**客户端（不加 `@Public`，受全局访问令牌守卫保护）。
+     * 客户端据此用 `clientNew(pskId, pskHex, deviceId)` 握手——密钥不再内嵌于 App。
+     * 未启用加密时返回 503，客户端回退明文。
+     */
+    @Get("psk")
+    psk(): { pskId: string; pskHex: string } {
+        const psk = this.transport.deliverablePsk;
+        if (!psk) {
+            throw ApiErrors.serviceUnavailable(5031, "传输加密未启用");
+        }
+        return psk;
+    }
 
     @Public()
     @Post("handshake")

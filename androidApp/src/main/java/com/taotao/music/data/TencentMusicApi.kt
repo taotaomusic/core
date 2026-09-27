@@ -39,7 +39,7 @@ class TencentMusicApi(
         val searchType: Int,
         val jumpUrl: String,
     )
-    data class ImContact(val uid: String, val nickname: String)
+    data class ImContact(val uid: String, val nickname: String, val avatarUrl: String?)
     /**
      * 认证响应中携带的账号 ID 只用于本地数据分桶，绝不作为鉴权凭据使用。
      *
@@ -980,7 +980,7 @@ class TencentMusicApi(
             val rows = connection.inputStream.bufferedReader().use { JSONObject(it.readText()) }.optJSONArray("data") ?: JSONArray()
             List(rows.length()) { index -> rows.optJSONObject(index) }.mapNotNull { row ->
                 row?.optString("uid")?.takeIf { it.isNotBlank() }?.let { uid ->
-                    ImContact(uid, row.optString("nickname").ifBlank { "加载昵称…" })
+                    ImContact(uid, row.optString("nickname").ifBlank { "加载昵称…" }, row.nullableString("avatarUrl"))
                 }
             }
         }

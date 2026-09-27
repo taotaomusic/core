@@ -19,6 +19,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChatBubbleOutline
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material3.Button
 import androidx.compose.material3.DrawerValue
@@ -40,8 +41,13 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import coil.compose.AsyncImage
+import com.taotao.music.data.TencentMusicApi
 import com.taotao.music.data.im.ImChatMessage
 import com.taotao.music.data.im.ImConnectionInfo
 import com.taotao.music.data.im.ImConnectionState
@@ -60,7 +66,8 @@ fun ChatPage(
     connection: ImConnectionInfo,
     messages: List<ImChatMessage>,
     savedPeers: List<String>,
-    peerNames: Map<String, String>,
+    peerContacts: Map<String, TencentMusicApi.ImContact>,
+    ownAvatarUrl: String?,
     onSend: (peerUid: String, content: String) -> Unit,
     onPeerSelected: (peerUid: String) -> Unit,
     onPeerActiveChanged: (peerUid: String?) -> Unit,
@@ -109,23 +116,29 @@ fun ChatPage(
             if (savedPeers.isEmpty()) {
                 Text("还没有聊天。发送第一条消息后，好友会显示在这里。", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = TaotaoSpacing.xl))
             } else {
-                val peerItems = remember(savedPeers, peerNames, peerUid) {
+                val peerItems = remember(savedPeers, peerContacts, peerUid) {
                     savedPeers.map { savedUid ->
-                        savedUid to (peerNames[savedUid] ?: "加载昵称…")
+                        Triple(savedUid, peerContacts[savedUid]?.nickname ?: "加载昵称…", peerContacts[savedUid]?.avatarUrl)
                     }
                 }
-                peerItems.forEach { (savedUid, displayName) ->
-                    Text(
-                        text = displayName,
-                        color = if (savedUid == peerUid) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                        fontWeight = if (savedUid == peerUid) FontWeight.Bold else FontWeight.Normal,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
+                peerItems.forEach { (savedUid, displayName, avatarUrl) ->
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.fillMaxWidth().clickable {
                             peerUid = savedUid
                             scope.launch { drawerState.close() }
                         }.padding(horizontal = TaotaoSpacing.xl, vertical = TaotaoSpacing.sm),
-                    )
+                    ) {
+                        ChatAvatar(avatarUrl, size = ConversationAvatarSize)
+                        Spacer(Modifier.size(TaotaoSpacing.sm))
+                        Text(
+                            text = displayName,
+                            color = if (savedUid == peerUid) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                            fontWeight = if (savedUid == peerUid) FontWeight.Bold else FontWeight.Normal,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
             }
         }
@@ -142,7 +155,7 @@ fun ChatPage(
                 Spacer(Modifier.size(TaotaoSpacing.xs))
                 Column(Modifier.weight(1f)) {
                     Text("聊天", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-                    Text(peerNames[peerUid] ?: peerUid.takeIf { it.isBlank() } ?: "加载昵称…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(peerContacts[peerUid]?.nickname ?: peerUid.takeIf { it.isBlank() } ?: "加载昵称…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 ConnectionBadge(connection.state)
             }
@@ -154,7 +167,14 @@ fun ChatPage(
                     modifier = Modifier.weight(1f).fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(TaotaoSpacing.xs),
                 ) {
-                    items(peerMessages, key = { it.id }) { ChatBubble(it, onRevoke) }
+                    items(peerMessages, key = { it.id }) { message ->
+                        ChatBubble(
+                            message = message,
+                            peerAvatarUrl = peerContacts[message.peerUid]?.avatarUrl,
+                            ownAvatarUrl = ownAvatarUrl,
+                            onRevoke = onRevoke,
+                        )
+                    }
                 }
             }
             Row(verticalAlignment = Alignment.Bottom) {
@@ -181,7 +201,13 @@ private fun ConnectionBadge(state: ImConnectionState) {
 }
 
 @Composable
-private fun ChatBubble(message: ImChatMessage, onRevoke: (ImChatMessage) -> Unit, modifier: Modifier = Modifier) {
+private fun ChatBubble(
+    message: ImChatMessage,
+    peerAvatarUrl: String?,
+    ownAvatarUrl: String?,
+    onRevoke: (ImChatMessage) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     if (message.isRevoked) {
         // 撤回消息：微信风格，灰色居中显示
         Box(modifier.fillMaxWidth().padding(vertical = TaotaoSpacing.xxs), contentAlignment = Alignment.Center) {
@@ -192,8 +218,18 @@ private fun ChatBubble(message: ImChatMessage, onRevoke: (ImChatMessage) -> Unit
             )
         }
     } else {
-        Box(modifier.fillMaxWidth(), contentAlignment = if (message.isMine) Alignment.CenterEnd else Alignment.CenterStart) {
-            Column(horizontalAlignment = if (message.isMine) Alignment.End else Alignment.Start) {
+        Row(
+            modifier = modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.Top,
+            horizontalArrangement = if (message.isMine) Arrangement.End else Arrangement.Start,
+        ) {
+            // 微信式布局：对方消息头像在左、自己的在右，头像与气泡顶部对齐。
+            if (!message.isMine) ChatAvatar(peerAvatarUrl, size = BubbleAvatarSize)
+            Column(
+                horizontalAlignment = if (message.isMine) Alignment.End else Alignment.Start,
+                // fill = false：气泡随内容收缩，长文本最多占到头像以外的剩余宽度。
+                modifier = Modifier.weight(1f, fill = false).padding(horizontal = TaotaoSpacing.xs),
+            ) {
                 Text(message.content, modifier = Modifier.background(if (message.isMine) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant, TaotaoShapes.card).padding(horizontal = TaotaoSpacing.sm, vertical = TaotaoSpacing.xs), color = if (message.isMine) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant)
                 Text(
                     text = MESSAGE_TIME_FORMAT.format(Date(message.sentAtMillis)),
@@ -215,9 +251,32 @@ private fun ChatBubble(message: ImChatMessage, onRevoke: (ImChatMessage) -> Unit
                     }
                 }
             }
+            if (message.isMine) ChatAvatar(ownAvatarUrl, size = BubbleAvatarSize)
         }
     }
 }
+
+/** 聊天头像：有头像地址就圆形加载，缺省退回人形占位（与「我的」页一致）。 */
+@Composable
+private fun ChatAvatar(avatarUrl: String?, size: Dp, modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .size(size)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.secondaryContainer),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (avatarUrl.isNullOrBlank()) {
+            Icon(Icons.Default.Person, null, tint = MaterialTheme.colorScheme.onSecondaryContainer, modifier = Modifier.size(TaotaoSizes.iconSm))
+        } else {
+            AsyncImage(model = avatarUrl, contentDescription = "聊天头像", modifier = Modifier.fillMaxSize())
+        }
+    }
+}
+
+/** 气泡旁的头像直径与会话列表头像直径。 */
+private val BubbleAvatarSize = 36.dp
+private val ConversationAvatarSize = 44.dp
 
 private val UUID_PATTERN = Regex("^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 private val MESSAGE_TIME_FORMAT = SimpleDateFormat("MM-dd HH:mm", Locale.CHINA)

@@ -1,4 +1,5 @@
 import { Injectable, Logger, OnApplicationBootstrap, OnModuleDestroy } from "@nestjs/common";
+import { randomBytes } from "crypto";
 import { AppConfigService } from "../config/app-config.service";
 import { loadNativeCrypto, NativeCrypto, NativeServer } from "./native-loader";
 
@@ -15,12 +16,25 @@ export class CryptoTransportService implements OnApplicationBootstrap, OnModuleD
     private native: NativeCrypto | null = null;
     private server: NativeServer | null = null;
     private sweepTimer: NodeJS.Timeout | null = null;
+    /** 当前生效的 PSK（下发给已登录客户端；见 [deliverablePsk]）。 */
+    private pskId = "prod-v1";
+    private pskHex = "";
 
     constructor(private readonly config: AppConfigService) {}
 
     /** 加密链路是否可用。false 时上层应完全透明地走明文。 */
     get enabled(): boolean {
-        return this.native !== null && this.server !== null;
+        return this.native !== null && this.server !== null && this.pskHex !== "";
+    }
+
+    /**
+     * 下发给客户端的 PSK。客户端不再内嵌密钥，改由后端动态下发（`plans/009` 修订）：
+     * 两端用的是同一把（后端这把），密钥不可能对不上；`.so` 混淆强度有限、内嵌钥
+     * 易被提取的问题也一并消除。**安全权衡**：下发经 HTTPS + 登录令牌保护，此层
+     * 不再是独立于 TLS 的第二把秘密，主要提供设备绑定与抗一般篡改。
+     */
+    get deliverablePsk(): { pskId: string; pskHex: string } | null {
+        return this.enabled ? { pskId: this.pskId, pskHex: this.pskHex } : null;
     }
 
     onApplicationBootstrap(): void {
@@ -28,25 +42,18 @@ export class CryptoTransportService implements OnApplicationBootstrap, OnModuleD
         if (!this.native) return;
 
         this.server = new this.native.Server();
-        // PSK 登记优先级：
-        //   1. 配了 CRYPTO_PSK_HEX → 用它（显式，支持轮换/多密钥场景）；
-        //   2. 否则 .node 内嵌了真实 PSK → 直接用内嵌那把（putEmbeddedPsk），
-        //      与客户端 clientNewEmbedded 对称，构建期注入一次两端通用，无需再配 hex；
-        //   3. 都没有 → 只有占位密钥，保持明文并告警。
-        // psk_id 未配时默认 prod-v1，与客户端 CryptoTransport.DEFAULT_PSK_ID 一致。
-        const pskId = this.config.cryptoPskId || "prod-v1";
-        const pskHex = this.config.cryptoPskHex;
-        if (pskHex) {
-            this.server.putPsk(pskId, pskHex);
-            this.logger.log(`已登记 PSK（来自环境变量，id=${pskId}）`);
-        } else if (this.native.hasRealPsk() && typeof this.server.putEmbeddedPsk === "function") {
-            this.server.putEmbeddedPsk(pskId);
-            this.logger.log(`已登记内嵌 PSK（来自产物，id=${pskId}）`);
-        } else if (this.native.hasRealPsk()) {
-            // 产物版本过旧（无 putEmbeddedPsk，需 v2.2.0+）：不崩，提示改配 hex 或升级产物。
-            this.logger.warn("产物内嵌了 PSK 但版本过旧（缺 putEmbeddedPsk），请升级到 v2.2.0+ 或配置 CRYPTO_PSK_HEX，暂保持明文");
+        // PSK 来源：优先环境变量 CRYPTO_PSK_HEX；未配则启动时随机生成一把。
+        // 无论哪种，都由 /crypto/psk 下发给已登录客户端，两端天然一致。
+        this.pskId = this.config.cryptoPskId || "prod-v1";
+        this.pskHex = this.config.cryptoPskHex || randomBytes(32).toString("hex");
+        this.server.putPsk(this.pskId, this.pskHex);
+        if (this.config.cryptoPskHex) {
+            this.logger.log(`已登记 PSK 并开放下发（来自环境变量，id=${this.pskId}）`);
         } else {
-            this.logger.warn("产物无真实内嵌 PSK 且未配置 CRYPTO_PSK_HEX，握手将失败，链路保持明文");
+            this.logger.warn(
+                `未配置 CRYPTO_PSK_HEX，已随机生成一把 PSK（id=${this.pskId}）。` +
+                    `重启会变、多实例不一致；生产建议配固定值。`,
+            );
         }
 
         // 每分钟清理过期会话，避免长期运行内存里堆积死会话。

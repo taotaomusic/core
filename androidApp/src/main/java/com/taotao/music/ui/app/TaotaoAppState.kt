@@ -80,6 +80,7 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
     private val cryptoTransport = CryptoTransport(
         endpoint = TencentMusicApi.ENDPOINT,
         deviceIdProvider = { HardwareDeviceId(context.contentResolver).deviceId() },
+        tokenProvider = { authSession.validToken() },
     )
     val musicApi = TencentMusicApi(
         authSession,

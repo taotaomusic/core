@@ -44,7 +44,10 @@ object NativeCrypto {
 
     // ---- 客户端 ----
 
-    /** 用内嵌 PSK 创建客户端引擎，返回句柄（0 = 失败）。`deviceId` 折进握手密钥。 */
+    /** 用**后端下发的** PSK 创建客户端引擎，返回句柄（0 = 失败）。`deviceId` 折进握手密钥。 */
+    external fun clientNew(pskId: String, pskHex: String, deviceId: String): Long
+
+    /** 用内嵌 PSK 创建客户端引擎（已弃用：改用后端动态下发 [clientNew]）。 */
     external fun clientNewEmbedded(pskId: String, deviceId: String): Long
 
     /** 发起握手，返回 ClientHello 字节。 */

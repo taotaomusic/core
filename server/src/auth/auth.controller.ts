@@ -1,16 +1,17 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Patch, Post, UploadedFile, UseInterceptors } from "@nestjs/common";
+import { Body, Controller, Get, HttpCode, HttpStatus, Patch, Post, Req, UploadedFile, UseInterceptors } from "@nestjs/common";
 import { FileInterceptor } from "@nestjs/platform-express";
-import type { Express } from "express";
+import type { Express, Request } from "express";
 import { ApiErrors } from "../common/api.exception";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
 import { Public } from "../common/decorators/public.decorator";
 import { RateLimit } from "../common/decorators/rate-limit.decorator";
-import { IMAGE_EXTENSION, IMAGE_MIME, sniffImageKind } from "../common/image-signature";
+import { IMAGE_MIME, sniffImageKind } from "../common/image-signature";
 import type { SessionUser } from "../common/request.types";
 import { AuthService } from "./auth.service";
 import { UsersRepository } from "./users.repository";
 import { EmailVerificationService } from "./email-verification.service";
 import { AppConfigService } from "../config/app-config.service";
+import { AvatarStoreService } from "../files/avatar-store.service";
 
 /** 用户名 3 至 32 位，允许字母数字下划线与汉字。与迁移前完全一致。 */
 const USERNAME_PATTERN = /^[\w一-龥]{3,32}$/;
@@ -40,6 +41,7 @@ export class AuthController {
     private readonly users: UsersRepository,
     private readonly emailVerification: EmailVerificationService,
     private readonly config: AppConfigService,
+    private readonly avatars: AvatarStoreService,
   ) {}
 
   /** 向邮箱发送注册验证码。邮箱统一转小写，保证同一地址不会绕过冷却与唯一约束。 */
@@ -144,51 +146,25 @@ export class AuthController {
       throw ApiErrors.badRequest(4000, "请至少提供昵称或头像");
     }
     const current = await this.requireProfile(user);
+    // 清除头像时连二进制一起删，避免 user_avatars 里留下不再被任何 URL 指向的孤儿行。
+    if (avatarUrl === null) await this.avatars.removeByUserId(current.id);
     return (await this.users.updateProfile(current.id, nickname, avatarUrl))!;
   }
 
-  /** 接收头像图片并转存到兰空图床，Key 仅保留在服务端环境变量。 */
+  /** 接收头像图片，存进本服务的数据库并返回更新后的资料。 */
   @Post("avatar")
   @UseInterceptors(FileInterceptor("file", { limits: { fileSize: 5 * 1024 * 1024 } }))
-  async uploadAvatar(@CurrentUser() user: SessionUser | undefined, @UploadedFile() file: Express.Multer.File) {
+  async uploadAvatar(@CurrentUser() user: SessionUser | undefined, @UploadedFile() file: Express.Multer.File, @Req() request: Request) {
     const current = await this.requireProfile(user);
     // 按文件头判定格式，不信 `file.mimetype`：那是请求里的 Content-Type，
     // 客户端改一个字节就能把任意文件声明成 image/png。
     const kind = file ? sniffImageKind(file.buffer) : null;
     if (!file || !kind) throw ApiErrors.badRequest(4000, "请选择 PNG / JPEG / GIF / WebP 图片");
-    if (!this.config.lskyApiKey) throw ApiErrors.badRequest(4000, "头像上传服务未配置");
-    const form = new FormData();
-    form.append(
-      "image",
-      new Blob([file.buffer], { type: IMAGE_MIME[kind] }),
-      file.originalname || `avatar.${IMAGE_EXTENSION[kind]}`,
-    );
-    form.append("token", this.config.lskyApiKey);
-    const response = await fetch(this.config.lskyUploadUrl, {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        "User-Agent": "TaotaoMusic-AvatarUploader/1.0",
-      },
-      body: form,
-    });
-    const raw = await response.text();
-    let payload: { result?: string; code?: number; message?: string; url?: string };
-    try {
-      payload = JSON.parse(raw) as typeof payload;
-    } catch {
-      const contentType = response.headers.get("content-type") || "未知类型";
-      const preview = raw.replace(/\s+/g, " ").slice(0, 160);
-      throw ApiErrors.badRequest(4000, `头像上传接口返回了无效响应（HTTP ${response.status}，${contentType}）：${preview}`);
-    }
-    const url = payload.url;
-    if (!response.ok || payload.result !== "success" || !url) {
-      throw ApiErrors.badRequest(4000, payload.message || "头像上传失败");
-    }
-    // 这个地址会被写进用户资料、再由别人的客户端去请求，所以必须过一遍白名单，
-    // 不能因为「是上游返回的」就默认可信。
-    const storedUrl = this.requireStoredAvatarUrl(url);
-    return (await this.users.updateProfile(current.id, undefined, storedUrl))!;
+    // 存库而不是转存第三方图床：外链寿命与图床可用性都不可控，且运行时镜像
+    // 无状态，落磁盘会在容器更新时丢数据。每次保存生成新 token，旧地址随即失效。
+    const token = await this.avatars.save(current.id, IMAGE_MIME[kind], file.buffer);
+    const url = `${this.baseUrlOf(request)}/api/v1/files/avatars/${token}`;
+    return (await this.users.updateProfile(current.id, undefined, url))!;
   }
 
   /** 老账号补绑邮箱：仅允许当前尚未绑定邮箱的已登录用户使用。 */
@@ -293,28 +269,11 @@ export class AuthController {
     return avatarUrl;
   }
 
-  /**
-   * 校验图床返回的头像地址。
-   *
-   * 与 [optionalAvatarUrl] 的区别在于来源：那个校验的是**用户填的**地址，这个校验
-   * 的是**上游响应里的**地址。后者看起来可信，其实不然 —— 图床被劫持、配置写错、
-   * 或者上游返回一个跳转后的第三方 CDN 地址，都会让任意 URL 落进 `avatar_url`，
-   * 之后每个渲染该用户头像的客户端都会去请求它。
-   *
-   * 基础要求是 https 且长度可控；配了 `LSKY_PUBLIC_HOSTS` 就再收紧到主机白名单。
-   */
-  private requireStoredAvatarUrl(raw: string): string {
-    const trimmed = raw.trim();
-    const parsed = (() => {
-      try { return new URL(trimmed); } catch { return null; }
-    })();
-    if (!parsed || parsed.protocol !== "https:" || trimmed.length > MAX_AVATAR_URL_LENGTH) {
-      throw ApiErrors.badRequest(4000, "头像上传接口返回了非法的图片地址");
-    }
-    const allowed = this.config.lskyPublicHosts;
-    if (allowed.length > 0 && !allowed.includes(parsed.host.toLowerCase())) {
-      throw ApiErrors.badRequest(4000, "头像上传接口返回了白名单之外的图片地址");
-    }
-    return trimmed;
+  /** 头像下载地址优先用配置的对外基地址；未配置时按请求推导，TLS 由 socket 或代理头判断。 */
+  private baseUrlOf(request: Request): string {
+    if (this.config.publicBaseUrl) return this.config.publicBaseUrl;
+    const forwarded = String(request.headers["x-forwarded-proto"] ?? "").split(",")[0].trim();
+    const secure = (request.socket as { encrypted?: boolean }).encrypted === true;
+    return `${forwarded || (secure ? "https" : "http")}://${request.headers.host ?? "localhost"}`;
   }
 }

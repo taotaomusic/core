@@ -10,7 +10,7 @@ export type UserWithEmail = UserRecord & { email: string | null };
 export type UserProfile = UserRecord & { email: string | null; nickname: string; avatarUrl: string | null };
 export type UserCredentials = UserRecord & { password_hash: string; password_salt: string };
 type ImUidRow = { im_uid: string | null };
-export type ImContact = { uid: string; nickname: string };
+export type ImContact = { uid: string; nickname: string; avatarUrl: string | null };
 
 /**
  * `created_at` 在库里是 timestamptz，但响应里必须仍是 SQLite 那种
@@ -136,7 +136,7 @@ export class UsersRepository {
   async imContactsByUid(uids: string[]): Promise<ImContact[]> {
     if (uids.length === 0) return [];
     return this.database.all<ImContact>(
-      `SELECT im_uid AS uid, COALESCE(NULLIF(BTRIM(nickname), ''), username) AS nickname
+      `SELECT im_uid AS uid, COALESCE(NULLIF(BTRIM(nickname), ''), username) AS nickname, avatar_url AS "avatarUrl"
        FROM users WHERE im_uid = ANY($1::text[]) AND disabled_at IS NULL`,
       [uids],
     );

@@ -87,6 +87,7 @@ internal fun TaotaoAppPageRouter(
                 peerStore = state.imPeerStore,
                 accountId = state.authSession.accountId,
                 client = state.wukongImClient,
+                ownAvatarUrl = state.userProfile?.avatarUrl,
                 onPeersChanged = { state.imPeers = it },
                 onMessage = { state.message = it },
             )

@@ -20,18 +20,20 @@ internal fun ChatPageHost(
     peerStore: ImPeerStore,
     accountId: Long?,
     client: WukongImClient,
+    ownAvatarUrl: String?,
     onPeersChanged: (List<String>) -> Unit,
     onMessage: (String) -> Unit,
 ) {
     val messages by client.messages.collectAsState()
-    val peerNames by client.peerNames.collectAsState()
+    val peerContacts by client.peerContacts.collectAsState()
     val haptic = LocalHapticFeedback.current
 
     ChatPage(
         connection = connection,
         messages = messages,
         savedPeers = savedPeers,
-        peerNames = peerNames,
+        peerContacts = peerContacts,
+        ownAvatarUrl = ownAvatarUrl,
         onSend = { peerUid, content ->
             onPeersChanged(peerStore.remember(accountId, peerUid))
             client.sendText(peerUid, content)
