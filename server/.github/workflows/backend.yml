@@ -144,13 +144,19 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # 契约全绿才走到这里；dist 含管理后台与分享播放器，
-          # crypto/ 含 linux-x64 的 taotao_crypto.node（若拉到），一并打包可直接部署。
-          zip -qr server-dist.zip dist crypto
+          # 契约全绿才走到这里。打包布局刻意「扁平」：把 dist/ 的内容放到 zip 根，
+          # 再并入 crypto/。这样解压到部署目录（如 /www/wwwroot/music）后就是
+          #   /www/wwwroot/music/main.js
+          #   /www/wwwroot/music/crypto/dist/node/<平台>/taotao_crypto.node
+          # 从该目录直接 `node main.js` 启动（cwd 即部署目录），native-loader 按
+          # <cwd>/crypto/dist/node/<平台>/ 命中，自动选 Linux/Windows。
+          rm -f server-dist.zip
+          ( cd dist && zip -qr "$OLDPWD/server-dist.zip" . )
+          zip -qr server-dist.zip crypto
           gh release view server-dist-latest >/dev/null 2>&1 || \
             gh release create server-dist-latest --prerelease \
               --title "后端 dist 最新构建" \
-              --notes "npm run build 的完整产物（tsc + 压缩 + 管理后台 vite + 分享播放器），契约验证通过后发布。部署：解压后按 server/README.md 安装生产依赖并启动。"
+              --notes "npm run build 的完整产物（tsc + 压缩 + 管理后台 vite + 分享播放器）+ 两平台 taotao_crypto.node，契约验证通过后发布。扁平布局：解压到部署目录即得 main.js 与 crypto/，从该目录 node main.js 启动。生产依赖按 server/README.md 安装。"
           gh release upload server-dist-latest server-dist.zip --clobber
           echo "已发布 server-dist-latest/server-dist.zip"
 
