@@ -1,27 +1,28 @@
-import { useState, type CSSProperties } from "react";
+import { useState, useEffect, type CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { ENDPOINT, postJson, saveSession, clearSession, restoreToken } from "./api";
 import "./App.css";
-
-const ENDPOINT = "https://music.xydaigua.cn";
-
-/** 从后端信封响应 {code,message,data} 取 data（兼容无信封），非 0 码抛错。 */
-async function postJson(path: string, body: unknown): Promise<any> {
-  const resp = await fetch(`${ENDPOINT}${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify(body),
-  });
-  const json = await resp.json().catch(() => ({}));
-  if (!resp.ok || (json && json.code !== undefined && json.code !== 0)) {
-    throw new Error(json?.message || `HTTP ${resp.status}`);
-  }
-  return json?.data ?? json;
-}
 
 export function App() {
   const [token, setToken] = useState<string | null>(null);
+  const [booting, setBooting] = useState(true);
+
+  useEffect(() => {
+    // 启动时尝试用本地会话恢复登录（accessToken 未过期直接用，否则刷新）。
+    restoreToken()
+      .then((t) => setToken(t))
+      .finally(() => setBooting(false));
+  }, []);
+
+  if (booting) {
+    return (
+      <div className="auth-bg">
+        <div style={{ color: "#cbd5e1", fontFamily: "system-ui" }}>正在恢复登录…</div>
+      </div>
+    );
+  }
   if (!token) return <Auth onToken={setToken} />;
-  return <Home token={token} onLogout={() => setToken(null)} />;
+  return <Home token={token} onLogout={() => { clearSession(); setToken(null); }} />;
 }
 
 // PLACEHOLDER_REST
@@ -61,6 +62,7 @@ function Auth({ onToken }: { onToken: (t: string) => void }) {
           ? await postJson("/api/v1/auth/login", { username, password })
           : await postJson("/api/v1/auth/register", { username, password, email, verificationCode: code });
       if (!data?.accessToken) throw new Error("响应缺少 accessToken");
+      saveSession(data);
       onToken(data.accessToken);
     } catch (e) {
       setErr(msg(e));
@@ -153,7 +155,7 @@ function Home({ token, onLogout }: { token: string; onLogout: () => void }) {
   return (
     <main className="home">
       <h1>桃桃音乐 · 桌面</h1>
-      <p style={{ color: "#6b7280" }}>已登录。下面验证传输加密（设备绑定握手）。</p>
+      <p style={{ color: "#6b7280" }}>已登录（会话已持久化，下次启动免登录）。</p>
       <button style={btn} onClick={testHandshake}>测试加密握手</button>
       <button style={{ ...btn, background: "#f3f4f6", color: "#1f2430" }} onClick={onLogout}>退出登录</button>
       {result && <pre>{result}</pre>}
