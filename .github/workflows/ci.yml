@@ -23,6 +23,7 @@ jobs:
       crypto: ${{ steps.f.outputs.crypto }}
       server: ${{ steps.f.outputs.server }}
       client: ${{ steps.f.outputs.client }}
+      desktop: ${{ steps.f.outputs.desktop }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -33,6 +34,8 @@ jobs:
               - 'crypto-src/**'
             server:
               - 'server/**'
+            desktop:
+              - 'desktop/**'
             client:
               - 'androidApp/**'
               - 'desktopApp/**'
@@ -384,6 +387,59 @@ jobs:
           gh release view latest >/dev/null 2>&1 || gh release create latest --prerelease --title "最新构建产物" --notes "指向最新一版，方便直链下载。"
           gh release view latest --json assets -q '.assets[].name' 2>/dev/null | grep -E '^TaotaoMusic-.*\.apk$' | while read -r old; do gh release delete-asset latest "$old" -y || true; done
           gh release upload latest out/* --clobber
+
+  # Windows 桌面（Tauri + React）。crypto-src 变化也重建（src-tauri 直接依赖 core）。
+  desktop:
+    needs: changes
+    if: needs.changes.outputs.desktop == 'true' || needs.changes.outputs.crypto == 'true'
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+          key: desktop
+      - name: 安装前端依赖
+        run: npm install
+      - name: 生成图标
+        shell: bash
+        run: |
+          node scripts/gen-icon.mjs > app-icon.png
+          npx tauri icon app-icon.png
+      - name: 构建 Tauri（.msi + nsis）
+        run: npm run tauri build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-tauri
+          path: |
+            desktop/src-tauri/target/release/bundle/msi/*.msi
+            desktop/src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+      - name: 发布 Release（desktop-latest + 版本化）
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          ver=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          files=$(find src-tauri/target/release/bundle -type f \( -name '*.msi' -o -name '*.exe' \))
+          gh release view desktop-latest >/dev/null 2>&1 || gh release create desktop-latest --prerelease --title "桌面(Tauri) 最新构建" --notes "Windows Tauri 桌面端滚动构建。"
+          gh release upload desktop-latest $files --clobber
+          gh release view "desktop-v$ver" >/dev/null 2>&1 || gh release create "desktop-v$ver" --title "桌面 $ver" --notes "Tauri Windows 安装包。"
+          gh release upload "desktop-v$ver" $files --clobber
+
+
 
 
 
