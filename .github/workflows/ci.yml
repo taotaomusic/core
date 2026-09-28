@@ -1,0 +1,381 @@
+name: CI（统一按需构建）
+
+# taotaomusic/core 单仓统一流水线：一处改动只构建相关部分。
+# - crypto-src/** 变 → 构建加密产物（.so/.node）并作为 run artifact 供下游取用
+# - server/**   变 → 后端构建 + 契约验证 + Docker
+# - 客户端目录  变 → Android APK + 桌面包
+# 加密产物同一次 run 内经 upload/download-artifact 流转，不再跨仓/Release 拉取。
+# PSK 已由后端动态下发，产物不含密钥，故无需注入 TAOTAO_CRYPTO_PSK。
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      crypto: ${{ steps.f.outputs.crypto }}
+      server: ${{ steps.f.outputs.server }}
+      client: ${{ steps.f.outputs.client }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: f
+        with:
+          filters: |
+            crypto:
+              - 'crypto-src/**'
+            server:
+              - 'server/**'
+            client:
+              - 'androidApp/**'
+              - 'desktopApp/**'
+              - 'desktopLauncher/**'
+              - 'desktopUpdater/**'
+              - 'webApp/**'
+              - 'player-ui/**'
+              - 'shared/**'
+              - 'build-logic/**'
+              - 'patch/**'
+              - 'gradle/**'
+              - '*.gradle*'
+              - 'gradle.properties'
+              - 'settings.gradle*'
+              - 'version.properties'
+              - 'crypto/**'
+
+  # PLACEHOLDER_JOBS
+  crypto:
+    needs: changes
+    if: needs.changes.outputs.crypto == 'true' || needs.changes.outputs.server == 'true' || needs.changes.outputs.client == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      NDK_VERSION: 27.2.12479018
+      CARGO_TERM_COLOR: always
+      # 字符串混淆密钥（可选，仅客户端 .so 用）。PSK 不再注入——已改后端动态下发。
+      CRYPTIFY_KEY: ${{ secrets.CRYPTIFY_KEY }}
+    defaults:
+      run:
+        working-directory: crypto-src
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crypto-src
+          key: unified-crypto
+      - name: 格式 / Clippy / 单元测试
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo test --workspace --lib
+      - name: 安装 Android NDK
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          CMDLINE=""
+          for d in "$SDK"/cmdline-tools/*/bin; do
+            if [ -x "$d/sdkmanager" ]; then CMDLINE="$d"; break; fi
+          done
+          yes | "$CMDLINE/sdkmanager" --licenses > /dev/null 2>&1 || true
+          "$CMDLINE/sdkmanager" --install "ndk;$NDK_VERSION" > /dev/null 2>&1 || true
+          echo "NDK_ROOT=$SDK/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+          echo "$SDK/ndk/$NDK_VERSION/toolchains/llvm/prebuilt/linux-x86_64/bin" >> "$GITHUB_PATH"
+      - name: 构建 Android .so（arm64-v8a + x86_64）
+        run: |
+          cargo build --release --target aarch64-linux-android -p taotao-crypto-jni
+          cargo build --release --target x86_64-linux-android -p taotao-crypto-jni
+          mkdir -p out/android/arm64-v8a out/android/x86_64
+          cp target/aarch64-linux-android/release/libtaotao_crypto_jni.so out/android/arm64-v8a/libtaotao_crypto.so
+          cp target/x86_64-linux-android/release/libtaotao_crypto_jni.so out/android/x86_64/libtaotao_crypto.so
+      - name: 构建 Node .node（linux-x64）
+        run: |
+          cargo build --release -p taotao-crypto-node
+          mkdir -p out/node/linux-x64
+          cp target/release/libtaotao_crypto_node.so out/node/linux-x64/taotao_crypto.node
+      - name: 校验字符串混淆（KDF 标签已明文，见脚本）
+        run: bash tools/check-obfuscated.sh out/android/arm64-v8a/libtaotao_crypto.so out/android/x86_64/libtaotao_crypto.so
+      - name: 端到端冒烟（node）
+        run: node tools/smoke-test.cjs out/node/linux-x64/taotao_crypto.node
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crypto-android
+          path: crypto-src/out/android
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crypto-node-linux
+          path: crypto-src/out/node
+          if-no-files-found: error
+      - name: 发布 crypto-latest（本地开发 fetch-crypto 用）
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd out
+          (cd android && zip -qr "$OLDPWD/android.zip" .)
+          (cd node/linux-x64 && zip -qr "$OLDPWD/node-linux-x64.zip" .)
+          gh release view crypto-latest >/dev/null 2>&1 || gh release create crypto-latest --prerelease --title "加密产物最新构建" --notes "同仓 CI 内部经 artifact 流转；此处供本地 fetch-crypto 取用。产物无内嵌密钥（PSK 动态下发）。"
+          gh release upload crypto-latest android.zip node-linux-x64.zip --clobber
+
+  # PLACEHOLDER_SERVER
+  server:
+    needs: [changes, crypto]
+    if: needs.changes.outputs.server == 'true' || needs.changes.outputs.crypto == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: music_verify
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/music_verify
+      AUTH_SECRET: "0123456789abcdefghij0123456789abcdefghij"
+      ADMIN_INITIAL_PASSWORD: verify-initial-123456
+      NODE_ENV: test
+      PORT: "4720"
+      APK_DIR: ./tmp/apk
+      EMAIL_VERIFICATION_TEST_CODE: "123456"
+      IM_ENABLED: "false"
+      ADMIN_RATE_LIMIT: "1000"
+      CORS_ALLOWED_ORIGINS: https://verify.example
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - name: 取加密 .node（同 run crypto 产物）
+        uses: actions/download-artifact@v4
+        with:
+          name: crypto-node-linux
+          path: server/crypto/dist/node
+      - name: 安装依赖
+        run: npm ci
+      - name: 构建
+        run: npm run build
+      - name: 拉取分享播放器（暂用 music 仓库 share-player-latest）
+        run: |
+          if curl -fsSL -o /tmp/share-player.zip \
+              https://github.com/hdppppppp/music/releases/download/share-player-latest/share-player.zip; then
+            rm -rf dist/share-player; mkdir -p dist/share-player
+            unzip -q /tmp/share-player.zip -d dist/share-player
+          else
+            mkdir -p dist/share-player
+            printf '/* placeholder */\n' > dist/share-player/taotao-share-player.js
+            printf 'wasm-placeholder' > dist/share-player/TaotaoMusic-webApp-wasm-js.wasm
+            printf '<!doctype html><title>占位</title>' > dist/share-player/index.html
+          fi
+      - name: 重置验证库
+        run: node tools/reset-db.mjs "$DATABASE_URL"
+      - name: 启动验证实例
+        run: |
+          node dist/main.js > server.log 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:4720/health | grep -q '"up"'; then echo "就绪($i s)"; break; fi
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:4720/health | grep -q '"up"' || { tail -n 20 server.log; exit 1; }
+      - name: 契约验证
+        run: node tools/verify-contract.mjs http://127.0.0.1:4720 2>&1 | tee verify.log
+      - name: 发布 dist（滚动 + 版本化）
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          rm -f server-dist.zip
+          ( cd dist && zip -qr "$OLDPWD/server-dist.zip" . )
+          zip -qr server-dist.zip crypto
+          gh release view server-dist-latest >/dev/null 2>&1 || \
+            gh release create server-dist-latest --prerelease --title "后端 dist 最新构建" --notes "扁平布局：解压即得 main.js 与 crypto/。"
+          gh release upload server-dist-latest server-dist.zip --clobber
+          VER=$(node -p "require('./package.json').version")
+          gh release view "server-v$VER" >/dev/null 2>&1 || gh release create "server-v$VER" --title "后端 $VER" --notes "契约通过的完整 dist。"
+          gh release upload "server-v$VER" server-dist.zip --clobber
+      - name: 构建并推送 Docker 镜像到 ghcr.io
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          IMAGE="ghcr.io/$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')"
+          VER=$(node -p "require('./package.json').version")
+          echo "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker build -t "$IMAGE:latest" -t "$IMAGE:$VER" -t "$IMAGE:${GITHUB_SHA::12}" .
+          docker push "$IMAGE:latest"; docker push "$IMAGE:$VER"; docker push "$IMAGE:${GITHUB_SHA::12}"
+      - name: 失败时输出日志
+        if: failure()
+        run: tail -n 60 server.log verify.log 2>/dev/null || true
+
+  # PLACEHOLDER_CLIENT
+  client-android:
+    needs: [changes, crypto]
+    if: needs.changes.outputs.client == 'true' || needs.changes.outputs.crypto == 'true'
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    outputs:
+      vn: ${{ steps.prep.outputs.vn }}
+      kind: ${{ steps.prep.outputs.kind }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+      - name: 取加密 .so（同 run crypto 产物）
+        uses: actions/download-artifact@v4
+        with:
+          name: crypto-android
+          path: crypto/dist/android
+      - name: 还原发布签名（未配 Secrets 时退回 Debug 包）
+        id: signing
+        shell: pwsh
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:ANDROID_KEYSTORE_BASE64)) {
+            Add-Content -Path $env:GITHUB_OUTPUT -Value "signed=false"
+          } else {
+            [IO.File]::WriteAllBytes("taotao-release.jks", [Convert]::FromBase64String($env:ANDROID_KEYSTORE_BASE64))
+            @("TAOTAO_STORE_PASSWORD=$env:ANDROID_STORE_PASSWORD","TAOTAO_KEY_ALIAS=$env:ANDROID_KEY_ALIAS","TAOTAO_KEY_PASSWORD=$env:ANDROID_KEY_PASSWORD") | Set-Content local.properties
+            Add-Content -Path $env:GITHUB_OUTPUT -Value "signed=true"
+          }
+      - name: 构建 APK
+        shell: pwsh
+        env:
+          SIGNED: ${{ steps.signing.outputs.signed }}
+        run: if ($env:SIGNED -eq "true") { .\gradlew.bat :androidApp:assembleRelease } else { .\gradlew.bat :androidApp:assembleDebug }
+      - name: 整理版本号
+        id: prep
+        shell: bash
+        run: |
+          meta=$(find androidApp/build/outputs/apk -name output-metadata.json | head -1)
+          vn=$(node -p "require('./$meta').elements[0].versionName" 2>/dev/null || echo unknown)
+          apk=$(find androidApp/build/outputs/apk -name '*.apk' | head -1)
+          case "$apk" in *release*) kind=release;; *) kind=debug;; esac
+          echo "vn=$vn" >> "$GITHUB_OUTPUT"; echo "kind=$kind" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: |
+            androidApp/build/outputs/apk/**/*.apk
+            androidApp/build/outputs/apk/**/output-metadata.json
+          if-no-files-found: error
+
+  client-desktop:
+    needs: [changes, crypto]
+    if: needs.changes.outputs.client == 'true' || needs.changes.outputs.crypto == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+      - name: 构建桌面更新包
+        shell: pwsh
+        run: .\gradlew.bat :desktopApp:packageDesktopUpdateBundle
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-update-bundle
+          path: desktopApp/build/desktop-update-bundle/
+          if-no-files-found: error
+
+  # PLACEHOLDER_CLIENT_PUBLISH
+  client-web:
+    needs: changes
+    if: needs.changes.outputs.client == 'true'
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: 构建 Kotlin/Wasm 分享播放器
+        shell: pwsh
+        run: .\gradlew.bat :webApp:wasmJsBrowserDistribution --no-daemon
+      - name: 打包并发布 share-player-latest
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $src = "webApp/build/dist/wasmJs/productionExecutable"
+          tar -a -cf share-player.zip -C $src .
+          gh release view share-player-latest *> $null
+          if ($LASTEXITCODE -ne 0) { gh release create share-player-latest --prerelease --title "share-player 最新构建" --notes "供后端构建拉取" }
+          gh release upload share-player-latest share-player.zip --clobber
+
+  client-publish:
+    needs: [client-android, client-desktop]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      VN: ${{ needs.client-android.outputs.vn }}
+      KIND: ${{ needs.client-android.outputs.kind }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: 整理产物
+        run: |
+          mkdir -p out
+          apk=$(find artifacts/android-apk -name '*.apk' | head -1)
+          cp "$apk" "out/TaotaoMusic-${VN}-${KIND}.apk"
+          (cd artifacts/desktop-update-bundle && zip -qr "$OLDPWD/out/taotao-music-desktop-bundle.zip" .)
+          ls -la out
+      - name: 发布版本化 Release（每版一条）
+        run: |
+          TAG="v$VN"
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "客户端 $VN（$KIND）" --notes "Android APK + Windows 桌面包，构建版本 $VN。"
+          gh release upload "$TAG" out/* --clobber
+      - name: 更新滚动 latest
+        run: |
+          gh release view latest >/dev/null 2>&1 || gh release create latest --prerelease --title "最新构建产物" --notes "指向最新一版，方便直链下载。"
+          gh release view latest --json assets -q '.assets[].name' 2>/dev/null | grep -E '^TaotaoMusic-.*\.apk$' | while read -r old; do gh release delete-asset latest "$old" -y || true; done
+          gh release upload latest out/* --clobber
+
+
+
+

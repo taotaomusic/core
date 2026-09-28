@@ -594,7 +594,7 @@ GitHub 侧三个正式仓库（music / music-server / tools）由助手手动跑
   `CRYPTO_PSK_ID` / `CRYPTO_PSK_HEX`。
 - **降级策略**：产物缺失或未配置 PSK 时握手返回 503/5031，全链路保持明文，不阻断功能。
 - **服务端接入**：AEAD 解密中间件挂在 body parser 之前，带 `X-Taotao-Crypto` 头才生效；
-  详见 [server/wiki/03-api-contracts.md](server/wiki/03-api-contracts.md) §18。
+  详见 [server/wiki/37-api-crypto.md](server/wiki/37-api-crypto.md)。
 
 ## ⚠️ 反复踩过的坑（必读）
 

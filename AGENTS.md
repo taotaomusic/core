@@ -19,7 +19,21 @@
 - 外部参考仓库不得放在项目根目录；临时参考代码使用项目外目录，交付前清理无关仓库。
 - 新增 Kotlin 代码必须放在已有的 `com.taotao.music` 包层级下。
 
-## 三仓库同步（GitHub 正式仓库）
+## 仓库与构建（单仓 taotaomusic/core）
+
+> **架构已合一**（2026-09）：从前的「monorepo → sync 到三个 GitHub 仓库」已废弃。
+> 现在 GitHub 主仓是 **[taotaomusic/core](https://github.com/taotaomusic/core)** 一个仓库，
+> 装全部代码，用**根目录 `.github/workflows/ci.yml`** 一份统一流水线,靠 `dorny/paths-filter`
+> 按路径**只构建改动的部分**（`crypto-src/**`→加密、`server/**`→后端、客户端目录→APK/桌面）。
+> 加密产物（`.so`/`.node`）在**同一次 run** 内经 `upload/download-artifact` 流转给下游，
+> 不再跨仓/Release 拉取。`gitee` 的 `origin` 继续做全量备份。
+> `tools/sync-repos.ps1` 已**停用**（文件保留备查）；旧的 `music`/`music-server`/`tools`
+> 三仓及其 Release **暂时保留**、不再更新。PSK 已改**后端动态下发**，产物不含密钥，故 core 可公开。
+>
+> 本地开发若需加密产物：`tools/fetch-crypto.ps1`（默认从 core 的 `crypto-latest` Release 拉），
+> 或直接在 `crypto-src/` 下 `cargo build`。
+
+<details><summary>历史：三仓库同步（已废弃，仅备查）</summary>
 
 GitHub 侧三个仓库（music / music-server / tools）都是**正式仓库**，由助手手动跑 `tools/sync-repos.ps1` 维护（不是自动镜像）。gitee 的 `origin` 保留完整 monorepo 作**总备份**。同步从本仓库 HEAD 生成**内容快照**推送；快照历史只有逐次快照的线性提交，不含 monorepo 提交历史，历史里的临时产物不会外泄：
 
@@ -41,6 +55,8 @@ GitHub 侧三个仓库（music / music-server / tools）都是**正式仓库**�
 - **music-server 仓库**：`server/.github/workflows/backend.yml`（源文件在 `server/.github/` 内）——Ubuntu + PostgreSQL 服务容器，构建时从 `share-player-latest` 拉取真实分享播放器放进 `dist/share-player/`（拉不到退回占位文件），然后起验证实例执行完整 `verify-contract.mjs`，**全绿才算通过**，通过后把完整 dist 发布到固定 tag 预发布版 **Release `server-dist-latest`**，并把复用这份已验证 dist 的运行时镜像（`server/Dockerfile`）推到 **ghcr.io**（`ghcr.io/hdppppppp/music-server` 打三个 tag：`latest`、`<package.json 的 version>`、`<sha 前 12 位>`；仅 push 到 main 时推，手动触发只验证）。后端版本号单一来源是 `server/package.json` 的 `version`（手动 SemVer 维护），要发新版本先改它再提交。独立仓库没有 Gradle 工程，`build:web-player` 会自动跳过（见 `build-web-player.mjs`）。
 - **APK 签名**：在 music 仓库 Secrets 配 `ANDROID_KEYSTORE_BASE64`（`taotao-release.jks` 的 base64）、`ANDROID_STORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD` 后出签名 Release 包；未配置时自动退回 Debug 包，仅验证工具链。
 
+</details>
+
 ## 文档索引
 
 - [README.md](README.md)：项目总览、播放链路、开发入口。
@@ -49,7 +65,7 @@ GitHub 侧三个仓库（music / music-server / tools）都是**正式仓库**�
 - [server/README.md](server/README.md)：后端接口、数据层规矩、契约验证。
 - [HOT_UPDATE.md](HOT_UPDATE.md)：热更新的设计动机（部分内容已被实现取代，文内有标注）。
 - [MUSIC_CROSS_PLATFORM.md](MUSIC_CROSS_PLATFORM.md)：Android/Windows 双端功能边界、定时播放与云端歌单契约。
-- [server/wiki/README.md](server/wiki/README.md)：后端专题文档中心（架构、契约、数据库、部署、排障、管理后台认证等 12 篇）。
+- [server/wiki/README.md](server/wiki/README.md)：后端专题文档中心（约 40 篇，按编号分组：架构 10–13、开发配置 20–23、接口契约 30–37、数据库 40–44、功能专题 50–53、发布部署 60–62、排障 70–74、管理后台 80–83）。
 
 ## 文档语言
 

@@ -23,7 +23,7 @@
 
 下面所有发布动作都有两条路。**日常用管理后台**(浏览器打开 `https://music.xydaigua.cn/admin/`,注意入口固定在 `/admin/`,服务根路径留给未来的网页版),它把三件事做成了界面:发布列表与放量、补丁列表与放量、强制更新下限。首次进入用**管理员账号密码登录**,登录后拿到的会话令牌存在浏览器 localStorage,有效期 24 小时。
 
-管理后台登录后直接就能操作发布和公告接口 —— 这些接口用的是同一个 `AdminAuthGuard`,只认管理员会话。账号、2FA、角色、强制改密和 LDAP 见 [server/wiki/11-admin-auth.md](server/wiki/11-admin-auth.md)。
+管理后台登录后直接就能操作发布和公告接口 —— 这些接口用的是同一个 `AdminAuthGuard`,只认管理员会话。账号、2FA、角色、强制改密和 LDAP 见 [server/wiki/80-admin-auth-login.md](server/wiki/80-admin-auth-login.md)。
 
 本文档保留 curl 版本,因为它们是**唯一能写进脚本、也唯一能在后台挂掉时兜底**的口径。两者打的是同一批接口。
 
@@ -408,4 +408,4 @@ GitHub 侧三个正式仓库（music / music-server / tools）由助手手动执
   全链路**透明降级为明文**，不阻断功能 —— 加密发布事故的表现是「退回明文」而不是「服务不可用」，
   排障时先查启动日志的加密 WARN。
 - 客户端现状：两端设备号来源已落地，JNI 绑定尚未进构建路径；`crypto/dist/` 当前只有服务端消费。
-- 接口语义见 [server/wiki/03-api-contracts.md](server/wiki/03-api-contracts.md) §18。
+- 接口语义见 [server/wiki/37-api-crypto.md](server/wiki/37-api-crypto.md)。

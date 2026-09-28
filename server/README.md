@@ -130,7 +130,7 @@ IP 白名单、会话撤销与审计归属。脚本化调用请从后台登录�
 只能读、写会拿到 403/4030；所有写操作都会记一条审计（`admin_audit_log`）。
 **用户资料与听歌历史是例外**：`/app/admin/users` 与 `/app/admin/users/:id/playback` 返回 `email`
 和逐首歌的播放记录，读也要求 `admin` 及以上，观察者被拒（前端「用户与统计」页签对观察者隐藏）。
-角色分配见 [wiki/11-admin-auth.md](wiki/11-admin-auth.md)。
+角色分配见 [wiki/80-admin-auth-login.md](wiki/80-admin-auth-login.md)。
 
 角色与端点权限的对应关系、以及几条不能破的硬约束（类级守卫会连登录一起挡掉、
 2FA 第二步必须带 `temp_token`、用到管理守卫或审计服务的模块必须自己导入 `AdminAuthModule`、
@@ -419,7 +419,7 @@ npm run dev:frontend      # 独立开发服务器（5173），API 代理到本�
 
 鉴权用 `X-API-Key: tt_...`（优先）或 `Authorization: Bearer tt_...`；缺失、无效、禁用或吊销一律 **401/4014**（新码，绝不能 403）。用户 access token（不以 `tt_` 开头）不能当开放 key。开放侧 Song 的 `favorited` 恒为 `false`，**不下发 `audioUrl`**（外部改用 `/open/songs/{id}/link` 换直链），`lyricUrl` 指向 `/api/v1/open/songs/...`；开放 JSON 端点下发 `access-control-allow-origin: *`（不带 credentials）。限流用独立的 `open-api` 桶：每 key 120 次 + 每来源地址 600 次 / 15 分钟，超限 429/4290。
 
-管理端（需管理员会话）：`GET/POST /api/v1/app/admin/open-api-keys`、`PATCH/DELETE /api/v1/app/admin/open-api-keys/{id}`；读用 `READ_ROLES`，写用 `WRITE_ROLES`，创建返回的明文 key 只出现一次（列表只有 `keyPrefix`），写操作记 `open_api_key.*` 审计。详见 [wiki/03-api-contracts.md](wiki/03-api-contracts.md) §17。
+管理端（需管理员会话）：`GET/POST /api/v1/app/admin/open-api-keys`、`PATCH/DELETE /api/v1/app/admin/open-api-keys/{id}`；读用 `READ_ROLES`，写用 `WRITE_ROLES`，创建返回的明文 key 只出现一次（列表只有 `keyPrefix`），写操作记 `open_api_key.*` 审计。详见 [wiki/36-api-open.md](wiki/36-api-open.md)。
 
 ### 传输加密
 
@@ -506,7 +506,7 @@ ON CONFLICT (channel, key) DO UPDATE SET quota = excluded.quota;
 
 Key 也可以从管理后台维护（SQL 直插不再是唯一途径）：`GET/POST /api/v1/app/admin/image-keys`
 与 `DELETE /api/v1/app/admin/image-keys/{id}`。列表只回 `maskedKey` 不回明文，写操作记
-`image_key.*` 审计，详见 [wiki/05-image-generation.md](wiki/05-image-generation.md)。
+`image_key.*` 审计，详见 [wiki/50-feature-image-generation.md](wiki/50-feature-image-generation.md)。
 删除仍被任务引用的 Key 受外键限制，返回 404/4042。
 
 ### 上游接口与音质降级
@@ -660,14 +660,14 @@ Release `server-dist-latest`。三仓快照由项目根的 `tools/sync-repos.ps1
 - `POST /api/v1/desktop/admin/artifacts` 接收原始模块（最多 500 MiB），`POST /desktop/admin/releases` 接收 1–512 项清单并生成差分。
 - `POST /desktop/admin/rollout` 分阶段放量，只有存在完整模块且 100% 放量的版本才能抬高 `min-version`。
 
-完整清单校验、发布命令、差分选择和错误码见 [wiki/10-desktop-release.md](wiki/10-desktop-release.md)。桌面后台不属于
+完整清单校验、发布命令、差分选择和错误码见 [wiki/52-feature-desktop-release.md](wiki/52-feature-desktop-release.md)。桌面后台不属于
 `/app/admin/*`，但用的是同一个 `AdminAuthGuard`（只认管理员会话）。
 
 ### 悟空 IM
 
 `/api/v1/im/*` 只负责会话凭据、联系人、会话/频道同步、撤回和已读；聊天正文不进入 PostgreSQL。
 `IM_ENABLED=false` 时返回 503/5031。会话 Token 只保存 SHA-256，Gateway 地址必须是 `tcp://`，悟空产品 API
-默认只在 `127.0.0.1:5001` 提供。端口、防火墙、同步参数和上线验收见 [wiki/09-wukongim.md](wiki/09-wukongim.md)。
+默认只在 `127.0.0.1:5001` 提供。端口、防火墙、同步参数和上线验收见 [wiki/51-feature-wukongim.md](wiki/51-feature-wukongim.md)。
 
 ### 当前实现审计提示
 

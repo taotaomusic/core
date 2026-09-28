@@ -64,7 +64,7 @@
 param(
     [string]$Version,
 
-    [string]$Repo = 'hdppppppp/tools',
+    [string]$Repo = 'taotaomusic/core',
 
     [string]$Token = $(if ($env:GH_TOKEN) { $env:GH_TOKEN } else { $env:GITHUB_TOKEN }),
 
@@ -153,7 +153,7 @@ function Resolve-Release {
     # 默认取开发构建。它是个 prerelease，所以不能用 /releases/latest
     # （那个只指向正式的最新版，而正式版目前可能还不存在）。
     if ([string]::IsNullOrWhiteSpace($Version)) {
-        $Version = 'dev-latest'
+        $Version = 'crypto-latest'
     }
 
     $apiUrl = "$apiBase/tags/$Version"

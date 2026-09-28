@@ -1,37 +1,97 @@
 # 桃桃音乐后端文档中心
 
-这里是桃桃音乐后端的专题文档目录。每篇文档只负责一个主题，修改功能时应同步更新对应专题，避免把所有内容继续堆回单个 README。
+这里是桃桃音乐后端的专题文档目录。文档按主题拆成约 40 篇短文,每篇只负责一个主题;修改功能时应同步更新对应专题,避免把内容继续堆回单篇长文。
+
+每篇文档头部带「最后更新」日期。发现某篇长期未动又拿不准是否过期时,先按 [00-code-index.md](00-code-index.md) 的 CodeGraph 流程核对源码,再决定改哪篇。
 
 ## 📚 文档导航
 
-### 核心文档（必读）
+### 核心索引
 
 | 文档 | 核心内容 | 适用场景 |
 | --- | --- | --- |
-| [00-code-index.md](00-code-index.md) | CodeGraph 基准、模块地图、路由与表清单（以实测为准）、配置与同步规则 | 先确认源码当前形状、查路由或判断文档应该改在哪里 |
-| [01-architecture.md](01-architecture.md) | 模块结构、请求链路、全局守卫与拦截器、静态资源处理 | 第一次接触项目、准备新增模块、需要理解请求链路时 |
-| [02-development.md](02-development.md) | 本地环境搭建、启动命令、热重载、调试、测试执行 | 搭建本地环境、运行、构建、调试和执行测试时 |
-| [03-api-contracts.md](03-api-contracts.md) | 响应信封、错误码、不能破坏的客户端契约、NDJSON 流 | 新增或修改接口、与客户端联调、处理错误码时 |
-| [04-database.md](04-database.md) | 表结构、PostgreSQL 特性、类型陷阱、并发控制、幂等性 | 修改表结构、Repository、SQL 或排查 PostgreSQL 问题时 |
+| [00-code-index.md](00-code-index.md) | CodeGraph 基准、模块地图、路由清单(以实测为准)、文档同步规则 | 先确认源码当前形状、查路由、判断文档应该改在哪里 |
 
-### 专题文档（按需查阅）
+### 架构(10–13)
 
 | 文档 | 核心内容 | 适用场景 |
 | --- | --- | --- |
-| [05-image-generation.md](05-image-generation.md) | gpt-image-2 任务创建、Key 池管理、额度扣减、状态轮询 | 维护 gpt-image-2、Key 池、额度和图片任务时 |
-| [06-release-deployment.md](06-release-deployment.md) | 后端构建与部署、APK 发布、灰度放量、热修复补丁、桌面发布入口 | 部署后端、发布 Android 或桌面版本、灰度或回滚时 |
-| [07-troubleshooting.md](07-troubleshooting.md) | 启动失败、连接超时、401/502 排查、热更新失效诊断 | 服务启动失败、接口异常或线上行为不符合预期时 |
-| [09-wukongim.md](09-wukongim.md) | 悟空 IM 接入、TCP/WebSocket 连接、凭据签发、频道管理 | 接入悟空 IM、配置端口、排查聊天连接或凭据问题时 |
-| [10-desktop-release.md](10-desktop-release.md) | Windows 模块清单、内容寻址上传、Courgette/bsdiff 差分、灰度与最低版本 | 构建、发布或排查桌面端更新时 |
-| [11-admin-auth.md](11-admin-auth.md) | 管理员账号、数据库会话、TOTP 2FA、角色权限、IP 白名单、审计与 LDAP/SSO | 维护管理后台登录、权限或对接企业目录时 |
+| [10-service-boundary.md](10-service-boundary.md) | 服务负责什么、不负责什么、外部系统边界 | 第一次接触项目、判断某个需求该不该进后端 |
+| [11-architecture-modules.md](11-architecture-modules.md) | 模块依赖图、源码职责、模块边界规则、依赖注入规则 | 准备新增模块、弄不清某个业务该写在哪个模块时 |
+| [12-request-pipeline.md](12-request-pipeline.md) | 请求链路、全局守卫/拦截器/过滤器、响应阶段、原始请求体例外、静态资源 | 排查某个请求为什么被拦、要加全局行为时 |
+| [13-startup-lifecycle.md](13-startup-lifecycle.md) | 启动时序、`onModuleInit` / `onApplicationBootstrap` 的区别、误判点 | 初始化代码该写在哪、启动日志看不懂时 |
 
-歌单接口的字段与同步语义见 [03-api-contracts.md](03-api-contracts.md) 的“云端歌单”章节，
-数据库表与并发顺序约束见 [04-database.md](04-database.md) 的 `playlists` 小节。需要确认“代码里到底有
-哪些路由”时，以 [00-code-index.md](00-code-index.md) 的 CodeGraph 清单为入口。
+### 开发与配置(20–23)
+
+| 文档 | 核心内容 | 适用场景 |
+| --- | --- | --- |
+| [20-development-setup.md](20-development-setup.md) | 环境要求、首次初始化、常用命令、数据库建表、调试技巧 | 搭本地环境、日常跑服务时 |
+| [21-configuration.md](21-configuration.md) | **全部环境变量的唯一完整出处**,含校验行为与坑 | 新增或查配置项、部署前核对 `.env` 时 |
+| [22-contract-verification.md](22-contract-verification.md) | 验证库准备、验证实例启动参数、契约脚本运行与失败定位 | 数据层改动后验证、交付前全绿验收时 |
+| [23-coding-rules.md](23-coding-rules.md) | 新增模块步骤、DTO 校验、错误处理、提交前检查 | 写新接口、写新 Repository、准备提交时 |
+
+### 接口契约(30–37)
+
+| 文档 | 核心内容 | 适用场景 |
+| --- | --- | --- |
+| [30-api-conventions.md](30-api-conventions.md) | 响应信封、业务码总表、鉴权矩阵、限流桶、响应头、兼容性红线 | 改任何接口前必读;与客户端联调时 |
+| [31-api-auth-user.md](31-api-auth-user.md) | 注册、登录、令牌刷新、资料、头像、邮箱绑定/换绑 | 改账号体系或用户资料接口时 |
+| [32-api-search-music.md](32-api-search-music.md) | 搜索联想、热搜、NDJSON 搜索、播放地址、播放代理、歌词 | 改搜索或播放链路、处理音质降级时 |
+| [33-api-playlists.md](33-api-playlists.md) | 云端歌单 CRUD、歌曲快照、排序与完整替换、revision 语义 | 改歌单接口或排查多端同步冲突时 |
+| [34-api-playback.md](34-api-playback.md) | 播放会话上报、最近播放、听歌统计、清空代际、单曲倒带日记 | 改播放记录链路、处理 409 因果冲突时 |
+| [35-api-shares.md](35-api-shares.md) | 歌曲分享短链、公开元数据、试听转发 | 改分享页链路、排查试听 502 时 |
+| [36-api-open.md](36-api-open.md) | 开放搜歌 API、API Key 管理、401/4014 语义 | 第三方接入、维护开放 Key 时 |
+| [37-api-crypto.md](37-api-crypto.md) | 传输加密握手、AEAD 中间件、PSK 配置、失败语义与降级 | 配置或排查加密链路时 |
+
+### 数据库(40–44)
+
+| 文档 | 核心内容 | 适用场景 |
+| --- | --- | --- |
+| [40-database-overview.md](40-database-overview.md) | 连接池、迁移机制、类型规则、Repository 规则、事务边界、表变更流程 | 改任何数据层代码前必读 |
+| [41-database-tables-core.md](41-database-tables-core.md) | users、refresh_tokens、favorites、playlists、playback 四表、song_share | 查用户域/播放域字段语义时 |
+| [42-database-tables-release.md](42-database-tables-release.md) | app_release、app_channel、app_config、app_patch、app_announcement、desktop_* | 查发布/公告/配置/桌面字段语义时 |
+| [43-database-tables-admin.md](43-database-tables-admin.md) | admin_users、admin_sessions、admin_audit_log、open_api_key、music_source_account、api_key、image_generation_task | 查管理域/凭据域字段语义、外键删除语义时 |
+| [44-database-operations.md](44-database-operations.md) | 并发 SQL 范例、Key 运维 SQL、图片额度一致性、索引清单 | 写并发路径、运维额度、评估查询性能时 |
+
+### 功能专题(50–53)
+
+| 文档 | 核心内容 | 适用场景 |
+| --- | --- | --- |
+| [50-feature-image-generation.md](50-feature-image-generation.md) | gpt-image-2 任务、Key 池、额度扣减归还、状态轮询 | 维护图片生成、Key 池、额度时 |
+| [51-feature-wukongim.md](51-feature-wukongim.md) | 悟空 IM 接入、端口基线、凭据签发、频道同步 | 接入或排查聊天链路时 |
+| [52-feature-desktop-release.md](52-feature-desktop-release.md) | Windows 模块清单、内容寻址上传、Courgette/bsdiff 差分、灰度 | 构建、发布或排查桌面更新时 |
+| [53-feature-music-sources.md](53-feature-music-sources.md) | 音源账号(酷我/波点)、凭据管理、KPK 签名、探测与缓存 | 维护音源账号、排查「搜得到放不出」时 |
+
+### 发布与部署(60–62)
+
+| 文档 | 核心内容 | 适用场景 |
+| --- | --- | --- |
+| [60-deploy-backend.md](60-deploy-backend.md) | 后端构建 6 步、部署文件、生产配置检查、systemd、nginx、回滚 | 部署后端、改生产环境时 |
+| [61-release-android.md](61-release-android.md) | APK 构建/登记/下载验证、灰度、最低版本、热更新契约 | 发 Android 版本、排灰度问题时 |
+| [62-ci-cloud-build.md](62-ci-cloud-build.md) | GitHub Actions 云端构建、三仓快照同步、版本号收编 | 同步仓库、用云端产物发版时 |
+
+### 排障(70–74)
+
+| 文档 | 核心内容 | 适用场景 |
+| --- | --- | --- |
+| [70-troubleshooting-startup.md](70-troubleshooting-startup.md) | 排查顺序、启动失败、数据库错误 | 服务起不来、迁移报错时 |
+| [71-troubleshooting-auth.md](71-troubleshooting-auth.md) | 401/403 区分、管理后台登录、2FA、退避、白名单 | 登录相关一切异常时 |
+| [72-troubleshooting-music.md](72-troubleshooting-music.md) | 搜索/播放/歌词、图片任务、分享试听、IM 排障 | 音乐业务或图片任务异常时 |
+| [73-troubleshooting-release.md](73-troubleshooting-release.md) | 热更新失效、桌面更新、契约验证失败 | 客户端收不到更新、验证脚本红了时 |
+| [74-error-codes.md](74-error-codes.md) | HTTP/业务码快速定位表、日志安全红线 | 看到错误码不知道先查什么时 |
+
+### 管理后台(80–83)
+
+| 文档 | 核心内容 | 适用场景 |
+| --- | --- | --- |
+| [80-admin-auth-login.md](80-admin-auth-login.md) | 管理员会话、登录链路、账号退避、TOTP 2FA | 维护登录、2FA、LDAP 回落时 |
+| [81-admin-roles-audit.md](81-admin-roles-audit.md) | 角色矩阵、IP 白名单、操作审计 | 加管理接口、查权限问题时 |
+| [82-admin-routes-data.md](82-admin-routes-data.md) | 管理路由表、限流分桶、三张表模型、启动期硬约束 | 加管理路由、排查启动即失败时 |
+| [83-admin-frontend.md](83-admin-frontend.md) | Vue 管理后台组件、CSP 与安全响应头、契约断言 | 改管理后台前端、调安全头时 |
 
 ## 🔗 上位文档
 
-项目级文档，位于项目根目录：
+项目级文档,位于项目根目录:
 
 | 文档 | 说明 | 关键内容 |
 | --- | --- | --- |
@@ -41,165 +101,51 @@
 | [RELEASE.md](../../RELEASE.md) | 发布与热更新手册 | **版本号铁律、不能破坏的客户端契约、发布流程** |
 | [HOT_UPDATE.md](../../HOT_UPDATE.md) | 热更新设计 | 热更新能力边界、设计动机、自愈机制 |
 
-> **⚠️ 改后端接口前必读 [RELEASE.md](../../RELEASE.md)**：其中列出了 15+ 条不能破坏的客户端契约，违反会导致装机客户端功能静默失效。
+> **⚠️ 改后端接口前必读 [RELEASE.md](../../RELEASE.md)**:其中列出了 15+ 条不能破坏的客户端契约,违反会导致装机客户端功能静默失效。
 
 ## 📋 文档维护规则
 
-1. **语言统一**：文档、代码注释、错误提示统一使用简体中文
-2. **同步更新**：
-   - 新模块：先更新架构和接口专题
-   - 数据层变化：同时更新数据库专题
-   - 客户端可感知的响应变化：必须写入接口契约专题
-   - 新环境变量：同时更新 `.env.example`、后端 README 和开发专题
-3. **安全第一**：不在文档中写入真实密码、API Key、数据库连接串或签名信息
-4. **示例规范**：示例密钥只能使用明显的占位文本，例如 `替换为真实Key`
-5. **可执行性**：文档中的命令应能从标注的工作目录直接执行
-6. **加密同步**：加密层源码在 monorepo 的 `crypto-src/`（Rust，core/jni/node/wasm 四 crate），由 `tools/sync-repos.ps1` 快照推到 GitHub `hdppppppp/tools` 仓库交叉编译，产物发 Release 后经 `tools/fetch-crypto.ps1` 落回本仓库 `crypto/dist/`。改协议格式或密钥规则去 `crypto-src/` 改，同步更新它的 `README.md` 与 `SECURITY.md`；`crypto/dist/` 只放产物，不放文档、不手改
-7. **索引同步**：新增或删除路由、表、环境变量或模块后先刷新 CodeGraph，再更新 `00-code-index.md` 和对应专题；不要凭旧 README 猜测路由。
-
-## 🚀 快速开始
-
-### 本地开发（首次启动）
-
-```powershell
-# 1. 创建数据库（只需一次）
-psql -U postgres -c "CREATE DATABASE music"
-
-# 2. 安装依赖
-cd server
-npm install
-
-# 3. 配置环境变量
-copy .env.example .env
-# 编辑 .env，至少填写以下必需项：
-#   DATABASE_URL=postgres://postgres:密码@localhost:5432/music
-#   AUTH_SECRET=至少32位随机值（必填，任何环境都不得留空或使用默认值）
-#
-# 管理后台 /admin/ 用的是数据库管理员账号：
-# 设了 ADMIN_INITIAL_PASSWORD（至少12位）就用它建 admin 账号，否则启动时随机生成一个
-# 并打印在日志里（只打印一次）。首次登录后会被强制改密。
-
-# 4. 启动开发服务器（自动建表 + 热重载）
-npm run dev
-```
-
-### 常用命令
-
-```powershell
-# 开发模式（ts-node + --watch）
-npm run dev
-
-# 生产构建（tsc + Terser + vite build）
-npm run build
-
-# 启动生产服务（需先构建）
-cd dist && npm start
-# 或
-node dist/main.js
-
-# 只构建管理后台
-npm run build:frontend
-
-# 管理后台独立开发服务器（Vite，端口 5173）
-npm run dev:frontend
-
-# 契约验证（以脚本实际输出为准，须全绿；需先 npm run build:frontend 与 build:web-player，并调大 ADMIN_RATE_LIMIT）
-node tools/verify-contract.mjs http://127.0.0.1:4720
-
-# 重置验证数据库
-node tools/reset-db.mjs postgres://postgres:密码@localhost:5432/music_verify
-```
-
-### 健康检查
-
-```powershell
-# 服务是否正常
-curl.exe http://127.0.0.1:4500/health
-# 预期响应：{"code":0,"message":"success","data":{"status":"up"}}
-# 注意 /health 同样经过全局信封拦截器，status 的值是 up 而不是 ok。
-
-# 管理后台
-# 浏览器打开：http://localhost:4500/admin/
-```
-
-### 接口测试
-
-接口统一前缀是 `/api/v1`，只有健康检查保留在 `/health`。
-
-```powershell
-# 公开接口示例（无需令牌）
-curl.exe "http://127.0.0.1:4500/api/v1/app/bootstrap?versionCode=1&sdk=34&deviceId=test-device-001&channel=release"
-
-# 需要登录的接口（带 Authorization）
-curl.exe "http://127.0.0.1:4500/api/v1/auth/me" -H "Authorization: Bearer <访问令牌>"
-
-# 管理接口（需要管理员会话；静态 X-Admin-Token 通道已移除）
-curl.exe "http://127.0.0.1:4500/api/v1/app/admin/releases?channel=release" -H "Authorization: Bearer <管理员会话令牌>"
-
-# 管理后台登录（返回 Bearer 会话令牌，之后用 Authorization: Bearer <token>）
-curl.exe -X POST "http://127.0.0.1:4500/api/v1/admin/auth/login" `
-  -H "Content-Type: application/json" `
-  -d '{\"username\":\"admin\",\"password\":\"<管理员口令>\"}'
-
-# 桌面端更新检查（公开）
-curl.exe "http://127.0.0.1:4500/api/v1/desktop/bootstrap?channel=release&architecture=windows-x64&versionCode=1&deviceId=doc-check"
-```
-
-管理后台的账号、2FA、角色和 LDAP 细节见 [11-admin-auth.md](11-admin-auth.md)。
+1. **语言统一**:文档、代码注释、错误提示统一使用简体中文。
+2. **一篇一主题**:新内容找不到归属时新增一篇编号文档并登记到本页,不要把多个主题塞进同一篇。
+3. **同步更新**:
+   - 新模块:先更新 [00-code-index.md](00-code-index.md) 和 [11-architecture-modules.md](11-architecture-modules.md);
+   - 数据层变化:同时更新数据库专题(40–44);
+   - 客户端可感知的响应变化:必须写入接口契约专题(30–37);
+   - 新环境变量:同时更新 `.env.example`、[21-configuration.md](21-configuration.md) 和后端 README;
+   - 新审计 action:同步 [81-admin-roles-audit.md](81-admin-roles-audit.md) 与前端 `AuditLogViewer.vue` 的 `ACTION_GROUPS`。
+4. **安全第一**:不在文档中写入真实密码、API Key、数据库连接串或签名信息;示例密钥只能使用明显的占位文本(例如 `替换为真实Key`)。
+5. **可执行性**:文档中的命令应能从标注的工作目录直接执行。
+6. **加密同步**:加密层源码在 monorepo 的 `crypto-src/`(Rust,core/jni/node/wasm 四 crate),由 `tools/sync-repos.ps1` 快照推到 GitHub `hdppppppp/tools` 仓库交叉编译,产物发 Release 后经 `tools/fetch-crypto.ps1` 落回本仓库 `crypto/dist/`。改协议格式或密钥规则去 `crypto-src/` 改,同步更新它的 `README.md` 与 `SECURITY.md`;`crypto/dist/` 只放产物,不放文档、不手改。
+7. **索引同步**:新增或删除路由、表、环境变量或模块后先刷新 CodeGraph,再更新 [00-code-index.md](00-code-index.md) 和对应专题;不要凭旧 README 猜测路由。
+8. **时效标注**:每篇文档头部保留「最后更新」日期;修改当天更新它。
 
 ## 📖 推荐阅读路径
 
-### 新后端开发者（首次接触项目）
+### 新后端开发者(首次接触项目)
 
-1. **[架构文档](01-architecture.md)**
-   先读 [代码索引](00-code-index.md) 确认模块和路由，再理解请求链路、全局守卫与拦截器的执行顺序。
+1. [10-service-boundary.md](10-service-boundary.md) → [11-architecture-modules.md](11-architecture-modules.md):先知道服务管什么、模块怎么分。
+2. [12-request-pipeline.md](12-request-pipeline.md) → [13-startup-lifecycle.md](13-startup-lifecycle.md):理解一个请求从进入到返回经过什么,以及启动的三个时间点。
+3. [20-development-setup.md](20-development-setup.md) → [21-configuration.md](21-configuration.md):把本地服务跑起来。
+4. [30-api-conventions.md](30-api-conventions.md) → [40-database-overview.md](40-database-overview.md):写接口与写 Repository 前的红线。
 
-2. **[开发环境](02-development.md)**
-   启动本地 PostgreSQL、配置 `.env`、运行开发服务器，跑通健康检查和基础接口。
+### 维护图片生成
 
-3. **[接口契约](03-api-contracts.md)**
-   了解响应信封格式、错误码规则、NDJSON 流式响应、不能破坏的客户端契约。这份文档决定了你改接口时哪些是红线。
-
-4. **[数据库](04-database.md)**
-   开始写 Repository 前必读：SQL 别名加引号、bigint vs integer、`enabled` 是 0/1 不是 boolean、并发控制与幂等性。
-
-### 维护图片生成功能
-
-1. **[图片生成专题](05-image-generation.md)**
-   理解 Key 池管理、任务状态轮询、额度扣减与归还、上游错误映射。
-
-2. **[数据库](04-database.md)** 中的 `api_key` 和 `image_generation_task` 表结构
-   掌握原子扣额 SQL、Key 选择逻辑、任务状态流转。
-
-3. **[故障排查](07-troubleshooting.md)** 中的 404/502/503 分类
-   按错误类型快速定位是上游问题、Key 问题还是网络问题。
+1. [50-feature-image-generation.md](50-feature-image-generation.md):Key 池、扣额归还、状态机全流程。
+2. [43-database-tables-admin.md](43-database-tables-admin.md) 的 `api_key` / `image_generation_task` 两节。
+3. [72-troubleshooting-music.md](72-troubleshooting-music.md) 的图片任务排障、[74-error-codes.md](74-error-codes.md) 速查。
 
 ### 发布与部署
 
-1. **[发布与部署](06-release-deployment.md)**
-   后端构建、APK 发布、灰度放量、热修复补丁的完整流程；桌面端细节见 [10-desktop-release.md](10-desktop-release.md)。
-
-2. **[项目根目录 RELEASE.md](../../RELEASE.md)**
-   版本号铁律、客户端契约、服务端契约、每个坑的真实案例。**推版本前必读。**
-
-3. **[故障排查](07-troubleshooting.md)** 中的热更新失效诊断
-   `bootstrap` 异常、APK 下载失败、补丁加载失败的排查步骤。
+1. [60-deploy-backend.md](60-deploy-backend.md) → [61-release-android.md](61-release-android.md)。
+2. [项目根目录 RELEASE.md](../../RELEASE.md):版本号铁律,**推版本前必读**。
+3. [73-troubleshooting-release.md](73-troubleshooting-release.md):热更新失效诊断。
 
 ### 维护管理后台
 
-1. **[管理后台认证](11-admin-auth.md)**
-   管理员账号与会话、TOTP 2FA 的两步流程、角色权限、IP 白名单、审计日志和 LDAP/SSO 回落规则。
-
-2. **[数据库](04-database.md)** 中的 `admin_users`、`admin_sessions`、`admin_audit_log`
-   三张表的字段语义，以及审计外键为什么必须是 `ON DELETE SET NULL`。
-
-3. **[故障排查](07-troubleshooting.md)** 中的管理后台登录排查
-   登录恒 401、2FA 验证过期、强制改密 403/4031、账号退避 429/4291 的定位路径。
+1. [80-admin-auth-login.md](80-admin-auth-login.md) → [81-admin-roles-audit.md](81-admin-roles-audit.md) → [82-admin-routes-data.md](82-admin-routes-data.md)。
+2. [43-database-tables-admin.md](43-database-tables-admin.md):三张管理表的字段语义与外键设计。
+3. [71-troubleshooting-auth.md](71-troubleshooting-auth.md):登录恒 401、强制改密 403/4031、退避 429/4291 的定位路径。
 
 ### 排查线上问题
 
-直接跳到 **[故障排查文档](07-troubleshooting.md)**，按症状分类查找：
-- 启动失败 → 数据库连接、环境变量、端口占用
-- 接口 401/502 → 令牌失效、上游问题、内部异常映射
-- 热更新失效 → `bootstrap` 契约、灰度分桶、APK 校验
-- 搜索/播放异常 → 上游适配、音质降级、NDJSON 流
+直接跳 [70-troubleshooting-startup.md](70-troubleshooting-startup.md),按症状走 70→74 的子篇;不确定分类时先看 [74-error-codes.md](74-error-codes.md) 的状态码速查表。

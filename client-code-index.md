@@ -171,7 +171,7 @@ CodeGraph 只提供结构索引，不替代 Kotlin 编译器、Gradle、Android 
 | 新增/删除客户端模块或 source set | 本页模块地图、`README.md` 项目结构、`MUSIC_CROSS_PLATFORM.md` |
 | 修改 `Song`、`Lyric`、`AudioQuality` 或歌单/播放数据契约 | 本页关键符号、`MUSIC_CROSS_PLATFORM.md`、`RELEASE.md` 中对应客户端契约 |
 | 修改 Android 导航、页面状态或返回键 | 本页 Android 组合根说明、`AGENTS.md` 的三处导航检查清单、相关页面文档 |
-| 修改更新、热修复、补丁键或桌面模块清单 | 本页更新/热修复入口、`RELEASE.md`、`HOT_UPDATE.md`、`server/wiki/10-desktop-release.md` |
-| 修改后端接口、认证、NDJSON 或错误码 | 本页数据流、`MUSIC_CROSS_PLATFORM.md`、`server/wiki/00-code-index.md`、`server/wiki/03-api-contracts.md` |
+| 修改更新、热修复、补丁键或桌面模块清单 | 本页更新/热修复入口、`RELEASE.md`、`HOT_UPDATE.md`、`server/wiki/52-feature-desktop-release.md` |
+| 修改后端接口、认证、NDJSON 或错误码 | 本页数据流、`MUSIC_CROSS_PLATFORM.md`、`server/wiki/00-code-index.md`、`server/wiki/30-api-conventions.md` |
 
 当本页与源码不一致时，以源码、编译器和最新 CodeGraph 状态为准，并在同一变更中刷新本页及对应专题文档。后端索引和契约验证仍按 [server/wiki/00-code-index.md](server/wiki/00-code-index.md) 的独立流程执行。
