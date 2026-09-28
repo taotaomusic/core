@@ -18,8 +18,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # 传输加密：直接用同仓 Rust core，不走 JNI/.dll。
 taotao-crypto-core = { path = "../../crypto-src/core" }
-# 轻量阻塞 HTTP（握手/取 PSK 用），比 reqwest 依赖少、产物小。
-ureq = { version = "2", features = ["tls"] }
+# 轻量阻塞 HTTP（握手/取 PSK 用）；json feature 提供 send_json。
+ureq = { version = "2", features = ["tls", "json"] }
 base64 = "0.22"
 
 [target.'cfg(windows)'.dependencies]

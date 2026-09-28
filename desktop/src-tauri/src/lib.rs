@@ -87,7 +87,7 @@ fn crypto_handshake_demo(endpoint: String, token: String) -> Result<String, Stri
     let resp = ureq::post(&format!("{endpoint}/api/v1/crypto/handshake"))
         .set("Content-Type", "application/json")
         .set("Accept", "application/json")
-        .send_json(serde_json::to_value(&body).map_err(|e| e.to_string())?)
+        .send_json(&body)
         .map_err(|e| format!("握手请求失败：{e}"))?;
     let rbody = resp.into_string().map_err(|e| e.to_string())?;
     let data = envelope_data(&rbody)?;
