@@ -130,3 +130,10 @@ body {
 .player .cover { width: 52px; height: 52px; border-radius: 8px; object-fit: cover; background: #eee; }
 .player .meta { flex: 1; min-width: 0; }
 .player audio { height: 36px; }
+
+.player .pbtn {
+  border: 0; background: #f3f4f6; color: var(--text); width: 40px; height: 40px;
+  border-radius: 50%; cursor: pointer; font-size: 16px; flex: none;
+}
+.player .pbtn:hover:not(:disabled) { background: #fdeceb; color: var(--coral); }
+.player .pbtn:disabled { opacity: .4; cursor: not-allowed; }
