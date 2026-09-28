@@ -28,6 +28,7 @@ winreg = "0.52"
 
 [profile.release]
 opt-level = "s"
-lto = true
+# thin LTO：比 fat 快不少、体积几乎一样小，CI 编译更快。
+lto = "thin"
 codegen-units = 1
 strip = true
