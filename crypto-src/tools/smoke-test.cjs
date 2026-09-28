@@ -12,7 +12,7 @@
 // 避免「CI 测的和本地跑的不是一套」。
 //
 // 用法：
-//   node tools/smoke-test.cjs <taotao_crypto.node 路径> [--expect-real-psk]
+//   node tools/smoke-test.cjs <taotao_crypto.node 路径>
 //
 // 退出码：0 通过，1 断言失败，2 用法错误。
 
@@ -23,10 +23,9 @@ const assert = require('node:assert/strict');
 
 const args = process.argv.slice(2);
 const modulePath = args.find((a) => !a.startsWith('--'));
-const expectRealPsk = args.includes('--expect-real-psk');
 
 if (!modulePath) {
-  console.error('用法：node tools/smoke-test.cjs <taotao_crypto.node 路径> [--expect-real-psk]');
+  console.error('用法：node tools/smoke-test.cjs <taotao_crypto.node 路径>');
   process.exit(2);
 }
 
@@ -70,19 +69,8 @@ check('协议版本为 2', () => {
   assert.equal(m.protocolVersion(), 2);
 });
 
-check('hasRealPsk() 返回布尔值', () => {
-  assert.equal(typeof m.hasRealPsk(), 'boolean');
-});
+// 注：内嵌 PSK 机制已废弃（改为后端动态下发），产物不再导出 hasRealPsk。
 
-if (expectRealPsk) {
-  check('构建期已注入真实 PSK', () => {
-    assert.equal(
-      m.hasRealPsk(),
-      true,
-      '产物不含真实 PSK。构建时 TAOTAO_CRYPTO_PSK 为空或未传到 cargo。',
-    );
-  });
-}
 
 // ---------------------------------------------------------------------------
 // 2. 握手
@@ -225,6 +213,5 @@ for (const c of checks) {
 }
 console.log('');
 console.log(`冒烟测试：${checks.length - failed.length}/${checks.length} 项通过`);
-console.log(`构建期 PSK 状态：hasRealPsk() = ${m.hasRealPsk()}`);
 
 process.exit(failed.length === 0 ? 0 : 1);
