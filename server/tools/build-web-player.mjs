@@ -9,6 +9,14 @@ const projectDirectory = resolve(serverDirectory, "..");
 const gradleWrapper = process.platform === "win32" ? "gradlew.bat" : "./gradlew";
 const gradleArguments = [":webApp:wasmJsBrowserDistribution", "--no-daemon"];
 
+// 显式跳过：CI 里后端 job 不自己构建 wasm 播放器（由客户端 web job 构建并发 Release，
+// 后端拉取即可）。合一到 core 单仓后上级目录有 Gradle 工程，下面的「缺工程即跳过」
+// 不再生效，所以用 SKIP_WEB_PLAYER=1 明确跳过，避免后端构建里误触发一次 Gradle wasm 构建。
+if (process.env.SKIP_WEB_PLAYER === "1") {
+  console.warn("SKIP_WEB_PLAYER=1，跳过 Kotlin/Wasm 分享播放器构建（由客户端 web 构建提供）。");
+  process.exit(0);
+}
+
 // 仓库拆分后，server 可能作为独立仓库存在（GitHub hdppppppp/music-server），
 // 上级目录不再有 Gradle 工程，Kotlin/Wasm 分享播放器无从构建。
 // 检测到上游工程（settings.gradle.kts 与 wrapper）缺失时跳过这一步，

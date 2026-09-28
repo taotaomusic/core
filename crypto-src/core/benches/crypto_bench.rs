@@ -26,9 +26,13 @@ use taotao_crypto_core::frame::{open_frame, seal_frame};
 use taotao_crypto_core::kdf::{random_array, KEY_LEN};
 use taotao_crypto_core::protocol::aad_context;
 use taotao_crypto_core::{
-    accept_client_hello, build_psk_or_placeholder, ClientHandshake, HelloReplayCache, OsRandom,
-    PskStore,
+    accept_client_hello, ClientHandshake, HelloReplayCache, OsRandom, Psk, PskStore,
 };
+
+/// 基准用固定 PSK，替代原先构建期注入的内嵌密钥。
+fn bench_psk() -> Psk {
+    Psk::from_hex("bench", &"11".repeat(32)).unwrap()
+}
 
 // ---------------------------------------------------------------------------
 // 分配计数器
@@ -203,7 +207,7 @@ fn bench_open() {
 fn bench_session_roundtrip() {
     print_header("会话层往返（Session::seal + Session::open，含防重放滑窗）");
 
-    let (psk, _) = build_psk_or_placeholder("bench").unwrap();
+    let psk = bench_psk();
     let mut rng = OsRandom;
     let (handshake, hello) =
         ClientHandshake::start(psk.clone(), b"bench-device", NOW, &mut rng).unwrap();
@@ -223,13 +227,8 @@ fn bench_session_roundtrip() {
     let mut n = 0usize;
     let m = measure(20_000, || {
         if n % REBUILD_EVERY == 0 {
-            let (h, hello) = ClientHandshake::start(
-                build_psk_or_placeholder("bench").unwrap().0,
-                b"bench-device",
-                NOW,
-                &mut rng,
-            )
-            .unwrap();
+            let (h, hello) =
+                ClientHandshake::start(bench_psk(), b"bench-device", NOW, &mut rng).unwrap();
             let mut cache = HelloReplayCache::new();
             let acc =
                 accept_client_hello(&store, &hello, b"bench-device", NOW, &mut cache, &mut rng)
@@ -248,19 +247,14 @@ fn bench_session_roundtrip() {
 fn bench_handshake() {
     print_header("握手（每次新建会话付一次）");
 
-    let (psk, _) = build_psk_or_placeholder("bench").unwrap();
+    let psk = bench_psk();
     let mut store = PskStore::new();
     store.insert(psk);
     let mut rng = OsRandom;
 
     let m = measure(5_000, || {
-        let (h, hello) = ClientHandshake::start(
-            build_psk_or_placeholder("bench").unwrap().0,
-            b"bench-device",
-            NOW,
-            &mut rng,
-        )
-        .unwrap();
+        let (h, hello) =
+            ClientHandshake::start(bench_psk(), b"bench-device", NOW, &mut rng).unwrap();
         let mut cache = HelloReplayCache::new();
         let acc = accept_client_hello(&store, &hello, b"bench-device", NOW, &mut cache, &mut rng)
             .unwrap();

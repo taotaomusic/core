@@ -232,16 +232,6 @@ pub fn protocol_version() -> u8 {
     taotao_crypto_core::PROTOCOL_VERSION
 }
 
-/// 当前 wasm 模块是否内嵌了真实 PSK。
-///
-/// Web 端正常情况下**不应该**是 true —— 分享页是公开的，内嵌 PSK 等于公开它。
-#[wasm_bindgen]
-pub fn has_real_psk() -> bool {
-    taotao_crypto_core::build_psk_or_placeholder("__probe__")
-        .map(|(_, is_real)| is_real)
-        .unwrap_or(false)
-}
-
 /// 构造 AAD 上下文。
 #[wasm_bindgen]
 pub fn aad_context(method: &str, path_and_query: &str) -> Vec<u8> {

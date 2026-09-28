@@ -152,13 +152,6 @@ impl Server {
         self.inner.put_psk(&psk_id, &psk_hex).map_err(to_napi)
     }
 
-    /// 用构建期注入的内嵌 PSK 登记一条 PSK（与客户端 clientNewEmbedded 对称）。
-    /// 服务端只需给 psk_id，无需再从环境变量喂十六进制；密钥来自 `.node` 本身。
-    #[napi]
-    pub fn put_embedded_psk(&mut self, psk_id: String) -> Result<()> {
-        self.inner.put_embedded_psk(&psk_id).map_err(to_napi)
-    }
-
     /// 移除一条 PSK。
     #[napi]
     pub fn remove_psk(&mut self, psk_id: String) -> bool {
@@ -263,17 +256,6 @@ impl Server {
 #[napi]
 pub fn protocol_version() -> u32 {
     taotao_crypto_core::PROTOCOL_VERSION as u32
-}
-
-/// 当前二进制里是否注入了真实 PSK。
-///
-/// 返回 false 说明构建时没设 `TAOTAO_CRYPTO_PSK`，用的是源码里的占位密钥。
-/// 生产环境必须在启动时检查这个值并拒绝启动。
-#[napi]
-pub fn has_real_psk() -> bool {
-    taotao_crypto_core::build_psk_or_placeholder("__probe__")
-        .map(|(_, is_real)| is_real)
-        .unwrap_or(false)
 }
 
 /// 构造 AAD 上下文。

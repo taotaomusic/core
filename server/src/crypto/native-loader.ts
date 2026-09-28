@@ -24,8 +24,6 @@ export interface NativeServer {
     hasSession(sessionIdHex: string, nowMs: number): boolean;
     /** 加入 / 更新一条 PSK（登记原始 PSK，设备绑定在握手时按 deviceId 现算）。 */
     putPsk(pskId: string, pskHex: string): void;
-    /** 用产物内嵌的 PSK 登记（与客户端 clientNewEmbedded 对称，无需传 hex）。 */
-    putEmbeddedPsk(pskId: string): void;
     /** 清理过期会话，返回清理数量。 */
     sweepExpired(nowMs: number): number;
     /** 当前会话数量。 */
@@ -43,8 +41,6 @@ export interface NativeCrypto {
     parseHeader(value: string): [string, string] | null;
     /** 协议版本。设备绑定版本要求 >= 2。 */
     protocolVersion(): number;
-    /** 产物是否内嵌了真实 PSK（占位密钥返回 false）。 */
-    hasRealPsk(): boolean;
 }
 
 /**

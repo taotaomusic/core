@@ -66,25 +66,6 @@ impl ClientEngine {
         })
     }
 
-    /// 用**构建期注入的内嵌 PSK** 创建客户端，密钥不经宿主语言传递。
-    ///
-    /// 客户端场景（Android / Windows）与服务端不同：PSK 已经在构建时编进
-    /// `.so` / `.dll`（见 [`crate::build_psk_or_placeholder`]），不该再让 APK
-    /// 自带一份十六进制密钥串 —— 那等于把密钥明文放进客户端，抵消了「编进产物 +
-    /// 混淆」的加固。这个入口直接取内嵌 PSK，Kotlin 侧只需传 `psk_id` 与设备号。
-    ///
-    /// 内嵌的是占位密钥时（开发构建，`build_psk_or_placeholder` 返回 `false`）
-    /// 依然能构造 —— 是否启用加密由调用方查 `has_real_psk()` 决定，不在这里拦。
-    pub fn from_embedded(psk_id: &str, device_id: &str) -> Result<Self> {
-        let (psk, _) = crate::build_psk_or_placeholder(psk_id)?;
-        Ok(Self {
-            psk,
-            device_id: device_id.as_bytes().to_vec(),
-            pending: None,
-            session: None,
-        })
-    }
-
     /// 发起握手，返回要发给服务端的 ClientHello 字节。
     ///
     /// 会丢弃上一个未完成的握手状态 —— 允许调用方直接重试，不必先清理。
@@ -218,18 +199,6 @@ impl ServerEngine {
     /// 加入 / 更新一条 PSK。轮换期可以同时持有多条。
     pub fn put_psk(&mut self, psk_id: &str, psk_hex: &str) -> Result<()> {
         self.psks.insert(Psk::from_hex(psk_id, psk_hex)?);
-        Ok(())
-    }
-
-    /// 用**构建期注入的内嵌 PSK** 登记一条 PSK，密钥不经宿主语言传递。
-    ///
-    /// 与 [`ClientEngine::from_embedded`] 对称：服务端与客户端用同一次构建注入的
-    /// 同一把钥（编进 `.node` / `.so`），因此服务端只需给出 `psk_id`，无需再从
-    /// 环境变量喂一遍十六进制。内嵌的是占位密钥时（开发构建）也会登记 —— 是否
-    /// 启用由调用方查 `has_real_psk()` 决定。
-    pub fn put_embedded_psk(&mut self, psk_id: &str) -> Result<()> {
-        let (psk, _) = crate::build_psk_or_placeholder(psk_id)?;
-        self.psks.insert(psk);
         Ok(())
     }
 
@@ -673,53 +642,5 @@ mod tests {
         assert!(ClientEngine::new("prod", "not-hex", DEVICE).is_err());
         assert!(ClientEngine::new("prod", "0011", DEVICE).is_err());
         assert!(ClientEngine::new("", PSK_HEX, DEVICE).is_err());
-    }
-
-    #[test]
-    fn from_embedded_builds_and_handshakes() {
-        // 测试构建注入的是占位 PSK，from_embedded 依然应能构造并发起握手 ——
-        // 密钥来自内嵌 blob，Kotlin 侧不再传 hex。
-        let mut client = ClientEngine::from_embedded("prod-v1", DEVICE).unwrap();
-        let hello = client.handshake(NOW).unwrap();
-        assert!(!hello.is_empty(), "ClientHello 不应为空");
-    }
-
-    #[test]
-    fn from_embedded_roundtrips_against_matching_server() {
-        // 服务端登记与内嵌产物相同的占位 PSK（同 id 同种子派生），握手与收发应通。
-        let (placeholder, is_real) = crate::build_psk_or_placeholder("prod-v1").unwrap();
-        assert!(!is_real, "测试构建必然是占位密钥");
-        let mut client = ClientEngine::from_embedded("prod-v1", DEVICE).unwrap();
-        let mut server = ServerEngine::new();
-        server
-            .put_psk("prod-v1", &hex::encode(placeholder.key()))
-            .unwrap();
-        connect(&mut client, &mut server, NOW);
-        assert!(client.has_session(NOW));
-
-        let aad = aad("GET", "/api/v1/favorites");
-        let frame = client.seal(&aad, b"", NOW).unwrap();
-        let opened = server
-            .seal_open_helper(client.session_id_hex().as_str(), &aad, &frame, NOW)
-            .unwrap();
-        assert!(opened.is_empty());
-    }
-
-    #[test]
-    fn embedded_psk_client_and_server_interoperate() {
-        // 两端都用内嵌 PSK（同一次构建注入的同一把钥）：客户端 from_embedded、
-        // 服务端 put_embedded_psk，无需任何十六进制传递即可握手与收发。
-        let mut client = ClientEngine::from_embedded("prod-v1", DEVICE).unwrap();
-        let mut server = ServerEngine::new();
-        server.put_embedded_psk("prod-v1").unwrap();
-        connect(&mut client, &mut server, NOW);
-        assert!(client.has_session(NOW));
-
-        let aad = aad("GET", "/api/v1/favorites");
-        let frame = client.seal(&aad, b"hi", NOW).unwrap();
-        let opened = server
-            .seal_open_helper(client.session_id_hex().as_str(), &aad, &frame, NOW)
-            .unwrap();
-        assert_eq!(opened, b"hi");
     }
 }

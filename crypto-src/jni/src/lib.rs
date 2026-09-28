@@ -185,21 +185,6 @@ pub extern "system" fn Java_com_taotao_music_crypto_NativeCrypto_nativeVersion<'
     taotao_crypto_core::PROTOCOL_VERSION as jint
 }
 
-/// 当前动态库里是否注入了真实 PSK。
-///
-/// 返回 false 说明构建时没设 `TAOTAO_CRYPTO_PSK`，用的是占位密钥。
-/// 发布包必须据此拒绝启用加密 —— 占位密钥写在源码里，所有人都能算出来。
-#[no_mangle]
-pub extern "system" fn Java_com_taotao_music_crypto_NativeCrypto_nativeHasRealPsk<'local>(
-    mut env: EnvUnowned<'local>,
-    _class: JClass<'local>,
-) -> jboolean {
-    run(&mut env, JNI_FALSE, |_env| {
-        let (_, is_real) = taotao_crypto_core::build_psk_or_placeholder("__probe__")?;
-        Ok(if is_real { JNI_TRUE } else { JNI_FALSE })
-    })
-}
-
 /// 构造 AAD 上下文。各语言侧必须走这个函数，不要自己拼字符串。
 #[no_mangle]
 pub extern "system" fn Java_com_taotao_music_crypto_NativeCrypto_nativeAad<'local>(
@@ -235,27 +220,6 @@ pub extern "system" fn Java_com_taotao_music_crypto_NativeCrypto_clientNew<'loca
     run(&mut env, 0, |_env| {
         Ok(insert(Entry::Client(ClientEngine::new(
             &psk_id, &psk_hex, &device_id,
-        )?)))
-    })
-}
-
-/// 用**内嵌 PSK** 创建客户端引擎。`deviceId` 是本机稳定标识（Android ANDROID_ID），
-/// 折进握手密钥；无设备号传空串即不绑定。
-///
-/// 与 [`clientNew`](Java_com_taotao_music_crypto_NativeCrypto_clientNew) 的区别：
-/// 密钥不由 Kotlin 传入，直接取构建期编进 `.so` 的那份，避免 APK 自带明文 PSK。
-#[no_mangle]
-pub extern "system" fn Java_com_taotao_music_crypto_NativeCrypto_clientNewEmbedded<'local>(
-    mut env: EnvUnowned<'local>,
-    _class: JClass<'local>,
-    psk_id: JString<'local>,
-    device_id: JString<'local>,
-) -> jlong {
-    let psk_id = read_string(&psk_id);
-    let device_id = read_string(&device_id);
-    run(&mut env, 0, |_env| {
-        Ok(insert(Entry::Client(ClientEngine::from_embedded(
-            &psk_id, &device_id,
         )?)))
     })
 }

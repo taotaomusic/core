@@ -35,7 +35,6 @@ NEEDLES=(
   "握手认证失败"
   "时间戳超出允许窗口"
   "会话序号空间耗尽"
-  "taotao-crypto-v1/psk/"
 )
 
 status=0

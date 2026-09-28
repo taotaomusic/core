@@ -185,6 +185,10 @@ jobs:
       - name: 安装依赖
         run: npm ci
       - name: 构建
+        env:
+          # 后端不自建 wasm 播放器（core 单仓里上级有 Gradle 工程会误触发）；
+          # 分享播放器由 client-web job 构建并发 Release，下一步拉取。
+          SKIP_WEB_PLAYER: "1"
         run: npm run build
       - name: 拉取分享播放器（暂用 music 仓库 share-player-latest）
         run: |

@@ -69,7 +69,6 @@ pub mod kdf;
 pub mod obf;
 pub mod protocol;
 pub mod psk;
-pub mod psk_blob;
 pub mod session;
 
 pub use engine::{aad, ClientEngine, ServerEngine};
@@ -79,34 +78,11 @@ pub use handshake::{
     accept_client_hello, peek_psk_id, AcceptedHandshake, ClientHandshake, HelloReplayCache,
 };
 pub use kdf::{random_array, OsRandom, RandomSource};
-pub use psk::{derive_psk_from_seed, Psk, PskStore};
+pub use psk::{Psk, PskStore};
 pub use session::Session;
 
 /// 协议版本，绑定层用它做能力声明。
 pub const PROTOCOL_VERSION: u8 = protocol::PROTOCOL_VERSION;
-
-/// 构建期注入的 PSK 分片 blob。
-///
-/// 由 `build.rs` 从环境变量 `TAOTAO_CRYPTO_PSK` 生成。未注入时是空数组，
-/// [`build_psk_or_placeholder`] 会退回到占位密钥并返回 `false`。
-mod build_psk {
-    include!(concat!(env!("OUT_DIR"), "/psk_blob.rs"));
-}
-
-/// 取构建期注入的 PSK。
-///
-/// 返回 `(psk, is_real)`。`is_real == false` 表示当前二进制里**没有**真实密钥
-/// （开发构建，或发布时忘了设环境变量），调用方必须据此决定是打警告还是直接
-/// 拒绝启动 —— 静默用一个所有人相同的占位密钥上线，比不加密还危险。
-pub fn build_psk_or_placeholder(id: &str) -> Result<(Psk, bool)> {
-    if build_psk::BLOB.is_empty() {
-        // 占位密钥派生自固定种子，仅用于本地开发与单元测试。
-        // 它写在源码里，所以**任何人都能算出它** —— 绝不能进生产包。
-        let seed = [0u8; kdf::PSK_LEN];
-        return Ok((derive_psk_from_seed(&seed, id)?, false));
-    }
-    Ok((Psk::from_build_blob(id, build_psk::BLOB)?, true))
-}
 
 #[cfg(test)]
 mod tests {
@@ -119,24 +95,9 @@ mod tests {
     }
 
     #[test]
-    fn placeholder_psk_is_flagged() {
-        // 测试构建不会注入真实 PSK，所以这里必然拿到占位密钥。
-        let (psk, is_real) = build_psk_or_placeholder("test").unwrap();
-        assert!(!is_real, "未注入真实 PSK 时必须如实报告");
-        assert_eq!(psk.id(), "test");
-    }
-
-    #[test]
-    fn placeholder_psk_is_deterministic() {
-        let (a, _) = build_psk_or_placeholder("test").unwrap();
-        let (b, _) = build_psk_or_placeholder("test").unwrap();
-        assert_eq!(a.key(), b.key());
-    }
-
-    #[test]
     fn end_to_end_through_public_api() {
         // 走一遍完整链路，确认公开 API 的签名组合是可用的。
-        let (psk, _) = build_psk_or_placeholder("test").unwrap();
+        let psk = Psk::from_hex("test", &"11".repeat(32)).unwrap();
         let now = 1_700_000_000_000u64;
         let mut rng = OsRandom;
 

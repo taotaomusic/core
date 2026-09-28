@@ -10,7 +10,7 @@ package com.taotao.music.crypto
  * 这里只声明**客户端**用到的方法；`server*` 系列是给「后端也用 JVM 跑」的场景
  * 准备的，Android 用不到，不声明。
  *
- * 句柄语义：`clientNewEmbedded` 返回一个 `Long` 句柄（0 表示失败），后续调用
+ * 句柄语义：`clientNew` 返回一个 `Long` 句柄（0 表示失败），后续调用
  * 都带上它；用完必须 `clientFree` 释放，否则 native 侧注册表泄漏。
  *
  * 领域错误经 [CryptoException] 抛回；native 库缺失时 [available] 为 false，
@@ -36,9 +36,6 @@ object NativeCrypto {
     /** 协议版本。设备绑定要求 >= 2。 */
     external fun nativeVersion(): Int
 
-    /** 当前库是否注入了真实 PSK（占位密钥返回 false，不可用于生产加密）。 */
-    external fun nativeHasRealPsk(): Boolean
-
     /** 构造 AAD 上下文（method + path），必须走它，不要自己拼字符串。 */
     external fun nativeAad(method: String, pathAndQuery: String): ByteArray
 
@@ -46,9 +43,6 @@ object NativeCrypto {
 
     /** 用**后端下发的** PSK 创建客户端引擎，返回句柄（0 = 失败）。`deviceId` 折进握手密钥。 */
     external fun clientNew(pskId: String, pskHex: String, deviceId: String): Long
-
-    /** 用内嵌 PSK 创建客户端引擎（已弃用：改用后端动态下发 [clientNew]）。 */
-    external fun clientNewEmbedded(pskId: String, deviceId: String): Long
 
     /** 发起握手，返回 ClientHello 字节。 */
     external fun clientHandshake(handle: Long, nowMs: Long): ByteArray
