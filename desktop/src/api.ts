@@ -64,3 +64,64 @@ export async function restoreToken(): Promise<string | null> {
     return null;
   }
 }
+
+// ---- 搜索与播放 ----
+
+export type Song = {
+  id: number;
+  title: string;
+  artist: string;
+  source: string;
+  mid?: string;
+  type?: number;
+  coverUrl?: string;
+};
+
+/** 搜索：/api/v1/search 返回裸 NDJSON（{type:"song",data} / {type:"end",meta}）。 */
+export async function searchSongs(keyword: string, token: string): Promise<Song[]> {
+  const q = new URLSearchParams({ keyword, page: "1", num: "60", quality: "4", source: "kuwo" });
+  const resp = await fetch(`${ENDPOINT}/api/v1/search?${q}`, {
+    headers: { Authorization: `Bearer ${token}`, Accept: "application/x-ndjson, application/json" },
+  });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  const text = await resp.text();
+  const songs: Song[] = [];
+  for (const raw of text.split("\n")) {
+    const line = raw.trim();
+    if (!line) continue;
+    let rec: any;
+    try { rec = JSON.parse(line); } catch { continue; }
+    if (rec?.type === "song" && rec.data) {
+      const d = rec.data;
+      if (Number(d.id) > 0 || d.mid) {
+        songs.push({
+          id: Number(d.id) || 0,
+          title: d.title || "未知歌曲",
+          artist: d.artist || "未知歌手",
+          source: d.source || "kuwo",
+          mid: d.mid || undefined,
+          type: d.type ?? undefined,
+          coverUrl: d.coverUrl || undefined,
+        });
+      }
+    }
+  }
+  return songs;
+}
+
+/** 解析上游直链：/api/v1/songs/:id/link（信封 data.url）。 */
+export async function resolveLink(song: Song, token: string): Promise<string> {
+  const q = new URLSearchParams({ quality: "4", source: song.source || "kuwo" });
+  if (song.mid) q.set("mid", song.mid);
+  if (song.type != null) q.set("type", String(song.type));
+  const resp = await fetch(`${ENDPOINT}/api/v1/songs/${song.id}/link?${q}`, {
+    headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+  });
+  const json = await resp.json().catch(() => ({}));
+  if (!resp.ok || (json && json.code !== undefined && json.code !== 0)) {
+    throw new Error(json?.message || `HTTP ${resp.status}`);
+  }
+  const url = json?.data?.url;
+  if (!url) throw new Error("无法获取播放地址");
+  return url as string;
+}

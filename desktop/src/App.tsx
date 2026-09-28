@@ -1,6 +1,5 @@
-import { useState, useEffect } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { ENDPOINT, postJson, saveSession, clearSession, restoreToken } from "./api";
+import { useState, useEffect, useRef } from "react";
+import { postJson, saveSession, clearSession, restoreToken, searchSongs, resolveLink, type Song } from "./api";
 import "./App.css";
 
 // 与服务端 /auth/register 一致：3–32 位中英文/数字/下划线。
@@ -194,23 +193,82 @@ function Auth({ onToken }: { onToken: (t: string) => void }) {
 }
 
 function Home({ token, onLogout }: { token: string; onLogout: () => void }) {
-  const [result, setResult] = useState("");
-  async function testHandshake() {
-    setResult("握手中…");
+  const [query, setQuery] = useState("");
+  const [songs, setSongs] = useState<Song[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [current, setCurrent] = useState<Song | null>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
+
+  async function doSearch() {
+    const kw = query.trim();
+    if (!kw) return;
+    setLoading(true);
+    setError("");
     try {
-      const sid = await invoke<string>("crypto_handshake_demo", { endpoint: ENDPOINT, token });
-      setResult(`加密握手成功，会话 ID：${sid}`);
+      setSongs(await searchSongs(kw, token));
     } catch (e) {
-      setResult(`失败：${String(e)}`);
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
     }
   }
+
+  async function play(song: Song) {
+    setCurrent(song);
+    setError("");
+    try {
+      const url = await resolveLink(song, token);
+      const el = audioRef.current;
+      if (el) {
+        el.src = url;
+        await el.play().catch(() => {});
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
   return (
-    <main className="home">
-      <h1>桃桃音乐 · 桌面</h1>
-      <p style={{ color: "#8a8791" }}>已登录（授权已保存，下次启动免登录）。</p>
-      <button className="btn-primary" onClick={testHandshake}>测试加密握手</button>
-      <button className="toggle-mode" onClick={onLogout}>退出登录</button>
-      {result && <pre>{result}</pre>}
-    </main>
+    <div className="app">
+      <div className="topbar">
+        <span className="title">桃桃音乐</span>
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && doSearch()}
+          placeholder="搜索歌曲 / 歌手"
+        />
+        <button className="link" onClick={onLogout}>退出</button>
+      </div>
+
+      <div className="list">
+        {loading && <p className="hint-center">搜索中…</p>}
+        {error && <p className="hint-center" style={{ color: "#d33" }}>{error}</p>}
+        {!loading && !error && songs.length === 0 && <p className="hint-center">输入关键词开始搜索</p>}
+        {songs.map((s) => (
+          <div
+            key={`${s.source}:${s.id}:${s.mid ?? ""}`}
+            className={`song ${current && current.id === s.id && current.mid === s.mid ? "active" : ""}`}
+            onClick={() => play(s)}
+          >
+            <img className="cover" src={s.coverUrl || ""} alt="" onError={(e) => ((e.target as HTMLImageElement).style.visibility = "hidden")} />
+            <div className="meta">
+              <div className="name">{s.title}</div>
+              <div className="artist">{s.artist}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="player">
+        <img className="cover" src={current?.coverUrl || ""} alt="" onError={(e) => ((e.target as HTMLImageElement).style.visibility = "hidden")} />
+        <div className="meta">
+          <div className="name">{current?.title || "未在播放"}</div>
+          <div className="artist">{current?.artist || ""}</div>
+        </div>
+        <audio ref={audioRef} controls autoPlay />
+      </div>
+    </div>
   );
 }
