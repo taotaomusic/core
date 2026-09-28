@@ -640,7 +640,7 @@ dependencies = [
 
 [[package]]
 name = "taotao-crypto-core"
-version = "0.1.0"
+version = "2.3.0"
 dependencies = [
  "chacha20poly1305",
  "cryptify",
@@ -657,7 +657,7 @@ dependencies = [
 
 [[package]]
 name = "taotao-crypto-jni"
-version = "0.1.0"
+version = "2.3.0"
 dependencies = [
  "jni",
  "taotao-crypto-core",
@@ -665,7 +665,7 @@ dependencies = [
 
 [[package]]
 name = "taotao-crypto-node"
-version = "0.1.0"
+version = "2.3.0"
 dependencies = [
  "napi",
  "napi-build",
@@ -675,7 +675,7 @@ dependencies = [
 
 [[package]]
 name = "taotao-crypto-wasm"
-version = "0.1.0"
+version = "2.3.0"
 dependencies = [
  "getrandom",
  "taotao-crypto-core",

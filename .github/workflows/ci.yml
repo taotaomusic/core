@@ -60,8 +60,6 @@ jobs:
     env:
       NDK_VERSION: 27.2.12479018
       CARGO_TERM_COLOR: always
-      # 字符串混淆密钥（可选，仅客户端 .so 用）。PSK 不再注入——已改后端动态下发。
-      CRYPTIFY_KEY: ${{ secrets.CRYPTIFY_KEY }}
     defaults:
       run:
         working-directory: crypto-src
@@ -93,6 +91,13 @@ jobs:
           echo "NDK_ROOT=$SDK/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
           echo "$SDK/ndk/$NDK_VERSION/toolchains/llvm/prebuilt/linux-x86_64/bin" >> "$GITHUB_PATH"
       - name: 构建 Android .so（arm64-v8a + x86_64）
+        env:
+          # CRYPTIFY_KEY 只在真正构建 .so 时设：字符串混淆的编译期密钥。
+          # **不能**放到 job 级 env，否则 fmt/clippy/test 步骤也带上它——
+          # cargo --workspace 的 feature 统一会让 core 编译时开启 obfuscate，
+          # 而 cryptify 用自定义 key 时会改写 `{}` 模板，触发 obf_string! 的
+          # 占位符自检 panic（core CI 曾因此挂在 rejects_bad_psk_id）。
+          CRYPTIFY_KEY: ${{ secrets.CRYPTIFY_KEY }}
         run: |
           cargo build --release --target aarch64-linux-android -p taotao-crypto-jni
           cargo build --release --target x86_64-linux-android -p taotao-crypto-jni
