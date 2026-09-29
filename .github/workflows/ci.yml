@@ -232,9 +232,6 @@ jobs:
           gh release view server-dist-latest >/dev/null 2>&1 || \
             gh release create server-dist-latest --prerelease --title "后端 dist 最新构建" --notes "扁平布局：解压即得 main.js 与 crypto/。"
           gh release upload server-dist-latest server-dist.zip --clobber
-          VER=$(node -p "require('./package.json').version")
-          gh release view "server-v$VER" >/dev/null 2>&1 || gh release create "server-v$VER" --title "后端 $VER" --notes "契约通过的完整 dist。"
-          gh release upload "server-v$VER" server-dist.zip --clobber
       - name: 构建并推送 Docker 镜像到 ghcr.io
         if: github.event_name == 'push'
         env:
@@ -382,12 +379,7 @@ jobs:
           cp "$apk" "out/TaotaoMusic-${VN}-${KIND}.apk"
           (cd artifacts/desktop-update-bundle && zip -qr "$OLDPWD/out/taotao-music-desktop-bundle.zip" .)
           ls -la out
-      - name: 发布版本化 Release（每版一条）
-        run: |
-          TAG="v$VN"
-          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "客户端 $VN（$KIND）" --notes "Android APK + Windows 桌面包，构建版本 $VN。"
-          gh release upload "$TAG" out/* --clobber
-      - name: 更新滚动 latest
+      - name: 更新滚动 latest（只保留最新一版，避免堆积）
         run: |
           gh release view latest >/dev/null 2>&1 || gh release create latest --prerelease --title "最新构建产物" --notes "指向最新一版，方便直链下载。"
           gh release view latest --json assets -q '.assets[].name' 2>/dev/null | grep -E '^TaotaoMusic-.*\.apk$' | while read -r old; do gh release delete-asset latest "$old" -y || true; done
@@ -459,6 +451,21 @@ jobs:
           releaseBody: Windows Tauri 桌面端。配置 TAURI_SIGNING_PRIVATE_KEY 后启用自动更新。
           releaseDraft: false
           prerelease: true
+      - name: 清理 desktop-latest 旧版本资产（只留本次 + latest.json）
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          ver="0.1.${GITHUB_RUN_NUMBER}"
+          gh release view desktop-latest --json assets -q '.assets[].name' 2>/dev/null | while read -r a; do
+            case "$a" in
+              latest.json) : ;;
+              *"$ver"*) : ;;
+              *) echo "删除旧资产 $a"; gh release delete-asset desktop-latest "$a" -y || true ;;
+            esac
+          done
 
 
 
