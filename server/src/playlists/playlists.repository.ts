@@ -51,6 +51,15 @@ export type PlaylistRecord = {
 
 export type PlaylistDetail = PlaylistRecord & { songs: PlaylistSongRecord[] };
 
+/** 「整单无封面」歌单的首曲身份，供封面回源兜底（PlaylistCoverService）。 */
+export type PlaylistCoverCandidate = {
+  playlistId: number;
+  source: string;
+  songId: string;
+  mid: string | null;
+  type: number | null;
+};
+
 /** 歌曲集合与歌单当前内容不一致时返回 400，而不是静默丢歌。 */
 export class PlaylistOrderError extends Error {}
 
@@ -107,6 +116,27 @@ export class PlaylistsRepository {
       [playlistId],
     );
     return { ...playlist, songs };
+  }
+
+  /**
+   * 「整单无封面」歌单的首曲身份（每单取 position 最小的一首）。
+   * 列表封面的 COALESCE 兜底在这种歌单上无图可取，回源服务按这份名单向上游补。
+   */
+  firstSongOfPlaylistsWithoutCover(userId: number): Promise<PlaylistCoverCandidate[]> {
+    return this.database.all<PlaylistCoverCandidate>(
+      `SELECT DISTINCT ON (p.id)
+         p.id AS "playlistId", ps.source, ps.song_id AS "songId", ps.mid, ps.song_type AS "type"
+       FROM playlists p
+       JOIN playlist_songs ps ON ps.playlist_id = p.id
+       WHERE p.user_id = $1
+         AND (p.cover_url IS NULL OR p.cover_url = '')
+         AND NOT EXISTS (
+           SELECT 1 FROM playlist_songs pc
+           WHERE pc.playlist_id = p.id AND pc.cover_url IS NOT NULL AND pc.cover_url <> ''
+         )
+       ORDER BY p.id, ps.position ASC`,
+      [userId],
+    );
   }
 
   async create(

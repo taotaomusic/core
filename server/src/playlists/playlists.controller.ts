@@ -14,6 +14,7 @@ import { ApiErrors } from "../common/api.exception";
 import { MUSIC_SOURCES } from "../upstream/music-source.client";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
 import type { SessionUser } from "../common/request.types";
+import { PlaylistCoverService } from "./playlists-cover.service";
 import {
   MAX_PLAYLIST_SONGS,
   PlaylistOrderError,
@@ -35,11 +36,17 @@ const MAX_URL_LENGTH = 2_048;
 /** 云端歌单接口。所有路由都默认经过全局访问令牌守卫，只能读写当前账号的数据。 */
 @Controller("playlists")
 export class PlaylistsController {
-  constructor(private readonly playlists: PlaylistsRepository) {}
+  constructor(
+    private readonly playlists: PlaylistsRepository,
+    private readonly covers: PlaylistCoverService,
+  ) {}
 
   @Get()
-  list(@CurrentUser() user: SessionUser) {
-    return this.playlists.list(user.id);
+  async list(@CurrentUser() user: SessionUser) {
+    const records = await this.playlists.list(user.id);
+    // 封面自愈：整单无封面的歌单回源首曲封面，之后快照非空零开销
+    await this.covers.fillForList(user.id, records);
+    return records;
   }
 
   @Post()
@@ -55,6 +62,8 @@ export class PlaylistsController {
   async detail(@CurrentUser() user: SessionUser, @Param("playlistId") playlistIdParam: string) {
     const playlist = await this.playlists.find(user.id, this.idOf(playlistIdParam));
     if (!playlist) throw this.notFound();
+    // 封面自愈：缺封面的曲目回源（预算内随响应可见，其余后台补）
+    await this.covers.fillForDetail(playlist);
     return playlist;
   }
 

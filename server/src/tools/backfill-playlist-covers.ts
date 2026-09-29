@@ -22,6 +22,10 @@ import { TencentClient } from "../upstream/tencent.client";
  * source + 歌曲身份逐行调用上游 `requestSongInfo` 拿真实封面，
  * 回填 `playlist_songs.cover_url`，让存量歌单立即有图可兜。
  *
+ * 运行时自愈：`playlists-cover.service.ts` 已在读取路径上做同样的回源（列表回
+ * 源首曲、详情逐首），部署后数据会随访问逐步自愈；本工具用于**一次性全量**
+ * 补齐或不想等自愈的场景，两者口径一致、互不冲突（都只写仍为空的行）。
+ *
  * 用法（在部署目录执行，与 `node dist/main.js` 同目录，读取同一份 .env）：
  *   node dist/tools/backfill-playlist-covers.js               # 实际回填
  *   node dist/tools/backfill-playlist-covers.js --dry-run     # 只探测不写库
