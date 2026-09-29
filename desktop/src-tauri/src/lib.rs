@@ -103,6 +103,7 @@ fn crypto_handshake_demo(endpoint: String, token: String) -> Result<String, Stri
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_http::init())
         .invoke_handler(tauri::generate_handler![crypto_handshake_demo])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

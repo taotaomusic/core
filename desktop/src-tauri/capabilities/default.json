@@ -1,0 +1,16 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "默认窗口能力。http:default 仅放行 tauri-plugin-http 对后端域名的请求（裸 origin 由插件放宽为匹配该域名下任意路径）；localhost 两条只为本机联调后端（dev 端口）预留。",
+  "windows": ["main"],
+  "permissions": [
+    {
+      "identifier": "http:default",
+      "allow": [
+        { "url": "https://music.xydaigua.cn" },
+        { "url": "http://localhost:*" },
+        { "url": "http://127.0.0.1:*" }
+      ]
+    }
+  ]
+}

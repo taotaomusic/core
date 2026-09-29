@@ -16,6 +16,9 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# 前端 fetch 走 Rust 侧直连后端：webview 的 window.fetch 受 CORS 约束，
+# 而服务端按安全设计默认不下发 CORS 头，跨源请求的预检必挂。
+tauri-plugin-http = "2"
 # 传输加密：直接用同仓 Rust core，不走 JNI/.dll。
 taotao-crypto-core = { path = "../../crypto-src/core" }
 # 轻量阻塞 HTTP（握手/取 PSK 用）；json feature 提供 send_json。

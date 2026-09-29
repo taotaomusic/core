@@ -1,4 +1,12 @@
+import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
+
 export const ENDPOINT = "https://music.xydaigua.cn";
+
+// 打包后运行在 Tauri webview 里，window.fetch 受 CORS 约束（服务端默认不下发
+// CORS 头），必须走 tauri-plugin-http 由 Rust 侧直连；纯浏览器 dev 没注入
+// Tauri 环境时退回 window.fetch，保持原有行为。
+const httpFetch: typeof fetch =
+  "__TAURI_INTERNALS__" in window ? tauriFetch : (input, init) => fetch(input, init);
 
 // ---- 会话与令牌 ----
 
@@ -51,7 +59,7 @@ async function unwrap(resp: Response): Promise<any> {
 
 /** POST 明文接口（登录/注册/验证码），不带令牌。 */
 export async function postJson(path: string, body: unknown): Promise<any> {
-  const resp = await fetch(`${ENDPOINT}${path}`, {
+  const resp = await httpFetch(`${ENDPOINT}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
     body: JSON.stringify(body),
@@ -90,7 +98,7 @@ export async function restoreToken(): Promise<string | null> {
 /** 带令牌的 GET；遇 401 自动刷新并重放一次，刷新失败抛 SessionExpired。 */
 async function authedGet(path: string, accept: string): Promise<Response> {
   const doFetch = (tok: string | null) =>
-    fetch(`${ENDPOINT}${path}`, { headers: { Authorization: `Bearer ${tok ?? ""}`, Accept: accept } });
+    httpFetch(`${ENDPOINT}${path}`, { headers: { Authorization: `Bearer ${tok ?? ""}`, Accept: accept } });
   let resp = await doFetch(accessToken);
   if (resp.status === 401) {
     const t = await refreshAccess();
@@ -157,6 +165,9 @@ export async function resolveLink(song: Song): Promise<string> {
 /** 把异常转成用户可读文案：网络类统一提示，其它保留原文。 */
 export function readableError(e: unknown): string {
   const m = e instanceof Error ? e.message : String(e);
-  if (/Failed to fetch|NetworkError|load failed/i.test(m)) return "网络连接失败，请检查网络后重试";
+  // 浏览器侧是 "Failed to fetch"；tauri-plugin-http（reqwest）是
+  // "error sending request for url (...)"，内层可能带 refused / reset / 超时 / DNS 文案。
+  if (/Failed to fetch|NetworkError|load failed|error sending request|connection refused|connection reset|timed out|name resolution|lookup address/i.test(m))
+    return "网络连接失败，请检查网络后重试";
   return m || "操作失败，请稍后重试";
 }
