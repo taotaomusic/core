@@ -421,6 +421,10 @@ jobs:
           key: desktop
       - name: 安装前端依赖
         run: npm install
+      - name: 自动版本号（<主>.<次>.<构建号>，对标安卓免手改）
+        shell: bash
+        run: |
+          node -e "const fs=require('fs');const f='src-tauri/tauri.conf.json';const j=JSON.parse(fs.readFileSync(f));const p=j.version.split('.');j.version=p[0]+'.'+p[1]+'.'+process.env.GITHUB_RUN_NUMBER;fs.writeFileSync(f,JSON.stringify(j,null,2));console.log('desktop version =>',j.version)"
       # 图标（src-tauri/icons/）已提交入库，不再动态生成。
       - name: 未配签名密钥时关闭更新产物（避免 CI 因缺 Secret 变红）
         if: env.HAS_UPDATER_KEY != 'true'
