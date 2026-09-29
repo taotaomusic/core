@@ -3,6 +3,7 @@ import { clearSession, restoreToken } from "./api";
 import { AppProvider } from "./state/AppState";
 import { Auth } from "./auth/Auth";
 import { MainScreen } from "./main/MainScreen";
+import brandIcon from "../src-tauri/icons/icon.png";
 import "./App.css";
 
 /** 根组件：启动恢复登录 → 未登录进 Auth，已登录进全局状态 + 主界面。 */
@@ -23,7 +24,7 @@ export function App() {
   if (booting) {
     return (
       <div className="auth">
-        <div className="brand-circle">♪</div>
+        <div className="brand-circle"><img src={brandIcon} alt="桃桃音乐" /></div>
         <p className="brand-sub" style={{ marginTop: 20 }}>正在恢复登录…</p>
       </div>
     );

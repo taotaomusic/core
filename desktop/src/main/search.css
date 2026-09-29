@@ -69,9 +69,10 @@
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
-  transition: background .15s;
+  transition: background .15s, transform .1s;
 }
 .sp-btn-search:hover { background: var(--coral-dark); }
+.sp-btn-search:active { transform: scale(.97); }
 
 /* 内容区：历史/热搜/联想各自滚动；结果区由 SongList 的 .list 撑满滚动 */
 .sp-body {
@@ -94,7 +95,21 @@
   gap: 10px;
   margin-bottom: 10px;
 }
-.sp-section-title { font-size: 15px; font-weight: 700; }
+/* 标题前的珊瑚短竖条：与「正在播放」行的指示条同一设计语言 */
+.sp-section-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 700;
+}
+.sp-section-title::before {
+  content: "";
+  width: 3px;
+  height: 14px;
+  border-radius: 2px;
+  background: var(--coral);
+}
 .sp-section-sub { font-size: 12px; color: var(--muted); }
 .sp-text-btn {
   border: 0;
@@ -161,9 +176,16 @@
   font-size: 13px;
   color: var(--text);
   cursor: pointer;
-  transition: border-color .15s, background .15s;
+  transition: border-color .15s, background .15s, box-shadow .15s, transform .1s;
+  user-select: none;
 }
-.sp-chip:hover { border-color: var(--coral); background: #fdf1f0; }
+.sp-chip:hover {
+  border-color: var(--coral);
+  background: #fdf1f0;
+  box-shadow: var(--shadow-sm);
+  transform: translateY(-1px);
+}
+.sp-chip:active { transform: translateY(0); }
 .sp-chip-word {
   max-width: 220px;
   white-space: nowrap;
@@ -198,11 +220,13 @@
   align-items: center;
   gap: 10px;
   min-width: 0;
-  padding: 7px 6px;
+  padding: 7px 8px;
   border-radius: 8px;
   cursor: pointer;
+  transition: background .15s;
+  user-select: none;
 }
-.sp-hot-item:hover { background: #fdf1f0; }
+.sp-hot-item:hover { background: var(--coral-tint-soft); }
 .sp-hot-rank {
   flex: none;
   width: 18px;
@@ -210,6 +234,7 @@
   font-size: 13px;
   font-weight: 700;
   font-style: italic;
+  font-variant-numeric: tabular-nums;
   color: var(--muted);
 }
 .sp-hot-rank.top { color: var(--coral); }
@@ -225,16 +250,20 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 6px;
+  padding: 10px 8px;
   border-radius: 8px;
   cursor: pointer;
+  transition: background .15s;
+  user-select: none;
 }
-.sp-sug-row:hover { background: #fdf1f0; }
+.sp-sug-row:hover { background: var(--coral-tint-soft); }
+.sp-sug-row:hover .sp-sug-icon { color: var(--coral); }
 .sp-sug-icon {
   flex: none;
   display: grid;
   place-items: center;
   color: var(--muted);
+  transition: color .15s;
 }
 .sp-sug-word {
   font-size: 14px;

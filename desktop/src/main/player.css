@@ -14,10 +14,12 @@
   height: 76px;
   background: var(--surface);
   border-top: 1px solid var(--border);
+  box-shadow: 0 -4px 16px rgba(38, 35, 42, 0.04);
   display: flex;
   align-items: center;
   gap: 14px;
   padding: 0 18px;
+  user-select: none;
 }
 
 /* 无当前歌曲：整体置灰，只显示「未在播放」 */
@@ -216,7 +218,10 @@
   position: fixed;
   inset: 0;
   z-index: 50;
-  background: var(--bg);
+  /* 顶部一点品牌色晕染 + 白到灰的纵向过渡，替代纯色平底 */
+  background:
+    radial-gradient(1100px 460px at 50% -8%, rgba(250, 94, 91, 0.07), transparent 62%),
+    linear-gradient(180deg, #ffffff 0%, var(--bg) 34%);
   display: flex;
   flex-direction: column;
   animation: pd-fade-in .18s ease-out;
@@ -731,6 +736,8 @@
   inset: 0;
   z-index: 60;
   background: rgba(38, 35, 42, .42);
+  /* 毛玻璃遮罩：不支持时退回纯色深底，不影响可读性 */
+  backdrop-filter: blur(3px);
   display: grid;
   place-items: center;
   animation: pd-fade-in .16s ease-out;
@@ -741,7 +748,7 @@
   background: var(--surface);
   border-radius: 16px;
   padding: 20px;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, .2);
+  box-shadow: var(--shadow-lg);
   animation: pd-pop-in .18s ease-out;
 }
 .pd-modal-title {

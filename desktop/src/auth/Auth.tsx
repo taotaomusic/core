@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { postJson, saveSession, readableError } from "../api";
+import brandIcon from "../../src-tauri/icons/icon.png";
 
 const USERNAME_PATTERN = /^[\w一-龥]{3,32}$/;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -67,7 +68,7 @@ export function Auth({ onToken }: { onToken: (t: string) => void }) {
   // PLACEHOLDER_JSX
   return (
     <div className="auth">
-      <div className="brand-circle">♪</div>
+      <div className="brand-circle"><img src={brandIcon} alt="桃桃音乐" /></div>
       <div className="brand-title">桃桃音乐</div>
       <p className="brand-sub">{register ? "注册后即可收藏和离线下载" : "登录后同步你的收藏与下载"}</p>
 
