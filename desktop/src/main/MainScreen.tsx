@@ -1,48 +1,48 @@
 import { useState } from "react";
-import { searchSongs, SessionExpired, readableError, type Song } from "../api";
-import { usePlayer } from "./usePlayer";
-import { SearchBar } from "./SearchBar";
-import { SongList } from "./SongList";
+import { FavoritesPage } from "./FavoritesPage";
 import { PlayerBar } from "./PlayerBar";
+import { PlayerDetail } from "./PlayerDetail";
+import { SearchPage } from "./SearchPage";
 
-/** 登录后的主界面：搜索 + 结果列表 + 底部播放条。会话过期回登录页。 */
+type Page = "search" | "favorites";
+
+/**
+ * 登录后的主界面：左侧导航（搜索 / 我的收藏）+ 内容区 + 底部播放条 + 全屏播放详情。
+ * 两个页面常驻挂载、用 CSS 隐藏切换，保留各自的搜索结果与滚动位置。
+ */
 export function MainScreen({ onLogout }: { onLogout: () => void }) {
-  const [songs, setSongs] = useState<Song[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const player = usePlayer(onLogout);
-
-  async function doSearch(kw: string) {
-    setLoading(true);
-    setError("");
-    try {
-      setSongs(await searchSongs(kw));
-    } catch (e) {
-      if (e instanceof SessionExpired) return onLogout();
-      setError(readableError(e));
-    } finally {
-      setLoading(false);
-    }
-  }
-
+  const [page, setPage] = useState<Page>("search");
   return (
     <div className="app">
-      <SearchBar onSearch={doSearch} onLogout={onLogout} />
-      <SongList
-        songs={songs}
-        loading={loading}
-        error={error || player.error}
-        current={player.current}
-        onPlay={(i) => player.playFrom(songs, i)}
-      />
-      <PlayerBar
-        current={player.current}
-        audioRef={player.audioRef}
-        hasPrev={player.hasPrev}
-        hasNext={player.hasNext}
-        onPrev={player.prev}
-        onNext={player.next}
-      />
+      <aside className="sidenav">
+        <div className="sidenav-brand">♪ 桃桃音乐</div>
+        <button
+          className={`nav-btn${page === "search" ? " on" : ""}`}
+          onClick={() => setPage("search")}
+        >
+          搜索
+        </button>
+        <button
+          className={`nav-btn${page === "favorites" ? " on" : ""}`}
+          onClick={() => setPage("favorites")}
+        >
+          我的收藏
+        </button>
+        <div className="sidenav-spacer" />
+        <button className="nav-btn exit" onClick={onLogout}>
+          退出登录
+        </button>
+      </aside>
+      <main className="content">
+        <div className="page" style={{ display: page === "search" ? "flex" : "none" }}>
+          <SearchPage />
+        </div>
+        <div className="page" style={{ display: page === "favorites" ? "flex" : "none" }}>
+          <FavoritesPage />
+        </div>
+      </main>
+      <PlayerBar />
+      <PlayerDetail />
     </div>
   );
 }

@@ -1,0 +1,693 @@
+/* ============================================================
+   播放条（.playerbar-）与全屏播放详情页（.pd-）样式。
+   色调沿用全局变量：--coral / --bg / --surface / --muted / --border。
+   ============================================================ */
+
+/* ---- 底部播放条 ---- */
+
+.playerbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 40;
+  height: 76px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 18px;
+}
+
+/* 无当前歌曲：整体置灰，只显示「未在播放」 */
+.playerbar.is-empty .playerbar-cover,
+.playerbar.is-empty .playerbar-controls {
+  opacity: .45;
+}
+.playerbar.is-empty .playerbar-name {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+/* 播放错误浮条（条上方，可关闭） */
+.playerbar-error {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: calc(100% + 10px);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--err-bg);
+  color: var(--err);
+  border-radius: 10px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .08);
+  animation: playerbar-error-in .2s ease-out;
+}
+.playerbar-error-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+}
+.playerbar-error-close {
+  border: 0;
+  background: transparent;
+  color: var(--err);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 6px;
+  flex: none;
+}
+.playerbar-error-close:hover {
+  background: rgba(211, 51, 51, .1);
+}
+
+/* 封面缩略图：无封面时露出浅珊瑚底「♪」（img 加载失败由 hideOnError 隐藏） */
+.playerbar-cover {
+  position: relative;
+  width: 52px;
+  height: 52px;
+  border-radius: 10px;
+  overflow: hidden;
+  background: linear-gradient(135deg, #ffe9e5, #ffd4ce);
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+.playerbar-cover-note {
+  color: var(--coral);
+  font-size: 22px;
+  opacity: .85;
+}
+.playerbar-cover img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* 歌名/歌手：点击打开详情页 */
+.playerbar-meta {
+  flex: 1;
+  min-width: 0;
+}
+.playerbar:not(.is-empty) .playerbar-meta {
+  cursor: pointer;
+}
+.playerbar-name {
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: color .15s;
+}
+.playerbar-artist {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.playerbar:not(.is-empty) .playerbar-meta:hover .playerbar-name {
+  color: var(--coral);
+}
+
+/* 中部细进度条：纯展示、不可交互 */
+.playerbar-progress {
+  width: 200px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border);
+  overflow: hidden;
+  flex: none;
+  pointer-events: none;
+}
+.playerbar-progress-fill {
+  height: 100%;
+  background: var(--coral);
+  border-radius: 2px;
+  transition: width .3s linear;
+}
+
+/* 右侧控制区 */
+.playerbar-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+}
+.playerbar-btn {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  border: 0;
+  border-radius: 50%;
+  background: #f3f4f6;
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  flex: none;
+  transition: background .15s, color .15s, transform .15s, opacity .15s;
+}
+.playerbar-btn:hover:not(:disabled) {
+  background: #fdeceb;
+  color: var(--coral);
+}
+.playerbar-btn:active:not(:disabled) {
+  transform: scale(.94);
+}
+.playerbar-btn:disabled {
+  opacity: .4;
+  cursor: not-allowed;
+}
+
+/* 循环模式：off 降透明度；one 叠加「1」角标 */
+.playerbar-repeat[data-mode="off"] {
+  opacity: .38;
+}
+.playerbar-repeat-badge {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--coral);
+  color: #fff;
+  font-size: 9px;
+  line-height: 13px;
+  text-align: center;
+  font-weight: 700;
+}
+
+/* 播放/暂停大按钮：珊瑚底白字圆形 */
+.playerbar-play {
+  width: 48px;
+  height: 48px;
+  background: var(--coral);
+  color: #fff;
+  font-size: 18px;
+  box-shadow: 0 4px 14px rgba(250, 94, 91, .35);
+}
+.playerbar-play:hover:not(:disabled) {
+  background: var(--coral-dark);
+  color: #fff;
+}
+
+/* 收藏心形：hover 放大反馈 */
+.playerbar-fav.on {
+  background: #fdeceb;
+  color: var(--coral);
+}
+.playerbar-fav:hover:not(:disabled) {
+  transform: scale(1.08);
+}
+
+/* ---- 全屏播放详情页 ---- */
+
+.pd-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  animation: pd-fade-in .18s ease-out;
+}
+
+/* 顶栏 */
+.pd-top {
+  display: grid;
+  grid-template-columns: 48px 1fr 48px;
+  align-items: center;
+  height: 56px;
+  padding: 0 12px;
+  flex: none;
+}
+.pd-collapse {
+  width: 40px;
+  height: 40px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background .15s;
+}
+.pd-collapse:hover {
+  background: #f0e8e8;
+}
+.pd-top-title {
+  text-align: center;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+/* 主区：左（封面+控制）右（队列）布局 */
+.pd-body {
+  flex: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 40px;
+  padding: 16px 32px 36px;
+  overflow-y: auto;
+}
+.pd-empty {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  font-size: 15px;
+}
+
+/* 左列 */
+.pd-main {
+  width: 340px;
+  display: flex;
+  flex-direction: column;
+  flex: none;
+}
+.pd-cover {
+  position: relative;
+  width: 340px;
+  height: 340px;
+  border-radius: 24px;
+  overflow: hidden;
+  background: linear-gradient(135deg, #ffe9e5, #ffc9c2);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, .12);
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+.pd-cover-note {
+  font-size: 96px;
+  color: rgba(250, 94, 91, .55);
+}
+.pd-cover img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.pd-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 24px;
+  min-width: 0;
+}
+.pd-song {
+  flex: 1;
+  min-width: 0;
+  font-size: 22px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pd-vip {
+  flex: none;
+  background: var(--coral);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+.pd-heart {
+  flex: none;
+  width: 42px;
+  height: 42px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  font-size: 26px;
+  line-height: 1;
+  cursor: pointer;
+  transition: transform .15s ease, color .15s;
+}
+.pd-heart:hover {
+  transform: scale(1.08);
+}
+.pd-heart.on {
+  color: var(--coral);
+}
+.pd-artist {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+/* 控制区（占左列宽度） */
+.pd-controls {
+  margin-top: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* 自绘进度滑条：轨道 + 红色填充 + 圆形手柄 */
+.pd-slider-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.pd-time {
+  width: 44px;
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
+  flex: none;
+}
+.pd-track {
+  position: relative;
+  flex: 1;
+  height: 20px;
+  cursor: pointer;
+  touch-action: none;
+}
+.pd-track::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 5px;
+  transform: translateY(-50%);
+  background: var(--border);
+  border-radius: 3px;
+}
+.pd-track-fill {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  height: 5px;
+  transform: translateY(-50%);
+  background: var(--coral);
+  border-radius: 3px;
+  pointer-events: none;
+}
+.pd-track-thumb {
+  position: absolute;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  background: var(--coral);
+  border: 2px solid #fff;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .25);
+  pointer-events: none;
+  transition: transform .12s;
+}
+.pd-track:hover .pd-track-thumb {
+  transform: translate(-50%, -50%) scale(1.15);
+}
+.pd-track.disabled {
+  cursor: not-allowed;
+  opacity: .55;
+}
+
+/* 快捷操作行：分享 / 队列显隐 */
+.pd-quick {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+}
+.pd-quick-btn {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  height: 34px;
+  padding: 0 16px;
+  border-radius: 17px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color .15s, color .15s, background .15s;
+}
+.pd-quick-btn:hover:not(:disabled) {
+  border-color: var(--coral);
+  color: var(--coral);
+  background: #fff5f4;
+}
+.pd-quick-btn:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+}
+
+/* 传输控制行 */
+.pd-transport {
+  display: flex;
+  align-items: center;
+  justify-content: space-evenly;
+}
+.pd-tbtn {
+  position: relative;
+  width: 46px;
+  height: 46px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background .15s, color .15s, transform .15s;
+}
+.pd-tbtn:hover {
+  background: #fdeceb;
+  color: var(--coral);
+}
+.pd-tbtn:active {
+  transform: scale(.94);
+}
+.pd-tbtn[data-mode="off"] {
+  opacity: .35;
+}
+.pd-repeat-badge {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--coral);
+  color: #fff;
+  font-size: 9px;
+  line-height: 14px;
+  text-align: center;
+  font-weight: 700;
+}
+.pd-play {
+  width: 72px;
+  height: 72px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--coral);
+  color: #fff;
+  font-size: 28px;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 10px 28px rgba(250, 94, 91, .4);
+  transition: background .15s, transform .15s;
+}
+.pd-play:hover {
+  background: var(--coral-dark);
+  transform: scale(1.04);
+}
+.pd-play:active {
+  transform: scale(.96);
+}
+
+/* 播放队列面板 */
+.pd-queue {
+  width: 300px;
+  height: 540px;
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, .06);
+  overflow: hidden;
+  flex: none;
+}
+.pd-queue-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+.pd-queue-title {
+  font-size: 15px;
+  font-weight: 700;
+}
+.pd-queue-count {
+  font-size: 12px;
+  color: var(--muted);
+}
+.pd-queue-list {
+  flex: 1;
+  overflow-y: auto;
+}
+.pd-queue-empty {
+  padding: 32px 0;
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
+}
+.pd-queue-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  cursor: pointer;
+  transition: background .12s;
+}
+.pd-queue-row:hover {
+  background: #faf3f3;
+}
+.pd-queue-row.active {
+  background: #fdeceb;
+}
+.pd-queue-idx {
+  width: 24px;
+  flex: none;
+  text-align: center;
+  font-size: 12px;
+  color: var(--muted);
+}
+.pd-queue-row.active .pd-queue-idx {
+  color: var(--coral);
+  font-weight: 700;
+}
+.pd-queue-meta {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.pd-queue-name {
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pd-queue-row.active .pd-queue-name {
+  color: var(--coral);
+}
+.pd-queue-artist {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pd-queue-foot {
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+  text-align: center;
+  font-size: 12px;
+  color: var(--muted);
+  flex: none;
+}
+
+/* 分享弹窗 */
+.pd-modal-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(38, 35, 42, .42);
+  display: grid;
+  place-items: center;
+  animation: pd-fade-in .16s ease-out;
+}
+.pd-modal {
+  width: 360px;
+  max-width: calc(100vw - 48px);
+  background: var(--surface);
+  border-radius: 16px;
+  padding: 20px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, .2);
+  animation: pd-pop-in .18s ease-out;
+}
+.pd-modal-title {
+  font-size: 16px;
+  font-weight: 700;
+}
+.pd-modal-song {
+  margin: 12px 0 10px;
+  font-size: 14px;
+}
+.pd-modal-link {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 13px;
+  color: var(--text);
+  outline: none;
+  user-select: all;
+}
+.pd-modal-link:focus {
+  border-color: var(--coral);
+}
+.pd-modal-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+}
+.pd-modal-btn {
+  flex: 1;
+  height: 40px;
+  border: 0;
+  border-radius: 10px;
+  background: #f3f4f6;
+  color: var(--text);
+  font-size: 14px;
+  cursor: pointer;
+  transition: background .15s;
+}
+.pd-modal-btn:hover {
+  background: #ececf2;
+}
+.pd-modal-btn.primary {
+  background: var(--coral);
+  color: #fff;
+  font-weight: 700;
+}
+.pd-modal-btn.primary:hover {
+  background: var(--coral-dark);
+}
+
+/* ---- 动画 ---- */
+
+@keyframes pd-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes pd-pop-in {
+  from { opacity: 0; transform: scale(.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+@keyframes playerbar-error-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}

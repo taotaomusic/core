@@ -1,0 +1,355 @@
+/* 搜索页与歌曲行样式 */
+
+/* ---- 搜索页整体布局 ---- */
+.sp-root {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+
+/* 搜索栏 */
+.sp-searchbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 18px 10px;
+}
+.sp-input-wrap {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+.sp-input-wrap input {
+  width: 100%;
+  height: 42px;
+  padding: 0 38px 0 16px;
+  border: 1px solid var(--border);
+  border-radius: 21px;
+  background: var(--surface);
+  font-family: inherit;
+  font-size: 14px;
+  color: var(--text);
+  outline: none;
+  transition: border-color .15s, box-shadow .15s;
+}
+.sp-input-wrap input:focus {
+  border-color: var(--coral);
+  box-shadow: 0 0 0 3px rgba(250, 94, 91, .14);
+}
+.sp-input-wrap input::placeholder { color: var(--muted); }
+.sp-clear {
+  position: absolute;
+  right: 8px;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 50%;
+  background: #f0e8e8;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  padding: 0;
+}
+.sp-clear:hover { background: #e9dddd; color: var(--text); }
+.sp-btn-search {
+  flex: none;
+  height: 42px;
+  padding: 0 22px;
+  border: 0;
+  border-radius: 21px;
+  background: var(--coral);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .15s;
+}
+.sp-btn-search:hover { background: var(--coral-dark); }
+
+/* 内容区：历史/热搜/联想各自滚动；结果区由 SongList 的 .list 撑满滚动 */
+.sp-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.sp-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 18px 28px;
+}
+
+/* ---- 区块标题行 ---- */
+.sp-section { margin-top: 14px; }
+.sp-section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.sp-section-title { font-size: 15px; font-weight: 700; }
+.sp-section-sub { font-size: 12px; color: var(--muted); }
+.sp-text-btn {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+.sp-text-btn:hover { color: var(--coral); }
+.sp-pause {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+}
+.sp-pause input { accent-color: var(--coral); cursor: pointer; margin: 0; }
+
+/* 清空历史确认条 */
+.sp-confirm {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  background: var(--err-bg);
+  color: var(--err);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 13px;
+  margin-bottom: 12px;
+}
+.sp-confirm-msg { flex: 1 1 auto; min-width: 200px; }
+.sp-confirm-btn {
+  border: 0;
+  border-radius: 8px;
+  padding: 5px 14px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.sp-confirm-btn.ok { background: var(--coral); color: #fff; }
+.sp-confirm-btn.ok:hover { background: var(--coral-dark); }
+.sp-confirm-btn.cancel { background: #fff; color: var(--muted); border: 1px solid var(--border); }
+.sp-confirm-btn.cancel:hover { color: var(--text); }
+
+/* ---- 搜索历史 chips（pill 流式布局） ---- */
+.sp-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.sp-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 5px 6px 5px 13px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color .15s, background .15s;
+}
+.sp-chip:hover { border-color: var(--coral); background: #fdf1f0; }
+.sp-chip-word {
+  max-width: 220px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sp-chip-x {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  padding: 0;
+}
+.sp-chip-x:hover { background: #f6dcdc; color: var(--err); }
+
+/* ---- 热门搜索：两列网格，前三名珊瑚色 ---- */
+.sp-hot-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px 20px;
+}
+.sp-hot-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 7px 6px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.sp-hot-item:hover { background: #fdf1f0; }
+.sp-hot-rank {
+  flex: none;
+  width: 18px;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 700;
+  font-style: italic;
+  color: var(--muted);
+}
+.sp-hot-rank.top { color: var(--coral); }
+.sp-hot-word {
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---- 联想列表 ---- */
+.sp-sug-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 6px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.sp-sug-row:hover { background: #fdf1f0; }
+.sp-sug-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+.sp-sug-word {
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---- 加载骨架屏：6 行占位 + 渐变动画 ---- */
+.sp-skel-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 18px;
+}
+.sp-skel-cover {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  border-radius: 8px;
+}
+.sp-skel-lines {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.sp-skel-line { height: 12px; border-radius: 6px; }
+.sp-skel-line.w60 { width: 60%; }
+.sp-skel-line.w35 { width: 35%; }
+.sp-skel-cover,
+.sp-skel-line {
+  background: linear-gradient(90deg, #f1eaea 25%, #faf4f4 45%, #f1eaea 65%);
+  background-size: 200% 100%;
+  animation: sp-shimmer 1.2s ease-in-out infinite;
+}
+@keyframes sp-shimmer {
+  from { background-position: 180% 0; }
+  to { background-position: -20% 0; }
+}
+
+/* ---- 歌曲行（songrow-）：行容器复用全局 .song 布局 ---- */
+.song .songrow-cover {
+  position: relative;
+  flex: none;
+  width: 44px;
+  height: 44px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #fdeceb;
+  display: grid;
+  place-items: center;
+}
+.song .songrow-cover .note { color: var(--coral); font-size: 17px; opacity: .85; }
+.song .songrow-cover img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.songrow-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.songrow-name .name { flex: 1 1 auto; min-width: 0; }
+.vip-badge {
+  flex: none;
+  font-size: 10px;
+  line-height: 1;
+  font-weight: 600;
+  color: var(--coral);
+  border: 1px solid var(--coral);
+  border-radius: 4px;
+  padding: 2px 3px;
+}
+.songrow-off { opacity: .45; }
+
+/* 行尾收藏心形：hover 显色，已收藏实心珊瑚红 */
+.songrow-fav {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: #ccc7d1;
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  transition: color .15s, background .15s;
+}
+.song:hover .songrow-fav { color: #f0a3a1; }
+.songrow-fav:hover { color: var(--coral); background: #fdeceb; }
+.songrow-fav.on { color: var(--coral); }
+
+/* 加载更多页脚 / 翻页错误行 */
+.songrow-foot {
+  text-align: center;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 14px 0 18px;
+  margin: 0;
+}
+.songrow-more-err {
+  text-align: center;
+  color: var(--err);
+  font-size: 12px;
+  padding: 8px 0 0;
+  margin: 0;
+}
+.sp-hint-err { color: var(--err); }
