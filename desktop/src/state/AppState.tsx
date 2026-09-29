@@ -84,20 +84,42 @@ export function useApp(): AppContextValue {
   return ctx;
 }
 
-// ---- 播放上报（对标安卓 trackPlaybackSession 的简化版，内部实现，不进 useApp 契约） ----
+// ---- 播放上报（对标安卓 trackPlaybackSession / PlaybackSyncStore，内部实现，不进 useApp 契约） ----
 
 /** 上报用的设备 id 存储键。 */
 const DEVICE_ID_KEY = "taotao.deviceId";
 
-/** 一次播放会话的本地累计状态；key 用于判断「同一首歌」以复用会话。 */
+/** 播放上报 outbox 的 localStorage 键：先落盘、服务端确认后再删除。 */
+const OUTBOX_KEY = "taotao.playbackOutbox";
+
+/**
+ * outbox 容量上限，超出丢最旧。正常路径 15 秒一报、服务端确认即删，
+ * 200 条只可能在长期离线仍持续听歌的极端场景下填满 —— 纯粹是防止
+ * localStorage 无限膨胀的兜底，不是正常流转的一部分。
+ */
+const OUTBOX_LIMIT = 200;
+
+/** 位置增量的可信上限（毫秒）：超过视为 seek / 换源 / 重播复位，丢弃不计。 */
+const MAX_POSITION_DELTA_MS = 2000;
+
+/** 周期快照间隔（毫秒）：每累计听满 15 秒快照上报一次。 */
+const PERIODIC_SYNC_MS = 15000;
+
+/**
+ * 一次播放会话的本地累计状态。会话生命周期规则（与安卓 shouldReuseSession 对齐）：
+ * - 复用（歌没变、没结束过）：暂停/恢复（togglePlay 直操音频元素，不经 playAt）、
+ *   seek、音质换源（reresolveCurrent）；
+ * - 终结并另起新会话：换了歌（songKey 不同）、自然播完（ended，含单曲循环重播）、
+ *   对正在播的同一首歌再次点播放（playAt 的语义是从头播放，即显式重播意图）。
+ */
 type PlaybackSessionState = {
   sessionId: string; // 每次新会话用 crypto.randomUUID() 生成
-  key: string; // songKeyOf 口径的歌曲键
+  songKey: string; // songKeyOf 口径的歌曲键，用于判断「同一首歌」
   source: string;
   songId: string; // songIdStringOf 口径的远端身份；空串的会话整体跳过不上报
-  startedAt: number; // 会话开始时间（毫秒）
-  listenedMs: number; // 已听时长累计（毫秒）
-  lastSyncAt: number; // 已快照上报到的 listenedMs 进度
+  startedAt: number; // 会话开始的真实墙钟（毫秒）
+  listenedMs: number; // 已听时长累计（毫秒），由真实播放位置增量累加
+  lastAudioPos: number; // 上次记录的 el.currentTime（毫秒），求位置增量用
 };
 
 /** 读取或生成设备 id：localStorage "taotao.deviceId" 缺失时用 crypto.randomUUID 生成并落盘。 */
@@ -117,19 +139,71 @@ function ensureDeviceId(): string {
 /**
  * 为歌曲开新会话。songId 为空串（既无 id 又无 mid）说明服务端无法定位这首歌，
  * 整个会话跳过不上报：返回 null 表示「无会话」，心跳与 flush 都直接忽略。
+ * lastAudioPos 取调用时刻音频元素的真实位置，避免把会话开始前的位移误算进收听时长。
  */
-function makePlaybackSession(song: Song): PlaybackSessionState | null {
+function makePlaybackSession(song: Song, el?: HTMLAudioElement | null): PlaybackSessionState | null {
   const songId = songIdStringOf(song);
   if (!songId) return null;
   return {
     sessionId: crypto.randomUUID(),
-    key: songKeyOf(song),
+    songKey: songKeyOf(song),
     source: song.source || "kuwo",
     songId,
     startedAt: Date.now(),
     listenedMs: 0,
-    lastSyncAt: 0,
+    lastAudioPos: el ? Math.round(el.currentTime * 1000) : 0,
   };
+}
+
+// ---- outbox（对标安卓 PlaybackSyncStore）：先落盘、服务端确认后才删除 ----
+
+/** 读取 outbox：解析失败或结构不对一律按空处理，不让坏数据卡死上报。 */
+function readOutbox(): PlaybackSessionReport[] {
+  try {
+    const raw = localStorage.getItem(OUTBOX_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (it): it is PlaybackSessionReport => !!it && typeof (it as PlaybackSessionReport).sessionId === "string",
+    );
+  } catch {
+    return [];
+  }
+}
+
+/** 整体写回 outbox；localStorage 不可用（配额/隐私模式）时放弃持久化。 */
+function writeOutbox(list: PlaybackSessionReport[]): void {
+  try {
+    localStorage.setItem(OUTBOX_KEY, JSON.stringify(list));
+  } catch {
+    // 写不进去就退化为一次性的直发快照，丢失只影响统计精度不影响播放
+  }
+}
+
+/**
+ * 待报快照入队：同一 sessionId 只保留最新一条快照（服务端按 sessionId 幂等 upsert，
+ * 新快照覆盖旧的即可），并把新快照排到队尾视为最新；超出上限丢最旧。
+ */
+function enqueueOutbox(report: PlaybackSessionReport): void {
+  const list = readOutbox().filter((it) => it.sessionId !== report.sessionId);
+  list.push(report);
+  writeOutbox(list.length > OUTBOX_LIMIT ? list.slice(list.length - OUTBOX_LIMIT) : list);
+}
+
+/**
+ * 上传成功后的删除：只删除与上传内容完全一致的那条（安卓 outboxVersion
+ * compare-and-remove 的简化版）。上传期间同 sessionId 若有更新的快照入队，
+ * 内容必然变化（listenedMs / lastPlayedAt 单调前进），会被保留下来等下一轮，
+ * 不会把未确认的新数据误删。
+ */
+function removeUploadedOutboxEntry(uploaded: PlaybackSessionReport): void {
+  const uploadedJson = JSON.stringify(uploaded);
+  writeOutbox(
+    readOutbox().filter(
+      (it) => !(it.sessionId === uploaded.sessionId && JSON.stringify(it) === uploadedJson),
+    ),
+  );
 }
 
 /**
@@ -220,8 +294,10 @@ export function AppProvider(props: { children: ReactNode; onExpired: () => void 
   const deviceIdRef = useRef(ensureDeviceId());
   // 当前播放会话；null = 无会话（未开播 / 刚终结 / 歌曲无远端身份不上报）
   const sessionRef = useRef<PlaybackSessionState | null>(null);
-  // isPlaying 的镜像 ref：上报心跳等闭包里读取真实播放态，避免取到过期 state
+  // isPlaying 的镜像 ref：位置增量结算等闭包里读取真实播放态，避免取到过期 state
   const isPlayingRef = useRef(false);
+  // outbox 在途标志：同一时刻只允许一个重试批在发送，防止并发重复上传同一批
+  const outboxSyncingRef = useRef(false);
 
   const current = index >= 0 && index < queue.length ? queue[index] : null;
 
@@ -240,9 +316,36 @@ export function AppProvider(props: { children: ReactNode; onExpired: () => void 
   }
 
   /**
-   * 快照式上报当前会话（fire-and-forget）：任何失败（网络错误 / 刷新令牌失败 /
-   * 409 冲突等）一律静默吞掉 —— 服务端按 sessionId 幂等 upsert、快照语义弱，
-   * 丢一次只影响统计精度，绝不能因此打断播放或弹提示。
+   * outbox 重试批：把待报快照逐条发往服务端，成功一条删一条，直到发空或遇到首个失败。
+   * 任何失败（网络 / 409 / 刷新令牌失败等）都静默保留条目等待下一轮 —— 后台同步语义，
+   * 不提示、不打断播放，SessionExpired 也不据此登出（与安卓一致）。
+   * 遇失败即整批中止：典型原因是网络不可达，余下条目大概率同样失败，留待下轮重试，
+   * 避免离线期间每轮打满一整批注定失败的请求。
+   */
+  const syncOutbox = useCallback(async () => {
+    if (outboxSyncingRef.current) return;
+    outboxSyncingRef.current = true;
+    try {
+      for (;;) {
+        const report = readOutbox()[0];
+        if (!report) break;
+        try {
+          await reportPlaybackSession(report);
+        } catch {
+          // 静默：失败不提示、不影响播放，条目留在 outbox 等重试
+          break;
+        }
+        removeUploadedOutboxEntry(report);
+      }
+    } finally {
+      outboxSyncingRef.current = false;
+    }
+  }, []);
+
+  /**
+   * 快照式上报当前会话：先把快照同步写入 outbox（localStorage 落盘，进程被杀也能补传），
+   * 再异步发送，服务端确认成功后才从 outbox 删除 —— 与安卓 PlaybackSyncStore 的
+   * persistTerminalSnapshot → syncPendingPlayback 同构。
    * opts.completed=true 时按「完整听完」口径上报并终结会话（置空 ref），
    * 防止其后的暂停/切歌快照把同 sessionId 的 completed 覆盖回去。
    */
@@ -257,8 +360,9 @@ export function AppProvider(props: { children: ReactNode; onExpired: () => void 
       source: session.source,
       songId: session.songId,
       startedAt: session.startedAt,
-      // 简化口径：lastPlayedAt = 开始时间 + 已听时长
-      lastPlayedAt: session.startedAt + session.listenedMs,
+      // 真实墙钟：快照落盘时刻（startedAt 也是创建时的 Date.now()）。
+      // lastPlayedAt >= startedAt、两值不超 now+5min 等服务端校验天然满足
+      lastPlayedAt: Date.now(),
       listenedMs: session.listenedMs,
     };
     if (opts?.completed) {
@@ -268,26 +372,56 @@ export function AppProvider(props: { children: ReactNode; onExpired: () => void 
       const dur = el ? el.duration : NaN;
       report.durationSeconds = Number.isFinite(dur) ? Math.floor(dur) : null;
     }
-    void reportPlaybackSession(report).catch(() => {
-      // 静默：上报失败不提示、不影响播放（含 SessionExpired，不据此登出）
-    });
-  }, []);
+    // 先落盘再发送：请求发不出去或进程随即被杀，下次挂载/重试也能补传
+    enqueueOutbox(report);
+    void syncOutbox();
+  }, [syncOutbox]);
 
-  // 上报心跳：每秒检查一次，仅当音频确实在播（isPlaying ref）时累计 1 秒；
-  // 每累计满 15 秒快照上报一次，lastSyncAt 记录已上报到的进度
+  /**
+   * 位置增量结算：读音频元素的真实播放位置，与上次记录位置求差后计入会话。
+   * 仅当会话在播（isPlaying）且 0 < delta <= 2000ms 时计入 listenedMs；
+   * delta 为负或超过 2 秒视为 seek / 换源 / 重播复位，丢弃但更新记录位置。
+   * 暂停与缓冲期间位置不前进，天然不累计。timeupdate 与 1 秒心跳共用本函数，
+   * 重复调用只按真实位置差结算一次，不会重复计费。
+   * 每跨过一个 15 秒整倍数边界触发一次周期快照（每个区间恰好触发一次）。
+   */
+  const accruePlayback = useCallback(() => {
+    const session = sessionRef.current;
+    const el = audioRef.current;
+    if (!session || !el || !el.src) return;
+    const posMs = Math.round(el.currentTime * 1000);
+    const delta = posMs - session.lastAudioPos;
+    session.lastAudioPos = posMs;
+    if (!isPlayingRef.current || delta <= 0 || delta > MAX_POSITION_DELTA_MS) return;
+    const before = session.listenedMs;
+    session.listenedMs += delta;
+    if (Math.floor(before / PERIODIC_SYNC_MS) < Math.floor(session.listenedMs / PERIODIC_SYNC_MS)) {
+      flushSession();
+    }
+  }, [flushSession]);
+
+  // 上报心跳：每秒结算一次真实位置增量（timeupdate 缺席或被节流时兜底），
+  // 15 秒周期快照由 accruePlayback 内部的边界检测触发；不再有时钟盲加
   useEffect(() => {
     const timer = window.setInterval(() => {
-      const session = sessionRef.current;
-      if (!session || !isPlayingRef.current) return;
-      session.listenedMs += 1000;
-      if (session.listenedMs - session.lastSyncAt >= 15000) flushSession();
+      accruePlayback();
     }, 1000);
     // 组件卸载时清掉心跳 interval，避免定时器泄漏
     return () => window.clearInterval(timer);
-  }, [flushSession]);
+  }, [accruePlayback]);
 
-  // 页面卸载前尽力上报一次：tauri 插件的 fetch 未必支持 keepalive，发不出去就丢，
-  // 快照语义弱、丢失无碍
+  // outbox 重试时机之三：挂载时立即补传上次遗留的待报快照，之后每 60 秒低频扫一次；
+  // 时机之一（flush 落盘时顺带触发）在 flushSession 里，同一时刻只有一个在途批
+  useEffect(() => {
+    void syncOutbox();
+    const timer = window.setInterval(() => {
+      void syncOutbox();
+    }, 60000);
+    return () => window.clearInterval(timer);
+  }, [syncOutbox]);
+
+  // 页面卸载前把当前会话快照同步写入 outbox：localStorage 是同步写，卸载前必然落盘，
+  // 发送交给下次挂载 / 定时重试补传（比原先 best-effort 的卸载期 fetch 可靠得多）
   useEffect(() => {
     const handleBeforeUnload = () => {
       try {
@@ -305,7 +439,7 @@ export function AppProvider(props: { children: ReactNode; onExpired: () => void 
       const list = queueRef.current;
       if (i < 0 || i >= list.length) return;
       const song = list[i];
-      // 换歌/重播前先把旧会话快照上报（fire-and-forget）。此时 el.src 还没换、
+      // 换歌/重播前先把旧会话快照落 outbox 并异步发送。此时 el.src 还没换、
       // 旧曲仍在播：若 resolveLink 失败，会话未终结，心跳会继续累计。
       flushSession();
       indexRef.current = i;
@@ -325,13 +459,12 @@ export function AppProvider(props: { children: ReactNode; onExpired: () => void 
         if (!el) return;
         el.src = link.url;
         await el.play();
-        // 播放真正开始后才开/续会话：resolveLink 失败或被更新的请求取代时不动会话。
-        // 同 key（暂停恢复 / seek 等同曲再入）复用会话，累计不清零；换了歌则开
-        // 新会话（旧会话已在 playAt 开头 flush）。
-        const key = songKeyOf(song);
-        if (!sessionRef.current || sessionRef.current.key !== key) {
-          sessionRef.current = makePlaybackSession(song);
-        }
+        // 播放真正开始后才开会话：resolveLink 失败或被更新的请求取代时不动会话。
+        // playAt 的语义是「从头播放这首歌」：即使同 key（对当前曲再次点播放）也是
+        // 显式重播意图，旧会话终结、另起新会话（暂停/恢复走 togglePlay 不经这里）。
+        // 开新会话前补一次快照，把旧会话在 resolveLink 期间多累计的部分带上。
+        flushSession();
+        sessionRef.current = makePlaybackSession(song, el);
       } catch (e) {
         if (gen !== playGenRef.current) return;
         if (e instanceof SessionExpired) {
@@ -538,10 +671,12 @@ export function AppProvider(props: { children: ReactNode; onExpired: () => void 
         el.currentTime = pos;
         setPosition(pos);
         await el.play();
-        // 换源续播仍是同一首歌：无会话（如刚被终结）则补开，有则复用，累计不清零
+        // 音质换源仍是同一首歌：复用会话、累计不清零（暂停/恢复/seek/换源都不换会话）；
+        // 仅当无会话（如刚播完被终结）或键不符时补开新会话。lastAudioPos 取恢复后的
+        // 真实位置，换 src 引起的位置跳变不会误算进收听时长
         const key = songKeyOf(song);
-        if (!sessionRef.current || sessionRef.current.key !== key) {
-          sessionRef.current = makePlaybackSession(song);
+        if (!sessionRef.current || sessionRef.current.songKey !== key) {
+          sessionRef.current = makePlaybackSession(song, el);
         }
       } catch (e) {
         if (gen !== playGenRef.current) return;
@@ -803,6 +938,8 @@ export function AppProvider(props: { children: ReactNode; onExpired: () => void 
   // ---- 音频元素事件：isPlaying/进度全部以元素事件为准 ----
 
   const handleTimeUpdate = (e: SyntheticEvent<HTMLAudioElement>) => {
+    // 先结算真实位置增量（跨 15 秒边界时会触发周期快照），再更新界面进度
+    accruePlayback();
     setPosition(e.currentTarget.currentTime);
   };
 
@@ -830,10 +967,11 @@ export function AppProvider(props: { children: ReactNode; onExpired: () => void 
       return;
     }
     if (repeat === "one") {
-      // 单曲循环重播：旧会话已终结，为重播单独开新会话（重播算一次独立播放）
+      // 单曲循环重播：旧会话已终结，为重播单独开新会话（重播算一次独立播放）；
+      // lastAudioPos 先取复位前的末尾位置，随后复位到 0 的负向跳变会被增量规则丢弃
       const replay = queueRef.current[indexRef.current];
-      if (replay) sessionRef.current = makePlaybackSession(replay);
       const el = audioRef.current;
+      if (replay) sessionRef.current = makePlaybackSession(replay, el);
       if (el) {
         el.currentTime = 0;
         void el.play().catch(() => {});
@@ -910,8 +1048,8 @@ export function AppProvider(props: { children: ReactNode; onExpired: () => void 
         onPause={() => {
           isPlayingRef.current = false;
           setIsPlaying(false);
-          // 暂停即快照上报一次；切歌换 src 引发的 pause 也会走到这里，
-          // 服务端按 sessionId 幂等 upsert，重复快照无害
+          // 暂停即快照上报一次（先落 outbox 再异步发）；切歌换 src 引发的 pause
+          // 也会走到这里，服务端按 sessionId 幂等 upsert，重复快照无害
           flushSession();
         }}
         onEnded={handleEnded}
