@@ -222,16 +222,17 @@
   animation: pd-fade-in .18s ease-out;
 }
 
-/* 顶栏 */
+/* 顶栏：两侧 1fr 等宽夹住标题，保证标题始终居中，右侧可容纳定时按钮 */
 .pd-top {
   display: grid;
-  grid-template-columns: 48px 1fr 48px;
+  grid-template-columns: 1fr auto 1fr;
   align-items: center;
   height: 56px;
   padding: 0 12px;
   flex: none;
 }
 .pd-collapse {
+  justify-self: start;
   width: 40px;
   height: 40px;
   border: 0;
@@ -250,6 +251,34 @@
   text-align: center;
   font-size: 15px;
   font-weight: 700;
+}
+/* 顶栏右侧：定时关闭按钮（倒计时/等待本首播完时高亮） */
+.pd-top-right {
+  display: flex;
+  justify-content: flex-end;
+}
+.pd-sleep-btn {
+  height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 17px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: border-color .15s, color .15s, background .15s;
+}
+.pd-sleep-btn:hover {
+  border-color: var(--coral);
+  color: var(--coral);
+  background: #fff5f4;
+}
+.pd-sleep-btn.on {
+  border-color: var(--coral);
+  color: var(--coral);
+  background: #fdeceb;
+  font-weight: 600;
 }
 
 /* 主区：左（封面+控制）右（队列）布局 */
@@ -349,6 +378,55 @@
   margin-top: 6px;
   color: var(--muted);
   font-size: 14px;
+}
+
+/* 左列顶部视图切换：封面 / 歌词（小分段控件） */
+.pd-view-tabs {
+  align-self: center;
+  display: inline-flex;
+  gap: 4px;
+  margin-bottom: 14px;
+  padding: 4px;
+  background: #f3f4f6;
+  border-radius: 17px;
+  flex: none;
+}
+.pd-view-tab {
+  height: 28px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 14px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background .15s, color .15s;
+}
+.pd-view-tab.on {
+  background: var(--surface);
+  color: var(--coral);
+  font-weight: 600;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .08);
+}
+.pd-view-tab:disabled {
+  opacity: .4;
+  cursor: not-allowed;
+}
+
+/* 歌词面板容器：与封面同尺寸占位，避免两种视图切换时布局跳动 */
+.pd-lyrics-wrap {
+  width: 340px;
+  height: 340px;
+  border: 1px solid var(--border);
+  border-radius: 24px;
+  background: var(--surface);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, .08);
+  overflow: hidden;
+  flex: none;
+}
+.pd-lyrics-wrap > * {
+  width: 100%;
+  height: 100%;
 }
 
 /* 控制区（占左列宽度） */
@@ -558,6 +636,7 @@
   gap: 10px;
   padding: 10px 14px;
   cursor: pointer;
+  user-select: none;
   transition: background .12s;
 }
 .pd-queue-row:hover {
@@ -599,6 +678,43 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* 拖动排序手柄：整行可拖，「⋮」作视觉提示 */
+.pd-queue-grip {
+  width: 14px;
+  flex: none;
+  text-align: center;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--muted);
+  opacity: .55;
+  cursor: grab;
+  user-select: none;
+}
+.pd-queue-row.dragging {
+  opacity: .45;
+}
+.pd-queue-row.drop-target {
+  background: #fff5f4;
+  box-shadow: inset 0 2px 0 var(--coral);
+}
+/* 行尾删除按钮：仅非当前曲显示，hover 变红 */
+.pd-queue-del {
+  width: 24px;
+  height: 24px;
+  flex: none;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background .15s, color .15s;
+}
+.pd-queue-del:hover {
+  background: rgba(211, 51, 51, .12);
+  color: var(--err);
 }
 .pd-queue-foot {
   padding: 10px 16px;
@@ -675,6 +791,165 @@
 }
 .pd-modal-btn.primary:hover {
   background: var(--coral-dark);
+}
+
+/* 音质选择弹窗 */
+.pd-quality-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+.pd-quality-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color .15s, background .15s;
+}
+.pd-quality-row:hover {
+  border-color: var(--coral);
+  background: #fff5f4;
+}
+.pd-quality-row.current {
+  border-color: var(--coral);
+  background: #fdeceb;
+}
+.pd-quality-name {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pd-quality-default {
+  flex: none;
+  font-size: 11px;
+  color: var(--muted);
+}
+.pd-quality-badge {
+  flex: none;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: var(--coral);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+}
+.pd-quality-size {
+  flex: none;
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.pd-quality-note {
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
+}
+.pd-quality-loading {
+  padding: 28px 0;
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
+}
+.pd-quality-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 20px 0 8px;
+  color: var(--err);
+  font-size: 13px;
+}
+.pd-quality-error .pd-modal-btn {
+  flex: none;
+  width: 120px;
+}
+
+/* 定时关闭弹窗 */
+.pd-sleep-notice {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #fdeceb;
+  color: var(--coral);
+  font-size: 13px;
+}
+.pd-sleep-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.pd-sleep-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  height: 42px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 14px;
+  cursor: pointer;
+  transition: border-color .15s, background .15s;
+}
+.pd-sleep-row:hover {
+  border-color: var(--coral);
+  background: #fff5f4;
+}
+.pd-sleep-row.selected {
+  border-color: var(--coral);
+  background: #fdeceb;
+  color: var(--coral);
+  font-weight: 600;
+}
+.pd-sleep-check {
+  flex: none;
+  color: var(--coral);
+  font-weight: 700;
+}
+.pd-sleep-wait {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  font-size: 13px;
+  cursor: pointer;
+  user-select: none;
+}
+.pd-sleep-wait input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--coral);
+  cursor: pointer;
+  flex: none;
+}
+.pd-sleep-cancel {
+  width: 100%;
+  margin-top: 14px;
+}
+.pd-sleep-cancel:disabled {
+  opacity: .45;
+  cursor: not-allowed;
 }
 
 /* ---- 动画 ---- */

@@ -5,6 +5,7 @@ import {
   favoriteKeyOf,
   fetchFavorites,
   fetchSongInfos,
+  labelOfQuality,
   readableError,
   removeFavorite,
   resolveLink,
@@ -15,7 +16,7 @@ import {
 /** 重复播放模式：off 播完即停；all 列表循环；one 单曲循环。 */
 export type RepeatMode = "off" | "all" | "one";
 
-/** useApp 返回的上下文值：播放器 / 收藏 / UI 轻提示三大块。 */
+/** useApp 返回的上下文值：播放器 / 队列操作 / 音质 / 收藏 / 定时关闭 / UI 轻提示。 */
 type AppContextValue = {
   // ---- 播放器 ----
   queue: Song[];
@@ -33,6 +34,20 @@ type AppContextValue = {
   prev: () => void;
   seek: (sec: number) => void;
   cycleRepeat: () => void;
+  // ---- 队列操作（新增） ----
+  removeQueueItem: (i: number) => void;
+  moveQueueItem: (from: number, to: number) => void;
+  // ---- 音质（新增） ----
+  preferredQuality: number;
+  setPreferredQuality: (q: number) => void;
+  activeQuality: number | null;
+  reresolveCurrent: (quality: number) => Promise<void>;
+  // ---- 定时关闭（新增） ----
+  sleepRemainingSec: number | null;
+  sleepWaitForSongEnd: boolean;
+  sleepPendingStop: boolean;
+  setSleepTimer: (minutes: number | null) => void;
+  toggleSleepWaitForSongEnd: () => void;
   // ---- 收藏 ----
   favorites: Set<string>;
   favSongs: Song[];
@@ -56,8 +71,8 @@ export function useApp(): AppContextValue {
 }
 
 /**
- * 全局状态 Provider：渲染唯一的 <audio> 元素，承载播放队列、收藏库和轻提示。
- * 播放失败/收藏失败等会话过期统一经 props.onExpired 上抛给上层登出。
+ * 全局状态 Provider：渲染唯一的 <audio> 元素，承载播放队列、收藏库、音质偏好、
+ * 定时关闭和轻提示。播放/收藏/换源等会话过期统一经 props.onExpired 上抛给上层登出。
  */
 export function AppProvider(props: { children: ReactNode; onExpired: () => void }): JSX.Element {
   const { children, onExpired } = props;
@@ -81,6 +96,44 @@ export function AppProvider(props: { children: ReactNode; onExpired: () => void 
   const [repeat, setRepeat] = useState<RepeatMode>("off");
   const repeatRef = useRef<RepeatMode>("off");
   const [playError, setPlayError] = useState("");
+
+  // ---- 音质状态 ----
+  // 默认播放音质档：localStorage "taotao.quality" 存数字字符串，仅接受 0-18 的整数档位，缺省 4
+  const [preferredQuality, setPreferredQualityState] = useState<number>(() => {
+    try {
+      const raw = localStorage.getItem("taotao.quality");
+      if (raw !== null) {
+        const n = Number(raw);
+        if (Number.isInteger(n) && n >= 0 && n <= 18) return n;
+      }
+    } catch {
+      // localStorage 不可用时忽略，使用缺省档位
+    }
+    return 4;
+  });
+  // preferredQuality 的镜像 ref：playAt 等闭包里读取最新档位，避免取到过期状态
+  const preferredQualityRef = useRef(preferredQuality);
+  // 当前曲实际生效档位（resolveLink 返回的 quality）；切歌前为 null
+  const [activeQuality, setActiveQuality] = useState<number | null>(null);
+
+  // ---- 定时关闭状态 ----
+  // 倒计时剩余秒数；null=未开启，开启期间每秒刷新
+  const [sleepRemainingSec, setSleepRemainingSec] = useState<number | null>(null);
+  // 「播完整首歌再停止播放」标记：localStorage "taotao.sleepWaitSongEnd" 存 "1"/"0"，持久语义由 UI 决定
+  const [sleepWaitForSongEnd, setSleepWaitForSongEnd] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("taotao.sleepWaitSongEnd") === "1";
+    } catch {
+      return false;
+    }
+  });
+  // sleepWaitForSongEnd 的镜像 ref：interval 回调闭包里读取最新标记
+  const sleepWaitRef = useRef(sleepWaitForSongEnd);
+  // 倒计时已到、正在等当前曲自然播完的等待态；跨手动切歌存活
+  const [sleepPendingStop, setSleepPendingStop] = useState(false);
+  // 定时关闭的秒级 interval 句柄与截止时间戳（按时间戳算剩余秒数，避免累计漂移）
+  const sleepTimerRef = useRef<number | null>(null);
+  const sleepDeadlineRef = useRef(0);
 
   // ---- 收藏状态 ----
   const [favorites, setFavorites] = useState<Set<string>>(new Set());
@@ -118,16 +171,19 @@ export function AppProvider(props: { children: ReactNode; onExpired: () => void 
       indexRef.current = i;
       setIndex(i);
       setPlayError("");
+      // 切歌时实际生效档位先归空，resolveLink 成功后再写入
+      setActiveQuality(null);
       // 切歌先复位进度，随后由音频元素事件写入真实值
       setPosition(0);
       setDuration(0);
       const gen = ++playGenRef.current;
       try {
-        const url = await resolveLink(song);
+        const link = await resolveLink(song, preferredQualityRef.current);
         if (gen !== playGenRef.current) return; // 已有更新的播放请求，丢弃过期结果
+        setActiveQuality(link.quality);
         const el = audioRef.current;
         if (!el) return;
-        el.src = url;
+        el.src = link.url;
         await el.play();
       } catch (e) {
         if (gen !== playGenRef.current) return;
@@ -154,6 +210,64 @@ export function AppProvider(props: { children: ReactNode; onExpired: () => void 
     },
     [playAt],
   );
+
+  // ---- 队列操作 ----
+
+  /** 删除队列第 i 项：越界直接忽略；当前播放中的曲不可删，toast 提示后不动。 */
+  const removeQueueItem = useCallback(
+    (i: number) => {
+      const list = queueRef.current;
+      if (i < 0 || i >= list.length) return;
+      if (i === indexRef.current) {
+        toast("当前播放的歌曲不能移除");
+        return;
+      }
+      const next = list.slice();
+      next.splice(i, 1);
+      queueRef.current = next;
+      setQueue(next);
+      // 删除点在播放中曲之前：current 的下标左移一位，保证仍指向同一首歌
+      const oldIndex = indexRef.current;
+      if (i < oldIndex) {
+        indexRef.current = oldIndex - 1;
+        setIndex(oldIndex - 1);
+      }
+    },
+    [toast],
+  );
+
+  /**
+   * 把队列第 from 项移动到 to：越界或相等直接忽略。
+   * 播放中曲的下标跟随算法，保证 current 始终是同一首歌：
+   * 移的就是当前曲（from===index）→ 下标跟随到 to；
+   * from 在当前曲之前且插入点不低于当前曲（from<index && to>=index）→ 当前曲左移一位；
+   * from 在当前曲之后且插入点不超过当前曲（from>index && to<=index）→ 当前曲右移一位。
+   */
+  const moveQueueItem = useCallback((from: number, to: number) => {
+    const list = queueRef.current;
+    if (from < 0 || from >= list.length) return;
+    if (to < 0 || to >= list.length) return;
+    if (from === to) return;
+    const moved = list[from];
+    const next = list.slice();
+    next.splice(from, 1);
+    next.splice(to, 0, moved);
+    queueRef.current = next;
+    setQueue(next);
+    const cur = indexRef.current;
+    let target = cur;
+    if (from === cur) {
+      target = to;
+    } else if (from < cur && to >= cur) {
+      target = cur - 1;
+    } else if (from > cur && to <= cur) {
+      target = cur + 1;
+    }
+    if (target !== cur) {
+      indexRef.current = target;
+      setIndex(target);
+    }
+  }, []);
 
   // next/prev 的回绕规则只认 all 循环：到尾/在 0 时其余模式保持不动
   const next = useCallback(() => {
@@ -201,6 +315,148 @@ export function AppProvider(props: { children: ReactNode; onExpired: () => void 
     const nextMode = order[(order.indexOf(repeatRef.current) + 1) % order.length];
     repeatRef.current = nextMode;
     setRepeat(nextMode);
+  }, []);
+
+  // ---- 音质 ----
+
+  /**
+   * 用传入档位重取当前曲直链并续播：换 src 后先恢复进度再 play，保持 position 不中断。
+   * 无当前曲或无音源时只把传入档位落盘为偏好，不发声。
+   * 同样计入播放请求代数：与 playAt 快速并发时只有最后一次请求的结果生效。
+   */
+  const reresolveCurrent = useCallback(
+    async (quality: number) => {
+      const list = queueRef.current;
+      const i = indexRef.current;
+      const song = i >= 0 && i < list.length ? list[i] : null;
+      const el = audioRef.current;
+      if (!song || !el || !el.src) {
+        // 没有可续播的音源：只更新偏好档位（持久化 + state + ref），不动播放
+        preferredQualityRef.current = quality;
+        setPreferredQualityState(quality);
+        try {
+          localStorage.setItem("taotao.quality", String(quality));
+        } catch {
+          // localStorage 不可用时忽略
+        }
+        return;
+      }
+      // 换源前记下当前进度，新直链就绪后恢复，听感不中断
+      const pos = el.currentTime;
+      const gen = ++playGenRef.current;
+      try {
+        const link = await resolveLink(song, quality);
+        if (gen !== playGenRef.current) return; // 已有更新的播放请求，丢弃过期结果
+        setActiveQuality(link.quality);
+        if (link.fallback) {
+          // 服务端沿阶梯降级：实际档位低于请求时明确告知
+          toast(`该档位不可用，已降级到 ${labelOfQuality(link.quality)}`);
+        }
+        // 换源续播：先换 src，再恢复进度，最后继续播放
+        el.src = link.url;
+        el.currentTime = pos;
+        setPosition(pos);
+        await el.play();
+      } catch (e) {
+        if (gen !== playGenRef.current) return;
+        if (e instanceof SessionExpired) {
+          onExpiredRef.current();
+          return;
+        }
+        // 快速切歌引发的中断不算错误
+        if (e instanceof DOMException && e.name === "AbortError") return;
+        toast(readableError(e));
+      }
+    },
+    [toast],
+  );
+
+  /** 设置默认音质档：持久化 + 更新 state；正在播放（有音源）时立即按新档位重取直链续播。 */
+  const setPreferredQuality = useCallback(
+    (q: number) => {
+      preferredQualityRef.current = q;
+      setPreferredQualityState(q);
+      try {
+        localStorage.setItem("taotao.quality", String(q));
+      } catch {
+        // localStorage 不可用时忽略
+      }
+      const el = audioRef.current;
+      if (el && el.src) {
+        void reresolveCurrent(q);
+      }
+    },
+    [reresolveCurrent],
+  );
+
+  // ---- 定时关闭 ----
+
+  /** 清掉定时关闭的秒级 interval：重复设置、取消、到期与组件卸载时都要调用。 */
+  const clearSleepInterval = useCallback(() => {
+    if (sleepTimerRef.current !== null) {
+      window.clearInterval(sleepTimerRef.current);
+      sleepTimerRef.current = null;
+    }
+  }, []);
+
+  /** 倒计时到期动作：只执行一次（进入前 interval 已清理）。 */
+  const handleSleepExpiry = useCallback(() => {
+    const el = audioRef.current;
+    if (sleepWaitRef.current && el && el.src && !el.paused) {
+      // 开了「播完整首再停」且音频在播：转入等待态，等本曲自然播完时由 handleEnded 停止
+      setSleepPendingStop(true);
+      setSleepRemainingSec(null);
+      toast("定时时间到，将在本首播完后暂停");
+      return;
+    }
+    // 否则立即暂停（无音源时 pause 为空操作，仅给出提示）
+    if (el && el.src) el.pause();
+    setSleepRemainingSec(null);
+    toast("定时关闭：已暂停播放");
+  }, [toast]);
+
+  /**
+   * 设置定时关闭：minutes>0 启动倒计时（清掉旧 interval 与「播完再停」等待态）；
+   * null 取消全部（含等待态）。interval 句柄与截止时间戳都存 ref，回调里按
+   * 截止时间戳计算剩余秒数，不随定时器累计漂移。
+   */
+  const setSleepTimer = useCallback(
+    (minutes: number | null) => {
+      clearSleepInterval();
+      if (minutes === null || minutes <= 0) {
+        // 取消：倒计时与等待态一并清掉
+        setSleepRemainingSec(null);
+        setSleepPendingStop(false);
+        return;
+      }
+      // 重新启动：旧的等待态作废
+      setSleepPendingStop(false);
+      const deadline = Date.now() + minutes * 60000;
+      sleepDeadlineRef.current = deadline;
+      setSleepRemainingSec(Math.max(0, Math.ceil((deadline - Date.now()) / 1000)));
+      sleepTimerRef.current = window.setInterval(() => {
+        const remain = Math.max(0, Math.ceil((sleepDeadlineRef.current - Date.now()) / 1000));
+        setSleepRemainingSec(remain);
+        if (remain <= 0) {
+          // 到期只触发一次：先清 interval，再处理到期动作
+          clearSleepInterval();
+          handleSleepExpiry();
+        }
+      }, 1000);
+    },
+    [clearSleepInterval, handleSleepExpiry],
+  );
+
+  /** 切换「播完整首歌再停止播放」标记并写回 localStorage。 */
+  const toggleSleepWaitForSongEnd = useCallback(() => {
+    const next = !sleepWaitRef.current;
+    sleepWaitRef.current = next;
+    setSleepWaitForSongEnd(next);
+    try {
+      localStorage.setItem("taotao.sleepWaitSongEnd", next ? "1" : "0");
+    } catch {
+      // localStorage 不可用时忽略
+    }
   }, []);
 
   const isFavorite = useCallback((s: Song) => favorites.has(favoriteKeyOf(s)), [favorites]);
@@ -307,6 +563,13 @@ export function AppProvider(props: { children: ReactNode; onExpired: () => void 
     void refreshFavorites();
   }, [refreshFavorites]);
 
+  // 组件卸载时清掉定时关闭的 interval，避免定时器泄漏
+  useEffect(() => {
+    return () => {
+      if (sleepTimerRef.current !== null) window.clearInterval(sleepTimerRef.current);
+    };
+  }, []);
+
   // ---- 音频元素事件：isPlaying/进度全部以元素事件为准 ----
 
   const handleTimeUpdate = (e: SyntheticEvent<HTMLAudioElement>) => {
@@ -319,8 +582,20 @@ export function AppProvider(props: { children: ReactNode; onExpired: () => void 
     setDuration(Number.isFinite(el.duration) ? el.duration : 0);
   };
 
-  // 播完：one 重播当前；all 到尾回 0 继续；off 最后一首停住，其余进入下一首
+  // 播完：定时关闭「播完再停」等待态优先于 repeat（单曲循环也不续播）；
+  // one 重播当前；all 到尾回 0 继续；off 最后一首停住，其余进入下一首
   const handleEnded = () => {
+    // sleepPendingStop 跨手动切歌存活：playAt 不清除它，下一次自然播完时仍会在这里停住
+    if (sleepPendingStop) {
+      const el = audioRef.current;
+      if (el) {
+        el.pause();
+        el.currentTime = 0;
+      }
+      setSleepPendingStop(false);
+      toast("定时关闭：已暂停播放");
+      return;
+    }
     if (repeat === "one") {
       const el = audioRef.current;
       if (el) {
@@ -355,6 +630,17 @@ export function AppProvider(props: { children: ReactNode; onExpired: () => void 
     prev,
     seek,
     cycleRepeat,
+    removeQueueItem,
+    moveQueueItem,
+    preferredQuality,
+    setPreferredQuality,
+    activeQuality,
+    reresolveCurrent,
+    sleepRemainingSec,
+    sleepWaitForSongEnd,
+    sleepPendingStop,
+    setSleepTimer,
+    toggleSleepWaitForSongEnd,
     favorites,
     favSongs,
     favReady,

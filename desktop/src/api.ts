@@ -320,15 +320,67 @@ export async function fetchSongInfos(source: string, ids: string[], mids: string
   });
 }
 
-/** 解析上游直链：/api/v1/songs/:id/link（信封 data.url）。 */
-export async function resolveLink(song: Song): Promise<string> {
-  const q = new URLSearchParams({ quality: "4", source: song.source || "kuwo" });
+/** 直链解析结果：url 可直接投喂 <audio>；quality 为服务端实际下发的档位。 */
+export type ResolvedLink = { url: string; quality: number; fallback: boolean };
+
+/** 解析上游直链：/api/v1/songs/:id/link。quality 缺省 4（标准），服务端会沿阶梯降级。 */
+export async function resolveLink(song: Song, quality?: number): Promise<ResolvedLink> {
+  const q = new URLSearchParams({ quality: String(quality ?? 4), source: song.source || "kuwo" });
   if (song.mid) q.set("mid", song.mid);
   if (song.type != null) q.set("type", String(song.type));
   const resp = await authedGet(`/api/v1/songs/${song.id}/link?${q}`, "application/json");
   const data = await unwrap(resp);
   if (!data?.url) throw new Error("无法获取播放地址");
-  return data.url as string;
+  return {
+    url: data.url as string,
+    quality: Number(data.quality ?? quality ?? 4),
+    fallback: data.fallback === true,
+  };
+}
+
+// ---- 歌词与音质档位 ----
+
+/** 拉取歌词：format=json 信封 data {lrc, yrc}。上游没有歌词（502）返回空串，界面显示「暂无歌词」。 */
+export async function fetchLyrics(song: Song): Promise<{ lrc: string; yrc: string }> {
+  const q = new URLSearchParams({ format: "json", source: song.source || "kuwo" });
+  if (song.mid) q.set("mid", song.mid);
+  const resp = await authedGet(`/api/v1/songs/${song.id}/lyrics?${q}`, "application/json");
+  if (resp.status === 502) return { lrc: "", yrc: "" };
+  const data = await unwrap(resp);
+  return { lrc: String(data?.lrc ?? ""), yrc: String(data?.yrc ?? "") };
+}
+
+/** 单曲音质档位：size 为字节数（服务端已滤掉 size=0 的不存在档位）。 */
+export type QualityTier = { quality: number; label: string; size: number };
+
+/** 拉取当前歌曲的可用音质档位：/api/v1/songs/:id/info 信封 data.qualities。 */
+export async function fetchQualityTiers(song: Song): Promise<QualityTier[]> {
+  const q = new URLSearchParams({ source: song.source || "kuwo" });
+  if (song.mid) q.set("mid", song.mid);
+  const resp = await authedGet(`/api/v1/songs/${song.id}/info?${q}`, "application/json");
+  const data = await unwrap(resp);
+  const list: any[] = Array.isArray(data?.qualities) ? data.qualities : [];
+  return list
+    .map((t) => ({ quality: Number(t?.quality), label: String(t?.label ?? ""), size: Number(t?.size) }))
+    .filter((t) => Number.isFinite(t.quality));
+}
+
+/** 任意音质档位的中文名（与 shared AudioQuality.kt 的 labelOfQuality 同口径），档位标签兜底用。 */
+export function labelOfQuality(value: number): string {
+  if (value === 0) return "试听";
+  if (value === 1 || value === 2) return "有损";
+  if (value >= 3 && value <= 7) return "标准";
+  if (value === 8 || value === 9) return "HQ 高音质";
+  if (value === 10) return "SQ 无损";
+  if (value === 11) return "Hi-Res";
+  if (value === 12) return "杜比全景声";
+  if (value === 13) return "臻品全景声";
+  if (value === 14) return "臻品母带";
+  if (value === 15) return "AI 伴奏消音";
+  if (value === 16) return "AI 人声消音";
+  if (value === 17) return "AI 钢琴";
+  if (value === 18) return "NAC";
+  return `音质 ${value}`;
 }
 
 /** 把异常转成用户可读文案：网络类统一提示，其它保留原文。 */
