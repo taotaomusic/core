@@ -2,5 +2,6 @@ node_modules
 dist
 src-tauri/target
 src-tauri/gen
-# 图标由 CI（或本地 `npm run tauri icon <png>`）生成，不入库。
-src-tauri/icons
+# 品牌图标（src-tauri/icons/icon.ico|png）直接入库：CI 上 `tauri icon` 动态生成
+# 曾静默回退成纯色图（见 gen-icon 历史），入库后构建不再依赖这一步。
+# 换品牌图时本地 `npx tauri icon <png>` 重新生成后提交。

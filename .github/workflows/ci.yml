@@ -417,17 +417,8 @@ jobs:
           key: desktop
       - name: 安装前端依赖
         run: npm install
-      - name: 生成图标
-        shell: bash
-        run: |
-          # 优先用 App 品牌图标（androidApp 的 app_icon.png）；非方形/失败时回退纯色生成图。
-          if npx tauri icon ../androidApp/src/main/res/drawable/app_icon.png; then
-            echo "已用 app_icon.png 生成图标"
-          else
-            echo "app_icon.png 不适用，回退生成纯色图标"
-            node scripts/gen-icon.mjs > app-icon.png
-            npx tauri icon app-icon.png
-          fi
+      # 图标（src-tauri/icons/）已提交入库，不再动态生成：CI 上 `tauri icon`
+      # 曾静默失败回退成纯色图，装出来的包图标是错的。
       - name: 构建 Tauri（.msi + nsis）
         run: npm run tauri build
       - uses: actions/upload-artifact@v4
