@@ -192,6 +192,10 @@ jobs:
           path: server/crypto/dist/node
       - name: 安装依赖
         run: npm ci
+      - name: 自动版本号（根 VERSION + 构建号）
+        run: |
+          base=$(tr -d '[:space:]' < ../VERSION)
+          node -e "const fs=require('fs');const j=JSON.parse(fs.readFileSync('package.json'));j.version='${base}.'+process.env.GITHUB_RUN_NUMBER;fs.writeFileSync('package.json',JSON.stringify(j,null,2)+'\n');console.log('server version =>',j.version)"
       - name: 构建
         env:
           # 后端不自建 wasm 播放器（core 单仓里上级有 Gradle 工程会误触发）；
@@ -413,10 +417,11 @@ jobs:
           key: desktop
       - name: 安装前端依赖
         run: npm install
-      - name: 自动版本号（<主>.<次>.<构建号>，对标安卓免手改）
+      - name: 自动版本号（根 VERSION 定 MAJOR.MINOR，PATCH=构建号）
         shell: bash
         run: |
-          node -e "const fs=require('fs');const f='src-tauri/tauri.conf.json';const j=JSON.parse(fs.readFileSync(f));const p=j.version.split('.');j.version=p[0]+'.'+p[1]+'.'+process.env.GITHUB_RUN_NUMBER;fs.writeFileSync(f,JSON.stringify(j,null,2));console.log('desktop version =>',j.version)"
+          base=$(tr -d '[:space:]' < ../VERSION)
+          node -e "const fs=require('fs');const f='src-tauri/tauri.conf.json';const j=JSON.parse(fs.readFileSync(f));j.version='${base}.'+process.env.GITHUB_RUN_NUMBER;fs.writeFileSync(f,JSON.stringify(j,null,2));console.log('desktop version =>',j.version)"
       # 图标（src-tauri/icons/）已提交入库，不再动态生成。
       - name: 未配签名密钥时关闭更新产物（避免 CI 因缺 Secret 变红）
         if: env.HAS_UPDATER_KEY != 'true'
@@ -458,7 +463,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          ver="0.1.${GITHUB_RUN_NUMBER}"
+          ver="$(tr -d '[:space:]' < ../VERSION).${GITHUB_RUN_NUMBER}"
           gh release view desktop-latest --json assets -q '.assets[].name' 2>/dev/null | while read -r a; do
             case "$a" in
               latest.json) : ;;
