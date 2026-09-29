@@ -20,10 +20,10 @@ jobs:
   changes:
     runs-on: ubuntu-latest
     outputs:
-      crypto: ${{ steps.f.outputs.crypto }}
-      server: ${{ steps.f.outputs.server }}
-      client: ${{ steps.f.outputs.client }}
-      desktop: ${{ steps.f.outputs.desktop }}
+      crypto: ${{ steps.f.outputs.crypto == 'true' || contains(github.event.head_commit.message, '[full]') }}
+      server: ${{ steps.f.outputs.server == 'true' || contains(github.event.head_commit.message, '[full]') }}
+      client: ${{ steps.f.outputs.client == 'true' || contains(github.event.head_commit.message, '[full]') }}
+      desktop: ${{ steps.f.outputs.desktop == 'true' || contains(github.event.head_commit.message, '[full]') }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -54,8 +54,24 @@ jobs:
               - 'crypto/**'
 
   # PLACEHOLDER_JOBS
-  crypto:
+  purge:
     needs: changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: 删除全部旧 Release（提交信息含 [purge] 时；随后各 job 重建干净的 5 个）
+        if: contains(github.event.head_commit.message, '[purge]')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release list --limit 300 --json tagName -q '.[].tagName' | while read -r t; do
+            [ -n "$t" ] && { echo "删除 $t"; gh release delete "$t" --cleanup-tag -y || true; }
+          done
+
+  crypto:
+    needs: [changes, purge]
     if: needs.changes.outputs.crypto == 'true' || needs.changes.outputs.server == 'true' || needs.changes.outputs.client == 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -337,7 +353,7 @@ jobs:
 
   # PLACEHOLDER_CLIENT_PUBLISH
   client-web:
-    needs: changes
+    needs: [changes, purge]
     if: needs.changes.outputs.client == 'true'
     runs-on: windows-latest
     permissions:
@@ -401,7 +417,7 @@ jobs:
 
   # Windows 桌面（Tauri + React）。crypto-src 变化也重建（src-tauri 直接依赖 core）。
   desktop:
-    needs: changes
+    needs: [changes, purge]
     if: needs.changes.outputs.desktop == 'true' || needs.changes.outputs.crypto == 'true'
     runs-on: windows-latest
     permissions:
