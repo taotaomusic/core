@@ -9,6 +9,21 @@ import {
 } from "../api";
 import { useApp } from "../state/AppState";
 import { hideOnError } from "./img";
+import {
+  IconChevronDown,
+  IconClock,
+  IconClose,
+  IconHeart,
+  IconMusicNote,
+  IconNext,
+  IconPause,
+  IconPlay,
+  IconPrev,
+  IconQuality,
+  IconQueue,
+  IconRepeat,
+  IconShare,
+} from "./icons";
 import { LyricsPane } from "./LyricsPane";
 import "./player.css";
 
@@ -83,7 +98,10 @@ async function copyText(text: string): Promise<boolean> {
  */
 export function PlayerDetail() {
   const app = useApp();
-  const [showQueue, setShowQueue] = useState(true);
+  // 队列面板显隐：宽窗默认并排展示；窄窗（≤980px，浮层模式）默认收起，点「队列」按钮以浮层弹出
+  const [showQueue, setShowQueue] = useState(
+    () => !window.matchMedia("(max-width: 980px)").matches,
+  );
   // 拖动进度条时的预览位置（秒）；null 表示未在拖动
   const [dragSec, setDragSec] = useState<number | null>(null);
   const [sharing, setSharing] = useState(false);
@@ -283,7 +301,7 @@ export function PlayerDetail() {
     <div className="pd-overlay">
       {/* 顶栏：收起 + 标题 + 定时关闭 */}
       <div className="pd-top">
-        <button className="pd-collapse" title="收起" onClick={collapse}>⌄</button>
+        <button className="pd-collapse" title="收起" onClick={collapse}><IconChevronDown size={22} /></button>
         <div className="pd-top-title">正在播放</div>
         <div className="pd-top-right">
           <button
@@ -291,7 +309,8 @@ export function PlayerDetail() {
             title={sleepTitle}
             onClick={() => setSleepOpen(true)}
           >
-            ⏱ {sleepLabel}
+            <IconClock size={15} />
+            {sleepLabel}
           </button>
         </div>
       </div>
@@ -320,11 +339,16 @@ export function PlayerDetail() {
             {/* 中部区域：封面大图 或 歌词面板（歌名/进度/控制留在外层不动） */}
             {lyricsTab === "lyrics" && current ? (
               <div className="pd-lyrics-wrap">
-                <LyricsPane song={current} positionSec={app.position} onSeek={(sec) => app.seek(sec)} />
+                <LyricsPane
+                  song={current}
+                  positionSec={app.position}
+                  playing={app.isPlaying}
+                  onSeek={(sec) => app.seek(sec)}
+                />
               </div>
             ) : (
               <div className="pd-cover">
-                <span className="pd-cover-note">♪</span>
+                <span className="pd-cover-note"><IconMusicNote size={80} /></span>
                 {current.coverUrl ? <img src={current.coverUrl} alt="" onError={hideOnError} /> : null}
               </div>
             )}
@@ -336,7 +360,7 @@ export function PlayerDetail() {
                 title={fav ? "取消收藏" : "收藏"}
                 onClick={() => app.toggleFavorite(current)}
               >
-                {fav ? "♥" : "♡"}
+                <IconHeart size={22} filled={fav} />
               </button>
             </div>
             <div className="pd-artist">{current.artist}</div>
@@ -359,12 +383,17 @@ export function PlayerDetail() {
               </div>
               <div className="pd-quick">
                 <button className="pd-quick-btn" disabled={sharing} onClick={() => { void startShare(); }}>
-                  {sharing ? "分享中…" : "↗ 分享"}
+                  <IconShare size={15} />
+                  {sharing ? "分享中…" : "分享"}
                 </button>
                 <button className="pd-quick-btn" onClick={() => setQualityOpen(true)}>
-                  ♪ {app.activeQuality != null ? labelOfQuality(app.activeQuality) : "音质"}
+                  <IconQuality size={15} />
+                  {app.activeQuality != null ? labelOfQuality(app.activeQuality) : "音质"}
                 </button>
-                <button className="pd-quick-btn" onClick={() => setShowQueue((v) => !v)}>☰ 队列</button>
+                <button className="pd-quick-btn" onClick={() => setShowQueue((v) => !v)}>
+                  <IconQueue size={15} />
+                  队列
+                </button>
               </div>
               <div className="pd-transport">
                 <button
@@ -373,18 +402,22 @@ export function PlayerDetail() {
                   title={repeatTitle(app.repeat)}
                   onClick={() => app.cycleRepeat()}
                 >
-                  ♻
+                  <IconRepeat size={20} />
                   {app.repeat === "one" && <span className="pd-repeat-badge">1</span>}
                 </button>
-                <button className="pd-tbtn" title="上一首" onClick={() => app.prev()}>⏮</button>
+                <button className="pd-tbtn" title="上一首" onClick={() => app.prev()}>
+                  <IconPrev size={20} />
+                </button>
                 <button
                   className="pd-play"
                   title={app.isPlaying ? "暂停" : "播放"}
                   onClick={() => app.togglePlay()}
                 >
-                  {app.isPlaying ? "⏸" : "▶"}
+                  {app.isPlaying ? <IconPause size={30} /> : <IconPlay size={30} />}
                 </button>
-                <button className="pd-tbtn" title="下一首" onClick={() => app.next()}>⏭</button>
+                <button className="pd-tbtn" title="下一首" onClick={() => app.next()}>
+                  <IconNext size={20} />
+                </button>
               </div>
             </div>
           </div>
@@ -395,6 +428,10 @@ export function PlayerDetail() {
               <div className="pd-queue-head">
                 <span className="pd-queue-title">播放队列</span>
                 <span className="pd-queue-count">{app.queue.length} 首</span>
+                {/* 面板自带关闭按钮：窄窗浮层盖住下方区域时也能直接收起 */}
+                <button className="pd-queue-close" title="收起队列" onClick={() => setShowQueue(false)}>
+                  <IconClose size={15} />
+                </button>
               </div>
               <div className="pd-queue-list">
                 {app.queue.length === 0 && <div className="pd-queue-empty">队列为空</div>}
@@ -418,7 +455,7 @@ export function PlayerDetail() {
                       }}
                     >
                       <span className="pd-queue-grip" title="拖动调整顺序">⋮</span>
-                      <span className="pd-queue-idx">{active ? "▶" : i + 1}</span>
+                      <span className="pd-queue-idx">{active ? <IconPlay size={10} /> : i + 1}</span>
                       <span className="pd-queue-meta">
                         <span className="pd-queue-name">{s.title}</span>
                         <span className="pd-queue-artist">{s.artist}</span>
@@ -432,7 +469,7 @@ export function PlayerDetail() {
                             app.removeQueueItem(i);
                           }}
                         >
-                          ×
+                          <IconClose size={14} />
                         </button>
                       )}
                     </div>

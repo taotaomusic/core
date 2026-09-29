@@ -9,9 +9,10 @@
   background: var(--bg);
 }
 
-/* 搜索栏 */
+/* 搜索栏：窄窗口保持单行，按钮不换行，输入框随之收缩 */
 .sp-searchbar {
   display: flex;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 10px;
   padding: 14px 18px 10px;
@@ -209,18 +210,18 @@
 }
 .sp-chip-x:hover { background: #f6dcdc; color: var(--err); }
 
-/* ---- 热门搜索：两列网格，前三名珊瑚色 ---- */
+/* ---- 热门搜索：自适应多列网格（窄窗收缩、宽窗自然展开），前三名珊瑚色 ---- */
 .sp-hot-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 2px 20px;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 4px 18px;
 }
 .sp-hot-item {
   display: flex;
   align-items: center;
   gap: 10px;
   min-width: 0;
-  padding: 7px 8px;
+  padding: 8px 10px;
   border-radius: 8px;
   cursor: pointer;
   transition: background .15s;

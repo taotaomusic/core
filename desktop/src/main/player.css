@@ -57,10 +57,10 @@
   border: 0;
   background: transparent;
   color: var(--err);
-  font-size: 16px;
-  line-height: 1;
+  display: grid;
+  place-items: center;
   cursor: pointer;
-  padding: 2px 6px;
+  padding: 2px;
   border-radius: 6px;
   flex: none;
 }
@@ -81,8 +81,8 @@
   flex: none;
 }
 .playerbar-cover-note {
+  display: inline-flex;
   color: var(--coral);
-  font-size: 22px;
   opacity: .85;
 }
 .playerbar-cover img {
@@ -152,8 +152,9 @@
   border-radius: 50%;
   background: #f3f4f6;
   color: var(--text);
-  font-size: 15px;
-  line-height: 1;
+  /* 图标按钮基线：grid 居中，svg 尺寸由组件自己决定，不依赖 font-size */
+  display: grid;
+  place-items: center;
   cursor: pointer;
   flex: none;
   transition: background .15s, color .15s, transform .15s, opacity .15s;
@@ -195,7 +196,6 @@
   height: 48px;
   background: var(--coral);
   color: #fff;
-  font-size: 18px;
   box-shadow: 0 4px 14px rgba(250, 94, 91, .35);
 }
 .playerbar-play:hover:not(:disabled) {
@@ -218,6 +218,8 @@
   position: fixed;
   inset: 0;
   z-index: 50;
+  /* 封面/歌词区的自适应边长：上限 340px，随视窗高度与宽度同步收缩（WebView2/Chromium 110 支持 min()） */
+  --pd-art: min(340px, 42vh, 34vw);
   /* 顶部一点品牌色晕染 + 白到灰的纵向过渡，替代纯色平底 */
   background:
     radial-gradient(1100px 460px at 50% -8%, rgba(250, 94, 91, 0.07), transparent 62%),
@@ -244,8 +246,8 @@
   border-radius: 50%;
   background: transparent;
   color: var(--text);
-  font-size: 20px;
-  line-height: 1;
+  display: grid;
+  place-items: center;
   cursor: pointer;
   transition: background .15s;
 }
@@ -263,6 +265,9 @@
   justify-content: flex-end;
 }
 .pd-sleep-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   height: 34px;
   padding: 0 12px;
   border: 1px solid var(--border);
@@ -286,11 +291,13 @@
   font-weight: 600;
 }
 
-/* 主区：左（封面+控制）右（队列）布局 */
+/* 主区：左（封面+控制）右（队列）布局。
+   position:relative 供 ≤980px 时队列面板绝对定位浮层化使用 */
 .pd-body {
+  position: relative;
   flex: 1;
+  min-height: 0;
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   justify-content: center;
   gap: 40px;
@@ -305,17 +312,19 @@
   font-size: 15px;
 }
 
-/* 左列 */
+/* 左列：弹性收缩，进度条/传输区上限 480px 居中；封面列随 --pd-art 自适应 */
 .pd-main {
-  width: 340px;
+  flex: 0 1 480px;
+  min-width: 0;
+  max-width: 480px;
   display: flex;
   flex-direction: column;
-  flex: none;
+  align-items: center;
 }
 .pd-cover {
   position: relative;
-  width: 340px;
-  height: 340px;
+  width: var(--pd-art);
+  aspect-ratio: 1;
   border-radius: 24px;
   overflow: hidden;
   background: linear-gradient(135deg, #ffe9e5, #ffc9c2);
@@ -325,7 +334,7 @@
   flex: none;
 }
 .pd-cover-note {
-  font-size: 96px;
+  display: inline-flex;
   color: rgba(250, 94, 91, .55);
 }
 .pd-cover img {
@@ -341,6 +350,7 @@
   gap: 10px;
   margin-top: 24px;
   min-width: 0;
+  width: 100%;
 }
 .pd-song {
   flex: 1;
@@ -368,8 +378,8 @@
   border-radius: 50%;
   background: transparent;
   color: var(--muted);
-  font-size: 26px;
-  line-height: 1;
+  display: grid;
+  place-items: center;
   cursor: pointer;
   transition: transform .15s ease, color .15s;
 }
@@ -383,6 +393,7 @@
   margin-top: 6px;
   color: var(--muted);
   font-size: 14px;
+  width: 100%;
 }
 
 /* 左列顶部视图切换：封面 / 歌词（小分段控件） */
@@ -418,10 +429,10 @@
   cursor: not-allowed;
 }
 
-/* 歌词面板容器：与封面同尺寸占位，避免两种视图切换时布局跳动 */
+/* 歌词面板容器：与封面同一自适应尺寸（--pd-art + 1:1），避免两种视图切换时布局跳动 */
 .pd-lyrics-wrap {
-  width: 340px;
-  height: 340px;
+  width: var(--pd-art);
+  aspect-ratio: 1;
   border: 1px solid var(--border);
   border-radius: 24px;
   background: var(--surface);
@@ -434,9 +445,10 @@
   height: 100%;
 }
 
-/* 控制区（占左列宽度） */
+/* 控制区（占左列宽度，上限即 pd-main 的 480px） */
 .pd-controls {
   margin-top: 22px;
+  width: 100%;
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -511,6 +523,10 @@
   gap: 12px;
 }
 .pd-quick-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   border: 1px solid var(--border);
   background: var(--surface);
   color: var(--text);
@@ -545,8 +561,8 @@
   border-radius: 50%;
   background: transparent;
   color: var(--text);
-  font-size: 18px;
-  line-height: 1;
+  display: grid;
+  place-items: center;
   cursor: pointer;
   transition: background .15s, color .15s, transform .15s;
 }
@@ -581,8 +597,8 @@
   border-radius: 50%;
   background: var(--coral);
   color: #fff;
-  font-size: 28px;
-  line-height: 1;
+  display: grid;
+  place-items: center;
   cursor: pointer;
   box-shadow: 0 10px 28px rgba(250, 94, 91, .4);
   transition: background .15s, transform .15s;
@@ -609,6 +625,23 @@
   overflow: hidden;
   flex: none;
 }
+
+/* 窄窗口（≤980px）：并排面板放不下，队列改为右侧绝对定位浮层；
+   显隐仍由「队列」按钮（showQueue state）控制，窄窗下默认收起 */
+@media (max-width: 980px) {
+  .pd-queue {
+    position: absolute;
+    right: 16px;
+    top: 68px;
+    bottom: 16px;
+    width: 300px;
+    height: auto;
+    max-height: none;
+    z-index: 5;
+    box-shadow: 0 12px 36px rgba(0, 0, 0, .16);
+  }
+}
+
 .pd-queue-head {
   display: flex;
   align-items: center;
@@ -624,6 +657,24 @@
 .pd-queue-count {
   font-size: 12px;
   color: var(--muted);
+}
+/* 队列面板头部关闭按钮：浮层模式下不依赖被遮挡的「队列」按钮也能收起 */
+.pd-queue-close {
+  width: 26px;
+  height: 26px;
+  flex: none;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: background .15s, color .15s;
+}
+.pd-queue-close:hover {
+  background: #f0e8e8;
+  color: var(--text);
 }
 .pd-queue-list {
   flex: 1;
@@ -653,7 +704,9 @@
 .pd-queue-idx {
   width: 24px;
   flex: none;
-  text-align: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   font-size: 12px;
   color: var(--muted);
 }
@@ -712,8 +765,8 @@
   border-radius: 50%;
   background: transparent;
   color: var(--muted);
-  font-size: 15px;
-  line-height: 1;
+  display: grid;
+  place-items: center;
   cursor: pointer;
   transition: background .15s, color .15s;
 }

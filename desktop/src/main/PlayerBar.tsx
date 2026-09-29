@@ -1,6 +1,17 @@
 import { useState } from "react";
 import { useApp } from "../state/AppState";
 import { hideOnError } from "./img";
+import {
+  IconClose,
+  IconHeart,
+  IconMusicNote,
+  IconNext,
+  IconPause,
+  IconPlay,
+  IconPrev,
+  IconQueue,
+  IconRepeat,
+} from "./icons";
 import "./player.css";
 
 /** 循环模式按钮的悬浮提示文案。 */
@@ -13,6 +24,7 @@ function repeatTitle(mode: "off" | "all" | "one"): string {
 /**
  * 底部播放条：封面/歌名（点击打开详情页）+ 细进度条 + 传输/循环/收藏/队列控制。
  * 全部状态来自 useApp，自身零 props；无当前歌曲时整体置灰只显示「未在播放」。
+ * 按钮统一使用共享线性图标集 icons.tsx，不再使用 unicode 字符。
  */
 export function PlayerBar() {
   const app = useApp();
@@ -34,12 +46,12 @@ export function PlayerBar() {
             title="关闭"
             onClick={() => setDismissedError(app.playError)}
           >
-            ×
+            <IconClose size={14} />
           </button>
         </div>
       )}
       <div className="playerbar-cover">
-        <span className="playerbar-cover-note">♪</span>
+        <span className="playerbar-cover-note"><IconMusicNote size={22} /></span>
         {current?.coverUrl ? <img src={current.coverUrl} alt="" onError={hideOnError} /> : null}
       </div>
       <div
@@ -63,29 +75,35 @@ export function PlayerBar() {
           disabled={empty}
           onClick={() => app.cycleRepeat()}
         >
-          ♻
+          <IconRepeat size={16} />
           {app.repeat === "one" && <span className="playerbar-repeat-badge">1</span>}
         </button>
-        <button className="playerbar-btn" title="上一首" disabled={empty} onClick={() => app.prev()}>⏮</button>
+        <button className="playerbar-btn" title="上一首" disabled={empty} onClick={() => app.prev()}>
+          <IconPrev size={16} />
+        </button>
         <button
           className="playerbar-btn playerbar-play"
           title={app.isPlaying ? "暂停" : "播放"}
           disabled={empty}
           onClick={() => app.togglePlay()}
         >
-          {app.isPlaying ? "⏸" : "▶"}
+          {app.isPlaying ? <IconPause size={20} /> : <IconPlay size={20} />}
         </button>
-        <button className="playerbar-btn" title="下一首" disabled={empty} onClick={() => app.next()}>⏭</button>
+        <button className="playerbar-btn" title="下一首" disabled={empty} onClick={() => app.next()}>
+          <IconNext size={16} />
+        </button>
         <button
           className={`playerbar-btn playerbar-fav${current && app.isFavorite(current) ? " on" : ""}`}
           title="收藏"
           disabled={empty}
           onClick={() => { if (current) app.toggleFavorite(current); }}
         >
-          {current && app.isFavorite(current) ? "♥" : "♡"}
+          <IconHeart size={16} filled={!!current && app.isFavorite(current)} />
         </button>
         {/* 打开详情页（详情页内自带队列面板，默认展开） */}
-        <button className="playerbar-btn" title="播放队列" disabled={empty} onClick={() => app.setShowDetail(true)}>☰</button>
+        <button className="playerbar-btn" title="播放队列" disabled={empty} onClick={() => app.setShowDetail(true)}>
+          <IconQueue size={16} />
+        </button>
       </div>
     </div>
   );

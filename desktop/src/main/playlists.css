@@ -275,10 +275,10 @@
 }
 .pl-btn-new:hover { background: var(--coral-dark); }
 
-/* 卡片网格：3-4 列自适应 */
+/* 卡片网格：按内容区宽度自适应列数（窄窗收缩、宽窗自然展开），封面 1:1 随卡片缩放 */
 .pl-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
   gap: 14px;
 }
 .pl-card {
@@ -415,6 +415,17 @@
 }
 .pl-btn.primary:hover { background: var(--coral-dark); color: #fff; }
 .pl-btn.danger:hover { border-color: var(--err); color: var(--err); }
+/* 窄窗口（<720px）：详情大封面缩到 88px，标题行与按钮行允许换行 */
+@media (max-width: 719px) {
+  .pl-detail-cover {
+    width: 88px;
+    height: 88px;
+  }
+  .pl-detail-head,
+  .pl-detail-actions {
+    flex-wrap: wrap;
+  }
+}
 /* 详情加载失败的提示：沿用 hint-center 排版但去掉音符装饰 */
 .pl-hint-err { color: var(--err); }
 .hint-center.pl-hint-err::before { content: none; }

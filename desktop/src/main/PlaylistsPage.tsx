@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { DragEvent as ReactDragEvent } from "react";
 import {
+  absoluteUrl,
   deletePlaylist,
   fetchPlaylistDetail,
   readableError,
@@ -237,7 +238,10 @@ export function PlaylistsPage() {
                 <div key={p.id} className="pl-card" onClick={() => void openDetail(p.id)}>
                   <div className="pl-card-cover">
                     <span className="note">♪</span>
-                    {p.coverUrl ? <img src={p.coverUrl} alt="" onError={hideOnError} /> : null}
+                    {/* 封面地址过 absoluteUrl 归一：相对路径补 API 域名，避免 webview 裂图 */}
+                    {p.coverUrl ? (
+                      <img src={absoluteUrl(p.coverUrl)} alt="" onError={hideOnError} />
+                    ) : null}
                   </div>
                   <div className="pl-card-name" title={p.name}>
                     {p.name}
@@ -262,7 +266,9 @@ export function PlaylistsPage() {
               <div className="pl-detail-head">
                 <div className="pl-detail-cover">
                   <span className="note">♪</span>
-                  {detail.coverUrl ? <img src={detail.coverUrl} alt="" onError={hideOnError} /> : null}
+                  {detail.coverUrl ? (
+                    <img src={absoluteUrl(detail.coverUrl)} alt="" onError={hideOnError} />
+                  ) : null}
                 </div>
                 <div className="pl-detail-info">
                   <div className="pl-detail-name">{detail.name}</div>
@@ -301,7 +307,9 @@ export function PlaylistsPage() {
                       <div className={`pl-index${active ? " on" : ""}`}>{active ? "▶" : i + 1}</div>
                       <div className="songrow-cover">
                         <span className="note">♪</span>
-                        {s.coverUrl ? <img src={s.coverUrl} alt="" onError={hideOnError} /> : null}
+                        {s.coverUrl ? (
+                          <img src={absoluteUrl(s.coverUrl)} alt="" onError={hideOnError} />
+                        ) : null}
                       </div>
                       <div className="meta">
                         <div className="songrow-name">

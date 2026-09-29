@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { UIEvent } from "react";
-import { songKeyOf, type Song } from "../api";
+import { absoluteUrl, songKeyOf, type Song } from "../api";
 import { useApp } from "../state/AppState";
 import { AddToPlaylistDialog } from "./AddToPlaylistDialog";
 import { hideOnError } from "./img";
@@ -102,7 +102,10 @@ export function SongList({
             >
               <div className="songrow-cover">
                 <span className="note">♪</span>
-                {s.coverUrl ? <img src={s.coverUrl} alt="" onError={hideOnError} /> : null}
+                {/* 封面地址过 absoluteUrl 归一：相对路径补 API 域名，避免 webview 裂图 */}
+                {s.coverUrl ? (
+                  <img src={absoluteUrl(s.coverUrl)} alt="" onError={hideOnError} />
+                ) : null}
               </div>
               <div className="meta">
                 <div className="songrow-name">
