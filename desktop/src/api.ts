@@ -2,6 +2,18 @@ import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 
 export const ENDPOINT = "https://music.xydaigua.cn";
 
+/**
+ * 把服务端下发的资源地址归一成绝对地址：相对路径（如 /api/v1/...）在 webview 里
+ * 会解析到应用自身 origin 导致裂图，必须补上 API 域名；已是绝对地址原样返回。
+ */
+export function absoluteUrl(url: string | undefined | null): string {
+  const u = (url ?? "").trim();
+  if (!u) return "";
+  if (/^(https?:)?\/\//i.test(u) || /^(data|blob):/i.test(u)) return u;
+  if (u.startsWith("/")) return `${ENDPOINT}${u}`;
+  return u;
+}
+
 // 打包后运行在 Tauri webview 里，window.fetch 受 CORS 约束（服务端默认不下发
 // CORS 头），必须走 tauri-plugin-http 由 Rust 侧直连；纯浏览器 dev 没注入
 // Tauri 环境时退回 window.fetch，保持原有行为。
