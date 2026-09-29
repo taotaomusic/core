@@ -164,8 +164,24 @@ button:disabled { cursor: not-allowed; }
 .nav-btn.exit { color: var(--muted); font-size: 13px; }
 .nav-btn.exit:hover { color: var(--err); background: var(--err-bg); }
 .sidenav-spacer { flex: 1; }
-.content { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.content { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; }
 .page { flex: 1; min-height: 0; }
+
+/* ---- 页面切换动画（快而克制：进场 200ms / 退场 150ms，小位移，不弹跳） ---- */
+.page-enter { animation: page-enter .2s ease-out; }
+@keyframes page-enter {
+  from { opacity: 0; transform: translateY(8px); }
+}
+/* 退场页绝对定位铺满内容区、叠在进场页上方：避免两个 flex:1 页面平分高度；
+   forwards 保证退场动画到点前保持透明，不闪回；pointer-events 挡掉退场期间的点击 */
+.page-exit {
+  position: absolute; inset: 0;
+  animation: page-exit .15s ease-in forwards;
+  pointer-events: none;
+}
+@keyframes page-exit {
+  to { opacity: 0; transform: translateY(-6px); }
+}
 
 .link { background: transparent; border: 0; color: var(--muted); cursor: pointer; font-size: 13px; transition: color .15s; }
 .link:hover { color: var(--coral); }

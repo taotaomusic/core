@@ -1048,6 +1048,15 @@
   from { opacity: 0; }
   to { opacity: 1; }
 }
+/* 详情页退场：淡出并轻微下移，播完由组件延迟卸载；覆盖基类的 pd-fade-in（同特异性、靠后生效），
+   forwards 保证卸载前保持透明，pointer-events 挡掉退场期间的误触 */
+.pd-overlay-exit {
+  animation: pd-fade-out .16s ease-in forwards;
+  pointer-events: none;
+}
+@keyframes pd-fade-out {
+  to { opacity: 0; transform: translateY(10px); }
+}
 @keyframes pd-pop-in {
   from { opacity: 0; transform: scale(.95); }
   to { opacity: 1; transform: scale(1); }

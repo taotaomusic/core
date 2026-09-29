@@ -5,6 +5,7 @@
 桃桃音乐是一个 Kotlin Multiplatform 音乐播放器，当前提供 Android、Windows 和 Web 分享播放器。
 
 - `androidApp/`：Android 应用入口、Jetpack Compose 页面、Android 资源和平台能力。
+- `desktop/`：新一代 Windows 桌面端（Tauri 2 + React + TypeScript）。webview 里的 `fetch` 一律走 `tauri-plugin-http` 由 Rust 直连后端（服务端按安全设计默认不下发 CORS 头，浏览器侧跨源请求必被预检拦掉）；换后端域名要同步改 `desktop/src-tauri/capabilities/default.json` 的 `http:default` 白名单，两边不一致会静默失败。构建走根 CI 的 `desktop` job（`desktop/**` 路径过滤），产物发 `desktop-latest` Release，应用内自动更新经 `tauri-plugin-updater` 签名校验。开发调试：`cd desktop && npm install && npm run tauri dev`；纯浏览器看 UI 访问 `http://localhost:5183/#mock`（内置假数据旁路，见 `desktop/index.html`）。
 - `desktopApp/`：Windows Compose Desktop 应用、JVM 播放、桌面持久化和系统媒体能力。
 - `desktopLauncher/`、`desktopUpdater/`：Windows 发布包的启动器和模块更新器。
 - `webApp/`：Kotlin/Wasm 分享播放器和浏览器音频适配。

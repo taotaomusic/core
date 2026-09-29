@@ -51,6 +51,22 @@
 | `desktopUpdater` | 2 / 24 | Windows 模块更新器和启动/替换流程 | `UpdaterMain.java` |
 | `webApp` | 4 / 106 | Kotlin/Wasm 分享播放器，只负责公开试听页和浏览器音频适配 | `Main.kt`、`WebAudioController.kt` |
 
+### `desktop/`（Tauri 新一代桌面端，未纳入 CodeGraph 索引）
+
+上面的统计是 CodeGraph 对 Kotlin/Java 客户端的快照；`desktop/` 是 React + TypeScript 的新一代 Windows 端，不在当前索引里。结构与关键文件：
+
+| 目录/文件 | 职责 |
+| --- | --- |
+| `desktop/src/api.ts` | 全部后端契约封装（NDJSON 搜索、收藏、歌单、分享、播放上报 outbox、歌词、音质档位），`httpFetch` 走 tauri-plugin-http 由 Rust 直连 |
+| `desktop/src/state/AppState.tsx` | 全局状态 Provider：播放队列/循环/进度、收藏乐观更新、歌单、播放上报会话、定时关闭、toast，唯一 `<audio>` 挂在这里 |
+| `desktop/src/main/SearchPage.tsx` | 独立搜索页：历史（localStorage）、250ms 联想防抖、热搜、无限滚动 |
+| `desktop/src/main/PlaylistsPage.tsx` | 歌单列表/详情：新建、改名、删除、拖动排序、移除歌曲 |
+| `desktop/src/main/RecentPage.tsx` | 最近播放：`/playback/recent` + batch-info 元数据补全 |
+| `desktop/src/main/PlayerDetail.tsx` | 全屏播放详情：封面/歌词双视图、音质面板、定时弹窗、队列拖拽删除、分享 |
+| `desktop/src/main/LyricsPane.tsx` + `lyrics.ts` | 歌词面板与 LRC/YRC 解析（行跟踪 timeupdate 驱动，rAF 只做逐字平滑） |
+| `desktop/src-tauri/` | Tauri 壳：`capabilities/default.json`（http 白名单）、`icons/`（品牌图标入库）、自动更新签名 |
+| `desktop/index.html` | `#mock` 假数据旁路：纯浏览器（`npm run dev` + 访问 `/#mock`）可渲染完整 UI，供无 Tauri 环境调样式 |
+
 ### 客户端构建与发布支撑
 
 | 模块 | 文件/节点 | 主要职责 | 备注 |

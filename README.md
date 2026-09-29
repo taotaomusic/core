@@ -28,12 +28,19 @@ androidApp/   Android 应用
               ├─ 离线下载管理
               └─ 崩溃日志捕获与导出
 
-desktopApp/   Windows 应用
+desktopApp/   Windows 应用（Compose Desktop 世代）
               ├─ Compose Desktop 宽屏界面
               ├─ FFmpeg + Java Sound 播放引擎
               ├─ Windows 系统媒体控件与托盘后台
               ├─ 搜索、队列、歌词、收藏与最近播放
               └─ 离线下载和本地设置
+
+desktop/      Windows 应用（Tauri 2 + React 新世代）
+              ├─ React 18 + TypeScript 界面（独立搜索页/歌单/最近播放/收藏）
+              ├─ 全屏播放详情：逐字歌词、音质切换、队列拖拽、定时关闭
+              ├─ fetch 经 tauri-plugin-http 走 Rust 直连（免 CORS）
+              ├─ tauri-plugin-updater 应用内自动更新（签名校验）
+              └─ 构建走根 CI desktop job，产物发 desktop-latest Release
 
 webApp/       Kotlin/Wasm 分享播放器
               ├─ 播放最多 60 秒的试听片段（客户端计时截断，禁用循环防后台节流）
@@ -459,6 +466,25 @@ Windows 版本当前优先覆盖音乐功能：账号、酷我主源搜索、播
 便携 JAR 需要 JDK/JRE 21；FFmpeg 与系统媒体控制依赖的许可证清单见 [`desktopApp/THIRD_PARTY_NOTICES.md`](desktopApp/THIRD_PARTY_NOTICES.md)。
 
 MSI/EXE 打包需要 WiX Toolset 3.11；若 Gradle 下载的 `wix311.zip` 损坏，请配置有效的 `WIX_PATH` 后重试。
+
+### Windows 客户端开发（Tauri 版 `desktop/`）
+
+新一代 Windows 桌面端是 Tauri 2 + React + TypeScript：独立搜索页（历史/联想/热搜）、歌单、最近播放、收藏、全屏播放详情（逐字歌词、音质切换、队列拖拽排序、定时关闭）、分享。构建与发版完全走云侧：推送命中 `desktop/**` 后 CI 的 `desktop` job 自动 `npm run tauri build` 并更新 [`desktop-latest`](https://github.com/taotaomusic/core/releases/tag/desktop-latest) Release，应用内经 `tauri-plugin-updater` 签名校验自动更新。
+
+```powershell
+# 本地开发（Rust 工具链 + Node 22）
+cd desktop
+npm install
+npm run tauri dev   # webview 里加载 vite dev server（端口 5183）
+
+# 纯浏览器调 UI（不启动 Tauri、不需要 Rust）：内置假数据旁路
+#   浏览器访问 http://localhost:5183/#mock —— 拦截 fetch 返回合成数据，
+#   可完整查看搜索/歌单/收藏/播放详情各页面（见 desktop/index.html）
+npm run dev
+```
+
+要点：webview 内所有 API 请求走 `tauri-plugin-http`（Rust 直连，不受 CORS 约束）；换后端域名必须同步改 `desktop/src-tauri/capabilities/default.json` 的 `http:default` 白名单。播放统计上报与安卓同语义（位置增量累计 + localStorage outbox 断网补传）。
+
 
 ### 后端开发
 

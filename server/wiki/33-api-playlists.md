@@ -2,7 +2,7 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-09-27
+最后更新:2026-09-29
 
 歌单是多端同步的核心:所有顺序操作都在事务内锁定歌单,顺序变更要求键集合与服务端完全一致。表结构细节见 [41-database-tables-core.md](41-database-tables-core.md) 的 `playlists` 一节;并发实现见 [44-database-operations.md](44-database-operations.md)。跨平台功能边界另见项目根目录 `MUSIC_CROSS_PLATFORM.md`。
 
@@ -40,3 +40,12 @@
 - 本地排序操作后先提交 order,失败(400/4004)就重新拉取详情再对账,不要在本地维护「乐观 revision」。
 - `songId` 永远以字符串传输与存储;客户端把数字 ID 直接当 number 用会在 `mid` 场景(腾讯数字 ID 缺失)下出错。
 - 多端并发添加同一首歌时,`(playlist_id, source, song_id)` 唯一约束保证只落一行,表现为「添加成功但只出现一次」。
+
+## 5. 封面兜底与读取路径自愈
+
+- 列表与详情接口的 `coverUrl` 都是读取期计算:`COALESCE(歌单自身 cover_url, 歌单内按 position 顺序第一张非空歌曲封面)`(见 `playlists.repository.ts` 的 `PLAYLIST_COLUMNS`),客户端不需要逐首拉详情补图。
+- 早期客户端加歌时没存封面,存量快照 `cover_url` 整列为空时兜底无图可取。两条修复路径,**口径一致、互不冲突(都只写仍为空的行,幂等,不动 revision 与 updated_at)**:
+  - **读取路径自愈**(`playlists-cover.service.ts`,随读取自动发生):列表接口给「整单无封面」的歌单回源首曲封面(同步部分受 1.2s 预算约束,超出转后台);详情接口给缺封面的曲目逐首回源(1.5s 预算,超出后台补,下次打开可见)。上游请求进程内串行 + 250ms 限流 + 单次 3s 超时,失败静默留空等下次再试,绝不影响接口响应。
+  - **一次性全量工具**(`node dist/tools/backfill-playlist-covers.js`,支持 `--dry-run` / `--playlist=N`):在部署目录执行,批量补齐所有空快照。自愈上线后只在想跳过渐进过程时才需要它。
+- 新增音源时两条路径都走 `MusicSourceRegistry` 分派,不需要改代码。
+

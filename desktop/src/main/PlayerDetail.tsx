@@ -69,6 +69,9 @@ type ShareResult = { token: string; url: string };
 /** 定时关闭弹窗提供的热门时长选项（分钟）。 */
 const SLEEP_MINUTES = [10, 20, 30, 45, 60, 90];
 
+/** 详情页退场动画时长（毫秒），与 player.css 里 .pd-overlay-exit 的 0.16s 对齐。 */
+const PD_CLOSE_MS = 160;
+
 /** 复制文本到剪贴板：优先 Clipboard API，失败退回 textarea + execCommand。 */
 async function copyText(text: string): Promise<boolean> {
   try {
@@ -119,6 +122,12 @@ export function PlayerDetail() {
   // 队列拖动排序：来源行下标 / 悬停落点行下标（null=未在拖动）
   const [dragFrom, setDragFrom] = useState<number | null>(null);
   const [dragOver, setDragOver] = useState<number | null>(null);
+  // 退场动画：showDetail 变 false 后先保留 160ms 播淡出，再真正卸载
+  const [closing, setClosing] = useState(false);
+  // 上一次 showDetail 值：区分「初始就是关闭」与「刚从打开收起」
+  const wasOpenRef = useRef(app.showDetail);
+  // 退场计时器句柄：退场中途重新打开时先取消，避免到点把页面卸载掉
+  const closeTimerRef = useRef<number | null>(null);
   const trackRef = useRef<HTMLDivElement>(null);
 
   // ESC 关闭最上层弹窗：音质 > 定时 > 分享
@@ -133,6 +142,33 @@ export function PlayerDetail() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [share, qualityOpen, sleepOpen]);
+
+  // 详情页进出场：打开时立即取消未完成的退场（回到进场动画）；
+  // 收起时先播 160ms 淡出再卸载。ESC 收起与 ⌄ 收起都走 setShowDetail(false)，这里统一接管。
+  useEffect(() => {
+    const wasOpen = wasOpenRef.current;
+    wasOpenRef.current = app.showDetail;
+    if (app.showDetail) {
+      if (closeTimerRef.current !== null) {
+        window.clearTimeout(closeTimerRef.current);
+        closeTimerRef.current = null;
+      }
+      setClosing(false);
+    } else if (wasOpen) {
+      setClosing(true);
+      closeTimerRef.current = window.setTimeout(() => {
+        closeTimerRef.current = null;
+        setClosing(false);
+      }, PD_CLOSE_MS);
+    }
+  }, [app.showDetail]);
+
+  // 卸载时清退场计时器，避免定时器泄漏
+  useEffect(() => {
+    return () => {
+      if (closeTimerRef.current !== null) window.clearTimeout(closeTimerRef.current);
+    };
+  }, []);
 
   // 打开音质面板时拉取当前歌曲的可用档位；tiersNonce 供「重试」按钮再次触发
   useEffect(() => {
@@ -296,10 +332,11 @@ export function PlayerDetail() {
     setDragOver(null);
   }
 
-  if (!app.showDetail) return null;
+  // 关闭态且不在退场动画中才卸载；退场期间保留 DOM 播淡出（pointer-events 已挡交互）
+  if (!app.showDetail && !closing) return null;
 
   return (
-    <div className="pd-overlay">
+    <div className={closing ? "pd-overlay pd-overlay-exit" : "pd-overlay"}>
       {/* 顶栏：收起 + 标题 + 定时关闭 */}
       <div className="pd-top">
         <button className="pd-collapse" title="收起" onClick={collapse}><IconChevronDown size={22} /></button>
