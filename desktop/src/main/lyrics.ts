@@ -2,10 +2,15 @@
  * LRC / YRC 歌词解析（纯函数，无 React 依赖）。
  *
  * 语义移植自 shared 的 LyricParser（com/taotao/music/model/Lyric.kt）：
- * 桌面端只做行级高亮，不保留逐字时间，行文本取该行所有字文本拼接。
+ * yrc 的字级时间组保留为 LyricWord，供 LyricsPane 做逐字卡拉OK渐变；
+ * lrc 没有字级时间，行文本取该行所有时间戳间隙文本拼接，words 恒为空。
  */
 
-export type LyricLine = { timeMs: number; text: string };
+/** 一个逐字单元：text 可能是一个汉字，也可能是一个英文单词。 */
+export type LyricWord = { text: string; startMs: number; endMs: number };
+
+/** 一行歌词。words 为空表示没有字级时间轴，界面只能整行高亮。 */
+export type LyricLine = { timeMs: number; text: string; words: LyricWord[] };
 export type Lyric = { lines: LyricLine[]; synced: boolean };
 
 /** 空歌词：lines 为空时界面显示「暂无歌词」。 */
@@ -33,7 +38,7 @@ const YRC_HEADER = /^\[(\d+),(\d+)\]/;
 const YRC_TIMING = /\((\d+),(\d+)(?:,\d+)?\)/g;
 
 /**
- * 解析歌词：yrc 非空且解析出至少一行就优先用它（自带行时间轴），
+ * 解析歌词：yrc 非空且解析出至少一行就优先用它（自带行时间轴与字级时间），
  * 否则退回 lrc；两者都解析不出时返回空歌词（synced=false）。
  */
 export function parseLyric(lrc: string, yrc: string): Lyric {
@@ -42,35 +47,46 @@ export function parseLyric(lrc: string, yrc: string): Lyric {
   return parseLrc(lrc);
 }
 
-/** 解析 YRC 逐字歌词：行起始时间 = 行头第一个时间组 + offset，行文本 = 所有字文本拼接。 */
+/**
+ * 解析 YRC 逐字歌词：行起始时间 = 行头第一个时间组 + offset；
+ * 行文本 = 所有时间组间隙文本拼接（字面括号因此天然保留）；
+ * 每个时间组生成一个 LyricWord（起始夹 0，结束 = 起始 + 时长）。
+ */
 function parseYrc(raw: string): Lyric {
   if (!raw || raw.trim() === "") return EMPTY_LYRIC;
-  // yrc 同样可能带 offset 标签，行时间跟着平移。
+  // yrc 同样可能带 offset 标签，行时间和字时间都要跟着平移。
   const offsetMs = offsetOf(raw);
   const lines: LyricLine[] = [];
   for (const rawLine of raw.split(/\r\n|\r|\n/)) {
     const header = YRC_HEADER.exec(rawLine);
     if (!header) continue;
     const body = rawLine.slice(header[0].length);
-    // 每个时间组前面的那段文字就是它对应的字，桌面端直接拼接成整行文本。
+    // 每个时间组前面的那段文字就是它对应的字；间隙为空的组没有可唱的内容，跳过
+    // （与安卓 wordsOf 口径一致，拼接出的行文本与旧版「间隙拼接」完全相同）。
+    const words: LyricWord[] = [];
     let text = "";
     let cursor = 0;
     for (const timing of body.matchAll(YRC_TIMING)) {
       const start = timing.index ?? 0;
-      text += body.slice(cursor, start);
+      const gap = body.slice(cursor, start);
       cursor = start + timing[0].length;
+      text += gap;
+      if (gap === "") continue;
+      // 字级起始时间同样吃 offset，并夹到不早于 0；结束时间 = 起始 + 时长。
+      const wordStartMs = Math.max(0, Number(timing[1]) + offsetMs);
+      words.push({ text: gap, startMs: wordStartMs, endMs: wordStartMs + Number(timing[2]) });
     }
     text = text.trim();
     // 只有时间没有文字的行是间奏标记，丢弃。
     if (text === "") continue;
-    lines.push({ timeMs: Math.max(0, Number(header[1]) + offsetMs), text });
+    lines.push({ timeMs: Math.max(0, Number(header[1]) + offsetMs), text, words });
   }
   if (lines.length === 0) return EMPTY_LYRIC;
   lines.sort((a, b) => a.timeMs - b.timeMs);
   return { lines, synced: true };
 }
 
-/** 解析 LRC 行级歌词：支持一行多时间戳、offset 平移、纯文本回退。 */
+/** 解析 LRC 行级歌词：支持一行多时间戳、offset 平移、纯文本回退；没有字级时间，words 恒为空。 */
 function parseLrc(raw: string): Lyric {
   if (!raw || raw.trim() === "") return EMPTY_LYRIC;
   const offsetMs = offsetOf(raw);
@@ -87,7 +103,7 @@ function parseLrc(raw: string): Lyric {
     if (text === "") continue;
     // 一行可以挂多个时间戳（副歌复用），每个时间戳都生成一行。
     for (const stamp of stamps) {
-      lines.push({ timeMs: timeMsOf(stamp, offsetMs), text });
+      lines.push({ timeMs: timeMsOf(stamp, offsetMs), text, words: [] });
     }
   }
 
@@ -97,7 +113,7 @@ function parseLrc(raw: string): Lyric {
       .split(/\r\n|\r|\n/)
       .map((line) => line.replace(METADATA, "").trim())
       .filter((line) => line !== "")
-      .map((line) => ({ timeMs: 0, text: line }));
+      .map((line) => ({ timeMs: 0, text: line, words: [] as LyricWord[] }));
     return { lines: plain, synced: false };
   }
   lines.sort((a, b) => a.timeMs - b.timeMs);
@@ -127,6 +143,16 @@ function timeMsOf(stamp: RegExpMatchArray, offsetMs: number): number {
           ? Number(fraction) * 10
           : Number(fraction.slice(0, 3));
   return Math.max(0, minutes * 60_000 + seconds * 1_000 + fractionMs + offsetMs);
+}
+
+/**
+ * 单个字已唱到的比例（0..1），用于逐字渐变的分界点。
+ * 长音的字靠这个比例平滑推进，而不是整字跳变。
+ * startMs >= endMs（异常时长，含时长为 0）时不做除法：唱到即算完成。
+ */
+export function wordProgress(w: LyricWord, positionMs: number): number {
+  if (w.startMs >= w.endMs) return positionMs >= w.startMs ? 1 : 0;
+  return Math.min(1, Math.max(0, (positionMs - w.startMs) / (w.endMs - w.startMs)));
 }
 
 /**

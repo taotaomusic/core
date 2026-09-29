@@ -62,6 +62,46 @@
   opacity: 1;
 }
 
+/* ---------- 逐字卡拉OK（yrc 字级时间） ---------- */
+
+/*
+ * 逐字单元：活动行里每个字/词一个 span，字号字重继承 .lyr-line.active。
+ * --lyr-unsung 是未唱字的灰色（对标安卓 LyricDim 的浅色主题值，
+ * 比 --muted 略亮，与珊瑚色的「已唱/未唱」落差更清晰）。
+ */
+.lyr-word {
+  --lyr-unsung: #b9b4bf;
+  display: inline;
+  color: var(--lyr-unsung);
+  /*
+   * 断行口径（对标安卓 FlowRow：折行只发生在字与字之间）：
+   * 英文单词浏览器默认不在内部断行，这里显式声明 overflow-wrap: normal，
+   * 防止外层容器的断词规则波及单元内部。刻意不用 word-break: keep-all ——
+   * Blink 会把相邻行内盒的 keep-all 一起算进断行判定，逐字 span 全带上它
+   * 会连中文「字与字之间」的换行也一并禁掉，长句会溢出容器。
+   * 多字中文/带空格的词组单元在极窄窗口下仍可能内部折行，
+   * 由下面的 clone 兜底保证渐变不错亮。
+   */
+  overflow-wrap: normal;
+  /*
+   * 万一某个多字单元被拆到两行：clone 让两段各自套用完整渐变，
+   * 避免默认 slice 让两行共用同一个水平分割点、第二行未唱的字被错误点亮
+   * （安卓 KaraokeLine 注释里描述的同一个问题）。
+   */
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  /*
+   * 逐帧只改 background-image 与 color，均为纯绘制属性，不触发布局/回流，
+   * 所以不额外加 will-change —— 每行几十个 span 各自提升合成层反而浪费显存。
+   * 也刻意不加 transition：逐帧内联样式需要即改即显，过渡反而拖慢分界点。
+   */
+}
+
+/* 已唱完的字：整字珊瑚（对齐 .lyr-line.active 的主色） */
+.lyr-word-sung {
+  color: var(--coral);
+}
+
 /* 纯文本（未同步）歌词：整列灰白，无交互 */
 .lyr-plain-line {
   padding: 7px 12px;

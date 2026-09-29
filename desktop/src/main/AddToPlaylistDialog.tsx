@@ -7,6 +7,7 @@ import {
   type Song,
 } from "../api";
 import { useApp } from "../state/AppState";
+import { absoluteUrl } from "../api";
 import { hideOnError } from "./img";
 import "./playlists.css";
 
@@ -104,7 +105,7 @@ export function AddToPlaylistDialog({ song, onClose }: { song: Song | null; onCl
                 >
                   <span className="apd-cover">
                     <span className="note">♪</span>
-                    {p.coverUrl ? <img src={p.coverUrl} alt="" onError={hideOnError} /> : null}
+                    {p.coverUrl ? <img src={absoluteUrl(p.coverUrl)} alt="" onError={hideOnError} /> : null}
                   </span>
                   <span className="apd-row-name">{p.name}</span>
                   <span className="apd-row-count">{p.songCount} 首</span>
