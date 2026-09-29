@@ -417,29 +417,23 @@ jobs:
           key: desktop
       - name: 安装前端依赖
         run: npm install
-      # 图标（src-tauri/icons/）已提交入库，不再动态生成：CI 上 `tauri icon`
-      # 曾静默失败回退成纯色图，装出来的包图标是错的。
-      - name: 构建 Tauri（.msi + nsis）
-        run: npm run tauri build
-      - uses: actions/upload-artifact@v4
-        with:
-          name: desktop-tauri
-          path: |
-            desktop/src-tauri/target/release/bundle/msi/*.msi
-            desktop/src-tauri/target/release/bundle/nsis/*.exe
-          if-no-files-found: error
-      - name: 发布 Release（desktop-latest + 版本化）
+      # 图标（src-tauri/icons/）已提交入库，不再动态生成。
+      - name: 构建 + 签名 + 发布（含自动更新 latest.json）
+        uses: tauri-apps/tauri-action@v0
         env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        shell: bash
-        run: |
-          ver=$(node -p "require('./src-tauri/tauri.conf.json').version")
-          files=$(find src-tauri/target/release/bundle -type f \( -name '*.msi' -o -name '*.exe' \))
-          gh release view desktop-latest >/dev/null 2>&1 || gh release create desktop-latest --prerelease --title "桌面(Tauri) 最新构建" --notes "Windows Tauri 桌面端滚动构建。"
-          gh release upload desktop-latest $files --clobber
-          gh release view "desktop-v$ver" >/dev/null 2>&1 || gh release create "desktop-v$ver" --title "桌面 $ver" --notes "Tauri Windows 安装包。"
-          gh release upload "desktop-v$ver" $files --clobber
+          GITHUB_TOKEN: ${{ github.token }}
+          # 更新签名私钥（一次性生成，存 core 仓库 Secret）；空密码故不设 PASSWORD。
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+        with:
+          projectPath: desktop
+          # 滚动发布到固定 tag：updater 的 endpoints 指向 desktop-latest 的 latest.json。
+          tagName: desktop-latest
+          releaseName: 桌面(Tauri) 最新构建
+          releaseBody: Windows Tauri 桌面端（自动更新已启用）。装 .msi 或 -setup.exe。
+          releaseDraft: false
+          prerelease: true
+          includeUpdaterJson: true
 
 
 

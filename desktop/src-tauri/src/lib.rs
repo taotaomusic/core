@@ -104,7 +104,28 @@ fn crypto_handshake_demo(endpoint: String, token: String) -> Result<String, Stri
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_http::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .setup(|app| {
+            // 启动时静默检查更新：有新版本就下载安装并重启。失败只记日志，不打断使用。
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = check_update(handle).await {
+                    eprintln!("更新检查失败：{e}");
+                }
+            });
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![crypto_handshake_demo])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+/// 检查并安装更新（签名由 tauri.conf.json 的 pubkey 校验）。
+async fn check_update(handle: tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+    use tauri_plugin_updater::UpdaterExt;
+    if let Some(update) = handle.updater()?.check().await? {
+        update.download_and_install(|_, _| {}, || {}).await?;
+        handle.restart();
+    }
+    Ok(())
 }

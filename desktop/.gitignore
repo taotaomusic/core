@@ -5,3 +5,8 @@ src-tauri/gen
 # 品牌图标（src-tauri/icons/icon.ico|png）直接入库：CI 上 `tauri icon` 动态生成
 # 曾静默回退成纯色图（见 gen-icon 历史），入库后构建不再依赖这一步。
 # 换品牌图时本地 `npx tauri icon <png>` 重新生成后提交。
+
+# 更新签名私钥：私钥进 CI Secret，绝不入库
+updater.key
+updater.key.pub
+app-icon.png
