@@ -2,6 +2,9 @@ import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 
 export const ENDPOINT = "https://music.xydaigua.cn";
 
+// 换后端域名时必须同步改 src-tauri/capabilities/default.json 里 http:default 的
+// allow 白名单——插件按 URL 前缀放行，两边不一致会静默 403（表现像网络失败）。
+
 /**
  * 把服务端下发的资源地址归一成绝对地址：相对路径（如 /api/v1/...）在 webview 里
  * 会解析到应用自身 origin 导致裂图，必须补上 API 域名；已是绝对地址原样返回。
