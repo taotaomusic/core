@@ -400,6 +400,10 @@ jobs:
     runs-on: windows-latest
     permissions:
       contents: write
+    env:
+      # 是否配了更新签名私钥。没配也不让 desktop 构建变红——出无签名安装包、
+      # 但不产更新清单（自动更新需配 Secret 后才启用）。
+      HAS_UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
     defaults:
       run:
         working-directory: desktop
@@ -418,22 +422,39 @@ jobs:
       - name: 安装前端依赖
         run: npm install
       # 图标（src-tauri/icons/）已提交入库，不再动态生成。
+      - name: 未配签名密钥时关闭更新产物（避免 CI 因缺 Secret 变红）
+        if: env.HAS_UPDATER_KEY != 'true'
+        shell: bash
+        run: |
+          node -e "const f='src-tauri/tauri.conf.json';const j=require('./'+f);j.bundle.createUpdaterArtifacts=false;require('fs').writeFileSync(f,JSON.stringify(j,null,2))"
+          echo "::warning::未配置 TAURI_SIGNING_PRIVATE_KEY，本次不产更新清单；配好该 Secret 后自动更新才生效。"
       - name: 构建 + 签名 + 发布（含自动更新 latest.json）
+        if: env.HAS_UPDATER_KEY == 'true'
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          # 更新签名私钥（一次性生成，存 core 仓库 Secret）；空密码故不设 PASSWORD。
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         with:
           projectPath: desktop
-          # 滚动发布到固定 tag：updater 的 endpoints 指向 desktop-latest 的 latest.json。
           tagName: desktop-latest
           releaseName: 桌面(Tauri) 最新构建
           releaseBody: Windows Tauri 桌面端（自动更新已启用）。装 .msi 或 -setup.exe。
           releaseDraft: false
           prerelease: true
           includeUpdaterJson: true
+      - name: 构建 + 发布（未配密钥：无签名、无更新清单）
+        if: env.HAS_UPDATER_KEY != 'true'
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          projectPath: desktop
+          tagName: desktop-latest
+          releaseName: 桌面(Tauri) 最新构建
+          releaseBody: Windows Tauri 桌面端。配置 TAURI_SIGNING_PRIVATE_KEY 后启用自动更新。
+          releaseDraft: false
+          prerelease: true
 
 
 
