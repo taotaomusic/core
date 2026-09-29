@@ -3,12 +3,14 @@ import brandIcon from "../../src-tauri/icons/icon.png";
 import { FavoritesPage } from "./FavoritesPage";
 import { PlayerBar } from "./PlayerBar";
 import { PlayerDetail } from "./PlayerDetail";
+import { PlaylistsPage } from "./PlaylistsPage";
+import { RecentPage } from "./RecentPage";
 import { SearchPage } from "./SearchPage";
 
-type Page = "search" | "favorites";
+type Page = "search" | "playlists" | "recent" | "favorites";
 
 /** 导航小图标：16px 线性风格，随文字颜色走（currentColor）。 */
-function NavIcon({ kind }: { kind: "search" | "heart" | "logout" }) {
+function NavIcon({ kind }: { kind: "search" | "playlists" | "recent" | "heart" | "logout" }) {
   const common = {
     width: 16,
     height: 16,
@@ -25,6 +27,26 @@ function NavIcon({ kind }: { kind: "search" | "heart" | "logout" }) {
       <svg {...common}>
         <circle cx="11" cy="11" r="7" />
         <line x1="16.5" y1="16.5" x2="21" y2="21" />
+      </svg>
+    );
+  }
+  if (kind === "playlists") {
+    return (
+      <svg {...common}>
+        <line x1="9" y1="6" x2="21" y2="6" />
+        <line x1="9" y1="12" x2="21" y2="12" />
+        <line x1="9" y1="18" x2="21" y2="18" />
+        <line x1="4" y1="6" x2="4.01" y2="6" />
+        <line x1="4" y1="12" x2="4.01" y2="12" />
+        <line x1="4" y1="18" x2="4.01" y2="18" />
+      </svg>
+    );
+  }
+  if (kind === "recent") {
+    return (
+      <svg {...common}>
+        <circle cx="12" cy="12" r="9" />
+        <polyline points="12 7 12 12 15.5 14" />
       </svg>
     );
   }
@@ -45,8 +67,8 @@ function NavIcon({ kind }: { kind: "search" | "heart" | "logout" }) {
 }
 
 /**
- * 登录后的主界面：左侧导航（搜索 / 我的收藏）+ 内容区 + 底部播放条 + 全屏播放详情。
- * 两个页面常驻挂载、用 CSS 隐藏切换，保留各自的搜索结果与滚动位置。
+ * 登录后的主界面：左侧导航（搜索 / 歌单 / 最近播放 / 我的收藏）+ 内容区 + 底部播放条 + 全屏播放详情。
+ * 各页面常驻挂载、用 CSS 隐藏切换，保留各自的搜索结果与滚动位置。
  */
 export function MainScreen({ onLogout }: { onLogout: () => void }) {
   const [page, setPage] = useState<Page>("search");
@@ -65,6 +87,20 @@ export function MainScreen({ onLogout }: { onLogout: () => void }) {
           搜索
         </button>
         <button
+          className={`nav-btn${page === "playlists" ? " on" : ""}`}
+          onClick={() => setPage("playlists")}
+        >
+          <NavIcon kind="playlists" />
+          歌单
+        </button>
+        <button
+          className={`nav-btn${page === "recent" ? " on" : ""}`}
+          onClick={() => setPage("recent")}
+        >
+          <NavIcon kind="recent" />
+          最近播放
+        </button>
+        <button
           className={`nav-btn${page === "favorites" ? " on" : ""}`}
           onClick={() => setPage("favorites")}
         >
@@ -80,6 +116,12 @@ export function MainScreen({ onLogout }: { onLogout: () => void }) {
       <main className="content">
         <div className="page" style={{ display: page === "search" ? "flex" : "none" }}>
           <SearchPage />
+        </div>
+        <div className="page" style={{ display: page === "playlists" ? "flex" : "none" }}>
+          <PlaylistsPage />
+        </div>
+        <div className="page" style={{ display: page === "recent" ? "flex" : "none" }}>
+          <RecentPage />
         </div>
         <div className="page" style={{ display: page === "favorites" ? "flex" : "none" }}>
           <FavoritesPage />

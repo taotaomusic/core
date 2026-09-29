@@ -152,6 +152,8 @@ export type Song = {
   playable?: boolean;
   favorited?: boolean;
   duration?: string;
+  /** 服务端侧的原样 songId（歌单/最近播放返回），排序与删除按它回传，避免 id/mid 推断错位 */
+  remoteId?: string;
 };
 
 export type SearchResult = { songs: Song[]; total: number; hasMore: boolean };
@@ -381,6 +383,209 @@ export function labelOfQuality(value: number): string {
   if (value === 17) return "AI 钢琴";
   if (value === 18) return "NAC";
   return `音质 ${value}`;
+}
+
+// ---- 歌单 ----
+
+export type PlaylistRecord = {
+  id: number;
+  name: string;
+  description: string;
+  coverUrl: string;
+  songCount: number;
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type PlaylistDetail = PlaylistRecord & { songs: Song[] };
+
+/** 服务端侧的稳定键：优先后端原样 songId，其次按 id/mid 推断。 */
+export function songIdStringOf(song: Song): string {
+  if (song.remoteId) return song.remoteId;
+  if (song.id > 0) return String(song.id);
+  return song.mid ?? "";
+}
+
+/** 歌单接口的歌曲输入体：songId=0 且有 mid 时服务端以 mid 为键。 */
+function playlistSongInput(song: Song) {
+  const body: Record<string, unknown> = {
+    source: song.source || "kuwo",
+    songId: songIdStringOf(song),
+  };
+  if (song.mid) body.mid = song.mid;
+  if (song.title) body.title = song.title;
+  if (song.artist) body.artist = song.artist;
+  if (song.album) body.album = song.album;
+  if (song.coverUrl) body.coverUrl = song.coverUrl;
+  if (song.duration) body.duration = song.duration;
+  if (song.type != null) body.type = song.type;
+  return body;
+}
+
+/** 歌单详情里的曲目记录转 Song：保留原样 songId 进 remoteId。 */
+function songOfPlaylistEntry(it: any): Song {
+  const raw = String(it?.songId ?? "");
+  const numeric = /^\d+$/.test(raw);
+  return {
+    id: numeric ? Number(raw) : 0,
+    title: it?.title || "未知歌曲",
+    artist: it?.artist || "未知歌手",
+    source: it?.source || "kuwo",
+    mid: it?.mid || (!numeric && raw ? raw : undefined),
+    type: it?.type ?? undefined,
+    coverUrl: it?.coverUrl || undefined,
+    album: it?.album || undefined,
+    duration: it?.duration || undefined,
+    remoteId: raw || undefined,
+  };
+}
+
+/** 歌单列表（按更新时间降序）。 */
+export async function fetchPlaylists(): Promise<PlaylistRecord[]> {
+  const resp = await authedGet("/api/v1/playlists", "application/json");
+  const data = await unwrap(resp);
+  return Array.isArray(data) ? data : [];
+}
+
+/** 歌单详情（songs 按 position 升序）。 */
+export async function fetchPlaylistDetail(id: number): Promise<PlaylistDetail> {
+  const resp = await authedGet(`/api/v1/playlists/${id}`, "application/json");
+  const data = await unwrap(resp);
+  return {
+    id: Number(data?.id ?? id),
+    name: String(data?.name ?? "未命名歌单"),
+    description: String(data?.description ?? ""),
+    coverUrl: String(data?.coverUrl ?? ""),
+    songCount: Number(data?.songCount ?? 0),
+    revision: Number(data?.revision ?? 0),
+    createdAt: String(data?.createdAt ?? ""),
+    updatedAt: String(data?.updatedAt ?? ""),
+    songs: Array.isArray(data?.songs) ? data.songs.map(songOfPlaylistEntry) : [],
+  };
+}
+
+/** 新建歌单，返回创建后的记录。 */
+export async function createPlaylist(name: string, description = ""): Promise<PlaylistRecord> {
+  const resp = await authedRequest("/api/v1/playlists", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ name, description }),
+  });
+  const data = await unwrap(resp);
+  if (!data?.id) throw new Error("创建歌单失败");
+  return {
+    id: Number(data.id),
+    name: String(data.name ?? name),
+    description: String(data.description ?? ""),
+    coverUrl: String(data.coverUrl ?? ""),
+    songCount: Number(data.songCount ?? 0),
+    revision: Number(data.revision ?? 0),
+    createdAt: String(data.createdAt ?? ""),
+    updatedAt: String(data.updatedAt ?? ""),
+  };
+}
+
+/** 改名/改简介（至少一项）。 */
+export async function updatePlaylist(
+  id: number,
+  patch: { name?: string; description?: string },
+): Promise<void> {
+  const resp = await authedRequest(`/api/v1/playlists/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify(patch),
+  });
+  await unwrap(resp);
+}
+
+/** 删除歌单（204，无响应体）。 */
+export async function deletePlaylist(id: number): Promise<void> {
+  const resp = await authedRequest(`/api/v1/playlists/${id}`, { method: "DELETE" });
+  await unwrap(resp);
+}
+
+/** 加歌到歌单末尾（幂等，重复添加只更新快照）。 */
+export async function addToPlaylist(playlistId: number, song: Song): Promise<void> {
+  const resp = await authedRequest(`/api/v1/playlists/${playlistId}/songs`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify(playlistSongInput(song)),
+  });
+  await unwrap(resp);
+}
+
+/** 从歌单移除一首。 */
+export async function removeFromPlaylist(playlistId: number, song: Song): Promise<void> {
+  const resp = await authedRequest(
+    `/api/v1/playlists/${playlistId}/songs/${encodeURIComponent(song.source)}/${encodeURIComponent(songIdStringOf(song))}`,
+    { method: "DELETE", headers: { Accept: "application/json" } },
+  );
+  await unwrap(resp);
+}
+
+/** 歌单曲目整体重排：键集合必须与服务端当前内容完全一致，不一致服务端 400/4004。 */
+export async function reorderPlaylist(playlistId: number, songs: Song[]): Promise<void> {
+  const resp = await authedRequest(`/api/v1/playlists/${playlistId}/songs/order`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({
+      songs: songs.map((s) => ({ source: s.source, songId: songIdStringOf(s) })),
+    }),
+  });
+  await unwrap(resp);
+}
+
+// ---- 播放上报与最近播放 ----
+
+/** 一次播放会话的上报体（服务端按 sessionId 幂等 upsert）。 */
+export type PlaybackSessionReport = {
+  sessionId: string;
+  deviceId: string;
+  source: string;
+  songId: string;
+  startedAt: number;
+  lastPlayedAt: number;
+  listenedMs: number;
+  completed?: boolean;
+  durationSeconds?: number | null;
+};
+
+/** 上报播放会话：听满 3 秒才会计入最近播放（服务端阈值），失败静默。 */
+export async function reportPlaybackSession(report: PlaybackSessionReport): Promise<void> {
+  const resp = await authedRequest("/api/v1/playback/sessions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify(report),
+  });
+  await unwrap(resp);
+}
+
+/** 最近播放条目：仅身份与统计，不带歌曲元数据。 */
+export type RecentPlayEntry = {
+  source: string;
+  songId: string;
+  firstPlayedAt: number;
+  lastPlayedAt: number;
+  playCount: number;
+  completedCount: number;
+  totalListenedMs: number;
+};
+
+/** 最近播放（按最后播放时间降序，同歌聚合为一行，上限 500）。 */
+export async function fetchRecentPlays(limit = 500): Promise<RecentPlayEntry[]> {
+  const resp = await authedGet(`/api/v1/playback/recent?limit=${limit}`, "application/json");
+  const data = await unwrap(resp);
+  const list: any[] = Array.isArray(data) ? data : Array.isArray(data?.entries) ? data.entries : [];
+  return list.map((it) => ({
+    source: String(it?.source ?? "kuwo"),
+    songId: String(it?.songId ?? ""),
+    firstPlayedAt: Number(it?.firstPlayedAt ?? 0),
+    lastPlayedAt: Number(it?.lastPlayedAt ?? 0),
+    playCount: Number(it?.playCount ?? 0),
+    completedCount: Number(it?.completedCount ?? 0),
+    totalListenedMs: Number(it?.totalListenedMs ?? 0),
+  }));
 }
 
 /** 把异常转成用户可读文案：网络类统一提示，其它保留原文。 */

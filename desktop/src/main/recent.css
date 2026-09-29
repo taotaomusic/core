@@ -1,0 +1,72 @@
+/* 最近播放页样式（rc- 前缀）；骨架屏直接复用 search.css 的 sp-skel 系列，无需重写 */
+
+/* ---- 页面骨架：页头 + 可选错误重试行 + 歌曲列表 ---- */
+.rc-root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg);
+}
+
+/* 页头：标题/副标题/统计在左，刷新按钮在右 */
+.rc-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 22px 8px;
+}
+.rc-head-text { min-width: 0; }
+.rc-title {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
+.rc-sub {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+/* 小统计行：口径为最终展示（命中元数据）的条目 */
+.rc-stats {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 6px;
+  font-variant-numeric: tabular-nums;
+}
+/* 拉取中禁用刷新按钮 */
+.rc-head .link:disabled { opacity: .5; }
+
+/* 错误重试行：红字 + 重试按钮；列表无数据时整体替代列表 */
+.rc-error {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 22px 8px;
+  padding: 10px 14px;
+  background: var(--err-bg);
+  color: var(--err);
+  border-radius: 10px;
+  font-size: 13px;
+}
+.rc-error-msg {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.rc-retry {
+  flex: none;
+  border: 1px solid var(--err);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--err);
+  font-size: 12px;
+  padding: 4px 14px;
+  transition: background .15s;
+}
+.rc-retry:hover { background: #fff; }
+
+/* 歌曲列表撑满剩余空间（与 .favpage .list 同口径） */
+.rc-root .list {
+  flex: 1;
+  min-height: 0;
+}

@@ -2,21 +2,28 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState } f
 import type { ReactNode, SyntheticEvent } from "react";
 import {
   addFavorite,
+  createPlaylist,
   favoriteKeyOf,
   fetchFavorites,
+  fetchPlaylists,
   fetchSongInfos,
   labelOfQuality,
   readableError,
   removeFavorite,
+  reportPlaybackSession,
   resolveLink,
   SessionExpired,
+  songIdStringOf,
+  songKeyOf,
+  type PlaybackSessionReport,
+  type PlaylistRecord,
   type Song,
 } from "../api";
 
 /** 重复播放模式：off 播完即停；all 列表循环；one 单曲循环。 */
 export type RepeatMode = "off" | "all" | "one";
 
-/** useApp 返回的上下文值：播放器 / 队列操作 / 音质 / 收藏 / 定时关闭 / UI 轻提示。 */
+/** useApp 返回的上下文值：播放器 / 队列与插播 / 音质 / 收藏 / 歌单 / 定时关闭 / UI 轻提示。 */
 type AppContextValue = {
   // ---- 播放器 ----
   queue: Song[];
@@ -37,6 +44,8 @@ type AppContextValue = {
   // ---- 队列操作（新增） ----
   removeQueueItem: (i: number) => void;
   moveQueueItem: (from: number, to: number) => void;
+  // ---- 插播（新增，对标安卓 playNext，纯本地队列操作） ----
+  playNext: (song: Song) => void;
   // ---- 音质（新增） ----
   preferredQuality: number;
   setPreferredQuality: (q: number) => void;
@@ -55,6 +64,11 @@ type AppContextValue = {
   isFavorite: (s: Song) => boolean;
   toggleFavorite: (s: Song) => void;
   refreshFavorites: () => Promise<void>;
+  // ---- 歌单（新增） ----
+  playlists: PlaylistRecord[]; // 全量歌单列表（不含 songs）
+  playlistsReady: boolean; // 首次加载完成
+  refreshPlaylists: () => Promise<void>;
+  createPlaylistAction: (name: string, description?: string) => Promise<PlaylistRecord | null>;
   // ---- UI ----
   showDetail: boolean;
   setShowDetail: (v: boolean) => void;
@@ -70,9 +84,57 @@ export function useApp(): AppContextValue {
   return ctx;
 }
 
+// ---- 播放上报（对标安卓 trackPlaybackSession 的简化版，内部实现，不进 useApp 契约） ----
+
+/** 上报用的设备 id 存储键。 */
+const DEVICE_ID_KEY = "taotao.deviceId";
+
+/** 一次播放会话的本地累计状态；key 用于判断「同一首歌」以复用会话。 */
+type PlaybackSessionState = {
+  sessionId: string; // 每次新会话用 crypto.randomUUID() 生成
+  key: string; // songKeyOf 口径的歌曲键
+  source: string;
+  songId: string; // songIdStringOf 口径的远端身份；空串的会话整体跳过不上报
+  startedAt: number; // 会话开始时间（毫秒）
+  listenedMs: number; // 已听时长累计（毫秒）
+  lastSyncAt: number; // 已快照上报到的 listenedMs 进度
+};
+
+/** 读取或生成设备 id：localStorage "taotao.deviceId" 缺失时用 crypto.randomUUID 生成并落盘。 */
+function ensureDeviceId(): string {
+  try {
+    const existing = localStorage.getItem(DEVICE_ID_KEY);
+    if (existing) return existing;
+    const id = crypto.randomUUID();
+    localStorage.setItem(DEVICE_ID_KEY, id);
+    return id;
+  } catch {
+    // localStorage 不可用时退化为进程内一次性 id，仅影响上报归属不影响播放
+    return crypto.randomUUID();
+  }
+}
+
+/**
+ * 为歌曲开新会话。songId 为空串（既无 id 又无 mid）说明服务端无法定位这首歌，
+ * 整个会话跳过不上报：返回 null 表示「无会话」，心跳与 flush 都直接忽略。
+ */
+function makePlaybackSession(song: Song): PlaybackSessionState | null {
+  const songId = songIdStringOf(song);
+  if (!songId) return null;
+  return {
+    sessionId: crypto.randomUUID(),
+    key: songKeyOf(song),
+    source: song.source || "kuwo",
+    songId,
+    startedAt: Date.now(),
+    listenedMs: 0,
+    lastSyncAt: 0,
+  };
+}
+
 /**
  * 全局状态 Provider：渲染唯一的 <audio> 元素，承载播放队列、收藏库、音质偏好、
- * 定时关闭和轻提示。播放/收藏/换源等会话过期统一经 props.onExpired 上抛给上层登出。
+ * 定时关闭、轻提示与播放上报。播放/收藏/换源等会话过期统一经 props.onExpired 上抛给上层登出。
  */
 export function AppProvider(props: { children: ReactNode; onExpired: () => void }): JSX.Element {
   const { children, onExpired } = props;
@@ -142,10 +204,24 @@ export function AppProvider(props: { children: ReactNode; onExpired: () => void 
   const favSongsRef = useRef<Song[]>(favSongs);
   const [favReady, setFavReady] = useState(false);
 
+  // ---- 歌单状态 ----
+  // 全量歌单列表（不含 songs）；歌单详情由歌单页自行拉取
+  const [playlists, setPlaylists] = useState<PlaylistRecord[]>([]);
+  // 首次拉取完成标记：歌单页据此区分「空列表」和「还没加载」
+  const [playlistsReady, setPlaylistsReady] = useState(false);
+
   // ---- UI 状态 ----
   const [showDetail, setShowDetail] = useState(false);
   const [toastMsg, setToastMsg] = useState("");
   const toastTimerRef = useRef<number | null>(null);
+
+  // ---- 播放上报（内部实现，不进 useApp 契约） ----
+  // 设备 id：localStorage 缺失时生成一次并落盘，服务端用于区分播放来源
+  const deviceIdRef = useRef(ensureDeviceId());
+  // 当前播放会话；null = 无会话（未开播 / 刚终结 / 歌曲无远端身份不上报）
+  const sessionRef = useRef<PlaybackSessionState | null>(null);
+  // isPlaying 的镜像 ref：上报心跳等闭包里读取真实播放态，避免取到过期 state
+  const isPlayingRef = useRef(false);
 
   const current = index >= 0 && index < queue.length ? queue[index] : null;
 
@@ -163,11 +239,75 @@ export function AppProvider(props: { children: ReactNode; onExpired: () => void 
     setFavSongs(songs);
   }
 
+  /**
+   * 快照式上报当前会话（fire-and-forget）：任何失败（网络错误 / 刷新令牌失败 /
+   * 409 冲突等）一律静默吞掉 —— 服务端按 sessionId 幂等 upsert、快照语义弱，
+   * 丢一次只影响统计精度，绝不能因此打断播放或弹提示。
+   * opts.completed=true 时按「完整听完」口径上报并终结会话（置空 ref），
+   * 防止其后的暂停/切歌快照把同 sessionId 的 completed 覆盖回去。
+   */
+  const flushSession = useCallback((opts?: { completed?: boolean }) => {
+    const session = sessionRef.current;
+    if (opts?.completed) sessionRef.current = null;
+    // 无会话或一秒都没听：没有可报的数据（服务端 3 秒阈值以下的也不进最近播放）
+    if (!session || session.listenedMs <= 0) return;
+    const report: PlaybackSessionReport = {
+      sessionId: session.sessionId,
+      deviceId: deviceIdRef.current,
+      source: session.source,
+      songId: session.songId,
+      startedAt: session.startedAt,
+      // 简化口径：lastPlayedAt = 开始时间 + 已听时长
+      lastPlayedAt: session.startedAt + session.listenedMs,
+      listenedMs: session.listenedMs,
+    };
+    if (opts?.completed) {
+      report.completed = true;
+      // durationSeconds 只在自然播完（ended）时带：取音频元素当前时长并取整
+      const el = audioRef.current;
+      const dur = el ? el.duration : NaN;
+      report.durationSeconds = Number.isFinite(dur) ? Math.floor(dur) : null;
+    }
+    void reportPlaybackSession(report).catch(() => {
+      // 静默：上报失败不提示、不影响播放（含 SessionExpired，不据此登出）
+    });
+  }, []);
+
+  // 上报心跳：每秒检查一次，仅当音频确实在播（isPlaying ref）时累计 1 秒；
+  // 每累计满 15 秒快照上报一次，lastSyncAt 记录已上报到的进度
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const session = sessionRef.current;
+      if (!session || !isPlayingRef.current) return;
+      session.listenedMs += 1000;
+      if (session.listenedMs - session.lastSyncAt >= 15000) flushSession();
+    }, 1000);
+    // 组件卸载时清掉心跳 interval，避免定时器泄漏
+    return () => window.clearInterval(timer);
+  }, [flushSession]);
+
+  // 页面卸载前尽力上报一次：tauri 插件的 fetch 未必支持 keepalive，发不出去就丢，
+  // 快照语义弱、丢失无碍
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      try {
+        flushSession();
+      } catch {
+        // 卸载路径吞掉一切异常
+      }
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [flushSession]);
+
   const playAt = useCallback(
     async (i: number) => {
       const list = queueRef.current;
       if (i < 0 || i >= list.length) return;
       const song = list[i];
+      // 换歌/重播前先把旧会话快照上报（fire-and-forget）。此时 el.src 还没换、
+      // 旧曲仍在播：若 resolveLink 失败，会话未终结，心跳会继续累计。
+      flushSession();
       indexRef.current = i;
       setIndex(i);
       setPlayError("");
@@ -185,6 +325,13 @@ export function AppProvider(props: { children: ReactNode; onExpired: () => void 
         if (!el) return;
         el.src = link.url;
         await el.play();
+        // 播放真正开始后才开/续会话：resolveLink 失败或被更新的请求取代时不动会话。
+        // 同 key（暂停恢复 / seek 等同曲再入）复用会话，累计不清零；换了歌则开
+        // 新会话（旧会话已在 playAt 开头 flush）。
+        const key = songKeyOf(song);
+        if (!sessionRef.current || sessionRef.current.key !== key) {
+          sessionRef.current = makePlaybackSession(song);
+        }
       } catch (e) {
         if (gen !== playGenRef.current) return;
         if (e instanceof SessionExpired) {
@@ -198,7 +345,7 @@ export function AppProvider(props: { children: ReactNode; onExpired: () => void 
         toast(msg);
       }
     },
-    [toast],
+    [toast, flushSession],
   );
 
   /** 整列设为队列并从第 i 首开始播放。 */
@@ -268,6 +415,40 @@ export function AppProvider(props: { children: ReactNode; onExpired: () => void 
       setIndex(target);
     }
   }, []);
+
+  /**
+   * 插播：对标安卓 playNext 的纯本地队列操作，不改变当前播放。
+   * 队列为空或无当前曲 → 等价 playList([song], 0) 直接开播；否则插到当前曲
+   * 后面（index+1），同 key 的旧位置先移除保持唯一（当前播放中的那首除外，
+   * 与 removeQueueItem 的「播放中不可删」口径一致），插完轻提示。
+   */
+  const playNext = useCallback(
+    (song: Song) => {
+      const list = queueRef.current;
+      const cur = indexRef.current;
+      if (list.length === 0 || cur < 0 || cur >= list.length) {
+        playList([song], 0);
+        return;
+      }
+      const key = songKeyOf(song);
+      const kept: Song[] = [];
+      // 插入点默认在当前曲后；每移除一个位于当前曲之前的同 key 旧位置，插入点左移一位
+      let insertAt = cur + 1;
+      for (let i = 0; i < list.length; i++) {
+        const it = list[i];
+        if (i !== cur && songKeyOf(it) === key) {
+          if (i < cur) insertAt -= 1;
+          continue;
+        }
+        kept.push(it);
+      }
+      kept.splice(insertAt, 0, song);
+      queueRef.current = kept;
+      setQueue(kept);
+      toast("已添加到下一首播放");
+    },
+    [playList, toast],
+  );
 
   // next/prev 的回绕规则只认 all 循环：到尾/在 0 时其余模式保持不动
   const next = useCallback(() => {
@@ -357,6 +538,11 @@ export function AppProvider(props: { children: ReactNode; onExpired: () => void 
         el.currentTime = pos;
         setPosition(pos);
         await el.play();
+        // 换源续播仍是同一首歌：无会话（如刚被终结）则补开，有则复用，累计不清零
+        const key = songKeyOf(song);
+        if (!sessionRef.current || sessionRef.current.key !== key) {
+          sessionRef.current = makePlaybackSession(song);
+        }
       } catch (e) {
         if (gen !== playGenRef.current) return;
         if (e instanceof SessionExpired) {
@@ -558,10 +744,54 @@ export function AppProvider(props: { children: ReactNode; onExpired: () => void 
     }
   }, [toast]);
 
+  /** 拉取全量歌单列表（不含 songs）：失败轻提示，完成后置 playlistsReady。 */
+  const refreshPlaylists = useCallback(async () => {
+    try {
+      const records = await fetchPlaylists();
+      setPlaylists(records);
+    } catch (e) {
+      if (e instanceof SessionExpired) {
+        onExpiredRef.current();
+        return;
+      }
+      // 拉取失败不阻塞界面，仅轻提示
+      toast(readableError(e));
+    } finally {
+      setPlaylistsReady(true);
+    }
+  }, [toast]);
+
+  /**
+   * 新建歌单：成功后把记录插入本地列表头部（与服务端「按更新时间降序」的展示
+   * 口径一致）并返回；失败轻提示并返回 null，SessionExpired 走 onExpired 登出。
+   */
+  const createPlaylistAction = useCallback(
+    async (name: string, description?: string): Promise<PlaylistRecord | null> => {
+      try {
+        const record = await createPlaylist(name, description ?? "");
+        setPlaylists((prev) => [record, ...prev]);
+        return record;
+      } catch (e) {
+        if (e instanceof SessionExpired) {
+          onExpiredRef.current();
+          return null;
+        }
+        toast(readableError(e));
+        return null;
+      }
+    },
+    [toast],
+  );
+
   // 挂载后拉取一次收藏库
   useEffect(() => {
     void refreshFavorites();
   }, [refreshFavorites]);
+
+  // 挂载后拉取一次歌单列表
+  useEffect(() => {
+    void refreshPlaylists();
+  }, [refreshPlaylists]);
 
   // 组件卸载时清掉定时关闭的 interval，避免定时器泄漏
   useEffect(() => {
@@ -585,6 +815,9 @@ export function AppProvider(props: { children: ReactNode; onExpired: () => void 
   // 播完：定时关闭「播完再停」等待态优先于 repeat（单曲循环也不续播）；
   // one 重播当前；all 到尾回 0 继续；off 最后一首停住，其余进入下一首
   const handleEnded = () => {
+    // 自然播完：先按完成口径 flush（completed=true + durationSeconds 取整）并终结会话，
+    // 防止其后的暂停/切歌快照把同 sessionId 的 completed 覆盖回去
+    flushSession({ completed: true });
     // sleepPendingStop 跨手动切歌存活：playAt 不清除它，下一次自然播完时仍会在这里停住
     if (sleepPendingStop) {
       const el = audioRef.current;
@@ -597,6 +830,9 @@ export function AppProvider(props: { children: ReactNode; onExpired: () => void 
       return;
     }
     if (repeat === "one") {
+      // 单曲循环重播：旧会话已终结，为重播单独开新会话（重播算一次独立播放）
+      const replay = queueRef.current[indexRef.current];
+      if (replay) sessionRef.current = makePlaybackSession(replay);
       const el = audioRef.current;
       if (el) {
         el.currentTime = 0;
@@ -632,6 +868,7 @@ export function AppProvider(props: { children: ReactNode; onExpired: () => void 
     cycleRepeat,
     removeQueueItem,
     moveQueueItem,
+    playNext,
     preferredQuality,
     setPreferredQuality,
     activeQuality,
@@ -647,6 +884,10 @@ export function AppProvider(props: { children: ReactNode; onExpired: () => void 
     isFavorite,
     toggleFavorite,
     refreshFavorites,
+    playlists,
+    playlistsReady,
+    refreshPlaylists,
+    createPlaylistAction,
     showDetail,
     setShowDetail,
     toast,
@@ -662,8 +903,17 @@ export function AppProvider(props: { children: ReactNode; onExpired: () => void 
         onTimeUpdate={handleTimeUpdate}
         onDurationChange={syncDuration}
         onLoadedMetadata={syncDuration}
-        onPlay={() => setIsPlaying(true)}
-        onPause={() => setIsPlaying(false)}
+        onPlay={() => {
+          isPlayingRef.current = true;
+          setIsPlaying(true);
+        }}
+        onPause={() => {
+          isPlayingRef.current = false;
+          setIsPlaying(false);
+          // 暂停即快照上报一次；切歌换 src 引发的 pause 也会走到这里，
+          // 服务端按 sessionId 幂等 upsert，重复快照无害
+          flushSession();
+        }}
         onEnded={handleEnded}
         onError={handleAudioError}
       />
