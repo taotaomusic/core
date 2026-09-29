@@ -139,8 +139,11 @@ jobs:
           cd out
           (cd android && zip -qr "$OLDPWD/android.zip" .)
           (cd node/linux-x64 && zip -qr "$OLDPWD/node-linux-x64.zip" .)
-          gh release view crypto-latest >/dev/null 2>&1 || gh release create crypto-latest --prerelease --title "加密产物最新构建" --notes "同仓 CI 内部经 artifact 流转；此处供本地 fetch-crypto 取用。产物无内嵌密钥（PSK 动态下发）。"
+          gh release view crypto-latest >/dev/null 2>&1 || gh release create crypto-latest --prerelease --title "加密模块" --notes "版本历史"
           gh release upload crypto-latest android.zip node-linux-x64.zip --clobber
+          cd ..
+          cver=$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
+          bash ../tools/release-log.sh crypto-latest "加密模块" "$cver"
 
   # PLACEHOLDER_SERVER
   server:
@@ -234,8 +237,9 @@ jobs:
           ( cd dist && zip -qr "$OLDPWD/server-dist.zip" . )
           zip -qr server-dist.zip crypto
           gh release view server-dist-latest >/dev/null 2>&1 || \
-            gh release create server-dist-latest --prerelease --title "后端 dist 最新构建" --notes "扁平布局：解压即得 main.js 与 crypto/。"
+            gh release create server-dist-latest --prerelease --title "后端" --notes "版本历史"
           gh release upload server-dist-latest server-dist.zip --clobber
+          bash ../tools/release-log.sh server-dist-latest "后端" "$(node -p "require('./package.json').version")"
       - name: 构建并推送 Docker 镜像到 ghcr.io
         if: github.event_name == 'push'
         env:
@@ -359,8 +363,13 @@ jobs:
           $src = "webApp/build/dist/wasmJs/productionExecutable"
           tar -a -cf share-player.zip -C $src .
           gh release view share-player-latest *> $null
-          if ($LASTEXITCODE -ne 0) { gh release create share-player-latest --prerelease --title "share-player 最新构建" --notes "供后端构建拉取" }
+          if ($LASTEXITCODE -ne 0) { gh release create share-player-latest --prerelease --title "Web 分享播放器" --notes "版本历史" }
           gh release upload share-player-latest share-player.zip --clobber
+      - name: 记录 Web 版本历史
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash tools/release-log.sh share-player-latest "Web 分享播放器" "$(tr -d '[:space:]' < VERSION).${GITHUB_RUN_NUMBER}"
 
   client-publish:
     needs: [client-android, client-desktop]
@@ -383,11 +392,12 @@ jobs:
           cp "$apk" "out/TaotaoMusic-${VN}-${KIND}.apk"
           (cd artifacts/desktop-update-bundle && zip -qr "$OLDPWD/out/taotao-music-desktop-bundle.zip" .)
           ls -la out
-      - name: 更新滚动 latest（只保留最新一版，避免堆积）
+      - name: 更新滚动 latest（安卓客户端，记录版本历史）
         run: |
-          gh release view latest >/dev/null 2>&1 || gh release create latest --prerelease --title "最新构建产物" --notes "指向最新一版，方便直链下载。"
+          gh release view latest >/dev/null 2>&1 || gh release create latest --prerelease --title "安卓客户端" --notes "版本历史"
           gh release view latest --json assets -q '.assets[].name' 2>/dev/null | grep -E '^TaotaoMusic-.*\.apk$' | while read -r old; do gh release delete-asset latest "$old" -y || true; done
           gh release upload latest out/* --clobber
+          bash tools/release-log.sh latest "安卓客户端" "$VN"
 
   # Windows 桌面（Tauri + React）。crypto-src 变化也重建（src-tauri 直接依赖 core）。
   desktop:
@@ -471,6 +481,13 @@ jobs:
               *) echo "删除旧资产 $a"; gh release delete-asset desktop-latest "$a" -y || true ;;
             esac
           done
+      - name: 记录桌面版本历史
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: bash ../tools/release-log.sh desktop-latest "桌面客户端" "$(tr -d '[:space:]' < ../VERSION).${GITHUB_RUN_NUMBER}"
 
 
 
