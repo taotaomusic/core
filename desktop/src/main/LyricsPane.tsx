@@ -103,9 +103,17 @@ export function LyricsPane(props: {
     // song 是 songKey 对应的那次渲染的对象；key 不变就不重复拉取
   }, [songKey]);
 
-  // 平滑时钟主循环：每帧估算播放位置、探测当前行。只在同步歌词下运行；
-  // setState 带下标守卫，行下标不变时 React 直接跳过 —— 行列表只在换句时重渲染，
-  // 逐字进度则完全由 KaraokeLine 内部消化（它每帧读 estimateRef 自行刷新）。
+  // 行跟踪主路径：positionSec 每次 timeupdate（约 4Hz）都直接重判当前行。
+  // 不依赖 rAF —— 窗口被遮挡/最小化时浏览器会停掉 rAF，若只靠帧循环，
+  // 恢复可见前 activeIndex 会一直卡死（实测踩过）。换行判定 4Hz 足够。
+  useEffect(() => {
+    if (!lyric || !lyric.synced) return;
+    const index = lyricIndexAt(lyric.lines, positionSec * 1000);
+    setActiveIndex(index);
+  }, [lyric, positionSec]);
+
+  // 平滑时钟兜底：rAF 每帧估算播放位置，供逐字卡拉OK做帧级进度（行跟踪已由上面的
+  // timeupdate 路径负责，这里只写 estimateRef；rAF 被节流时卡拉OK暂停但换行不受影响）
   useEffect(() => {
     if (lyric === null || !lyric.synced) return;
     let rafId = 0;

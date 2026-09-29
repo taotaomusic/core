@@ -12,12 +12,16 @@
   min-height: 0;
 }
 
-/* 滚动容器：撑满剩余空间；上下大留白让首尾行也能滚到垂直居中位置 */
+/* 滚动容器：撑满剩余空间；上下留白让首尾行也能滚到垂直居中位置。
+ * 留白必须随面板尺寸走（百分比按宽度解析，本容器恒为正方形 → 等效于高度比例），
+ * 之前用 30vh：上下共 432px 的 padding 把滚动体最小高度撑到超过方形容器，
+ * 居中计算落在被裁掉的不可见区域里，活动行在可见区内偏向底部。
+ * 45% ≈ 136px ≥ (302 − 行高)/2 的居中所需净空。 */
 .lyr-list {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 30vh 16px;
+  padding: 45% 16px;
   /* Firefox 细滚动条 */
   scrollbar-width: thin;
   scrollbar-color: rgba(0, 0, 0, 0.18) transparent;

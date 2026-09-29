@@ -7,6 +7,52 @@
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      // dev 调试旁路：URL 带 #mock 时用内置假数据渲染完整界面（纯浏览器环境可看 UI）。
+      // 1) 预置一个"未过期"的本地会话，让 App 跳过登录页（restoreToken 不发请求）；
+      // 2) 拦截 window.fetch，按路径返回合成响应。打包后没有任何行为差异（hash 不存在）。
+      if (location.hash.includes("mock")) {
+        localStorage.setItem(
+          "taotao.session",
+          JSON.stringify({ accessToken: "mock", refreshToken: "mock", expiresAt: Date.now() + 864e5 }),
+        );
+        const json = (data) => new Response(JSON.stringify({ code: 0, message: "success", data }), {
+          status: 200, headers: { "Content-Type": "application/json" },
+        });
+        const LRC = Array.from({ length: 40 }, (_, i) =>
+          `[${String(Math.floor(i * 8 / 60)).padStart(2, "0")}:${String((i * 8) % 60).padStart(2, "0")}.00]这是第 ${i + 1} 句歌词，用来验证自动滚动居中`,
+        ).join("\n");
+        window.fetch = async (input, init) => {
+          const url = String(input instanceof Request ? input.url : input);
+          const path = url.replace(/^https?:\/\/[^/]+/, "").split("#")[0];
+          const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+          if (path.includes("/api/v1/playlists")) return json([]);
+          if (path.includes("/api/v1/favorites")) return json([]);
+          if (path.includes("/api/v1/search/suggestions")) return json([]);
+          if (path.includes("/api/v1/search/hot")) return json([]);
+          if (path.includes("/api/v1/search")) {
+            await wait(200);
+            return new Response(
+              Array.from({ length: 12 }, (_, i) =>
+                JSON.stringify({ type: "song", data: { id: i + 1, title: `mock 歌曲 ${i + 1}`, artist: "mock 歌手", source: "kuwo", coverUrl: "", playable: true } }),
+              ).join("\n") + "\n" + JSON.stringify({ type: "end", meta: { total: 12, hasMore: false } }),
+              { status: 200, headers: { "Content-Type": "application/x-ndjson" } },
+            );
+          }
+          if (path.includes("/lyrics")) {
+            await wait(300);
+            return json({ lrc: LRC, yrc: "" });
+          }
+          if (path.includes("/link")) {
+            await wait(300);
+            // 指向本地静音音频：mock 模式下播放器真实走完 timeupdate/ended 全链路
+            return json({ songId: 1, url: "http://127.0.0.1:8641/silence.wav", quality: 4, fallback: false });
+          }
+          if (path.includes("/playback/sessions")) return json({});
+          return json(null);
+        };
+      }
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
