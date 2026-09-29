@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { absoluteUrl } from "../api";
 import { useApp } from "../state/AppState";
 import { hideOnError } from "./img";
 import {
@@ -52,7 +53,7 @@ export function PlayerBar() {
       )}
       <div className="playerbar-cover">
         <span className="playerbar-cover-note"><IconMusicNote size={22} /></span>
-        {current?.coverUrl ? <img src={current.coverUrl} alt="" onError={hideOnError} /> : null}
+        {current?.coverUrl ? <img src={absoluteUrl(current.coverUrl)} alt="" onError={hideOnError} /> : null}
       </div>
       <div
         className="playerbar-meta"

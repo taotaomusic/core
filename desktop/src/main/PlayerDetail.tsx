@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  absoluteUrl,
   createSongShare,
   fetchQualityTiers,
   labelOfQuality,
@@ -349,7 +350,7 @@ export function PlayerDetail() {
             ) : (
               <div className="pd-cover">
                 <span className="pd-cover-note"><IconMusicNote size={80} /></span>
-                {current.coverUrl ? <img src={current.coverUrl} alt="" onError={hideOnError} /> : null}
+                {current.coverUrl ? <img src={absoluteUrl(current.coverUrl)} alt="" onError={hideOnError} /> : null}
               </div>
             )}
             <div className="pd-title-row">
@@ -455,7 +456,12 @@ export function PlayerDetail() {
                       }}
                     >
                       <span className="pd-queue-grip" title="拖动调整顺序">⋮</span>
-                      <span className="pd-queue-idx">{active ? <IconPlay size={10} /> : i + 1}</span>
+                      {/* 行封面：序号/播放中标记直接叠在封面角标上，替代原先裸序号列 */}
+                      <span className={`pd-queue-cover${active ? " active" : ""}`}>
+                        <span className="pd-queue-cover-note"><IconMusicNote size={16} /></span>
+                        {s.coverUrl ? <img src={absoluteUrl(s.coverUrl)} alt="" onError={hideOnError} /> : null}
+                        <span className="pd-queue-cover-badge">{active ? <IconPlay size={9} /> : i + 1}</span>
+                      </span>
                       <span className="pd-queue-meta">
                         <span className="pd-queue-name">{s.title}</span>
                         <span className="pd-queue-artist">{s.artist}</span>
