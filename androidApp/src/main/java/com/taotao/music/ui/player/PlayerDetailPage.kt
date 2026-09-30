@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
@@ -42,14 +41,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
-import coil.compose.AsyncImage
 import com.taotao.music.data.PlaybackHistoryEntry
 import com.taotao.music.data.TencentMusicApi
 import com.taotao.music.model.LyricParser
@@ -61,7 +57,6 @@ import com.taotao.music.playerui.PlayerRepeatMode
 import com.taotao.music.playerui.PlayerUiState
 import com.taotao.music.playerui.theme.TaotaoSizes
 import com.taotao.music.playerui.theme.TaotaoSpacing
-import com.taotao.music.ui.common.AlbumArt
 import com.taotao.music.ui.common.FavoriteButton
 import com.taotao.music.ui.common.PagerDots
 import com.taotao.music.ui.common.VipBadge
@@ -255,20 +250,17 @@ internal fun PlayerDetailPage(
                 )
             } else {
                 // 封面按可用空间取尺寸，固定 292dp 在小屏上会把下方控制区挤出屏幕。
+                // 黑胶唱片机的盘径沿用原封面的尺寸预算；封面本身缩为盘径的 0.68，
+                // 空出的环带由 VinylDisc 画成声槽与高光。
                 BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     val coverSize = minOf(maxWidth, maxHeight) * 0.86f
-                    if (!song.coverUri.isNullOrBlank()) {
-                        AsyncImage(
-                            model = song.coverUri,
-                            contentDescription = "专辑封面",
-                            modifier = Modifier
-                                .size(coverSize)
-                                .graphicsLayer { rotationZ = coverRotation.value }
-                                .clip(CircleShape),
-                        )
-                    } else {
-                        AlbumArt(Color(song.color), coverSize)
-                    }
+                    VinylDisc(
+                        coverUri = song.coverUri,
+                        fallbackColor = Color(song.color),
+                        isPlaying = isPlaying,
+                        rotationDegrees = coverRotation.value,
+                        discSize = coverSize,
+                    )
                 }
             }
         }
