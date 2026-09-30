@@ -179,10 +179,12 @@ private fun DrawScope.drawVinylSheen() {
     val d = size.minDimension
     val r = d / 2f
     val grooveRing = Path().apply {
+        // EvenOdd 规则让内外两个圆构成圆环，高光只落在声槽环带内。
+        fillType = PathFillType.EvenOdd
         addOval(Rect(center, r))
         addOval(Rect(center, r * COVER_FRACTION))
     }
-    clipPath(grooveRing, pathFillType = PathFillType.EvenOdd) {
+    clipPath(grooveRing) {
         drawCircle(
             Brush.sweepGradient(
                 0.00f to Color.Transparent,
