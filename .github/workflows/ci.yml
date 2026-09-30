@@ -348,6 +348,21 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      # npm 锁文件解析有平台差异：Windows 侧生成的 kotlin-js-store 锁在 Linux
+      # 会被 npm 改写，kotlinStorePackageLock 直接判死（本 job 已固定在 Linux 跑，
+      # 这里先自愈并把新锁回写仓库，之后锁文件以 Linux 解析为准）。
+      - name: 刷新 kotlin-js-store 锁文件（漂移时回写）
+        run: |
+          ./gradlew :kotlinUpgradePackageLock --no-daemon
+          if git diff --quiet -- kotlin-js-store; then
+            echo "锁文件无漂移"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add kotlin-js-store
+            git commit -m "build: CI 刷新 kotlin-js-store 锁文件（Linux 侧 npm 解析）[skip ci]"
+            git push || echo "::warning::锁文件回写推送失败，下次运行重试"
+          fi
       - name: 构建 Kotlin/Wasm 分享播放器
         run: ./gradlew :webApp:wasmJsBrowserDistribution --build-cache --no-daemon
       - name: 打包并发布 share-player-latest
