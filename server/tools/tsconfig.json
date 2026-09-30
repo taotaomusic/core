@@ -2,8 +2,9 @@
     "compilerOptions": {
         "target": "ES2022",
         "lib": ["ES2022", "DOM"],
-        "module": "CommonJS",
-        "moduleResolution": "node",
+        // NodeNext：node10 解析已弃用（TS 7 移除）；这些脚本按 CommonJS 运行，行为不变。
+        "module": "NodeNext",
+        "moduleResolution": "NodeNext",
         "strict": true,
         "esModuleInterop": true,
         "skipLibCheck": true,

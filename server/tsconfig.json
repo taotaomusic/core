@@ -2,8 +2,10 @@
   "compilerOptions": {
     "target": "ES2022",
     "lib": ["ES2022"],
-    "module": "CommonJS",
-    "moduleResolution": "node",
+    // NodeNext：node10 解析在 TS 6.0 起被弃用、TS 7.0 移除；package.json 无 "type": "module"，
+    // 产物仍是 CommonJS require()，运行时行为不变，仅模块类型解析改按 Node 现行规则（识别 exports 映射）。
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
     "rootDir": "src",
     "outDir": "dist",
     "strict": true,
