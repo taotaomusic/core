@@ -332,7 +332,10 @@ jobs:
   client-web:
     needs: [changes, purge]
     if: needs.changes.outputs.client == 'true'
-    runs-on: windows-latest
+    # 用 Linux：wasm 产物与构建平台无关，且 Windows runner 上 npm 刚生成的
+    # wasm-opt.cmd shim 偶发被占用导致进程启动失败（Optimize 任务连挂多次），
+    # Linux 的 POSIX shim 无此问题。
+    runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
@@ -346,20 +349,16 @@ jobs:
         with:
           node-version: 22
       - name: 构建 Kotlin/Wasm 分享播放器
-        shell: pwsh
-        run: .\gradlew.bat :webApp:wasmJsBrowserDistribution --build-cache --no-daemon
+        run: ./gradlew :webApp:wasmJsBrowserDistribution --build-cache --no-daemon
       - name: 打包并发布 share-player-latest
-        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $src = "webApp/build/dist/wasmJs/productionExecutable"
-          tar -a -cf share-player.zip -C $src .
-          gh release view share-player-latest *> $null
-          if ($LASTEXITCODE -ne 0) { gh release create share-player-latest --prerelease --title "Web 分享播放器" --notes "版本历史" }
+          (cd webApp/build/dist/wasmJs/productionExecutable && zip -qr "$OLDPWD/share-player.zip" .)
+          gh release view share-player-latest >/dev/null 2>&1 \
+            || gh release create share-player-latest --prerelease --title "Web 分享播放器" --notes "版本历史"
           gh release upload share-player-latest share-player.zip --clobber
       - name: 记录 Web 版本历史
-        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: bash tools/release-log.sh share-player-latest "Web 分享播放器" "$(tr -d '[:space:]' < VERSION).${GITHUB_RUN_NUMBER}"
