@@ -259,10 +259,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # 包 ghcr.io/taotaomusic/core 的 Actions 写授权损坏（2026-09-30 起 push 稳定报
-          # permission_denied: write_package，重跑无效），而包 ACL 无 REST/GraphQL 接口、
-          # 只能在网页设置里修，故改推新包：GITHUB_TOKEN 首推会自动建包并关联本仓库。
-          IMAGE="ghcr.io/taotaomusic/music-server"
+          # 镜像名跟随仓库（ghcr.io/taotaomusic/core）。2026-09-30 该包的 Actions 写授权曾被改坏
+          # （稳定报 permission_denied: write_package，且包 ACL 无 API 只能网页修），期间临时改推
+          # taotaomusic/music-server（冻结在 1.0.47，可在包设置删除）；授权恢复后已切回本包。
+          IMAGE="ghcr.io/$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')"
           VER=$(node -p "require('./package.json').version")
           echo "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
           docker build -t "$IMAGE:latest" -t "$IMAGE:$VER" -t "$IMAGE:${GITHUB_SHA::12}" .
