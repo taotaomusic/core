@@ -9,12 +9,20 @@ import { AdminGuarded } from "../admin-auth/admin-guarded.decorator";
 import { RequireRole } from "../admin-auth/roles.decorator";
 import { PRIVILEGED_READ_ROLES, WRITE_ROLES } from "../admin-auth/admin-roles";
 import { AdminAuditService } from "../admin-auth/admin-audit.service";
+import { AuthService } from "../auth/auth.service";
+import { UsersRepository } from "../auth/users.repository";
 import { UserAdminRepository } from "./user-admin.repository";
 
 const DEFAULT_PAGE_SIZE = 30;
 const MAX_PAGE_SIZE = 100;
 const DEFAULT_HISTORY_LIMIT = 50;
 const MAX_HISTORY_LIMIT = 200;
+
+/** 与 auth.controller 注册接口的口径逐字一致；一边收紧另一边不同步，就会出现「后台建得出、客户端登不进」的账号。 */
+const USERNAME_PATTERN = /^[\w一-龥]{3,32}$/;
+const MIN_PASSWORD_LENGTH = 6;
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const MAX_NICKNAME_LENGTH = 24;
 
 /**
  * 管理端用户与听歌统计。
@@ -35,7 +43,50 @@ export class UserAdminController {
   constructor(
     private readonly users: UserAdminRepository,
     private readonly audit: AdminAuditService,
+    private readonly auth: AuthService,
+    private readonly accounts: UsersRepository,
   ) {}
+
+  /**
+   * 后台直接创建账号，绕过邮箱验证码。
+   *
+   * 用户名/密码规则与客户端注册完全一致，建出的账号当场就能登录 App。邮箱选填，
+   * 且**不做注册渠道的域名白名单**：那份白名单管的是「对外承诺的注册渠道」，
+   * 管理员建号是内部操作，写什么邮箱由管理员负责。密码绝不进请求日志与审计详情。
+   */
+  @AdminGuarded()
+  @Post()
+  @RequireRole(...WRITE_ROLES)
+  @HttpCode(HttpStatus.CREATED)
+  async create(@Req() request: AdminAuthenticatedRequest, @Body() body: Record<string, unknown>) {
+    const username = this.auth.textOf(body?.username, true);
+    const password = this.auth.textOf(body?.password);
+    const email = this.auth.textOf(body?.email, true).toLowerCase();
+    const nickname = body?.nickname === undefined || body?.nickname === null || body?.nickname === ""
+      ? null
+      : this.nicknameOf(body.nickname);
+    if (!USERNAME_PATTERN.test(username) || password.length < MIN_PASSWORD_LENGTH) {
+      throw ApiErrors.badRequest(4000, "用户名为3至32位，密码至少6位");
+    }
+    if (email && !EMAIL_PATTERN.test(email)) throw ApiErrors.badRequest(4000, "邮箱格式不正确");
+    // 查重只为给出准确的 409；真正兜底是 users.create 里的唯一约束翻译（连接池并发窗口）。
+    if (email && (await this.accounts.findByEmail(email))) throw ApiErrors.conflict(4092, "邮箱已注册");
+    if (await this.accounts.findByUsername(username)) throw ApiErrors.conflict(4090, "用户名已存在");
+
+    const credentials = this.auth.hashPassword(password);
+    const user = await this.accounts.create(username, email || null, credentials.hash, credentials.salt, nickname);
+    await this.audit.record(request, "user.create", "user", String(user.id), { username, email: email || null });
+    return user;
+  }
+
+  /** 与 auth.controller 的昵称校验一致：1 至 24 个非控制字符。 */
+  private nicknameOf(value: unknown): string {
+    const nickname = this.auth.textOf(value, true);
+    if (!nickname || nickname.length > MAX_NICKNAME_LENGTH || /[\u0000-\u001F\u007F]/.test(nickname)) {
+      throw ApiErrors.badRequest(4000, `昵称须为 1 至 ${MAX_NICKNAME_LENGTH} 个非控制字符`);
+    }
+    return nickname;
+  }
 
   @AdminGuarded()
   @Get()

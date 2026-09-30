@@ -82,17 +82,32 @@ export class UsersRepository {
    * 这里必须接住唯一约束冲突：调用方是先查重、再哈希密码（scrypt N=65536，约 100ms）、
    * 最后插入，连接池下两个同名注册会双双通过查重，第二条 INSERT 撞约束。
    * 不翻译的话会被全局过滤器归成 502，而契约要求 409/4090。
+   *
+   * 按撞掉的约束区分文案：用户名 4090、邮箱 4092 —— 后台创建允许邮箱与用户名
+   * 各自冲突，只报「用户名已存在」会把管理员引去改一个没问题的名字。
+   * nickname 只有后台创建会用到，注册路径必然没有昵称。
    */
-  async create(username: string, email: string, passwordHash: string, passwordSalt: string): Promise<UserRecord> {
+  async create(
+    username: string,
+    email: string | null,
+    passwordHash: string,
+    passwordSalt: string,
+    nickname: string | null = null,
+  ): Promise<UserRecord> {
     try {
       const created = await this.database.first<UserRecord>(
-        `INSERT INTO users (username, email, password_hash, password_salt, im_uid) VALUES ($1, $2, $3, $4, $5)
+        `INSERT INTO users (username, email, nickname, password_hash, password_salt, im_uid) VALUES ($1, $2, $3, $4, $5, $6)
          RETURNING id, username, ${CREATED_AT}`,
-        [username, email, passwordHash, passwordSalt, randomUUID()],
+        [username, email, nickname, passwordHash, passwordSalt, randomUUID()],
       );
       return created!;
     } catch (error) {
-      if (isUniqueViolation(error)) throw ApiErrors.conflict(4090, "用户名已存在");
+      if (isUniqueViolation(error)) {
+        if ((error as { constraint?: string }).constraint === "idx_users_email_unique") {
+          throw ApiErrors.conflict(4092, "邮箱已注册");
+        }
+        throw ApiErrors.conflict(4090, "用户名已存在");
+      }
       throw error;
     }
   }

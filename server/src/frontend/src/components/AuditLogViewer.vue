@@ -129,7 +129,7 @@ const ACTION_GROUPS: Array<{ label: string; actions: Array<[string, string]> }> 
   {
     label: "用户",
     actions: [
-      ["user.set_disabled", "禁用/恢复用户"], ["user.delete", "删除用户"],
+      ["user.create", "创建用户"], ["user.set_disabled", "禁用/恢复用户"], ["user.delete", "删除用户"],
     ],
   },
 ];
@@ -156,6 +156,7 @@ const DETAIL_KEY_LABELS: Record<string, string> = {
   minSupportedVersionCode: "最低支持版本", minVersionCode: "最低版本号", maxVersionCode: "最高版本号",
   rescueVersionCode: "救援版本号", key: "配置键", value: "配置值", maskedKey: "密钥掩码",
   keyPrefix: "密钥前缀", maskedPhone: "手机号", source: "音源", uid: "账号 ID", status: "状态",
+  username: "用户名", email: "邮箱",
 };
 
 /** 详情值里的枚举翻译，例如公告更新只记改了哪些字段。 */

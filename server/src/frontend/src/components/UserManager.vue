@@ -16,6 +16,10 @@
         <el-icon><Refresh /></el-icon>
         <span>刷新</span>
       </el-button>
+      <el-button type="success" @click="openCreateDialog">
+        <el-icon><Plus /></el-icon>
+        <span>新建用户</span>
+      </el-button>
       <span class="bar-spacer"></span>
       <span class="pill">
         <span class="pill-dot"></span>
@@ -87,6 +91,41 @@
       />
     </div>
 
+    <el-dialog v-model="createVisible" title="新建用户" width="min(460px, 92vw)" destroy-on-close>
+      <el-form label-position="top" @submit.prevent>
+        <el-form-item label="用户名" required>
+          <el-input
+            v-model="createForm.username"
+            placeholder="3-32 位，字母、数字、下划线或汉字"
+            maxlength="32"
+            @keyup.enter="submitCreate"
+          />
+        </el-form-item>
+        <el-form-item label="初始密码" required>
+          <el-input
+            v-model="createForm.password"
+            type="password"
+            show-password
+            placeholder="至少 6 位"
+            @keyup.enter="submitCreate"
+          />
+        </el-form-item>
+        <el-form-item label="昵称（可选）">
+          <el-input v-model="createForm.nickname" maxlength="24" placeholder="留空则显示用户名" />
+        </el-form-item>
+        <el-form-item label="邮箱（可选）">
+          <el-input v-model="createForm.email" placeholder="选填；仅用于标识账号，不发验证码" />
+        </el-form-item>
+      </el-form>
+      <p class="hint">
+        创建后即可用该用户名与密码直接登录 App，无需邮箱验证码。操作会记入审计日志。
+      </p>
+      <template #footer>
+        <el-button @click="createVisible = false">取消</el-button>
+        <el-button type="primary" :loading="creating" @click="submitCreate">创建</el-button>
+      </template>
+    </el-dialog>
+
     <el-drawer v-model="detailVisible" :title="detailTitle" size="min(760px, 96vw)" destroy-on-close>
       <template v-if="detail" #default>
         <el-descriptions :column="2" border>
@@ -137,8 +176,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
-import { Search, Refresh } from "@element-plus/icons-vue";
+import { computed, onMounted, reactive, ref } from "vue";
+import { Search, Refresh, Plus } from "@element-plus/icons-vue";
 import { apiDelete, apiGet, apiPostJson, formatTime } from "../api";
 
 type UserSummary = {
@@ -189,6 +228,60 @@ const loading = ref(false);
 const detailVisible = ref(false);
 const detail = ref<PlaybackDetail | null>(null);
 const detailTitle = computed(() => (detail.value ? `${detail.value.user.nickname}的听歌统计` : "听歌统计"));
+
+/** 与服务端 user-admin.controller 的创建口径一致，先在本地拦掉明显不合法的输入，精确文案仍以服务端为准。 */
+const USERNAME_PATTERN = /^[\w一-龥]{3,32}$/;
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+const createVisible = ref(false);
+const creating = ref(false);
+const createForm = reactive({ username: "", password: "", nickname: "", email: "" });
+
+function openCreateDialog() {
+  createForm.username = "";
+  createForm.password = "";
+  createForm.nickname = "";
+  createForm.email = "";
+  createVisible.value = true;
+}
+
+async function submitCreate() {
+  const username = createForm.username.trim();
+  const password = createForm.password;
+  const email = createForm.email.trim();
+  if (!USERNAME_PATTERN.test(username)) {
+    ElMessage.warning("用户名须为 3 至 32 位字母、数字、下划线或汉字");
+    return;
+  }
+  if (password.length < 6) {
+    ElMessage.warning("密码至少 6 位");
+    return;
+  }
+  if (email && !EMAIL_PATTERN.test(email)) {
+    ElMessage.warning("邮箱格式不正确");
+    return;
+  }
+  creating.value = true;
+  try {
+    // 空串由服务端归一成 NULL，不必在这里区分 undefined。
+    const created = await apiPostJson<{ id: number; username: string }>("/app/admin/users", props.adminToken, {
+      username,
+      password,
+      nickname: createForm.nickname.trim(),
+      email,
+    });
+    ElMessage.success(`用户「${created.username}」已创建（ID ${created.id}）`);
+    createVisible.value = false;
+    // 新账号按 ID 倒序排在第一页；带着旧的搜索词会「创建成功却看不见」，所以一并复位。
+    query.value = "";
+    page.value = 1;
+    await fetchUsers();
+  } catch (error) {
+    ElMessage.error(`创建失败：${(error as Error).message}`);
+  } finally {
+    creating.value = false;
+  }
+}
 
 onMounted(fetchUsers);
 

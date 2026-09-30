@@ -176,6 +176,7 @@ async function main() {
     ["POST", "/api/v1/app/admin/config"],
     // app/admin/users —— 用户隐私数据
     ["GET", "/api/v1/app/admin/users"],
+    ["POST", "/api/v1/app/admin/users"],
     ["GET", "/api/v1/app/admin/users/1/playback"],
     ["POST", "/api/v1/app/admin/users/1/disabled"],
     ["DELETE", "/api/v1/app/admin/users/1"],
@@ -1568,6 +1569,7 @@ async function main() {
   const writeProbes = [
     { name: "发布放量", path: "/api/v1/app/admin/rollout", body: { versionCode: 1, percent: 100 } },
     { name: "禁用用户", path: "/api/v1/app/admin/users/1/disabled", body: { disabled: true } },
+    { name: "创建用户", path: "/api/v1/app/admin/users", body: { username: "viewer_blocked", password: "pass123456" } },
     { name: "发布公告", path: "/api/v1/app/admin/announcements", body: { title: "越权公告", content: "越权公告" } },
     { name: "导入图片 Key", path: "/api/v1/app/admin/image-keys", body: { key: "viewer-should-not-write-this-key", quota: 1 } },
   ];
@@ -1646,6 +1648,98 @@ async function main() {
     "admin 角色读听歌历史不被守卫拦下",
     adminPlayback.status === 200 || adminPlayback.status === 404,
     `${adminPlayback.status} ${(await adminPlayback.text()).slice(0, 120)}`,
+  );
+
+  // ---- 后台创建用户 ----
+  // 免邮箱验证码直达处理器：创建出的账号要能直接走客户端登录链路；用户名/邮箱冲突、
+  // 弱口令分别落到 4090/4092/4000；结束时清理干净，不给后续断言留脏数据。
+  const createdUserName = `taotao_${randomBytes(3).toString("hex")}`;
+  const createdUser = await fetch(`${base}/api/v1/app/admin/users`, {
+    method: "POST", headers: bearer(adminRoleSession),
+    body: JSON.stringify({
+      username: createdUserName, password: "pass123456",
+      nickname: "契约验证账号", email: `${createdUserName}@qq.com`,
+    }),
+  });
+  const createdUserBody = await createdUser.json();
+  const createdUserId = createdUserBody.data?.id;
+  check(
+    "admin 角色可创建用户（201）",
+    createdUser.status === 201 && Number.isInteger(createdUserId),
+    `${createdUser.status} ${JSON.stringify(createdUserBody).slice(0, 160)}`,
+  );
+
+  const createdUserLogin = await postJson("/api/v1/auth/login", {
+    username: createdUserName, password: "pass123456",
+  });
+  check(
+    "后台创建的用户可直接登录客户端",
+    createdUserLogin.status === 200 && typeof createdUserLogin.body.data?.accessToken === "string",
+    `${createdUserLogin.status} ${JSON.stringify(createdUserLogin.body).slice(0, 120)}`,
+  );
+
+  const duplicateCreatedUser = await fetch(`${base}/api/v1/app/admin/users`, {
+    method: "POST", headers: bearer(adminRoleSession),
+    body: JSON.stringify({ username: createdUserName, password: "pass123456" }),
+  });
+  const duplicateCreatedUserBody = await duplicateCreatedUser.json();
+  check(
+    "后台创建重名用户被拒 409 且 code 4090",
+    duplicateCreatedUser.status === 409 && duplicateCreatedUserBody.code === 4090,
+    `${duplicateCreatedUser.status} ${JSON.stringify(duplicateCreatedUserBody).slice(0, 120)}`,
+  );
+
+  const duplicateCreatedEmail = await fetch(`${base}/api/v1/app/admin/users`, {
+    method: "POST", headers: bearer(adminRoleSession),
+    body: JSON.stringify({
+      username: `${createdUserName}_x`, password: "pass123456",
+      email: `${createdUserName}@qq.com`,
+    }),
+  });
+  const duplicateCreatedEmailBody = await duplicateCreatedEmail.json();
+  check(
+    "后台创建撞邮箱用户被拒 409 且 code 4092",
+    duplicateCreatedEmail.status === 409 && duplicateCreatedEmailBody.code === 4092,
+    `${duplicateCreatedEmail.status} ${JSON.stringify(duplicateCreatedEmailBody).slice(0, 120)}`,
+  );
+
+  const weakPasswordUser = await fetch(`${base}/api/v1/app/admin/users`, {
+    method: "POST", headers: bearer(adminRoleSession),
+    body: JSON.stringify({ username: `${createdUserName}_w`, password: "123" }),
+  });
+  const weakPasswordUserBody = await weakPasswordUser.json();
+  check(
+    "后台创建用户弱口令被拒 400 且 code 4000",
+    weakPasswordUser.status === 400 && weakPasswordUserBody.code === 4000,
+    `${weakPasswordUser.status} ${JSON.stringify(weakPasswordUserBody).slice(0, 120)}`,
+  );
+
+  // 创建动作必须留审计，且操作人记在执行创建的管理员头上（不是超管 admin）。
+  const auditUserCreate = await fetch(`${base}/api/v1/admin/auth/audit-log?action=user.create&limit=20`, {
+    headers: bearer(adminSession),
+  });
+  const auditUserCreateBody = await auditUserCreate.json();
+  const auditUserRow = (auditUserCreateBody.data?.items ?? []).find(
+    (row) => String(row.target_id) === String(createdUserId),
+  );
+  check(
+    "用户创建写入审计且操作人正确",
+    !!auditUserRow && auditUserRow.admin_id === adminRoleId && auditUserRow.target_type === "user",
+    JSON.stringify(auditUserRow ?? auditUserCreateBody).slice(0, 200),
+  );
+
+  const cleanupCreatedUser = await fetch(`${base}/api/v1/app/admin/users/${createdUserId}`, {
+    method: "DELETE", headers: bearer(adminRoleSession),
+  });
+  check("清理契约用户（204）", cleanupCreatedUser.status === 204, `实际 ${cleanupCreatedUser.status}`);
+
+  const deletedUserLogin = await postJson("/api/v1/auth/login", {
+    username: createdUserName, password: "pass123456",
+  });
+  check(
+    "已删除账号登录被拒 401 且 code 4011",
+    deletedUserLogin.status === 401 && deletedUserLogin.body.code === 4011,
+    `${deletedUserLogin.status} ${JSON.stringify(deletedUserLogin.body).slice(0, 120)}`,
   );
 
   // 审计留痕：写操作必须能在 admin_audit_log 里查到，并且记在正确的操作人头上。

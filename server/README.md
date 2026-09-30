@@ -255,6 +255,7 @@ npm run dev:frontend      # 独立开发服务器（5173），API 代理到本�
 
 ### 管理端用户（需要管理员会话）
 
+- `POST /api/v1/app/admin/users`，JSON：`{"username":"用户名","password":"至少6位密码","nickname":"可选昵称","email":"可选邮箱"}`：管理员直接创建账号，**免邮箱验证码**，成功返回 **201**。用户名/密码规则与客户端注册一致，建出的账号可立即登录 App；邮箱选填、不做注册渠道的域名白名单。写操作记审计（`user.create`，不含密码）。
 - `GET /api/v1/app/admin/users`：按用户名、昵称或邮箱搜索用户，并返回听歌汇总。
 - `GET /api/v1/app/admin/users/{id}/playback`：读取该用户的统计与最近播放明细。
 - `POST /api/v1/app/admin/users/{id}/disabled`，JSON：`{"disabled":true|false}`：禁用或恢复账号。禁用会撤销所有刷新令牌，所有后续业务请求都会被拒绝。

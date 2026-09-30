@@ -125,7 +125,7 @@ POST /api/v1/app/admin/patches
 - `GET /app/admin/config`、`POST /app/admin/config`:远程配置读写。
 - `GET /app/admin/image-keys`、`POST /app/admin/image-keys`、`DELETE /app/admin/image-keys/:id`:图片 Key 池后台维护(删除成功 204,被任务引用 404/4042)。
 - `GET /app/admin/announcements`、`POST /app/admin/announcements`、`POST /app/admin/announcements/:id`、`POST /app/admin/announcements/:id/enabled`、`POST /app/admin/announcements/:id/pinned`、`DELETE /app/admin/announcements/:id`:公告管理。
-- `GET /app/admin/users`、`GET /app/admin/users/:id/playback`、`POST /app/admin/users/:id/disabled`、`DELETE /app/admin/users/:id`:用户与播放统计管理。
+- `POST /app/admin/users`、`GET /app/admin/users`、`GET /app/admin/users/:id/playback`、`POST /app/admin/users/:id/disabled`、`DELETE /app/admin/users/:id`:用户管理(后台创建免邮箱验证码,审计 `user.create`)与播放统计。
 - `GET /app/admin/open-api-keys`、`POST /app/admin/open-api-keys`、`PATCH /app/admin/open-api-keys/:id`、`DELETE /app/admin/open-api-keys/:id`:开放 API Key 列表、创建(明文只返回一次)、启停和吊销;走管理员会话,读 `READ_ROLES`,写 `WRITE_ROLES`(见 [36-api-open.md](36-api-open.md))。
 - `GET /app/admin/music-sources`、`GET /app/admin/music-sources/available`、`POST /app/admin/music-sources`、`PATCH /app/admin/music-sources/:id`、`PUT /app/admin/music-sources/:id/enabled`、`POST /app/admin/music-sources/:id/probe`、`DELETE /app/admin/music-sources/:id`、`POST /app/admin/music-sources/sms`、`POST /app/admin/music-sources/login`:音源账号(酷我/波点)后台管理,细节见 [53-feature-music-sources.md](53-feature-music-sources.md)。
 
