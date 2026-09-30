@@ -63,8 +63,9 @@ HKDF 的 info 字符串多一个斜杠、AAD 拼接顺序差一个字节、序�
 - **纯 Rust 依赖链**。`chacha20poly1305` / `x25519-dalek` / `hkdf` 都是纯 Rust，
   没有 C 依赖。换成 `ring` 或 `openssl` 会立刻卡在 `wasm32-unknown-unknown`
   和 NDK 的链接上 —— 这是能不能同时出四个产物的硬约束。
-- **Windows 端复用 JNI**。桌面端是 Compose Desktop（JVM），与 Android 需要
-  同一个 JNI 接口，只是编译目标不同。选 JNA 就要多维护一套 C 头文件。
+- **Windows 端直接链接 `core` crate**。桌面端已改为 Tauri（Rust），在 Rust 侧
+  直接把 `core` crate 当普通依赖编进应用，不再走 JVM/JNI 那条路。Android 仍用
+  JNI（`libtaotao_crypto.so`），两端只是消费同一份 Rust 协议实现的不同方式。
 
 ### 产物矩阵
 
@@ -72,7 +73,6 @@ HKDF 的 info 字符串多一个斜杠、AAD 拼接顺序差一个字节、序�
 | --- | --- | --- | --- |
 | Android arm64-v8a | `aarch64-linux-android` | `libtaotao_crypto.so` | JNI |
 | Android x86_64 | `x86_64-linux-android` | `libtaotao_crypto.so` | JNI |
-| Windows x64 | `x86_64-pc-windows-msvc` | `taotao_crypto.dll` | JNI |
 | 后端 | 本机三元组 | `taotao_crypto.node` | napi-rs |
 | Web | `wasm32-unknown-unknown` | `taotao_crypto_bg.wasm` + JS 胶水 | wasm-bindgen |
 
@@ -308,7 +308,7 @@ LLVM 版本严格匹配，且它的字符串加密 pass **在 Rust 上不生效*
 搬运**，不含任何协议逻辑。这是整个设计里最重要的结构决定 —— 三个语言各实现
 一遍状态流转，漂移是必然的。
 
-### 6.2 JNI（Android `.so` + Windows `.dll`）
+### 6.2 JNI（Android `.so`）
 
 - 类名 `com.taotao.music.crypto.NativeCrypto`，导出 **24 个**
   `Java_com_taotao_music_crypto_NativeCrypto_*` 符号（已用 PE 导出表实测校验）。
@@ -426,7 +426,6 @@ wasm 上时钟不可靠、服务端可能需要漂移补偿、测试要能注入
 
 | 目标 | 产物 | 体积 | 状态 |
 | --- | --- | --- | --- |
-| Windows x64 | `taotao_crypto.dll` | 390,656 字节 | 已构建，导出符号已校验 |
 | 后端 | `taotao_crypto.node` | 361,472 字节 | 已构建，端到端跑通 |
 | Web | `taotao_crypto_bg.wasm` + JS 胶水 | 103,233 字节 | 已构建，端到端跑通 |
 | Android arm64 / x86_64 | `libtaotao_crypto.so` | — | **未构建**（本机无 NDK） |

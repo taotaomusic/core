@@ -16,8 +16,8 @@
 | --- | --- | --- |
 | S1 | 删除 `NODE_ENV` 门控，`AUTH_SECRET` 无条件要求 ≥32 位；删除源码内硬编码回退（改为 `?? ""`，由校验拦住） | `config/env.validation.ts`、`config/app-config.service.ts` |
 | S2 | 默认管理员改为「配置 `ADMIN_INITIAL_PASSWORD`（≥12 位）或启动时随机生成并打印一次」，两种路径都置 `must_change_password = 1`；新增 `@AllowPendingPasswordChange()` 白名单 + 403/4031 全链路（含后台强制改密页） | `admin-bootstrap.service.ts`、`admin-auth.guard.ts`、`ForcePasswordChange.vue` |
-| S3 | **整体移除**静态通道：`ADMIN_TOKEN` 环境变量、`AppConfigService.adminToken`、守卫内的 `X-Admin-Token` 分支、前端 `authHeaders` 的短串判定、桌面发布任务改 Bearer 会话 | `admin-auth.guard.ts`、`api.ts`、`desktopApp/build.gradle.kts` |
-| S4 | 4 个控制器共 21 个方法改为方法级 `@AdminGuarded()`，删除全部类级 `@UseGuards`；新增逐条无凭据探测断言（39 条） | 新增 `admin-guarded.decorator.ts` |
+| S3 | **整体移除**静态通道：`ADMIN_TOKEN` 环境变量、`AppConfigService.adminToken`、守卫内的 `X-Admin-Token` 分支、前端 `authHeaders` 的短串判定、桌面发布任务改 Bearer 会话 | `admin-auth.guard.ts`、`api.ts` |
+| S4 | 3 个控制器共 21 个方法改为方法级 `@AdminGuarded()`，删除全部类级 `@UseGuards`；新增逐条无凭据探测断言（39 条） | 新增 `admin-guarded.decorator.ts` |
 | S5 | Express 中间件下发 CSP（挂在 `expressStatic` 之前）；内联主题脚本外置为 `public/theme-bootstrap.js` | `main.ts`、`frontend/index.html` |
 | S6 | 新增账号维度指数退避（5 次阈值，5→10→20→30 分钟封顶）+ 独立错误码 4291；管理端登录地址限流放宽到 30 次/15 分钟 | `admin-auth.service.ts`、`api.exception.ts`、`rate-limit.service.ts` |
 | S7 | LDAP 增加 `unavailable` 态，不再静默回落；新增 `auth_source` 列区分本地/LDAP 账号 | `ldap.service.ts`、`migrations.ts` |
@@ -37,7 +37,7 @@ TOTP 依赖、构建链步骤的过时描述一并更新。
 > 残留检索说明：全仓库 `X-Admin-Token` / `ADMIN_TOKEN` 的剩余命中**均为有意保留**，
 > 语义统一是「该通道已移除」，分布在 `AGENTS.md`、`RELEASE.md`、`server/README.md`、
 > `wiki/00-code-index.md`、`03-api-contracts.md`、`04-database.md`、`07-troubleshooting.md`、
-> `10-desktop-release.md`、`11-admin-auth.md` 与 `verify-contract.mjs` 的反向断言中。
+> `11-admin-auth.md` 与 `verify-contract.mjs` 的反向断言中。
 > 本报告正文内的旧引用属于审查快照，不视为残留。
 
 ---
@@ -53,7 +53,7 @@ TOTP 依赖、构建链步骤的过时描述一并更新。
 | S1 | **严重** | `AUTH_SECRET` 缺省回退到源码内硬编码常量，且强制校验被 `NODE_ENV=production` 门控，而部署流程从不设置该变量 | `config/app-config.service.ts:131`、`config/env.validation.ts:9` |
 | S2 | **严重** | 默认超级管理员 `admin/admin123` 自动创建，无强制改密机制 | `admin-auth/admin-bootstrap.service.ts:5-6` |
 | S3 | 高 | `X-Admin-Token` 兼容通道是绕过 2FA、IP 白名单、会话撤销与审计归属的静态万能钥匙 | `admin-auth/admin-auth.guard.ts:35-44` |
-| S4 | 中 | 4 个管理端控制器使用类级 `@UseGuards`，违反项目自身明文规范 | 4 个 admin controller |
+| S4 | 中 | 3 个管理端控制器使用类级 `@UseGuards`，违反项目自身明文规范 | 3 个 admin controller |
 | S5 | 中 | 管理端会话令牌存 `localStorage`，且全站无 CSP | `frontend/src/App.vue:115`、`security-headers.interceptor.ts` |
 | S6 | 中 | 管理端登录无账号维度失败锁定，仅按 IP 限流 | `common/rate-limit/rate-limit.service.ts:26-28` |
 | S7 | 中 | LDAP 不可达时静默回落本地口令；TLS 证书校验可被关闭 | `ldap/ldap.service.ts:59-84,130` |
@@ -186,20 +186,19 @@ if (legacyToken && this.auth.verifyLegacyToken(legacyToken)) {
 2. 若必须保留兼容通道：在守卫中识别兼容身份并**只放行读操作**，写操作一律要求真实会话；或限制来源为回环地址。
 3. 文档补充该通道的完整风险说明（绕过 2FA 与白名单）。
 
-### S4【中】4 个管理端控制器使用类级 `@UseGuards`
+### S4【中】3 个管理端控制器使用类级 `@UseGuards`
 
 **证据**（均为 `@Public()` + 类级 `@UseGuards(AdminAuthGuard, RolesGuard)`）
 
 | 控制器 | 位置 |
 | --- | --- |
-| `DesktopReleaseAdminController` | `desktop-release/desktop-release-admin.controller.ts:24` |
 | `ImageKeyAdminController` | `image-generation/image-key-admin.controller.ts:24` |
 | `UserAdminController` | `user-admin/user-admin.controller.ts:31` |
 | `ReleaseAdminController` | `release/release-admin.controller.ts:39` |
 
-**现状**：这 4 个控制器内均无 `login` 路由，因此**未触发实际后果**。对照组 `AdminAuthController` 已按规范改为方法级 `@AdminGuarded()`，`AnnouncementController` 亦有注释说明刻意只在方法级挂守卫。
+**现状**：这 3 个控制器内均无 `login` 路由，因此**未触发实际后果**。对照组 `AdminAuthController` 已按规范改为方法级 `@AdminGuarded()`，`AnnouncementController` 亦有注释说明刻意只在方法级挂守卫。
 
-**风险**：项目规范（`AGENTS.md`「管理员认证的几条硬约束」）明确禁止该写法，理由是类级守卫会让同控制器内的公开路由先被自己的守卫 401。这是一枚**静默的定时炸弹**——未来在这 4 个控制器中新增任何公开路由都会立刻失败，且不会被类型检查或静态审计发现。
+**风险**：项目规范（`AGENTS.md`「管理员认证的几条硬约束」）明确禁止该写法，理由是类级守卫会让同控制器内的公开路由先被自己的守卫 401。这是一枚**静默的定时炸弹**——未来在这 3 个控制器中新增任何公开路由都会立刻失败，且不会被类型检查或静态审计发现。
 
 **建议**：统一改为方法级 `@AdminGuarded()`。属机械改动，风险低。
 
@@ -397,7 +396,7 @@ const limit = Number.isInteger(parsed) ? Math.min(RECENT_LIMIT, Math.max(1, pars
 
 4. **S3 + D5**：把 `ADMIN_TOKEN` 的文档要求改为「保持为空」；若保留兼容通道，限制为只读或回环地址。
 5. **D2 / D3**：修正 IM 联系人与播放历史的接口文档，避免客户端按错误契约开发。
-6. **S4**：4 个控制器改为方法级 `@AdminGuarded()`（机械改动）。
+6. **S4**：3 个控制器改为方法级 `@AdminGuarded()`（机械改动）。
 7. **S6**：管理端登录增加账号维度退避。
 
 **中期（一个月内）**

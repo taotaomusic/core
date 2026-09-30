@@ -32,12 +32,11 @@
 
 ## 2. 业务管理接口的角色标注
 
-`/app/admin/**` 与 `/desktop/admin/**` 不在认证控制器里,但用的是同一套守卫与角色常量:
+`/app/admin/**` 不在认证控制器里,但用的是同一套守卫与角色常量:
 
 | 域 | 路径前缀 | 读 | 写 |
 | --- | --- | --- | --- |
 | Android 发布 | `/app/admin`(releases、rollout、min-version、config、patches、patch-rollout) | `READ_ROLES` | `WRITE_ROLES` |
-| Windows 发布 | `/desktop/admin`(releases、artifacts、rollout、min-version) | `READ_ROLES` | `WRITE_ROLES` |
 | 公告 | `/app/admin/announcements` | `READ_ROLES` | `WRITE_ROLES` |
 | 图片 Key | `/app/admin/image-keys` | `READ_ROLES` | `WRITE_ROLES` |
 | 开放 API Key | `/app/admin/open-api-keys` | `READ_ROLES` | `WRITE_ROLES` |

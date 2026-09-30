@@ -174,12 +174,6 @@ async function main() {
     ["POST", "/api/v1/app/admin/patches"],
     ["POST", "/api/v1/app/admin/patch-rollout"],
     ["POST", "/api/v1/app/admin/config"],
-    // desktop/admin —— Windows 发布管理
-    ["GET", "/api/v1/desktop/admin/releases"],
-    ["POST", "/api/v1/desktop/admin/artifacts"],
-    ["POST", "/api/v1/desktop/admin/releases"],
-    ["POST", "/api/v1/desktop/admin/rollout"],
-    ["POST", "/api/v1/desktop/admin/min-version"],
     // app/admin/users —— 用户隐私数据
     ["GET", "/api/v1/app/admin/users"],
     ["GET", "/api/v1/app/admin/users/1/playback"],
@@ -1110,118 +1104,6 @@ async function main() {
   });
   check("缺少全量版本时抬高下限被拒（409 / code 4091）", guard.status === 409 && (await guard.json()).code === 4091, `实际 ${guard.status}`);
 
-  section("Windows 模块化发布");
-  const noDesktopAdmin = await fetch(`${base}/api/v1/desktop/admin/releases`, {
-    headers: { authorization: "Bearer wrong" },
-  });
-  check(
-    "Windows 管理接口无有效凭据仍返回 4013",
-    noDesktopAdmin.status === 401 && (await noDesktopAdmin.json()).code === 4013,
-    `实际 ${noDesktopAdmin.status}`,
-  );
-  const moduleBytes = Buffer.from(("taotao-desktop-module-".repeat(10_000)) + "v999101");
-  const moduleSha = createHash("sha256").update(moduleBytes).digest("hex");
-  const uploadedModule = await fetch(`${base}/api/v1/desktop/admin/artifacts?sha256=${moduleSha}`, {
-    method: "POST",
-    headers: { authorization: `Bearer ${adminSession}` },
-    body: moduleBytes,
-  });
-  check("内容寻址模块上传成功", uploadedModule.status === 201, `实际 ${uploadedModule.status}`);
-
-  const desktopManifest = {
-    versionCode: 999101,
-    versionName: "9.9.101",
-    architecture: "windows-x64",
-    entrypoint: "taotao-app.jar",
-    releaseNote: "契约验证",
-    rollout: 0,
-    files: [{ path: "taotao-app.jar", category: "core", size: moduleBytes.length, sha256: moduleSha }],
-  };
-  const publishedDesktop = await fetch(`${base}/api/v1/desktop/admin/releases`, {
-    method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${adminSession}` },
-    body: JSON.stringify(desktopManifest),
-  });
-  check("Windows 清单登记成功", publishedDesktop.status === 201, `实际 ${publishedDesktop.status}`);
-  const hiddenDesktop = await (
-    await fetch(`${base}/api/v1/desktop/bootstrap?versionCode=999100&architecture=windows-x64&deviceId=verify-desktop`)
-  ).json();
-  check("Windows rollout=0 不下发", hiddenDesktop.data?.update?.available === false, JSON.stringify(hiddenDesktop.data?.update));
-
-  await fetch(`${base}/api/v1/desktop/admin/rollout`, {
-    method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${adminSession}` },
-    body: JSON.stringify({ versionCode: 999101, architecture: "windows-x64", percent: 100 }),
-  });
-  const offeredDesktopResponse = await fetch(
-    `${base}/api/v1/desktop/bootstrap?versionCode=999100&architecture=windows-x64&deviceId=verify-desktop`,
-    { headers: { authorization: "Bearer expired.invalid.token" } },
-  );
-  const offeredDesktop = await offeredDesktopResponse.json();
-  check("过期令牌访问 Windows bootstrap 仍是 200", offeredDesktopResponse.status === 200, `实际 ${offeredDesktopResponse.status}`);
-  check(
-    "Windows bootstrap 下发模块清单",
-    offeredDesktop.data?.update?.available === true &&
-      offeredDesktop.data.update.versionCode === 999101 &&
-      offeredDesktop.data.update.files?.[0]?.sha256 === moduleSha &&
-      typeof offeredDesktop.data.update.totalSize === "number",
-    JSON.stringify(offeredDesktop.data?.update),
-  );
-  const artifactRange = await fetch(offeredDesktop.data.update.files[0].url, {
-    headers: { range: "bytes=1-3" },
-  });
-  check(
-    "Windows 内容寻址下载支持 Range",
-    artifactRange.status === 206 && artifactRange.headers.get("content-range") === `bytes 1-3/${moduleBytes.length}`,
-    `${artifactRange.status} ${artifactRange.headers.get("content-range")}`,
-  );
-
-  const nextModuleBytes = Buffer.from(("taotao-desktop-module-".repeat(10_000)) + "v999102");
-  const nextModuleSha = createHash("sha256").update(nextModuleBytes).digest("hex");
-  const uploadedNextModule = await fetch(`${base}/api/v1/desktop/admin/artifacts?sha256=${nextModuleSha}`, {
-    method: "POST",
-    headers: { authorization: `Bearer ${adminSession}` },
-    body: nextModuleBytes,
-  });
-  check("Windows 第二版模块上传成功", uploadedNextModule.status === 201, `实际 ${uploadedNextModule.status}`);
-  const nextDesktop = await fetch(`${base}/api/v1/desktop/admin/releases`, {
-    method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${adminSession}` },
-    body: JSON.stringify({
-      ...desktopManifest,
-      versionCode: 999102,
-      versionName: "9.9.102",
-      files: [{ path: "taotao-app.jar", category: "core", size: nextModuleBytes.length, sha256: nextModuleSha }],
-      rollout: 100,
-    }),
-  });
-  check("Windows 第二版清单登记成功", nextDesktop.status === 201, `实际 ${nextDesktop.status}`);
-  const patchedDesktop = await (
-    await fetch(`${base}/api/v1/desktop/bootstrap?versionCode=999101&architecture=windows-x64&deviceId=verify-desktop-patch`)
-  ).json();
-  const desktopPatch = patchedDesktop.data?.update?.files?.[0]?.patch;
-  check(
-    "Windows 相邻版本生成 bsdiff",
-    patchedDesktop.data?.update?.versionCode === 999102 && desktopPatch?.algorithm === "bsdiff" && desktopPatch.size < nextModuleBytes.length,
-    JSON.stringify(desktopPatch),
-  );
-  const patchDownload = desktopPatch ? await fetch(desktopPatch.url) : undefined;
-  check(
-    "Windows bsdiff 补丁可下载",
-    patchDownload?.status === 200 && Number(patchDownload.headers.get("content-length")) === desktopPatch?.size,
-    `${patchDownload?.status ?? 0} ${patchDownload?.headers.get("content-length") ?? ""}`,
-  );
-  const desktopGuard = await fetch(`${base}/api/v1/desktop/admin/min-version`, {
-    method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${adminSession}` },
-    body: JSON.stringify({ versionCode: 999999, architecture: "windows-x64" }),
-  });
-  check(
-    "Windows 强制更新下限同样要求全量救援版本",
-    desktopGuard.status === 409 && (await desktopGuard.json()).code === 4091,
-    `实际 ${desktopGuard.status}`,
-  );
-
   section("PostgreSQL 迁移专项");
   // 以下每一项都对应一处「SQLite 能过、PostgreSQL 会错」的差异，
   // 迁移前这些路径都没有被覆盖。
@@ -1685,7 +1567,6 @@ async function main() {
   // 先被 4030 挡下 —— 这让断言不依赖业务数据当前处于什么状态。
   const writeProbes = [
     { name: "发布放量", path: "/api/v1/app/admin/rollout", body: { versionCode: 1, percent: 100 } },
-    { name: "Windows 放量", path: "/api/v1/desktop/admin/rollout", body: { versionCode: 1, percent: 100 } },
     { name: "禁用用户", path: "/api/v1/app/admin/users/1/disabled", body: { disabled: true } },
     { name: "发布公告", path: "/api/v1/app/admin/announcements", body: { title: "越权公告", content: "越权公告" } },
     { name: "导入图片 Key", path: "/api/v1/app/admin/image-keys", body: { key: "viewer-should-not-write-this-key", quota: 1 } },
@@ -1705,7 +1586,6 @@ async function main() {
   // 读接口不能被顺手关掉：观察者进后台就是为了看发布状态这类运营数据。
   const readProbes = [
     { name: "发布列表", path: "/api/v1/app/admin/releases" },
-    { name: "Windows 发布列表", path: "/api/v1/desktop/admin/releases" },
     { name: "公告列表", path: "/api/v1/app/admin/announcements" },
     { name: "图片 Key 列表", path: "/api/v1/app/admin/image-keys" },
     // 音源清单只有音源名与能力标记，不含账号数据，观察者可以看。

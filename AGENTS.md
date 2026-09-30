@@ -6,8 +6,6 @@
 
 - `androidApp/`：Android 应用入口、Jetpack Compose 页面、Android 资源和平台能力。
 - `desktop/`：新一代 Windows 桌面端（Tauri 2 + React + TypeScript）。webview 里的 `fetch` 一律走 `tauri-plugin-http` 由 Rust 直连后端（服务端按安全设计默认不下发 CORS 头，浏览器侧跨源请求必被预检拦掉）；换后端域名要同步改 `desktop/src-tauri/capabilities/default.json` 的 `http:default` 白名单，两边不一致会静默失败。构建走根 CI 的 `desktop` job（`desktop/**` 路径过滤），产物发 `desktop-latest` Release，应用内自动更新经 `tauri-plugin-updater` 签名校验。开发调试：`cd desktop && npm install && npm run tauri dev`；纯浏览器看 UI 访问 `http://localhost:5183/#mock`（内置假数据旁路，见 `desktop/index.html`）。
-- `desktopApp/`：Windows Compose Desktop 应用、JVM 播放、桌面持久化和系统媒体能力。
-- `desktopLauncher/`、`desktopUpdater/`：Windows 发布包的启动器和模块更新器。
 - `webApp/`：Kotlin/Wasm 分享播放器和浏览器音频适配。
 - `player-ui/`：Android、Windows、Web 共用的播放主题、歌曲行、迷你播放器和布局组件。
 - `shared/`：跨平台共享的数据模型、歌词解析和音质规则，代码放在 `src/commonMain/`。
@@ -52,7 +50,7 @@ GitHub 侧三个仓库（music / music-server / tools）都是**正式仓库**�
 
 两个镜像仓库各带工作流，随同步推送自动触发，也可在 Actions 页手动 `workflow_dispatch`：
 
-- **music 仓库**：`.github/workflows/client.yml`（源文件在主仓库根目录同名路径）——Windows runner 上构建 `:androidApp:assembleRelease` 与 `:desktopApp:packageDesktopUpdateBundle`，APK 和含 `launcher.exe` 的更新包从 Actions Artifact 下载。必须 Windows runner：`incrementVersion` 走 `powershell` 命令。另有 `web-player` job 在 Windows 上构建 `:webApp:wasmJsBrowserDistribution`。三个构建成功后由 `publish-release` job 汇总发到固定 tag 的滚动预发布版 **Release `latest`**（`TaotaoMusic-<版本>-<release|debug>.apk` + 桌面包 zip，每次覆盖），免登录可下载。
+- **music 仓库**：`.github/workflows/client.yml`（源文件在主仓库根目录同名路径）——Windows runner 上构建 `:androidApp:assembleRelease`，APK 从 Actions Artifact 下载。必须 Windows runner：`incrementVersion` 走 `powershell` 命令。另有 `web-player` job 在 Windows 上构建 `:webApp:wasmJsBrowserDistribution`。两个构建成功后由 `publish-release` job 汇总发到固定 tag 的滚动预发布版 **Release `latest`**（`TaotaoMusic-<版本>-<release|debug>.apk`，每次覆盖），免登录可下载。Windows 桌面端（Tauri）不在此流程内：它由根 CI 的 `desktop` job 单独构建，产物发 GitHub Release `desktop-latest`，与后端无关。
 - **music-server 仓库**：`server/.github/workflows/backend.yml`（源文件在 `server/.github/` 内）——Ubuntu + PostgreSQL 服务容器，构建时从 `share-player-latest` 拉取真实分享播放器放进 `dist/share-player/`（拉不到退回占位文件），然后起验证实例执行完整 `verify-contract.mjs`，**全绿才算通过**，通过后把完整 dist 发布到固定 tag 预发布版 **Release `server-dist-latest`**，并把复用这份已验证 dist 的运行时镜像（`server/Dockerfile`）推到 **ghcr.io**（`ghcr.io/hdppppppp/music-server` 打三个 tag：`latest`、`<package.json 的 version>`、`<sha 前 12 位>`；仅 push 到 main 时推，手动触发只验证）。后端版本号单一来源是 `server/package.json` 的 `version`（手动 SemVer 维护），要发新版本先改它再提交。独立仓库没有 Gradle 工程，`build:web-player` 会自动跳过（见 `build-web-player.mjs`）。
 - **APK 签名**：在 music 仓库 Secrets 配 `ANDROID_KEYSTORE_BASE64`（`taotao-release.jks` 的 base64）、`ANDROID_STORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD` 后出签名 Release 包；未配置时自动退回 Debug 包，仅验证工具链。
 
@@ -163,7 +161,7 @@ GitHub 侧三个仓库（music / music-server / tools）都是**正式仓库**�
 
 - **业务管理接口的角色矩阵只有一个定义处**：`server/src/admin-auth/admin-roles.ts`。新增管理接口时从那里取 `READ_ROLES` / `WRITE_ROLES` / `PRIVILEGED_READ_ROLES`，不要手写角色数组 —— 手写迟早会把 `viewer` 放进写权限。
 - **返回个人数据的读接口用 `PRIVILEGED_READ_ROLES`，不要用 `READ_ROLES`**。目前是管理员列表、审计日志、用户资料与听歌历史（`/app/admin/users` 带 `email`，`/app/admin/users/:id/playback` 带逐首歌的播放次数与时间戳）。新增接口时先问一句「这个响应里有没有别人的个人信息」，有就用 `PRIVILEGED_READ_ROLES`。改这类接口要同时改前端的页签可见性（`App.vue`），否则观察者会点进一个只会报错的页签。
-- **`/app/admin/*` 与 `/desktop/admin/*` 的写操作必须标 `@RequireRole(...WRITE_ROLES)`**，只读账号（`viewer`）被拒 403/4030。读接口用 `READ_ROLES`。`RolesGuard` 对没标注的路由一律放行，所以**漏标等于没有权限校验**，这一点不会报错、也不会被类型检查发现。
+- **`/app/admin/*` 的写操作必须标 `@RequireRole(...WRITE_ROLES)`**，只读账号（`viewer`）被拒 403/4030。读接口用 `READ_ROLES`。`RolesGuard` 对没标注的路由一律放行，所以**漏标等于没有权限校验**，这一点不会报错、也不会被类型检查发现。
 - **管理端写操作必须写审计**：注入 `AdminAuditService`，在操作成功之后 `await this.audit.record(request, "域.动作", targetType, targetId, detail)`。它统一处理「非正常身份不能落库」和「`X-Forwarded-For` 只在 `TRUST_PROXY` 下可信」两个坑。漏写不会报错，但 `admin_audit_log` 里就查不到这次操作。
 - **`AdminAuthModule` 必须导出 `AdminAuditService`**（以及 `AdminAuthService`、`AdminUsersRepository`）。业务模块的控制器要用它们，而依赖是在**声明 Controller 的模块**里解析的。
 - **`common/guards/admin-token.guard.ts` 的 `AdminTokenGuard` 已删除**。它曾是死代码（全项目零引用），所有管理控制器用的都是 `AdminAuthGuard`。不要照着历史文件名推断鉴权行为，也不要用 `grep` 之外的方式猜守卫是否生效 —— 要 `grep` 它在 `@UseGuards` 里的实际引用。

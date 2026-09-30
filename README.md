@@ -28,14 +28,7 @@ androidApp/   Android 应用
               ├─ 离线下载管理
               └─ 崩溃日志捕获与导出
 
-desktopApp/   Windows 应用（Compose Desktop 世代）
-              ├─ Compose Desktop 宽屏界面
-              ├─ FFmpeg + Java Sound 播放引擎
-              ├─ Windows 系统媒体控件与托盘后台
-              ├─ 搜索、队列、歌词、收藏与最近播放
-              └─ 离线下载和本地设置
-
-desktop/      Windows 应用（Tauri 2 + React 新世代）
+desktop/      Windows 应用（Tauri 2 + React + TypeScript）
               ├─ React 18 + TypeScript 界面（独立搜索页/歌单/最近播放/收藏）
               ├─ 全屏播放详情：逐字歌词、音质切换、队列拖拽、定时关闭
               ├─ fetch 经 tauri-plugin-http 走 Rust 直连（免 CORS）
@@ -65,15 +58,11 @@ server/       NestJS 后端服务（TypeScript + PostgreSQL）
               ├─ 多音源上游适配（腾讯/网易/酷我/波点）与音源账号管理
               ├─ 热更新版本管理与灰度分发
               ├─ 分享短链、试听转发与公告
-              ├─ Windows 模块清单、内容寻址对象与差分发布
               ├─ 悟空 IM 会话与同步代理
               ├─ 邮箱验证码、头像上传与后台用户管理
               ├─ AI 图片生成任务代理与开放搜歌 API（密钥管理）
               ├─ 传输层加密（握手 + AEAD 中间件，协议 v2 绑定设备号）
               └─ 管理后台（Vue 3 + Element Plus，TOTP/LDAP/审计/IP 白名单）
-
-desktopLauncher/  Windows 发布包启动器
-desktopUpdater/   Windows 模块化更新器
 
 patch/        热修复补丁模块
               └─ 独立编译的 DEX 文件（几 KB），不打入 APK
@@ -438,35 +427,6 @@ GET /api/v1/songs/{id}/lyrics?format=json
 - Release 构建保持 `isMinifyEnabled = false`（确保可调试、可追踪）
 - 签名密钥文件 `taotao-release.jks` 必须妥善备份（丢失无法恢复）
 
-### Windows 客户端开发
-
-Windows 版本当前优先覆盖音乐功能：账号、酷我主源搜索、播放队列、逐行/逐字歌词、收藏、最近播放、离线下载、主题和音质设置。两端均支持云端歌单（创建、改名、删除、歌曲增删与排序）和按实际播放时间倒计时的定时停止；Android 另有单曲倒带日记。后端虽已提供 AI 图片与 IM 接口，Android/Windows 客户端当前暂不接入。完整的接口字段、同步边界和定时器行为见 [MUSIC_CROSS_PLATFORM.md](MUSIC_CROSS_PLATFORM.md)。
-
-```powershell
-# 运行桌面客户端
-.\gradlew.bat :desktopApp:run
-
-# 单元测试与共享逻辑测试
-.\gradlew.bat :desktopApp:test :shared:allTests
-
-# 生成 Windows 便携 JAR
-.\gradlew.bat :desktopApp:packageUberJarForCurrentOS
-
-# 生成 EXE / MSI（需要 WiX Toolset 3.11）
-.\gradlew.bat :desktopApp:packageDistributionForCurrentOS
-
-# 生成含 launcher.exe 的模块化更新包（云端构建用）
-.\gradlew.bat :desktopApp:packageDesktopUpdateBundle
-```
-
-便携产物位于 `desktopApp/build/compose/jars/`，本地数据位于 `%APPDATA%\TaotaoMusic`。登录令牌使用 Windows Java Preferences 存储，不写入项目文件。
-
-桌面播放使用 FFmpeg 解码并通过 Java Sound 输出，支持 MP3、M4A/AAC、WAV、FLAC、OGG/Opus，播放页与设置页均提供标准、HQ、无损、Hi-Res、臻品母带五档音质。腾讯 NAC 私有格式（quality=18）暂不支持 Windows 解码，选择该档位时会明确提示；网易云的 quality=18 是统一最高档标记，按实际返回容器处理。窗口关闭时（系统托盘可用）会隐藏到后台，Windows 系统媒体控件和全局媒体键可控制播放；“退出应用”才会结束进程。下载、歌词、收藏和最近播放均支持离线缓存，播放统计先写本地 outbox，网络恢复后补传。
-
-便携 JAR 需要 JDK/JRE 21；FFmpeg 与系统媒体控制依赖的许可证清单见 [`desktopApp/THIRD_PARTY_NOTICES.md`](desktopApp/THIRD_PARTY_NOTICES.md)。
-
-MSI/EXE 打包需要 WiX Toolset 3.11；若 Gradle 下载的 `wix311.zip` 损坏，请配置有效的 `WIX_PATH` 后重试。
-
 ### Windows 客户端开发（Tauri 版 `desktop/`）
 
 新一代 Windows 桌面端是 Tauri 2 + React + TypeScript：独立搜索页（历史/联想/热搜）、歌单、最近播放、收藏、全屏播放详情（逐字歌词、音质切换、队列拖拽排序、定时关闭）、分享。构建与发版完全走云侧：推送命中 `desktop/**` 后 CI 的 `desktop` job 自动 `npm run tauri build` 并更新 [`desktop-latest`](https://github.com/taotaomusic/core/releases/tag/desktop-latest) Release，应用内经 `tauri-plugin-updater` 签名校验自动更新。
@@ -600,8 +560,8 @@ GitHub 侧三个正式仓库（music / music-server / tools）由助手手动跑
 快照分支 `sync/server` / `sync/crypto` / `sync/client`），gitee `origin` 保留完整 monorepo 作总备份。
 
 - **客户端构建**（[.github/workflows/client.yml](.github/workflows/client.yml)）：Windows runner 上构建
-  `:androidApp:assembleRelease`、`:desktopApp:packageDesktopUpdateBundle` 与 `:webApp:wasmJsBrowserDistribution`，
-  成功后发到滚动预发布 Release `latest`；Web 播放器另发 `share-player-latest` 供后端构建拉取。
+  `:androidApp:assembleRelease` 与 `:webApp:wasmJsBrowserDistribution`，
+  成功后发到滚动预发布 Release `latest`；Web 播放器另发 `share-player-latest` 供后端构建拉取。Tauri 桌面端由独立的 `desktop` job（`desktop/**` 路径过滤）构建并发 `desktop-latest` Release。
 - **后端构建**（server/.github/workflows/backend.yml）：Ubuntu + PostgreSQL 服务容器，完整契约验证
   全绿后把 dist 发布到 Release `server-dist-latest`。
 - **版本号单调延续**：云端构建成功后自动回写递增的 `version.properties`（`[skip ci]`），sync 时
@@ -809,7 +769,7 @@ node -e "const d=require('./androidApp/build/outputs/apk/release/output-metadata
 |------|------|-----------|
 | Kotlin Multiplatform | 跨平台框架 | Android + JVM Desktop 共享模型 |
 | Jetpack Compose | UI 框架 | Material3 设计语言 |
-| Compose Desktop | Windows UI | Material3 宽屏界面 |
+| Tauri 2 + React | Windows UI | webview 宽屏界面，Rust 直连后端 |
 | FFmpeg + Java Sound | Windows 音频播放 | MP3 / M4A / AAC / WAV / FLAC / OGG / Opus |
 | JavaMediaTransportControls | Windows 系统媒体 | 系统媒体控件、媒体键、托盘后台 |
 | Media3 ExoPlayer | 音频播放引擎 | MediaSessionService 架构 |

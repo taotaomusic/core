@@ -17,9 +17,5 @@ gradlePlugin {
             id = "com.taotao.hotfix"
             implementationClass = "com.taotao.hotfix.HotfixInstrumentationPlugin"
         }
-        create("desktopModules") {
-            id = "com.taotao.desktop-modules"
-            implementationClass = "com.taotao.desktop.DesktopModulesPlugin"
-        }
     }
 }

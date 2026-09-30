@@ -1,10 +1,10 @@
-# 数据表:发布、公告与桌面发布
+# 数据表:发布与公告
 
 [返回文档中心](README.md)
 
-最后更新:2026-09-27
+最后更新:2026-09-30
 
-Android 发布、桌面发布与公告域的表。发布操作流程见 [61-release-android.md](61-release-android.md) 与 [52-feature-desktop-release.md](52-feature-desktop-release.md)。
+Android 发布与公告域的表。发布操作流程见 [61-release-android.md](61-release-android.md)。
 
 ## 1. `app_release`
 
@@ -15,10 +15,9 @@ Android 发布、桌面发布与公告域的表。发布操作流程见 [61-rele
 
 ## 2. `app_channel`
 
-保存每个发布渠道的 Android `min_supported_version_code`、桌面 `desktop_min_supported_version_code` 和更新时间。
+保存每个发布渠道的 Android `min_supported_version_code` 和更新时间。
 
-- 两端最低版本**独立判断**,不能混用:Android 用 `min_supported_version_code`,桌面用 `desktop_min_supported_version_code`。
-- 抬高一端不会改变另一端。
+- 抬高最低版本只影响该渠道的 Android 客户端。
 
 ## 3. `app_config`
 
@@ -38,15 +37,3 @@ Android 补丁按 `(channel, target_version_code, patch_version)` 唯一,保存�
 
 - 补丁只对指定宿主 `target_version_code` 有效,**不能当成「高版本 APK」处理**。
 - 发布与放量流程见 [61-release-android.md](61-release-android.md)。
-
-## 6. `desktop_release`、`desktop_jar`、`desktop_patch`
-
-- `desktop_release` 以 `(channel, architecture, version_code)` 唯一,保存入口、灰度、启用和说明。
-- `desktop_jar` 保存安装目录相对路径、分类、内容寻址对象名、大小和 sha256;同一发布内路径唯一。
-- `desktop_patch` 保存来源版本、路径、源/目标 sha256、算法(`courgette`/`bsdiff`)、对象、大小和启用状态;`(release_id, from_version_code, path, algorithm)` 唯一。
-
-要点:
-
-- 桌面发布与 Android 发布**不能共用 versionCode 表或最低版本字段**;两者共享管理员会话、灰度哈希和 `app_config`。
-- `desktop_jar`/`desktop_patch` 随 `desktop_release` 级联删除,但**磁盘内容寻址文件不会自动回收**(旧客户端可能仍在下载),清理流程见 [52-feature-desktop-release.md](52-feature-desktop-release.md)。
-- 差分按 `fromSha256` 匹配上一版本同路径文件;sha256 不匹配时客户端只能拿完整模块。

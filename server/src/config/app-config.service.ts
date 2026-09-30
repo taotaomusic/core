@@ -29,14 +29,7 @@ export class AppConfigService {
   readonly authSecret: string;
 
   readonly apkDirectory: string;
-  /** Windows 模块、清单差分和原生更新工具的内容寻址存储目录。 */
-  readonly desktopReleaseDirectory: string;
-  /** 可选的 Courgette 可执行文件；仅用于 .dll/.exe 等 PE 原生二进制。 */
-  readonly courgettePath: string;
   readonly defaultChannel: string;
-
-  /** 兼容旧部署的 bsdiff 路径字段；当前桌面差分实现使用 bsdiff-wasm。 */
-  readonly bsdiffExecutable: string;
 
   /**
    * 对外可访问的基地址，用于拼装安装包下载地址。
@@ -172,10 +165,7 @@ export class AppConfigService {
     this.databaseUrl = String(config.get("DATABASE_URL") ?? "");
     this.authSecret = String(config.get("AUTH_SECRET") ?? "");
     this.apkDirectory = resolve(String(config.get("APK_DIR") ?? "./data/apk"));
-    this.desktopReleaseDirectory = resolve(String(config.get("DESKTOP_RELEASE_DIR") ?? "./data/desktop"));
-    this.courgettePath = String(config.get("COURGETTE_PATH") ?? "").trim();
     this.defaultChannel = String(config.get("DEFAULT_CHANNEL") ?? "release");
-    this.bsdiffExecutable = String(config.get("BSDIFF_BIN") ?? "bsdiff");
     this.publicBaseUrl = String(config.get("PUBLIC_BASE_URL") ?? "").replace(/\/+$/, "");
     this.searchConcurrency = Math.max(1, Number(config.get("SEARCH_CONCURRENCY") ?? 8));
     this.apiSweetBaseUrl = String(config.get("APISWEET_BASE_URL") ?? "https://apisweet.com").replace(

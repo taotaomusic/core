@@ -24,7 +24,7 @@
 
 | 语言 | 文件 | 说明 |
 | --- | ---: | --- |
-| Kotlin | 147 | Android、KMP、桌面、Wasm、构建逻辑和补丁 |
+| Kotlin | 147 | Android、KMP、Wasm、构建逻辑和补丁 |
 | TypeScript | 137 | `server/` 源码与工具 |
 | Rust | 18 | `crypto-src/` 加密层四 crate |
 | Vue | 15 | 服务端管理后台前端 |
@@ -33,7 +33,6 @@
 | Python | 4 | 根目录维护脚本 |
 | XML | 3 | Android Manifest 和资源配置 |
 | Properties | 3 | Gradle/版本配置 |
-| Java | 2 | `desktopLauncher`、`desktopUpdater` |
 
 根索引还包含 194 个服务端相关文件（server/ 源码、前端、工具与工作流）；后端路由、数据库和配置请以 [server/wiki/00-code-index.md](server/wiki/00-code-index.md) 为准，不要把本页的根索引统计当成后端独立快照。
 
@@ -45,15 +44,12 @@
 | --- | ---: | --- | --- |
 | `androidApp` | 85 / 2,439 | Android 生命周期、Compose 页面、账号与本地 Store、网络适配、Media3 播放、IM、热修复和更新。`ui/` 已拆 15 个功能子包（account/ai/app/auth/chat/common/home/library/mine/player/playlist/search/settings/theme/update），全局状态在 `ui/app/` 状态容器（`TaotaoAppState`、`SearchState`、`PlaylistState`、`AppEffects`、`AppDialogs`、`AppPageRouter`、`AppContent`） | `MainActivity.kt`、`TaotaoMusicApp.kt`、`TencentMusicApi.kt`、`AudioPlayer.kt`、`PlaybackService.kt` |
 | `shared` | 6 / 52 | Kotlin Multiplatform 纯模型和规则：歌曲、歌词、音质与解析器 | `MusicModels.kt`、`Lyric.kt`、`AudioQuality.kt` |
-| `player-ui` | 23 / 381 | Android、Windows、Web 共用的播放主题、歌曲行、迷你播放器、播放布局和状态视图；`theme/` 是 Taotao 设计 token 与组件，`layout/` 承载主布局骨架 | `SharedMiniPlayer.kt`、`PlayerSurface.kt`、`layout/SharedMainLayout.kt`、`theme/AppleStyleTheme.kt` |
-| `desktopApp` | 17 / 853 | Windows Compose Desktop 应用、搜索/歌单/收藏/历史、JVM 播放、持久化、同步、系统媒体和定时播放 | `Main.kt`、`DesktopShell.kt`、`DesktopPlayer.kt`、`DesktopMusicApi.kt` |
-| `desktopLauncher` | 2 / 23 | Windows 发布包的轻量启动器 | `LauncherMain.java` |
-| `desktopUpdater` | 2 / 24 | Windows 模块更新器和启动/替换流程 | `UpdaterMain.java` |
+| `player-ui` | 23 / 381 | Android、Web 共用的播放主题、歌曲行、迷你播放器、播放布局和状态视图；`theme/` 是 Taotao 设计 token 与组件，`layout/` 承载主布局骨架 | `SharedMiniPlayer.kt`、`PlayerSurface.kt`、`layout/SharedMainLayout.kt`、`theme/AppleStyleTheme.kt` |
 | `webApp` | 4 / 106 | Kotlin/Wasm 分享播放器，只负责公开试听页和浏览器音频适配 | `Main.kt`、`WebAudioController.kt` |
 
 ### `desktop/`（Tauri 新一代桌面端，未纳入 CodeGraph 索引）
 
-上面的统计是 CodeGraph 对 Kotlin/Java 客户端的快照；`desktop/` 是 React + TypeScript 的新一代 Windows 端，不在当前索引里。结构与关键文件：
+上面的统计是 CodeGraph 对 Kotlin 客户端的快照；`desktop/` 是 React + TypeScript 的新一代 Windows 端，不在当前索引里。结构与关键文件：
 
 | 目录/文件 | 职责 |
 | --- | --- |
@@ -71,7 +67,7 @@
 
 | 模块 | 文件/节点 | 主要职责 | 备注 |
 | --- | ---: | --- | --- |
-| `build-logic` | 8 / 68 | Gradle convention/plugin、热修复字节码插桩和桌面模块配置 | 编译期能力，不应被运行时模块反向依赖 |
+| `build-logic` | 8 / 68 | Gradle convention/plugin、热修复字节码插桩 | 编译期能力，不应被运行时模块反向依赖 |
 | `patch` | 2 / 24 | 独立 DEX 补丁入口和补丁构建配置 | 通过 `compileOnly` 读取宿主产物，不打入 APK |
 
 索引还记录根目录的 `build.gradle.kts`、`settings.gradle.kts`、`gradle.properties`、`version.properties` 以及维护脚本；这些文件用于定位构建边界，但不计入上面的运行模块职责。
@@ -84,10 +80,9 @@
 shared（Song / Lyric / AudioQuality / 纯规则）
   ├── player-ui（跨平台 Compose 播放界面）
   ├── androidApp（Android 平台实现与页面）
-  ├── desktopApp（Windows 平台实现与页面）
   └── webApp（Wasm 分享页）
 
-androidApp / desktopApp
+androidApp
   → 自建后端 /api/v1
   → 音乐搜索、账号、收藏、歌单、播放统计、更新和分享接口
   → 播放地址返回后由平台播放器从上游 CDN 拉流
@@ -95,21 +90,18 @@ androidApp / desktopApp
 androidApp
   → Media3 AudioPlayer / PlaybackService
   → 本地队列、下载、播放会话与热修复/整包更新
-
-desktopApp
-  → DesktopPlayer（FFmpeg/Java Sound 适配）
-  → DesktopPersistence / PlaybackOutbox
-  → desktopLauncher + desktopUpdater（发布包更新）
 ```
+
+> Windows 桌面端是 `desktop/` 的 Tauri 应用（React + TypeScript），不依赖上述 Kotlin 模块，也不接入后端热更；自动更新走 GitHub Release `desktop-latest`（`tauri-plugin-updater`）。
 
 当前跨端边界保持为：
 
 - `shared` 不依赖 Android、Compose、HTTP 或本地存储；纯模型和解析规则在 `commonMain`，测试在 `commonTest`。
 - `player-ui` 只提供界面骨架和可插槽的回调；实际封面、歌词、队列、下载和播放引擎仍由各端注入。
-- Android 与 Windows 共用歌曲身份 `source + songId`、音质枚举和云端歌单契约，但本地缓存、播放引擎和生命周期状态分别由平台持有。
+- Android 与 Windows（`desktop/` Tauri 端）在后端契约层共用歌曲身份 `source + songId`、音质档位和云端歌单契约，但本地缓存、播放引擎和界面实现分别由平台持有。
 - Web 分享播放器只处理公开分享和试听，不接入 Android 的账号、IM、AI、下载和队列能力。
-- **传输加密（协议 v2，握手绑定设备号）**：`androidApp/.../data/crypto/HardwareDeviceId.kt`（ANDROID_ID）与
-  `desktopApp/.../crypto/MachineGuid.kt`（注册表 MachineGuid）提供设备号来源；四端编译产物在
+- **传输加密（协议 v2，握手绑定设备号）**：`androidApp/.../data/crypto/HardwareDeviceId.kt`（ANDROID_ID）
+  提供 Android 设备号来源；四端编译产物在
   `crypto/dist/`（源码在 `crypto-src/`，经 tools 仓库交叉编译）。当前只有服务端消费产物
   （`server/src/crypto/native-loader.ts`），客户端 JNI 绑定尚未进构建路径，Web 端不接入。
 - `build-logic` 与 `patch` 参与构建和热修复，不属于业务运行时依赖；修改包名或插桩键前必须阅读 [RELEASE.md](RELEASE.md) 和 [HOT_UPDATE.md](HOT_UPDATE.md)。
@@ -130,17 +122,13 @@ desktopApp
 | Android 设备号 | `HardwareDeviceId` | `androidApp/.../data/crypto/HardwareDeviceId.kt` | ANDROID_ID 设备号来源，供传输加密协议 v2 绑定 |
 | Android 更新 | `UpdateManager` | `androidApp/src/main/java/com/taotao/music/update/UpdateManager.kt` | 版本检查、下载、校验和安装协调 |
 | Android 热修复 | `PatchDispatcher` / `PatchEntry` | `androidApp/src/main/java/com/taotao/music/hotfix/` | 补丁入口、分发和诊断 |
-| Windows 设备号 | `MachineGuid` | `desktopApp/src/main/kotlin/com/taotao/music/desktop/crypto/MachineGuid.kt` | 读注册表 MachineGuid 作设备号来源 |
-| 共享模型 | `Song` | `shared/src/commonMain/kotlin/com/taotao/music/model/MusicModels.kt` | 被 Android、Windows、播放 UI 等 30 个文件引用的歌曲模型 |
+| 共享模型 | `Song` | `shared/src/commonMain/kotlin/com/taotao/music/model/MusicModels.kt` | 被 Android、播放 UI 等客户端文件引用的歌曲模型 |
 | 歌词规则 | `LyricParser` | `shared/src/commonMain/kotlin/com/taotao/music/model/Lyric.kt` | LRC/YRC 解析、逐字进度和时间映射 |
 | 音质规则 | `AudioQuality` | `shared/src/commonMain/kotlin/com/taotao/music/model/AudioQuality.kt` | STANDARD/HIGH/LOSSLESS/HIRES/MASTER 及标签映射 |
-| 共用播放 UI | `SharedMiniPlayer` / `PlayerSurface` | `player-ui/src/commonMain/kotlin/com/taotao/music/playerui/` | Android 与 Windows 共用的迷你播放器和详情播放面 |
-| Windows 入口 | `main` / `DesktopMusicApp` | `desktopApp/src/main/kotlin/com/taotao/music/desktop/Main.kt` | 桌面状态编排、页面导航、同步和播放生命周期 |
-| Windows 壳层 | `DesktopShell` | `desktopApp/src/main/kotlin/com/taotao/music/desktop/DesktopShell.kt` | 导航、歌曲列表、歌词、队列和设置 UI |
-| Windows 播放 | `DesktopPlayer` | `desktopApp/src/main/kotlin/com/taotao/music/desktop/DesktopPlayer.kt` | JVM 音频输出、进度、切歌和停止/暂停控制 |
+| 共用播放 UI | `SharedMiniPlayer` / `PlayerSurface` | `player-ui/src/commonMain/kotlin/com/taotao/music/playerui/` | Android 与 Web 共用的迷你播放器和详情播放面 |
 | Web 入口 | `SharePlayerApp` | `webApp/src/wasmJsMain/kotlin/com/taotao/music/web/Main.kt` | 分享页状态与公开试听 UI |
 
-索引显示的实际关系示例：`SharedMiniPlayer` 被 Android 的 `TaotaoMusicApp.kt` 和 Windows 的 `DesktopShell.kt` 使用；`Song` 被 30 个客户端文件使用；`TaotaoMusicApp` 由 `MainActivity` 作为唯一入口文件使用。这些关系可作为跨模块修改的影响分析起点。
+索引显示的实际关系示例：`SharedMiniPlayer` 被 Android 的 `TaotaoMusicApp.kt` 使用；`Song` 被 30 个客户端文件使用；`TaotaoMusicApp` 由 `MainActivity` 作为唯一入口文件使用。这些关系可作为跨模块修改的影响分析起点。
 
 ## 5. 常用索引命令
 
@@ -155,7 +143,6 @@ codegraph sync .
 
 # 查看客户端模块文件和节点数
 codegraph files --filter androidApp --format grouped
-codegraph files --filter desktopApp --format grouped
 codegraph files --filter shared --format grouped
 codegraph files --filter player-ui --format grouped
 
@@ -187,7 +174,7 @@ CodeGraph 只提供结构索引，不替代 Kotlin 编译器、Gradle、Android 
 | 新增/删除客户端模块或 source set | 本页模块地图、`README.md` 项目结构、`MUSIC_CROSS_PLATFORM.md` |
 | 修改 `Song`、`Lyric`、`AudioQuality` 或歌单/播放数据契约 | 本页关键符号、`MUSIC_CROSS_PLATFORM.md`、`RELEASE.md` 中对应客户端契约 |
 | 修改 Android 导航、页面状态或返回键 | 本页 Android 组合根说明、`AGENTS.md` 的三处导航检查清单、相关页面文档 |
-| 修改更新、热修复、补丁键或桌面模块清单 | 本页更新/热修复入口、`RELEASE.md`、`HOT_UPDATE.md`、`server/wiki/52-feature-desktop-release.md` |
+| 修改更新、热修复或补丁键（Android） | 本页更新/热修复入口、`RELEASE.md`、`HOT_UPDATE.md` |
 | 修改后端接口、认证、NDJSON 或错误码 | 本页数据流、`MUSIC_CROSS_PLATFORM.md`、`server/wiki/00-code-index.md`、`server/wiki/30-api-conventions.md` |
 
 当本页与源码不一致时，以源码、编译器和最新 CodeGraph 状态为准，并在同一变更中刷新本页及对应专题文档。后端索引和契约验证仍按 [server/wiki/00-code-index.md](server/wiki/00-code-index.md) 的独立流程执行。

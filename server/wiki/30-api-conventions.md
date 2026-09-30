@@ -10,9 +10,9 @@
 
 - 普通 API 前缀:`/api/v1`。
 - 健康检查:`/health`,不带前缀。
-- 普通 JSON 请求体上限:16KB;桌面发布清单 `POST /desktop/admin/releases` 单独上限 1MB。
+- 普通 JSON 请求体上限:16KB。
 - 普通接口默认需要 `Authorization: Bearer <accessToken>`。
-- 管理接口(`/admin/auth/**`、`/app/admin/**`、`/desktop/admin/**`)统一用登录后签发的管理员会话:`Authorization: Bearer <token>`。静态 `X-Admin-Token` 通道已整体移除。
+- 管理接口(`/admin/auth/**`、`/app/admin/**`)统一用登录后签发的管理员会话:`Authorization: Bearer <token>`。静态 `X-Admin-Token` 通道已整体移除。
 - 客户端判断成功的唯一依据是响应体 `code === 0`。
 
 ## 2. 响应信封
@@ -67,8 +67,6 @@ Controller 不应返回 HTTP 200 加错误业务码;失败应同时使用正确 
 | `GET /api/v1/app/apk/{versionCode}` | APK 字节 | 下载器要求 Range/ETag |
 | `GET /api/v1/app/patch/{targetVersionCode}/{patchVersion}` | 补丁字节 | 补丁应用器要求 Range/ETag |
 | `GET /api/v1/public/shares/{token}/preview` | MP3 音频流 | 公开试听需要 Range,不能套 JSON |
-| `GET /api/v1/desktop/artifacts/{sha256}` | 桌面模块字节 | 内容寻址下载和 Range |
-| `GET /api/v1/desktop/patches/{sha256}` | 桌面差分字节 | 内容寻址差分下载和 Range |
 
 `lyrics?format=json` 仍由 Controller 自行返回带信封的 JSON。
 
@@ -109,8 +107,6 @@ Controller 不应返回 HTTP 200 加错误业务码;失败应同时使用正确 
 | `/open/**` | 不要求(用 `X-API-Key` 或 `Authorization: Bearer tt_...`) | 不使用 | 开放搜歌,`ApiKeyGuard`,鉴权失败 401/4014;与用户访问令牌、管理员会话三套凭据互相独立。详见 [36-api-open.md](36-api-open.md) |
 | `/admin/auth/login`、`/totp-verify`、`/logout` | 不要求 | 不要求 | 显式公开;2FA 第二步额外要求 `temp_token` |
 | `/admin/auth/**`(其余) | 不使用 | 管理员会话 | 由 AdminAuthGuard + RolesGuard 校验;角色不足为 403/4030 |
-| `/desktop/bootstrap`、`/desktop/artifacts/**`、`/desktop/patches/**` | 不要求 | 不要求 | 桌面更新通道必须公开 |
-| `/desktop/admin/**` | 不使用 | 管理员会话 | 与 Android 共用守卫与角色常量,但版本表分开 |
 | `/announcements`、`/public/shares/**` | 不要求 | 不使用 | 公开公告、分享元数据和试听 |
 | `/shares/songs` | 必须 | 不使用 | 创建短链 |
 | `/playback/**`、`/playlists/**` | 必须 | 不使用 | 用户云端数据 |
@@ -128,8 +124,7 @@ Controller 不应返回 HTTP 200 加错误业务码;失败应同时使用正确 
 | `Content-Range` | 音频和 APK Range | 断点续传范围 |
 | `Accept-Ranges: bytes` | 支持 Range 的资源 | 告知客户端下载能力 |
 | `ETag` | APK 下载 | 使用 APK sha256 标识内容 |
-| `ETag` | Android 补丁、桌面模块/差分 | 使用对象 sha256 标识内容 |
-| `Cache-Control: public, ... immutable` | 内容寻址桌面对象 | sha256 地址内容不可变,可长缓存 |
+| `ETag` | Android 补丁 | 使用对象 sha256 标识内容 |
 | `Content-Type` | 所有响应 | 区分 JSON、NDJSON、文本和二进制 |
 
 新增拦截器或自行 `writeHead` 时,要确认不会覆盖已经由全局拦截器设置的响应头(响应阶段顺序见 [12-request-pipeline.md](12-request-pipeline.md))。

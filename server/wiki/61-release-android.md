@@ -57,7 +57,7 @@ curl.exe -X POST "https://你的域名/api/v1/app/admin/releases?versionCode=版
   --data-binary "@$apk"
 ```
 
-管理员会话的取法见 [52-feature-desktop-release.md](52-feature-desktop-release.md) §4(登录拿 `data.token`,开了 2FA 再走 `totp-verify`)。首次登记保持 `rollout=0`,先验证下载和安装。
+管理员会话的取法见 [80-admin-auth-login.md](80-admin-auth-login.md)(登录拿 `data.token`,开了 2FA 再走 `totp-verify`)。首次登记保持 `rollout=0`,先验证下载和安装。
 
 发布登记依赖 `ON CONFLICT DO UPDATE`:同渠道同版本号重复登记会更新元数据(表约束见 [42-database-tables-release.md](42-database-tables-release.md))。
 

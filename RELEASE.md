@@ -335,33 +335,11 @@ node dist/main.js
 
 ---
 
-## 九、Windows 模块化桌面版发布
+## 九、Windows 桌面版发布（Tauri）
 
-Windows 客户端按 `current/` 模块目录发布。稳定启动器负责启动和失败回滚,更新器只在应用退出后替换文件；应用本身只检查清单、续传文件并生成更新计划。发布清单按模块的 SHA-256 寻址,服务端会自动为相邻版本生成 bsdiff,配置 `COURGETTE_PATH` 后对 DLL/EXE 优先使用 Courgette。
+Windows 桌面端现在是 Tauri 应用（`desktop/` 目录，Tauri 2 + React + TypeScript），**不经过后端发布系统**。构建走根 CI 的 `desktop` job（`desktop/**` 路径过滤），产物发到 GitHub Release `desktop-latest`；应用内自动更新经 `tauri-plugin-updater` 做签名校验拉取新版本。旧的 Kotlin Compose Desktop 桌面端（`:desktopApp`/`:desktopLauncher`/`:desktopUpdater` 模块与后端 `desktop-release` 模块化热更）已整体移除。
 
-### 1. 生成便携更新包
-
-```powershell
-.\gradlew.bat :desktopApp:packageDesktopUpdateBundle
-```
-
-产物在 `desktopApp/build/desktop-update-bundle/`,包含 `current/`、精简 JRE、`taotao-launcher.jar`、`taotao-updater.jar`、JDK `jpackage` 生成的 `launcher.exe`/`updater.exe` 和 `manifest.json`。若已安装 GraalVM Native Image,也可执行 `:desktopLauncher:nativeLauncher` 与 `:desktopUpdater:nativeUpdater` 生成更小的原生入口；没有 GraalVM 时不影响包的使用。
-
-### 2. 上传和登记
-
-管理台选择该目录即可完成逐模块校验、内容寻址上传和清单登记；命令行可使用：
-
-```powershell
-$env:DESKTOP_RELEASE_BASE_URL = "https://music.xydaigua.cn"
-$env:ADMIN_SESSION_TOKEN = "<管理员会话令牌，取法见第一节>"
-.\gradlew.bat :desktopApp:publishDesktopRelease
-```
-
-默认渠道是 `release`，可用 `-PdesktopChannel=beta` 生成其他渠道。登记默认放量 0，先用 `/api/v1/desktop/bootstrap` 自测，再通过管理台或 `POST /api/v1/desktop/admin/rollout` 灰度放量。`POST /api/v1/desktop/admin/min-version` 与 Android 使用同一条规则：抬高下限前必须已有版本号不低于该值、放量 100% 且包含完整模块清单的救援版本。
-
-### 3. 客户端回滚
-
-更新器替换前把 `current/` 移到 `backup/` 并在注册表 `HKCU\\Software\\TaotaoMusic\UpdateAttempts` 写入 1；启动器发现启动未稳定完成时自动恢复 `backup/`。应用稳定运行后会清零计数。不要手工删除 `backup/` 或更新计划文件，排障时先停用对应发布再保留现场文件。
+后端的客户端热更现在**只服务 Android**（APK + DEX 热修复）。
 
 ---
 
@@ -377,7 +355,8 @@ GitHub 侧三个正式仓库（music / music-server / tools）由助手手动执
 
 | 仓库 | 工作流 | 内容 | 产物 |
 | --- | --- | --- | --- |
-| music | `.github/workflows/client.yml` | Windows runner：`:androidApp:assembleRelease` + `:desktopApp:packageDesktopUpdateBundle` + `:webApp:wasmJsBrowserDistribution` | 滚动预发布 Release `latest`（APK + 桌面包 zip，每次覆盖）；Web 播放器另发 `share-player-latest` |
+| music | `.github/workflows/client.yml` | Windows runner：`:androidApp:assembleRelease` + `:webApp:wasmJsBrowserDistribution` | 滚动预发布 Release `latest`（APK，每次覆盖）；Web 播放器另发 `share-player-latest` |
+| core（`desktop` job） | `.github/workflows/ci.yml` | Tauri Windows 桌面端（`desktop/**` 路径过滤） | GitHub Release `desktop-latest`，应用内经 `tauri-plugin-updater` 签名更新 |
 | music-server | `server/.github/workflows/backend.yml` | Ubuntu + PostgreSQL 服务容器，完整 `verify-contract.mjs` **全绿才算通过** | Release `server-dist-latest`（完整 dist） |
 
 要点：

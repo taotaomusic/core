@@ -129,10 +129,6 @@ ORDER BY api_key_id;
 | `idx_image_generation_task_key` | 按 Key 汇总和外键相关操作 |
 | `idx_im_device_session_active`(部分) | 查找未撤销且未过期 IM 凭据 |
 | `idx_app_patch_lookup` | Android 补丁候选版本 |
-| `idx_desktop_release_lookup` | 桌面更新候选版本 |
-| `idx_desktop_jar_sha256` | 内容寻址模块引用检查 |
-| `idx_desktop_patch_manifest` | 桌面差分按版本/路径查找 |
-| `idx_desktop_patch_sha256` | 内容寻址差分引用检查 |
 | `idx_admin_sessions_active`(部分) | 按 `admin_id` 查未撤销会话;`WHERE revoked_at IS NULL` |
 | `idx_admin_audit_admin` | 审计按管理员和时间倒序读取 |
 | `idx_admin_audit_action` | 审计按 action 和时间倒序筛选 |

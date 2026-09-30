@@ -15,4 +15,4 @@ dependencyResolutionManagement {
     }
 }
 rootProject.name = "TaotaoMusic"
-include(":shared", ":player-ui", ":androidApp", ":patch", ":desktopApp", ":desktopLauncher", ":desktopUpdater", ":webApp")
+include(":shared", ":player-ui", ":androidApp", ":patch", ":webApp")

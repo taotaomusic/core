@@ -23,13 +23,9 @@
 - **绕过会话撤销** —— 改密码、禁用账号都撤不掉这把钥匙,只能改环境变量并重启。
 - **绕过审计归属** —— 它合成的身份 `id = 0` 在 `admin_users` 里没有对应行,所有操作都记成「无归属」,出了事查不到人。
 
-现在所有管理接口(`/api/v1/admin/auth/**`、`/api/v1/app/admin/**`、`/api/v1/desktop/admin/**`)都只认登录后签发的会话令牌,用的是同一个 `AdminAuthGuard`。
+现在所有管理接口(`/api/v1/admin/auth/**`、`/api/v1/app/admin/**`)都只认登录后签发的会话令牌,用的是同一个 `AdminAuthGuard`。
 
 > **`AdminTokenGuard` 早已删除。** `common/guards/admin-token.guard.ts` 曾经只认 `X-Admin-Token` 且在 `ADMIN_TOKEN` 为空时一律拒绝,但全项目没有任何 `@UseGuards` 或模块引用它,是纯死代码。历史文档把它写成「发布接口的守卫」是错的;实际生效的一律是 `AdminAuthGuard`。要判断某个守卫是否生效,`grep` 它在 `@UseGuards` 里的实际引用,不要靠文件名或旧文档推断。
-
-### 桌面发布脚本怎么拿凭据
-
-`desktopApp/build.gradle.kts` 的 `publishDesktopRelease` 任务原先带静态令牌,现在读环境变量 `ADMIN_SESSION_TOKEN`,并以 `Authorization: Bearer` 发送。取法是在管理后台登录一次,从浏览器 `localStorage.taotao_admin_token` 里取出会话令牌 —— 它 24 小时过期,正好适合一次发布操作。
 
 ### 数据库里为什么还允许 `admin_id` 为空
 

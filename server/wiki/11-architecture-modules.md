@@ -22,7 +22,6 @@ flowchart TD
     App --> Shares["SongShareModule"]
     App --> Image["ImageGenerationModule"]
     App --> Release["ReleaseModule"]
-    App --> Desktop["DesktopReleaseModule"]
     App --> Im["ImModule"]
     App --> UserAdmin["UserAdminModule"]
     App --> AdminAuth["AdminAuthModule"]
@@ -40,7 +39,6 @@ flowchart TD
     Music --> Upstream["UpstreamModule"]
     Shares --> Upstream
     Shares --> Release
-    Desktop --> Database
     Im --> Database
     Im --> Auth
     Auth --> Database
@@ -84,7 +82,6 @@ src/
 ├─ music/
 ├─ open-api/
 ├─ release/
-├─ desktop-release/
 ├─ im/
 ├─ mail/
 ├─ shares/
@@ -101,8 +98,8 @@ src/
 
 - 关闭 NestJS 默认 body parser。
 - 挂载传输加密中间件(`crypto.middleware.ts`):**必须先于 body parser**,带 `X-Taotao-Crypto` 头的请求按 AAD(method+path+query)逐块 AEAD 解密出原始字节,无加密头的请求完全透明。`RAW_BODY_PATHS` 白名单与 `*/play` 音频流不参与解密。
-- 对 APK、Android 补丁和桌面 artifact 原始字节上传路由跳过 JSON 解析。
-- 普通路由挂载 16KB JSON parser,桌面发布清单单独使用 1MB parser。
+- 对 APK 和 Android 补丁原始字节上传路由跳过 JSON 解析。
+- 普通路由挂载 16KB JSON parser。
 - 注册全局 `ValidationPipe`。
 - 设置 `/api/v1` 前缀,并排除 `/health`。
 
@@ -162,16 +159,16 @@ src/
 - `favorites/` 保存收藏状态机;搜索只通过 Repository 批量查询,不为每首歌单独请求收藏接口。
 - `playback/` 把会话快照、最近播放可见代际和累计统计分开,清空操作不删除统计。
 - `playlists/` 的所有顺序/完整替换操作在事务内锁定歌单,`source + songId` 是歌曲身份,展示字段只是快照。
-- `release/` 与 `desktop-release/` 各自拥有版本、文件和最低版本语义;桌面端使用内容寻址对象,不能复用 APK 文件名逻辑。
+- `release/` 拥有 Android APK 的版本、文件和最低版本语义,使用 APK 文件名逻辑管理产物。
 - `im/` 只代理悟空 IM 的凭据和同步命令;聊天正文、频道游标不进入 PostgreSQL。
 - `files/` 承担头像存取与匿名只读下载端点(`AvatarStoreService`、`user_avatars` 表)。
 - `admin-auth/` 拥有管理后台的身份与权限:账号、会话、2FA、角色守卫、IP 白名单和审计。它对外只暴露 `AdminAuthGuard` 与角色常量(`admin-roles.ts`),并提供 `AdminAuditService` 给业务控制器写审计,其它模块不应自己实现管理员鉴权。
 - `ldap/` 只做目录协议(Bind、Search、过滤器编解码)和角色映射,不直接签发会话;`authenticate()` 返回 `success`/`denied`/`skipped` 三态,由 `admin-auth/` 决定是否回落本地口令。
-- 下面 5 个控制器都挂 `@AdminGuarded()`(= `AdminAuthGuard` + `RolesGuard`,只认管理员会话 `Authorization: Bearer`),不要误加普通访问令牌依赖:
+- 下面 4 个控制器都挂 `@AdminGuarded()`(= `AdminAuthGuard` + `RolesGuard`,只认管理员会话 `Authorization: Bearer`),不要误加普通访问令牌依赖:
   `announcement.controller.ts`(只保护 `/app/admin/*` 那几个方法,公开的 `GET /announcements` 不能加)、
-  `release/release-admin.controller.ts`、`desktop-release/desktop-release-admin.controller.ts`、
+  `release/release-admin.controller.ts`、
   `user-admin/user-admin.controller.ts`、`image-generation/image-key-admin.controller.ts`。
-  **五个控制器一律逐方法挂,没有例外**:类级 `@UseGuards` 会在将来新增公开路由时静默拦下它,
+  **四个控制器一律逐方法挂,没有例外**:类级 `@UseGuards` 会在将来新增公开路由时静默拦下它,
   且漏标一个方法就等于那条路由裸奔。见 `admin-auth/admin-guarded.decorator.ts`。
   写操作标 `@RequireRole(...WRITE_ROLES)` 并调 `AdminAuditService` 留痕;读操作标 `@RequireRole(...READ_ROLES)`,
   **但返回个人数据的读接口要用 `PRIVILEGED_READ_ROLES`** —— 目前是 `user-admin` 的两个读接口

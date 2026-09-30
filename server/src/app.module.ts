@@ -12,7 +12,6 @@ import { RateLimitGuard } from "./common/rate-limit/rate-limit.guard";
 import { RateLimitService } from "./common/rate-limit/rate-limit.service";
 import { AppConfigModule } from "./config/config.module";
 import { DatabaseModule } from "./database/database.module";
-import { DesktopReleaseModule } from "./desktop-release/desktop-release.module";
 import { FilesModule } from "./files/files.module";
 import { FavoritesModule } from "./favorites/favorites.module";
 import { HealthController } from "./health/health.controller";
@@ -42,7 +41,6 @@ import { CryptoModule } from "./crypto/crypto.module";
   imports: [
     AppConfigModule,
     DatabaseModule,
-    DesktopReleaseModule,
     MailModule,
     LatestVersionModule,
     AuthModule,

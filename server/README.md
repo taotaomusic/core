@@ -2,7 +2,7 @@
 
 > 后端架构、接口、数据库与运维文档统一整理在 [wiki/](wiki/README.md)。先看 [CodeGraph 代码索引](wiki/00-code-index.md) 了解当前路由和模块快照。
 
-NestJS + TypeScript 实现的音乐接口适配服务。音乐媒体、图片和歌词只做实时转发；分享试听和 Android/Windows 发布文件是受控的本地缓存/对象例外。PostgreSQL 保存用户账号、刷新令牌哈希、收藏、歌单、播放统计、热更新发布记录、第三方 API Key、图片任务和 IM 凭据元数据，不保存聊天正文或上游限时播放直链。
+NestJS + TypeScript 实现的音乐接口适配服务。音乐媒体、图片和歌词只做实时转发；分享试听和 Android 发布文件是受控的本地缓存例外。PostgreSQL 保存用户账号、刷新令牌哈希、收藏、歌单、播放统计、热更新发布记录、第三方 API Key、图片任务和 IM 凭据元数据，不保存聊天正文或上游限时播放直链。
 
 ## 启动
 
@@ -82,7 +82,6 @@ src/
   image-generation/       gpt-image-2 图片生成任务适配
   release/                热更新：客户端引导、安装包分发、发布管理，以及 x-latest-version-code
                           响应头缓存（latest-version.cache.ts，LatestVersionModule）
-  desktop-release/        Windows 模块清单、内容寻址对象和差分发布
   im/                     悟空 IM 会话、同步、撤回和已读代理
   user-admin/              后台用户、禁用和播放统计
   health/                 健康检查（HealthController 直接注册在 AppModule，无独立模块）
@@ -119,14 +118,14 @@ src/
 - **登录失败退避**：同一账号连续失败 5 次即锁定，5 → 10 → 20 → 30 分钟逐轮翻倍
 - **LDAP/SSO 集成**：可选的企业目录对接，支持组到角色的映射
 
-后台入口固定在 `/admin/`，服务根路径留给未来网页版；Android 发布、补丁、公告、用户统计、AI 密钥和系统设置通过 `/api/v1/app/admin/*`，Windows 桌面发布通过独立的 `/api/v1/desktop/admin/*`，管理员管理通过 `/api/v1/admin/auth/*`。
+后台入口固定在 `/admin/`，服务根路径留给未来网页版；Android 发布、补丁、公告、用户统计、AI 密钥和系统设置通过 `/api/v1/app/admin/*`，管理员管理通过 `/api/v1/admin/auth/*`。
 
 管理接口**只认一种凭据**：`Authorization: Bearer <token>`（通过 `/api/v1/admin/auth/login` 获取，
 24 小时有效）。历史上的静态 `X-Admin-Token` / `ADMIN_TOKEN` 通道已整体移除 —— 它同时绕过 2FA、
 IP 白名单、会话撤销与审计归属。脚本化调用请从后台登录后取出会话令牌（浏览器
 `localStorage.taotao_admin_token`），或用环境变量 `ADMIN_SESSION_TOKEN`。
 
-`/app/admin/*` 与 `/desktop/admin/*` 的**写操作**要求 `admin` 及以上角色，观察者（`viewer`）
+`/app/admin/*` 的**写操作**要求 `admin` 及以上角色，观察者（`viewer`）
 只能读、写会拿到 403/4030；所有写操作都会记一条审计（`admin_audit_log`）。
 **用户资料与听歌历史是例外**：`/app/admin/users` 与 `/app/admin/users/:id/playback` 返回 `email`
 和逐首歌的播放记录，读也要求 `admin` 及以上，观察者被拒（前端「用户与统计」页签对观察者隐藏）。
@@ -143,7 +142,7 @@ IP 白名单、会话撤销与审计归属。脚本化调用请从后台登录�
 管理后台使用 Vite 生产压缩；Element Plus 通过 `unplugin-vue-components` 与
 `unplugin-auto-import` 按实际使用的组件、服务和样式自动导入，入口禁止重新使用
 `app.use(ElementPlus)` 或导入 `element-plus/dist/index.css`，否则会退化成整包构建。管理标签页
-（登录、强制改密、管理员、审计日志、IP 白名单、音源账号、开放 Key、赞助 Key、桌面发布、
+（登录、强制改密、管理员、审计日志、IP 白名单、音源账号、开放 Key、赞助 Key、
 Android 发布、补丁、公告、用户与统计、系统设置，以 `server/src/frontend/src/components/`
 实际文件为准）使用异步组件，未打开的模块不进入首屏主包；观察者（`viewer`）登录后部分页签
 会被隐藏。用户统计读取服务端已同步的 `user_song_stats`，可查看歌曲数、有效播放、完整播放、
@@ -183,8 +182,7 @@ npm run dev:frontend      # 独立开发服务器（5173），API 代理到本�
 
 **④ `bucketOf` 必须保持同步。** 它在 `Array.prototype.find` 的回调里被调用，一旦变成 async，回调返回的 Promise 恒为真值，`find` 会命中第一个候选版本 —— 灰度静默失效成全量下发。
 
-普通 JSON 请求体限制为 16KB；桌面发布清单 `POST /api/v1/desktop/admin/releases` 单独允许 1MB，
-以容纳多模块清单。桌面模块文件上传仍使用原始字节流，不应发送 JSON 或 multipart。
+普通 JSON 请求体限制为 16KB。
 
 另外两处竞态是这次迁移顺带修掉的，别改回两步写法：刷新令牌的 `consume` 是**单条** `UPDATE … RETURNING`（拆成 SELECT + UPDATE 会让并发刷新双双成功，一次性令牌就不再一次性）；注册的唯一约束冲突在 `users.create` 里翻译成 409/4090（查重和插入之间夹着约 100ms 的 scrypt，连接池下挡不住并发，不翻译会漏成 502）。
 
@@ -201,8 +199,6 @@ npm run dev:frontend      # 独立开发服务器（5173），API 代理到本�
 | `CRYPTO_PSK_ID` / `CRYPTO_PSK_HEX` | 传输加密 PSK 的标识与 32 字节 hex 原始密钥（可选）。二者缺一时握手全部失败，链路保持明文，不影响其它功能 |
 | `ADMIN_INITIAL_PASSWORD` | 默认超级管理员的初始口令。留空则启动时随机生成并只打印一次；设置时至少 12 字符。两种情况下该账号首次登录都必须改密 |
 | `APK_DIR` | APK 存放目录，默认 `./data/apk` |
-| `DESKTOP_RELEASE_DIR` | Windows 模块和差分对象目录，默认 `./data/desktop` |
-| `COURGETTE_PATH` | 可选的 PE 差分工具；未配置时使用 bsdiff-wasm |
 | `DEFAULT_CHANNEL` | 默认渠道，默认 `release` |
 | `PUBLIC_BASE_URL` | 对外基地址，用于拼装 APK 下载地址 |
 | `SEARCH_CONCURRENCY` | 历史兼容配置，当前搜索不解析播放地址，不读取该字段 |
@@ -245,7 +241,6 @@ npm run dev:frontend      # 独立开发服务器（5173），API 代理到本�
 - `GET /api/v1/app/apk/{versionCode}` —— 二进制
 - `GET /api/v1/app/patch/{targetVersionCode}/{patchVersion}` —— Android 补丁二进制
 - `GET /api/v1/public/shares/{token}/preview` —— 上游完整音频的转发流，支持 Range（60 秒上限由分享页自己守）
-- `GET /api/v1/desktop/artifacts/{sha256}`、`GET /api/v1/desktop/patches/{sha256}` —— 桌面对象/差分二进制，支持 Range
 
 ## 接口
 
@@ -578,7 +573,7 @@ Key 也可以从管理后台维护（SQL 直插不再是唯一途径）：`GET/P
 | 发布管理 | 按来源地址 60 次 / 15 分钟 |
 | 管理端登录 | 按来源地址 30 次 / 15 分钟 |
 | 验证码邮件发码 | 按来源地址 5 次 / 15 分钟 |
-| 管理端接口（`/app/admin/**`、`/desktop/admin/**`、`/admin/auth/**` 等） | 按来源地址 60 次 / 15 分钟，`ADMIN_RATE_LIMIT` 可覆盖（仅供契约验证调大，生产勿设） |
+| 管理端接口（`/app/admin/**`、`/admin/auth/**` 等） | 按来源地址 60 次 / 15 分钟，`ADMIN_RATE_LIMIT` 可覆盖（仅供契约验证调大，生产勿设） |
 | 图片任务创建 | 按用户 10 次 + 按来源地址 60 次 / 15 分钟 |
 | 图片任务轮询 | 按用户 300 次 + 按来源地址 1800 次 / 15 分钟 |
 | 开放搜歌 `/api/v1/open/**` | 按 key 120 次 + 按来源地址 600 次 / 15 分钟 |
@@ -621,9 +616,7 @@ node tools/verify-contract.mjs http://127.0.0.1:4720
 - `ADMIN_RATE_LIMIT` 要调大（如 `1000`）：脚本一次运行要打上百次管理接口，不调大时管理端
   限流桶（默认 60 次/15 分钟）会在中途命中 4290，失败位置随请求顺序漂移，看起来像业务坏了。
 
-另外两个容易踩的坑：**每次运行前必须重置验证库**（版本/rollout 类断言依赖空库），以及
-**桌面发布目录要清空**（`data/desktop`）。内容寻址存储在命中
-已有对象时会走「删除临时文件」的分支，上一轮留下的对象会让上传路径和首次运行时不同。
+另外一个容易踩的坑：**每次运行前必须重置验证库**（版本/rollout 类断言依赖空库）。
 
 以脚本实际输出为准，所有契约必须全绿 —— 检查项数量随脚本版本变化（当前运行约 300 项），以实际输出为准。
 脚本会核对状态码、业务码、信封形状、
@@ -653,15 +646,7 @@ Release `server-dist-latest`。三仓快照由项目根的 `tools/sync-repos.ps1
 
 ### Windows 桌面更新
 
-桌面端使用独立的 `/api/v1/desktop/*` 路由和 `DESKTOP_RELEASE_DIR` 内容寻址目录：
-
-- `GET /api/v1/desktop/bootstrap` 公开返回渠道、架构、版本、模块清单和可用差分；无效访问令牌不能让它变成 401。
-- `GET/HEAD /api/v1/desktop/artifacts/{sha256}` 与 `/desktop/patches/{sha256}` 是裸字节 Range 下载，使用 ETag 和不可变缓存。
-- `POST /api/v1/desktop/admin/artifacts` 接收原始模块（最多 500 MiB），`POST /desktop/admin/releases` 接收 1–512 项清单并生成差分。
-- `POST /desktop/admin/rollout` 分阶段放量，只有存在完整模块且 100% 放量的版本才能抬高 `min-version`。
-
-完整清单校验、发布命令、差分选择和错误码见 [wiki/52-feature-desktop-release.md](wiki/52-feature-desktop-release.md)。桌面后台不属于
-`/app/admin/*`，但用的是同一个 `AdminAuthGuard`（只认管理员会话）。
+Windows 桌面端已改为 Tauri（仓库 `desktop/` 目录，Tauri 2 + React + TypeScript），自动更新走 GitHub Release `desktop-latest`，由 `tauri-plugin-updater` 做签名校验，**与本后端无关**——后端不再提供桌面发布路由，只保留 Android 的 APK + DEX 热更。
 
 ### 悟空 IM
 
@@ -672,6 +657,4 @@ Release `server-dist-latest`。三仓快照由项目根的 `tools/sync-repos.ps1
 ### 当前实现审计提示
 
 - `SEARCH_CONCURRENCY` 仍是类型化配置字段，但当前搜索已经不解析播放地址，因此不会读取它。
-- `BSDIFF_BIN` 仍被读取以兼容旧配置，桌面差分实际使用 `bsdiff-wasm`，外部 bsdiff 不是运行前置条件。
 - `vite.config.ts` 的开发代理默认目标是 `http://localhost:4500`，可用 `VITE_API_PROXY_TARGET` 覆盖；使用其它后端端口时先设置该变量再运行 `npm run dev:frontend`。
-- `main.ts` 为历史兼容保留 `/desktop/admin/jars`、`/desktop/admin/patches` 原始体白名单，但当前没有对应 Controller；可调用的上传接口只有 `/desktop/admin/artifacts`。

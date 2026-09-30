@@ -20,7 +20,7 @@
 | `ForcePasswordChange.vue` | `must_change_password` 为真时的全屏强制改密页,在 `App.vue` 里优先于后台主体渲染,没有跳过入口 |
 | `AdminUserManager.vue` / `AuditLogViewer.vue` | 调用 `/admin/auth/**` 下的路径(管理员管理 / 审计中文化展示) |
 | `IpWhitelistManager.vue` | 白名单编辑。**当前没有任何页面引用它,是孤儿组件**;白名单实际通过 `GET/POST /admin/auth/ip-whitelist/:adminId` 接口维护 |
-| `ReleaseManager.vue` / `PatchManager.vue` / `DesktopReleaseManager.vue` / `AnnouncementManager.vue` / `UserManager.vue` / `MusicSourceManager.vue` / `OpenApiKeyManager.vue` / `SupporterKeyManager.vue` | 业务管理页,各自调用对应 `/app/admin/**`、`/desktop/admin/**` 路径 |
+| `ReleaseManager.vue` / `PatchManager.vue` / `AnnouncementManager.vue` / `UserManager.vue` / `MusicSourceManager.vue` / `OpenApiKeyManager.vue` / `SupporterKeyManager.vue` | 业务管理页,各自调用对应 `/app/admin/**` 路径 |
 
 改后端路由时必须同步对应组件,否则页面表现为 404/4040。改 `PRIVILEGED_READ_ROLES` 接口时要同步 `App.vue` 的页签可见性(观察者不该点进只会报错的页签,见 [81-admin-roles-audit.md](81-admin-roles-audit.md))。
 

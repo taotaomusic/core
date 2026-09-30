@@ -53,17 +53,14 @@ sequenceDiagram
 
 ## 3. 请求体解析的例外路径
 
-普通 JSON 请求体上限 16KB;`POST /api/v1/desktop/admin/releases` 的桌面清单单独允许 1MB。
+普通 JSON 请求体上限 16KB。
 
 原始请求体(跳过 JSON 解析)的路径:
 
 ```text
 POST /api/v1/app/admin/releases
 POST /api/v1/app/admin/patches
-POST /api/v1/desktop/admin/artifacts
 ```
-
-`main.ts` 还保留了 `/api/v1/desktop/admin/jars` 和 `/api/v1/desktop/admin/patches` 的原始体路径白名单,但当前 Controller 没有对应路由;不要把这两个路径当作可调用接口。大文件上传必须走实际的 `artifacts` 路由。
 
 ## 4. 静态资源
 

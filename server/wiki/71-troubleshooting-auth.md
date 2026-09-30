@@ -73,7 +73,7 @@
 
 ### 登录成功但发布/公告/用户页面报 401
 
-先确认**不是**守卫问题:所有管理控制器(`/app/admin/**`、`/desktop/admin/**`、`/admin/auth/**`)挂的都是同一个 `AdminAuthGuard`,它只接受 `Authorization: Bearer <会话令牌>`,登录后直接就能操作发布和公告页面。
+先确认**不是**守卫问题:所有管理控制器(`/app/admin/**`、`/admin/auth/**`)挂的都是同一个 `AdminAuthGuard`,它只接受 `Authorization: Bearer <会话令牌>`,登录后直接就能操作发布和公告页面。
 
 如果确实报 401,检查:
 

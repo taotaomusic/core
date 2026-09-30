@@ -43,7 +43,6 @@ codegraph query --path server --kind route --limit 200 --json ""
 | `src/shares/` | 歌曲短链、公开元数据、试听转发 | `song_share`、`StreamService` |
 | `src/image-generation/` | 图片任务、Key 池、额度预扣和状态轮询 | `api_key`、`image_generation_task`、ApiSweet |
 | `src/release/` | Android APK/补丁、灰度、最低版本和远程配置 | `app_release`、`app_patch`、`app_channel`、`app_config` |
-| `src/desktop-release/` | Windows 模块化发布、内容寻址文件和二进制差分 | `desktop_*`、Courgette/bsdiff-wasm |
 | `src/im/` | 悟空 IM 会话凭据和同步代理 | `im_device_session`、悟空 IM HTTP API |
 | `src/user-admin/` | 后台用户列表、播放统计、禁用和删除 | `users`、refresh/playback 外键级联 |
 | `src/admin-auth/` | 管理后台账号、数据库会话、TOTP 2FA、角色守卫、IP 白名单和审计 | `admin_users`、`admin_sessions`、`admin_audit_log` |
@@ -51,7 +50,7 @@ codegraph query --path server --kind route --limit 200 --json ""
 | `src/tools/` | 独立维护工具(随 tsc 编进 dist,服务器上 `node dist/tools/…` 执行):`backfill-playlist-covers.ts` 按音源回填 `playlist_songs.cover_url`,幂等、只补空值 | `playlist_songs`、`MusicSourceRegistry`、上游 API |
 | `src/frontend/` | Vue 管理后台;发布时产到 `dist/public` | Vite、Element Plus |
 
-各模块的边界规则与依赖注入约束见 [11-architecture-modules.md](11-architecture-modules.md);专题细节:图片 [50-feature-image-generation.md](50-feature-image-generation.md)、IM [51-feature-wukongim.md](51-feature-wukongim.md)、桌面 [52-feature-desktop-release.md](52-feature-desktop-release.md)、音源账号 [53-feature-music-sources.md](53-feature-music-sources.md)、传输加密 [37-api-crypto.md](37-api-crypto.md)。
+各模块的边界规则与依赖注入约束见 [11-architecture-modules.md](11-architecture-modules.md);专题细节:图片 [50-feature-image-generation.md](50-feature-image-generation.md)、IM [51-feature-wukongim.md](51-feature-wukongim.md)、音源账号 [53-feature-music-sources.md](53-feature-music-sources.md)、传输加密 [37-api-crypto.md](37-api-crypto.md)。
 
 全局 Provider 的实际职责如下:
 
@@ -66,7 +65,7 @@ codegraph query --path server --kind route --limit 200 --json ""
 
 全局 `APP_GUARD` 只有 `AccessTokenGuard` 和 `RateLimitGuard` 两个。
 
-`AdminAuthGuard` 和 `RolesGuard` **不是全局守卫**,它们由 `AdminAuthModule` 提供。所有管理控制器(`/admin/auth/**`、`/app/admin/**`、`/desktop/admin/**`)都挂 `AdminAuthGuard`,它只接受会话 `Authorization: Bearer`(静态 `X-Admin-Token` 通道已移除);`RolesGuard` 再按 `@RequireRole` 判角色,写操作还要注入 `AdminAuditService` 写审计。引用它们的模块必须自己 `imports: [AdminAuthModule]`,否则启动时 `UnknownDependenciesException`。详见 [82-admin-routes-data.md](82-admin-routes-data.md)。
+`AdminAuthGuard` 和 `RolesGuard` **不是全局守卫**,它们由 `AdminAuthModule` 提供。所有管理控制器(`/admin/auth/**`、`/app/admin/**`)都挂 `AdminAuthGuard`,它只接受会话 `Authorization: Bearer`(静态 `X-Admin-Token` 通道已移除);`RolesGuard` 再按 `@RequireRole` 判角色,写操作还要注入 `AdminAuditService` 写审计。引用它们的模块必须自己 `imports: [AdminAuthModule]`,否则启动时 `UnknownDependenciesException`。详见 [82-admin-routes-data.md](82-admin-routes-data.md)。
 
 `ApiKeyGuard`(`src/open-api/open-api-key.guard.ts`)也不是全局守卫,它只挂在 `OpenApiModule` 的 `/open/**` 路由上:读取 `X-API-Key`(优先)或 `Authorization: Bearer tt_...`,校验开放 API Key,失败一律 401/4014(**不能 403**)。用户访问令牌(`payload.signature` 形状、不以 `tt_` 开头)与管理员会话都不能当开放 key。开放侧细节见 [36-api-open.md](36-api-open.md)。
 
@@ -82,7 +81,7 @@ codegraph query --path server --kind route --limit 200 --json ""
   → pg_advisory_xact_lock(913720001) + 幂等迁移
   → 挂载传输加密中间件(带 X-Taotao-Crypto 头的请求先做 AEAD 解密;必须先于 body parser,
     否则拿到的是密文;无加密头请求完全透明。排除 RAW_BODY_PATHS 与 */play 音频流)
-  → 挂载按路由分流的 JSON parser(普通 16KB、桌面清单 1MB、原始上传跳过)
+  → 挂载按路由分流的 JSON parser(普通 16KB、原始上传跳过)
   → /api/v1 全局前缀(/health 例外)
   → 全局 ValidationPipe(transform=true)
   → onApplicationBootstrap:AdminBootstrapService 创建默认管理员 admin(随机或 ADMIN_INITIAL_PASSWORD 口令,强制首登改密)
@@ -96,10 +95,7 @@ codegraph query --path server --kind route --limit 200 --json ""
 ```text
 POST /api/v1/app/admin/releases
 POST /api/v1/app/admin/patches
-POST /api/v1/desktop/admin/artifacts
 ```
-
-`main.ts` 还保留了 `/api/v1/desktop/admin/jars` 和 `/api/v1/desktop/admin/patches` 的原始体路径白名单,但当前 Controller 没有对应路由;不要把这两个路径当作可调用接口。大文件上传必须走实际的 `artifacts` 路由。
 
 静态资源:
 
@@ -107,7 +103,7 @@ POST /api/v1/desktop/admin/artifacts
 - 分享播放器:`/share/*` 资源和 `/s/{token}` 页面,构建目录 `dist/share-player`。入口 JS 与应用 wasm 都是**固定名**,两者必须严格同批(JS 胶水要提供 wasm 的全部 `js_code` 导入),否则浏览器抛 `LinkError ... requires a callable`。所以服务端把它们挂成**版本化路径** `/share/v/<内容指纹>/…`,并改写 `index.html` 的 `<base>` 指向它,让所有相对引用自动跟版本走(见 `src/common/share-player-assets.ts`)。未版本化的 `/share/*` 保留,用于兼容历史页面与绝对路径引用。
 - 资源不存在时后端仍可启动,只记录警告。
 
-普通 JSON 请求体上限为 16KB;`POST /api/v1/desktop/admin/releases` 的桌面清单单独允许 1MB,原始 artifact 上传仍跳过 JSON 解析。任何跨网络调用都不得持有 PostgreSQL 连接;需要多条 SQL 原子化时使用 `DatabaseService.transaction`。
+普通 JSON 请求体上限为 16KB;原始 artifact 上传跳过 JSON 解析。任何跨网络调用都不得持有 PostgreSQL 连接;需要多条 SQL 原子化时使用 `DatabaseService.transaction`。
 
 ## 4. 完整路由索引
 
@@ -154,19 +150,6 @@ POST /api/v1/desktop/admin/artifacts
 - `GET /admin/auth/users`、`POST /admin/auth/users`、`PATCH /admin/auth/users/:id`、`DELETE /admin/auth/users/:id`:管理员增删改查;读取需 `admin` 以上,写入需 `super_admin`。
 - `GET /admin/auth/audit-log`:操作审计查询。
 - `GET /admin/auth/ip-whitelist/:adminId`、`POST /admin/auth/ip-whitelist/:adminId`:IP 白名单读写,仅 `super_admin`。
-
-### Windows 桌面发布(10)
-
-- `GET /desktop/bootstrap`:按渠道、架构和当前版本返回模块清单及可用差分。
-- `GET/HEAD /desktop/artifacts/:sha256`:内容寻址模块文件。
-- `GET/HEAD /desktop/patches/:sha256`:内容寻址差分文件。
-- `GET /desktop/admin/releases`:后台查看桌面版本。
-- `POST /desktop/admin/artifacts`:上传单个原始模块(最多 500 MiB)。
-- `POST /desktop/admin/releases`:提交版本清单并生成差分。
-- `POST /desktop/admin/rollout`:桌面版本灰度/启用。
-- `POST /desktop/admin/min-version`:桌面最低支持版本。
-
-契约与操作见 [52-feature-desktop-release.md](52-feature-desktop-release.md)。
 
 ### 音乐与图片(10)
 
@@ -216,13 +199,13 @@ POST /api/v1/desktop/admin/artifacts
 | --- | --- | --- |
 | 注册/登录 | `@Public()` | 每 IP 每用途 10 次/15 分钟 |
 | 邮箱发码 | `@Public()` | 每 IP 5 次/15 分钟;同邮箱 60 秒冷却;验证码最多 5 次错误 |
-| Android/桌面 bootstrap、APK/模块下载、公告和公开分享 | 公开;无效 Authorization 也不能变 401 | App 桶:每 IP 900 次 + 每设备/来源 60 次/15 分钟 |
+| Android bootstrap、APK 下载、公告和公开分享 | 公开;无效 Authorization 也不能变 401 | App 桶:每 IP 900 次 + 每设备/来源 60 次/15 分钟 |
 | 普通音乐、收藏、歌单、播放、资料、分享创建 | 桃桃访问令牌 | 默认无独立桶;由全局门禁保护 |
 | 图片创建 | 桃桃访问令牌 | 每用户 10 次 + 每 IP 60 次/15 分钟 |
 | 图片轮询 | 桃桃访问令牌 | 每用户 300 次 + 每 IP 1800 次/15 分钟 |
 | IM 会话 | 桃桃访问令牌 | 每用户 30 次 + 每 IP 180 次/15 分钟 |
 | IM 同步/撤回/已读 | 桃桃访问令牌 | 每用户 300 次 + 每 IP 1800 次/15 分钟 |
-| Android/桌面后台、公告、图片 Key(读) | `AdminAuthGuard` + `RolesGuard`,`READ_ROLES` | 每 IP 60 次/15 分钟;两条凭据都不可用时 401/4013;角色不足 403/4030 |
+| Android 后台、公告、图片 Key(读) | `AdminAuthGuard` + `RolesGuard`,`READ_ROLES` | 每 IP 60 次/15 分钟;两条凭据都不可用时 401/4013;角色不足 403/4030 |
 | 用户资料与听歌历史(读) | 同上,`PRIVILEGED_READ_ROLES` | 同上;观察者看不到个人数据 |
 | 同上(写:发版、放量、改配置、公告、用户、密钥) | 同上,`WRITE_ROLES` | 同上;观察者被拒,写操作另写 `admin_audit_log` |
 | 管理后台登录、2FA、改密码 | `@Public()` 或已认证 | `admin-login`/`admin-totp`/`admin-password` 三个独立桶(见 [82-admin-routes-data.md](82-admin-routes-data.md)) |
@@ -235,7 +218,7 @@ POST /api/v1/desktop/admin/artifacts
 
 ## 6. 数据模型速览
 
-迁移当前创建 26 张表:
+迁移当前创建 23 张表:
 
 ```text
 users                         refresh_tokens
@@ -244,8 +227,7 @@ song_share                    playback_sessions         user_song_stats
 playback_history_state        playback_history_clear_operation
 app_release                   app_channel               app_config
 app_announcement              api_key                    image_generation_task
-im_device_session             app_patch                  desktop_release
-desktop_jar                   desktop_patch
+im_device_session             app_patch
 admin_users                   admin_sessions            admin_audit_log
 open_api_key                  music_source_account
 ```
@@ -256,7 +238,6 @@ open_api_key                  music_source_account
 
 - 用户删除会级联刷新令牌、收藏、歌单、分享、播放和 IM 设备凭据。
 - `image_generation_task.api_key_id` 使用 `ON DELETE RESTRICT`,仍有任务引用时不能删除 Key。
-- `desktop_jar`/`desktop_patch` 随 `desktop_release` 级联删除;磁盘内容寻址文件不会自动回收。
 - 播放清空只推进 `playback_history_state.revision`,不删除累计统计;每个 marker 另存于 `playback_history_clear_operation` 保证重试幂等。
 - `admin_sessions.admin_id` 随 `admin_users` 级联删除;`admin_audit_log.admin_id` 与 `admin_users.created_by` 是 `ON DELETE SET NULL`,管理员被删后审计仍保留、只是变成无归属。
 - `open_api_key` 只存 `sha256(key)`,明文 key 只在创建响应里返回一次;列表接口只回传 `keyPrefix`。
@@ -266,10 +247,9 @@ open_api_key                  music_source_account
 
 ## 7. 配置索引
 
-全部环境变量的唯一完整出处是 **[21-configuration.md](21-configuration.md)**(含默认值、校验行为与坑),本页不再复制配置表。两条容易误判的兼容项在这里留个路标:
+全部环境变量的唯一完整出处是 **[21-configuration.md](21-configuration.md)**(含默认值、校验行为与坑),本页不再复制配置表。一条容易误判的兼容项在这里留个路标:
 
 - `SEARCH_CONCURRENCY`:类型化配置仍保留,但当前搜索实现不读取它,不要误以为能改变请求并发。
-- `BSDIFF_BIN`:`AppConfigService` 仍有兼容字段,但当前差分实现直接使用 bsdiff-wasm,不要把它写成部署必需项。
 
 ## 8. 构建、验证和文档同步
 
@@ -290,6 +270,6 @@ git diff --check
 5. `21-configuration.md` 与 `.env.example`(配置);
 6. `60–62`(部署、发布、CI)与 `70–74`(排障路径);
 7. 改动 `admin-auth/` 或 `ldap/` 时同步 `80–83`(会话、2FA、角色、白名单、审计、前端);
-8. 改动图片/IM/桌面/音源账号时同步 `50–53` 对应专题。
+8. 改动图片/IM/音源账号时同步 `50`、`51`、`53` 对应专题。
 
 本页是索引,不替代专题中的参数细节;当本页与源码冲突时,以源码和 CodeGraph 最新索引为准,并在同一提交中修正文档。

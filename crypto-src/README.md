@@ -1,6 +1,6 @@
 # 桃桃音乐传输层加密模块
 
-**一份 Rust 协议实现，四个平台绑定门面，四类产物。**
+**一份 Rust 协议实现，三个平台绑定门面，三类产物。**
 
 客户端与后端之间的请求/响应体，在应用层再加一道认证加密。目标不是「密钥不可提取」，
 而是把「抓包读明文、改参数重放」从半小时的体力活，变成需要真正理解协议、
@@ -9,7 +9,7 @@
 | 目标 | 产物 | 绑定方式 | 由谁消费 |
 | --- | --- | --- | --- |
 | Android | `libtaotao_crypto.so`（arm64-v8a / x86_64） | JNI | `androidApp` |
-| Windows | `taotao_crypto.dll` | JNI | `desktopApp`（Compose Desktop 是 JVM） |
+| Windows | 直接编译进应用（无独立产物） | 直接链接 `core` crate（Rust，无 FFI） | `desktop/`（Tauri，Rust 侧直连后端） |
 | 后端 | `taotao_crypto.node`（Linux x64 / Windows x64） | napi-rs | `server` |
 | Web | `taotao_crypto_bg.wasm` + JS 胶水 | wasm-bindgen | `webApp` 分享播放器 |
 
@@ -318,7 +318,7 @@ let frame = session.seal(&aad, b"{}", now)?;
 
 | 目录 | 绑定方式 | 产物 | 要点 |
 | --- | --- | --- | --- |
-| `jni/` | JNI | Android `.so` + Windows `.dll` | 桌面端是 JVM，与安卓共用一份 |
+| `jni/` | JNI | Android `.so` | 安卓客户端用 |
 | `node/` | napi-rs | `.node` | 后端用 |
 | `wasm/` | wasm-bindgen | `.wasm` + JS | 分享播放器用 |
 
@@ -486,7 +486,7 @@ pwsh tools/fetch-crypto.ps1 -Version v2.0.0     # 生产版本（需 -Token）
 
 | 文件 | 触发 | 作用 |
 | --- | --- | --- |
-| `.github/workflows/build.yml` | `workflow_call` | 四平台构建的**唯一实现** |
+| `.github/workflows/build.yml` | `workflow_call` | 多平台构建的**唯一实现** |
 | `.github/workflows/ci.yml` | push / PR / 手动 | 占位密钥；main 上额外产出 `dev-latest` |
 | `.github/workflows/release.yml` | `v*` tag | 注入真密钥并发布正式 Release |
 
@@ -560,11 +560,11 @@ pwsh tools/build.ps1 -Target all -OutDir ..\music\crypto\dist   # 直接输出�
 ```text
 ├── Cargo.toml            工作区、共享依赖、release 优化配置
 ├── .cargo/config.toml    Android 链接器与 16KB 页面对齐
-├── .github/workflows/    CI（build.yml 是四平台构建的唯一实现）
+├── .github/workflows/    CI（build.yml 是多平台构建的唯一实现）
 ├── core/                 协议实现（唯一的逻辑来源，无任何绑定依赖）
 │   ├── build.rs          构建期把 PSK 编译进产物并做分片混淆
 │   └── benches/          性能与堆分配基准（`cargo bench`）
-├── jni/                  JNI 绑定 → Android .so + Windows .dll
+├── jni/                  JNI 绑定 → Android .so
 ├── node/                 napi-rs 绑定 → .node
 ├── wasm/                 wasm-bindgen 绑定 → .wasm
 ├── bindings/             参考包装层（不在构建路径里，接入时复制）

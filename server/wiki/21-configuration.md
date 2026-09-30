@@ -32,10 +32,7 @@
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `APK_DIR` | `./data/apk` | Android APK 和补丁文件目录,运行用户必须可写 |
-| `DESKTOP_RELEASE_DIR` | `./data/desktop` | Windows 内容寻址模块和差分目录;契约验证前要清空(原因见 [22-contract-verification.md](22-contract-verification.md)) |
-| `COURGETTE_PATH` | 空 | PE 文件差分工具路径;未配置时使用内置 bsdiff-wasm |
 | `SEARCH_CONCURRENCY` | `8` | 类型化配置仍保留;**当前搜索实现不读取该字段**,不要误以为能改变请求并发 |
-| `BSDIFF_BIN` | 空 | `AppConfigService` 仍读取以兼容旧配置,但当前差分实现直接使用 bsdiff-wasm,**不需要安装外部 bsdiff** |
 
 ## 4. 管理后台与安全
 
@@ -110,8 +107,6 @@ AUTH_SECRET=change-me-to-a-random-string-at-least-32-chars
 ADMIN_INITIAL_PASSWORD=
 CORS_ALLOWED_ORIGINS=
 APK_DIR=./data/apk
-DESKTOP_RELEASE_DIR=./data/desktop
-COURGETTE_PATH=
 DEFAULT_CHANNEL=release
 PUBLIC_BASE_URL=http://127.0.0.1:4500
 SEARCH_CONCURRENCY=8

@@ -60,8 +60,6 @@ node dist/main.js
 | `TRUST_PROXY` | 只在可信反向代理之后设为 `1`;直接暴露公网时必须留空,否则 IP 白名单可被伪造 |
 | `LDAP_*` | 可选;对接企业目录时配置,`LDAP_TLS_REJECT_UNAUTHORIZED` 保持默认 `true` |
 | `APK_DIR` | 服务进程可写、磁盘空间充足 |
-| `DESKTOP_RELEASE_DIR` | 桌面模块和差分对象目录可写、磁盘空间充足 |
-| `COURGETTE_PATH` | 可选;PE 模块差分工具 |
 | `PUBLIC_BASE_URL` | 外部 HTTPS 地址 |
 | `APISWEET_BASE_URL` | 默认 `https://apisweet.com` |
 | `SMTP_HOST/PORT/USER/PASSWORD/FROM` | 注册、绑定、换绑验证码发信配置必须完整 |
@@ -105,7 +103,7 @@ Group=taotao
 WantedBy=multi-user.target
 ```
 
-目录和用户仅为示例。确保运行用户可读 `.env`、可写 `APK_DIR`/`DESKTOP_RELEASE_DIR`,但其他系统用户不能读取密钥配置。应用自身会进行 10 次数据库连接重试,超过后退出并交给进程管理器重启(`Restart=always`)。
+目录和用户仅为示例。确保运行用户可读 `.env`、可写 `APK_DIR`,但其他系统用户不能读取密钥配置。应用自身会进行 10 次数据库连接重试,超过后退出并交给进程管理器重启(`Restart=always`)。
 
 ## 5. 反向代理要求
 
@@ -133,7 +131,7 @@ location = /health {
 注意:
 
 - 不要在代理层把 `/search` 的 NDJSON 缓冲到完整响应后再发送。
-- APK 上传请求体可能超过默认限制,需要配置匹配实际 APK 大小的 `client_max_body_size`;桌面上传单模块最大 500 MiB。
+- APK 上传请求体可能超过默认限制,需要配置匹配实际 APK 大小的 `client_max_body_size`。
 - APK 和音频下载必须允许 Range 请求头和 206 响应。
 - 应正确传递 `X-Forwarded-Proto`,否则服务在未配置 `PUBLIC_BASE_URL` 时可能生成 HTTP 地址。
 - 外部必须使用 HTTPS,Android 默认会阻止明文资源。

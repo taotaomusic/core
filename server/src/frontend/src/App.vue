@@ -78,12 +78,6 @@
               </template>
               <PatchManager :admin-token="token" />
             </el-tab-pane>
-            <el-tab-pane name="desktop" lazy>
-              <template #label>
-                <div class="tab-label"><el-icon><Monitor /></el-icon> <span v-show="!isMobile || tab === 'desktop'">Windows 发布</span></div>
-              </template>
-              <DesktopReleaseManager :admin-token="token" />
-            </el-tab-pane>
             <el-tab-pane name="announcements" lazy>
               <template #label>
                 <div class="tab-label"><el-icon><Bell /></el-icon> <span v-show="!isMobile || tab === 'announcements'">公告管理</span></div>
@@ -142,7 +136,7 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, ref, onMounted, onUnmounted, watch } from "vue";
 import zhCn from "element-plus/es/locale/lang/zh-cn";
-import { Upload, Connection, Bell, User, Key, Setting, Moon, Sunny, SwitchButton, Monitor, Loading, Headset, Postcard } from '@element-plus/icons-vue'
+import { Upload, Connection, Bell, User, Key, Setting, Moon, Sunny, SwitchButton, Loading, Headset, Postcard } from '@element-plus/icons-vue'
 import { useDark, useToggle } from '@vueuse/core'
 import AdminLogin from "./components/AdminLogin.vue";
 import ForcePasswordChange from "./components/ForcePasswordChange.vue";
@@ -151,7 +145,6 @@ import { adminLogout, adminMe, type AdminIdentity } from "./api";
 // 标签页使用异步组件：用户未打开的管理模块不进入首屏主包。
 const ReleaseManager = defineAsyncComponent(() => import("./components/ReleaseManager.vue"));
 const PatchManager = defineAsyncComponent(() => import("./components/PatchManager.vue"));
-const DesktopReleaseManager = defineAsyncComponent(() => import("./components/DesktopReleaseManager.vue"));
 const AnnouncementManager = defineAsyncComponent(() => import("./components/AnnouncementManager.vue"));
 const UserManager = defineAsyncComponent(() => import("./components/UserManager.vue"));
 const SupporterKeyManager = defineAsyncComponent(() => import("./components/SupporterKeyManager.vue"));

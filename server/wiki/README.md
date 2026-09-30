@@ -49,7 +49,7 @@
 | --- | --- | --- |
 | [40-database-overview.md](40-database-overview.md) | 连接池、迁移机制、类型规则、Repository 规则、事务边界、表变更流程 | 改任何数据层代码前必读 |
 | [41-database-tables-core.md](41-database-tables-core.md) | users、refresh_tokens、favorites、playlists、playback 四表、song_share | 查用户域/播放域字段语义时 |
-| [42-database-tables-release.md](42-database-tables-release.md) | app_release、app_channel、app_config、app_patch、app_announcement、desktop_* | 查发布/公告/配置/桌面字段语义时 |
+| [42-database-tables-release.md](42-database-tables-release.md) | app_release、app_channel、app_config、app_patch、app_announcement | 查发布/公告/配置字段语义时 |
 | [43-database-tables-admin.md](43-database-tables-admin.md) | admin_users、admin_sessions、admin_audit_log、open_api_key、music_source_account、api_key、image_generation_task | 查管理域/凭据域字段语义、外键删除语义时 |
 | [44-database-operations.md](44-database-operations.md) | 并发 SQL 范例、Key 运维 SQL、图片额度一致性、索引清单 | 写并发路径、运维额度、评估查询性能时 |
 
@@ -59,7 +59,6 @@
 | --- | --- | --- |
 | [50-feature-image-generation.md](50-feature-image-generation.md) | gpt-image-2 任务、Key 池、额度扣减归还、状态轮询 | 维护图片生成、Key 池、额度时 |
 | [51-feature-wukongim.md](51-feature-wukongim.md) | 悟空 IM 接入、端口基线、凭据签发、频道同步 | 接入或排查聊天链路时 |
-| [52-feature-desktop-release.md](52-feature-desktop-release.md) | Windows 模块清单、内容寻址上传、Courgette/bsdiff 差分、灰度 | 构建、发布或排查桌面更新时 |
 | [53-feature-music-sources.md](53-feature-music-sources.md) | 音源账号(酷我/波点)、凭据管理、KPK 签名、探测与缓存 | 维护音源账号、排查「搜得到放不出」时 |
 
 ### 发布与部署(60–62)
@@ -77,7 +76,7 @@
 | [70-troubleshooting-startup.md](70-troubleshooting-startup.md) | 排查顺序、启动失败、数据库错误 | 服务起不来、迁移报错时 |
 | [71-troubleshooting-auth.md](71-troubleshooting-auth.md) | 401/403 区分、管理后台登录、2FA、退避、白名单 | 登录相关一切异常时 |
 | [72-troubleshooting-music.md](72-troubleshooting-music.md) | 搜索/播放/歌词、图片任务、分享试听、IM 排障 | 音乐业务或图片任务异常时 |
-| [73-troubleshooting-release.md](73-troubleshooting-release.md) | 热更新失效、桌面更新、契约验证失败 | 客户端收不到更新、验证脚本红了时 |
+| [73-troubleshooting-release.md](73-troubleshooting-release.md) | 热更新失效、契约验证失败 | 客户端收不到更新、验证脚本红了时 |
 | [74-error-codes.md](74-error-codes.md) | HTTP/业务码快速定位表、日志安全红线 | 看到错误码不知道先查什么时 |
 
 ### 管理后台(80–83)

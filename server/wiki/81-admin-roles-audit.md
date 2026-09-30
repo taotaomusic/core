@@ -103,8 +103,6 @@ TRUST_PROXY=1 或 true
 | `release.publish` / `release.rollout` / `release.min_version` | Android 发版、放量、抬高下限(`release`) |
 | `release.patch_publish` / `release.patch_rollout` | 热修复补丁登记与放量(`patch`) |
 | `release.config_set` / `release.config_remove` | 远端配置写入与删除(`remote_config`) |
-| `desktop.artifact_upload` | 上传 Windows 模块(`desktop_artifact`) |
-| `desktop.publish` / `desktop.rollout` / `desktop.min_version` | Windows 发布、放量、抬高下限(`desktop_release`) |
 | `announcement.create` / `update` / `set_enabled` / `set_pinned` / `delete` | 公告生命周期(`announcement`) |
 | `user.set_disabled` / `user.delete` | 禁用与删除普通用户(`user`) |
 | `image_key.import` / `image_key.delete` | 图片 Key 导入与删除(`image_key`) |
@@ -138,7 +136,7 @@ await this.audit.record(request, "release.rollout", "release", `${channel}#${bod
 
 `AuditLogViewer.vue` 负责把库里「域名.动作」式的英文 action 翻译成中文展示:
 
-- `ACTION_GROUPS` 按域分组(登录与账号 / 管理员 / 公告 / 客户端版本 / 桌面版本 / 音源账号 / 密钥 / 用户),既是筛选下拉的数据源,也派生出整张动作名翻译表;未收录的 action 回退显示原文。
+- `ACTION_GROUPS` 按域分组(登录与账号 / 管理员 / 公告 / 客户端版本 / 音源账号 / 密钥 / 用户),既是筛选下拉的数据源,也派生出整张动作名翻译表;未收录的 action 回退显示原文。
 - `TARGET_TYPE_LABELS` 翻译 `target_type`(如 `music_source_account` → 音源账号)。
 - `DETAIL_KEY_LABELS` / `DETAIL_VALUE_LABELS` 把 `detail` JSON 还原成「中文键名:中文值」一行文本(布尔转是/否、字节数转 MB、放量加 %),非法 JSON 原样展示。
 

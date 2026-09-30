@@ -41,9 +41,10 @@ GitHub 侧 music / music-server / tools 三个正式仓库由项目根的 `tools
 
 `.github/workflows/client.yml`(源文件在主仓库根目录同名路径),Windows runner:
 
-- `:androidApp:assembleRelease` 与 `:desktopApp:packageDesktopUpdateBundle`;APK 和含 `launcher.exe` 的更新包从 Actions Artifact 下载。必须 Windows runner:`incrementVersion` 走 `powershell` 命令。
+- `:androidApp:assembleRelease`;APK 从 Actions Artifact 下载。必须 Windows runner:`incrementVersion` 走 `powershell` 命令。
 - 另有 `web-player` job 在 Windows 上构建 `:webApp:wasmJsBrowserDistribution`。
-- 三个构建成功后由 `publish-release` job 汇总发到固定 tag 的滚动预发布版 **Release `latest`**(`TaotaoMusic-<版本>-<release|debug>.apk` + 桌面包 zip,每次覆盖),免登录可下载。
+- 两个构建成功后由 `publish-release` job 汇总发到固定 tag 的滚动预发布版 **Release `latest`**(`TaotaoMusic-<版本>-<release|debug>.apk`,每次覆盖),免登录可下载。
+- Windows 桌面端已改为 Tauri(`desktop/`),由根 CI 的 `desktop` job 单独构建并发到 GitHub Release `desktop-latest`,经 `tauri-plugin-updater` 签名自动更新,与本后端发布无关。
 - APK 签名:在 music 仓库 Secrets 配 `ANDROID_KEYSTORE_BASE64`、`ANDROID_STORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD` 后出签名 Release 包;未配置时自动退回 Debug 包,仅验证工具链。
 
 ## 4. 与本地发布的关系

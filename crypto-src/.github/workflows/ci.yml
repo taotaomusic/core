@@ -88,7 +88,6 @@ jobs:
             | 包 | 内容 |
             | --- | --- |
             | `android.zip` | `arm64-v8a/libtaotao_crypto.so`、`x86_64/libtaotao_crypto.so` |
-            | `windows.zip` | `taotao_crypto.dll` |
             | `node-linux-x64.zip` | `taotao_crypto.node`（给后端容器） |
             | `node-windows-x64.zip` | `taotao_crypto.node` |
             | `wasm.zip` | `taotao_crypto_bg.wasm`、`taotao_crypto.js`、`taotao_crypto.d.ts` |

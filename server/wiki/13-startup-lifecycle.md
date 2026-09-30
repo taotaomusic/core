@@ -12,7 +12,7 @@
 读取 .env / 系统环境变量
   → validateEnvironment 校验端口、AUTH_SECRET、DATABASE_URL
   → NestFactory.create(AppModule):实例化 Module 和 Provider(构造函数在这里跑)
-  → 挂载按路由分流的 JSON parser(普通 16KB、桌面清单 1MB、原始上传跳过)
+  → 挂载按路由分流的 JSON parser(普通 16KB、原始上传跳过)
   → 挂载 /admin 与 /share 静态资源
   → setGlobalPrefix("api/v1", exclude: ["health"])
   → 注册全局 ValidationPipe

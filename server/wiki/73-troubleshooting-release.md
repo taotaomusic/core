@@ -1,10 +1,10 @@
-# 排障:热更新、桌面更新与契约验证
+# 排障:热更新与契约验证
 
 [返回文档中心](README.md)
 
-最后更新:2026-09-27
+最后更新:2026-09-30
 
-发布契约与操作流程见 [61-release-android.md](61-release-android.md) 与 [52-feature-desktop-release.md](52-feature-desktop-release.md);验证流程见 [22-contract-verification.md](22-contract-verification.md)。
+发布契约与操作流程见 [61-release-android.md](61-release-android.md);验证流程见 [22-contract-verification.md](22-contract-verification.md)。
 
 ## 1. 热更新(Android)
 
@@ -34,35 +34,7 @@
 
 这是必须立即回滚处理的事故:抬高下限前必须已有版本号不低于目标、启用且放量 100% 的发布(顺序见 [61-release-android.md](61-release-android.md))。
 
-## 2. 桌面更新与内容寻址文件
-
-### `desktop/bootstrap` 返回无更新
-
-按顺序确认:
-
-1. `channel`、`architecture` 和客户端 `versionCode` 与后台发布记录一致。
-2. 目标 `desktop_release.enabled = 1`,灰度比例命中当前用户/设备哈希。
-3. 每个 `desktop_jar` 的对象确实存在于 `DESKTOP_RELEASE_DIR`,sha256 和文件大小一致。
-4. 客户端是否低于桌面最低版本;强制更新只能使用同架构 100% 放量版本。
-
-无效或过期 Authorization 不应导致 bootstrap 401;若出现 401,先检查 `AccessTokenGuard` 的 `@Public()` 元数据和反向代理是否篡改了路径。
-
-### 桌面上传 400/4006 或下载 404/4042
-
-上传接口接收原始字节和 query `sha256`,不能发送 JSON/base64/multipart。代理层检查:
-
-- `client_max_body_size` 是否超过模块大小(单模块最多 500 MiB);
-- 是否启用了压缩/转码导致字节改变;
-- `DESKTOP_RELEASE_DIR` 运行用户是否可写;
-- 发布清单里的相对路径是否包含 `..`、反斜杠或重复项。
-
-数据库有记录但对象不存在时**不要手工改 sha256**;重新上传同一对象或重新发布清单,并保留旧对象供正在下载的客户端完成请求。
-
-### 差分没有出现
-
-只有上一版本同路径文件存在、源 sha256 匹配且生成结果小于目标完整模块 90% 时才会下发差分。Courgette 失败会回退 bsdiff-wasm;两者都失败或差分过大时返回完整模块是预期行为。
-
-## 3. 契约验证失败
+## 2. 契约验证失败
 
 失败定位的完整流程(环境变量、重置顺序、常见假失败)见 [22-contract-verification.md](22-contract-verification.md)。速记:
 
@@ -84,7 +56,7 @@
 
 CI 上的同一套验证见 [62-ci-cloud-build.md](62-ci-cloud-build.md)。
 
-## 4. 文档与索引漂移
+## 3. 文档与索引漂移
 
 发现文档写了不存在的路由或漏掉新模块时,先运行:
 

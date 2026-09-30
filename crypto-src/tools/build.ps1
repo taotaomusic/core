@@ -15,7 +15,7 @@
     保留这个脚本是为了「要改加密层本身、需要在本地快速迭代」的场景。
 
 .PARAMETER Target
-    all / android / windows / node / wasm。默认 all。
+    all / android / node / wasm。默认 all。
 
 .PARAMETER Psk
     64 个十六进制字符的 PSK。不传则读取环境变量 TAOTAO_CRYPTO_PSK；
@@ -46,7 +46,7 @@
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('all', 'android', 'windows', 'node', 'wasm')]
+    [ValidateSet('all', 'android', 'node', 'wasm')]
     [string]$Target = 'all',
 
     [string]$Psk = $env:TAOTAO_CRYPTO_PSK,
@@ -195,40 +195,6 @@ function Build-Android([string]$ResolvedPsk) {
     }
 }
 
-function Build-Windows([string]$ResolvedPsk) {
-    Write-Step '构建 Windows .dll'
-
-    & rustup target add x86_64-pc-windows-msvc 2>&1 | Out-Null
-    & cargo build --manifest-path (Join-Path $CryptoRoot 'Cargo.toml') `
-        --release --target x86_64-pc-windows-msvc -p taotao-crypto-jni
-    if ($LASTEXITCODE -ne 0) { throw '构建 Windows 目标失败' }
-
-    $src = Join-Path $CryptoRoot 'target/x86_64-pc-windows-msvc/release/taotao_crypto_jni.dll'
-    $outDir = Join-Path $DistRoot 'windows'
-    New-Item -ItemType Directory -Force -Path $outDir | Out-Null
-    Copy-Item -Force $src (Join-Path $outDir 'taotao_crypto.dll')
-
-    $size = (Get-Item (Join-Path $outDir 'taotao_crypto.dll')).Length
-    Write-Ok ("产物 {0:N0} 字节" -f $size)
-
-    # 验证导出符号还在。`strip = "symbols"` 剥掉的是静态符号表，
-    # 但这条断言值得每次构建都跑 —— 一旦配置改错导致动态符号被剥，
-    # 表现是「System.loadLibrary 成功，但调方法时 UnsatisfiedLinkError」，
-    # 而这个错误在安卓真机上极难定位。
-    Write-Step '校验 JNI 导出符号'
-    $dumpbin = Get-Command dumpbin -ErrorAction SilentlyContinue
-    if ($dumpbin) {
-        $exports = & dumpbin /exports (Join-Path $outDir 'taotao_crypto.dll') 2>&1
-        $jniCount = ($exports | Select-String -Pattern 'Java_com_taotao_music_crypto_NativeCrypto_').Count
-        if ($jniCount -lt 20) {
-            throw "JNI 导出符号只有 $jniCount 个，预期 20+。请检查 Cargo.toml 的 strip 配置。"
-        }
-        Write-Ok "找到 $jniCount 个 JNI 导出符号"
-    } else {
-        Write-Warn '未找到 dumpbin（需要 VS 开发者命令行），跳过符号校验。'
-    }
-}
-
 function Build-Node([string]$ResolvedPsk) {
     Write-Step '构建 Node 原生扩展 .node'
 
@@ -343,7 +309,6 @@ else {
 Push-Location $CryptoRoot
 try {
     if ($Target -in @('all', 'android')) { Build-Android $resolvedPsk }
-    if ($Target -in @('all', 'windows')) { Build-Windows $resolvedPsk }
     if ($Target -in @('all', 'node'))    { Build-Node $resolvedPsk }
     if ($Target -in @('all', 'wasm'))    { Build-Wasm $resolvedPsk }
 }
@@ -356,7 +321,7 @@ finally {
 # 而不是只在 CI 上查 —— 本地迭代恰恰是最容易临时关掉 feature 的场景。
 if ($Target -ne 'node') {
     $obfTargets = @()
-    foreach ($pattern in @('android\**\*.so', 'windows\*.dll', 'wasm\*.wasm')) {
+    foreach ($pattern in @('android\**\*.so', 'wasm\*.wasm')) {
         $obfTargets += @(Get-ChildItem -Path (Join-Path $DistRoot $pattern) `
                 -File -ErrorAction SilentlyContinue)
     }

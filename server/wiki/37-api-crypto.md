@@ -34,7 +34,7 @@ Content-Type: application/json
 ## 3. 中间件约束
 
 - AAD 绑定 `method + path + query`,**改路由形状会直接导致解密失败**(400/4006)。
-- `RAW_BODY_PATHS` 白名单(APK/补丁/桌面上传)与 `*/play` 音频流不参与解密。
+- `RAW_BODY_PATHS` 白名单(APK/补丁上传)与 `*/play` 音频流不参与解密。
 - 解密中间件必须挂载在 body parser **之前**,否则拿到的是密文(挂载顺序见 [11-architecture-modules.md](11-architecture-modules.md))。
 - 服务端会话在内存中管理,每分钟清理过期会话;**重启后客户端需重新握手**(409/4091 引导),多实例部署时各实例会话独立。
 

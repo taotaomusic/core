@@ -1,6 +1,6 @@
 name: 构建（可复用）
 
-# 四类产物（Android .so / Windows .dll / Node .node / Web .wasm）的唯一构建入口。
+# 三类产物（Android .so / Node .node / Web .wasm）的唯一构建入口。
 #
 # ci.yml 与 release.yml 都调用本文件，区别**只有**是否注入真实 PSK：
 #   · ci.yml      → 占位密钥，产物 hasRealPsk()=false，可公开下载做联调
@@ -283,75 +283,6 @@ jobs:
         with:
           name: android-${{ inputs.artifact-suffix }}
           path: out/android
-          if-no-files-found: error
-
-  # ---------------------------------------------------------------------------
-  # Windows：.dll（Compose Desktop 是 JVM，所以和 Android 共用 JNI 绑定）
-  # ---------------------------------------------------------------------------
-  windows:
-    runs-on: windows-latest
-    needs: psk-guard
-    env:
-      TAOTAO_CRYPTO_PSK: ${{ secrets.TAOTAO_CRYPTO_PSK }}
-      # 产物混淆密钥，同 android job 的说明。
-      CRYPTIFY_KEY: ${{ secrets.CRYPTIFY_KEY }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-pc-windows-msvc
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: windows
-
-      - name: 构建
-        run: cargo build --release --target x86_64-pc-windows-msvc -p taotao-crypto-jni
-
-      - name: 收集产物
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path out/windows | Out-Null
-          Copy-Item target/x86_64-pc-windows-msvc/release/taotao_crypto_jni.dll out/windows/taotao_crypto.dll
-          Get-Item out/windows/taotao_crypto.dll | Select-Object Name, Length
-
-      - name: 校验 JNI 导出符号
-        # `strip = "symbols"` 剥的是静态符号表，动态符号表保留 —— 但这条配置
-        # 一旦被改成 "true"/"debuginfo"，动态符号会被一起剥掉。那时的表现是
-        # 「System.loadLibrary 成功，调用方法时 UnsatisfiedLinkError」，
-        # 在安卓真机上极难定位。这里在构建期就把它挡住。
-        shell: pwsh
-        run: |
-          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          if (-not (Test-Path $vswhere)) { throw "找不到 vswhere.exe，无法定位 dumpbin" }
-          $vsPath = & $vswhere -latest -products * `
-            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
-            -property installationPath
-          if (-not $vsPath) { throw "vswhere 没找到带 C++ 工具集的 VS 安装" }
-          $dumpbin = Get-ChildItem -Path "$vsPath\VC\Tools\MSVC" -Recurse -Filter dumpbin.exe `
-            -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -match 'Hostx64\\x64' } |
-            Select-Object -First 1
-          if (-not $dumpbin) { throw "在 $vsPath 下找不到 Hostx64\x64 的 dumpbin.exe" }
-
-          $exports = & $dumpbin.FullName /exports out/windows/taotao_crypto.dll
-          $count = ($exports | Select-String -SimpleMatch 'Java_com_taotao_music_crypto_NativeCrypto_').Count
-          if ($count -lt 20) {
-            throw "JNI 导出符号只有 $count 个（预期 20+）。动态符号表可能被 strip 剥掉了，检查 Cargo.toml 的 [profile.release] strip。"
-          }
-          Write-Host "找到 $count 个 JNI 导出符号"
-
-      - name: 校验字符串混淆生效
-        # windows runner 上自带 Git Bash，直接复用同一份脚本，
-        # 避免和 android job 各写一份逻辑、然后慢慢漂移。
-        shell: bash
-        run: bash tools/check-obfuscated.sh out/windows/taotao_crypto.dll
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: windows-${{ inputs.artifact-suffix }}
-          path: out/windows
           if-no-files-found: error
 
   # ---------------------------------------------------------------------------

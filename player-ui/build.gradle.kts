@@ -9,7 +9,6 @@ plugins {
 
 kotlin {
     androidTarget()
-    jvm("desktop")
     wasmJs { browser() }
     jvmToolchain(21)
 

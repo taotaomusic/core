@@ -14,7 +14,7 @@
 - 云端“我的歌单”：创建、改名、删除、查看、加入歌曲、移除歌曲和排序
 - 定时播放：选择倒计时，倒计时结束后停止当前播放并清除计时状态
 
-Windows 使用 Compose Desktop + JVM 播放器，Android 使用 Compose + Media3，Web 分享页使用 Compose Multiplatform + Kotlin/Wasm。三端复用 `player-ui` 中的品牌主题、歌曲信息、进度、主控制区以及加载、空数据、错误状态视图；Android 与 Windows 还共用歌曲行和迷你播放器骨架，通过插槽保留收藏、下载进度、菜单、拖拽、音量、定时器和队列等平台能力。封面加载、歌词、播放队列、下载能力和实际播放引擎仍由各端适配。`shared` 继续承载 `Song`、`Lyric`、`AudioQuality` 等纯模型和业务规则。
+Windows 使用 Tauri 2（`desktop/`，React + TypeScript，播放与后端直连由 Rust 侧承载），Android 使用 Compose + Media3，Web 分享页使用 Compose Multiplatform + Kotlin/Wasm。Android 与 Web 两端复用 `player-ui` 中的品牌主题、歌曲行、迷你播放器、进度、主控制区以及加载、空数据、错误状态视图，通过插槽保留收藏、下载进度、菜单、拖拽、音量、定时器和队列等平台能力；Windows 的 Tauri 端有独立的 React UI，不复用 Kotlin `player-ui`。封面加载、歌词、播放队列、下载能力和实际播放引擎仍由各端适配。`shared` 继续承载 `Song`、`Lyric`、`AudioQuality` 等纯模型和业务规则。
 
 ## 定时播放
 
@@ -62,7 +62,6 @@ Android 提供 10、20、30、45、60、90 分钟及 1-1440 分钟自定义时�
 .\gradlew.bat :shared:allTests
 .\gradlew.bat :player-ui:desktopTest
 .\gradlew.bat :androidApp:compileDebugKotlin :androidApp:testDebugUnitTest
-.\gradlew.bat :desktopApp:compileKotlin :desktopApp:test
 .\gradlew.bat :webApp:compileKotlinWasmJs
 ```
 
@@ -77,14 +76,15 @@ node tools/verify-contract.mjs http://127.0.0.1:4720
 契约验证实例需先 `npm run build:frontend` 与 `npm run build:web-player`，并把
 `ADMIN_RATE_LIMIT` 调大（如 1000），否则验证会在管理端断言中途吃 4290 假失败。
 
-Windows 运行和打包：
+Windows 桌面端（Tauri）开发和打包：
 
 ```powershell
-.\gradlew.bat :desktopApp:run
-.\gradlew.bat :desktopApp:packageUberJarForCurrentOS
+cd desktop
+npm install
+npm run tauri dev
 ```
 
-MSI/EXE 需要有效的 WiX Toolset 3.11；便携 JAR 不依赖 WiX，但需要 JDK/JRE 21。Android 发布验收仍以 `:androidApp:assembleRelease` 生成的 APK 和 `output-metadata.json` 为准。
+正式产物由根 CI 的 `desktop` job 构建（`npm run tauri build`）并发布到 GitHub Release `desktop-latest`，应用内自动更新经 `tauri-plugin-updater` 签名校验，与后端无关。Android 发布验收仍以 `:androidApp:assembleRelease` 生成的 APK 和 `output-metadata.json` 为准。
 
 ## 已知边界
 
