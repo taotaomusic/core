@@ -350,11 +350,13 @@ jobs:
           node-version: 22
       # npm 锁文件解析有平台差异：Windows 侧生成的 kotlin-js-store 锁在 Linux
       # 会被 npm 改写，kotlinStorePackageLock 直接判死（本 job 已固定在 Linux 跑，
-      # 这里先自愈并把新锁回写仓库，之后锁文件以 Linux 解析为准。
-      # KGP 2.0.21 没有 kotlinUpgradePackageLock 任务，故手工对齐两个锁文件）。
+      # 这里先自愈并把新锁回写仓库，之后锁文件以 Linux 解析为准）。
+      # 注意 org.gradle.configureondemand=true 下直接调 :kotlinNpmInstall 会因
+      # root 未注册任务而失败，所以要借 :webApp 的构建图并临时排除锁校验；
+      # KGP 2.0.21 没有 kotlinUpgradePackageLock 任务，故手工对齐两个锁文件。
       - name: 刷新 kotlin-js-store 锁文件（漂移时回写）
         run: |
-          ./gradlew :kotlinNpmInstall --no-daemon
+          ./gradlew :webApp:wasmJsBrowserDistribution -x :kotlinStorePackageLock --build-cache --no-daemon
           if ! git diff --quiet --no-index kotlin-js-store/package-lock.json build/js/package-lock.json; then
             cp build/js/package-lock.json kotlin-js-store/package-lock.json
             git config user.name "github-actions[bot]"
