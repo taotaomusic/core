@@ -398,6 +398,7 @@ jobs:
       VN: ${{ needs.client-android.outputs.vn }}
       KIND: ${{ needs.client-android.outputs.kind }}
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
