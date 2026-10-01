@@ -143,16 +143,44 @@ import ForcePasswordChange from "./components/ForcePasswordChange.vue";
 import { adminLogout, adminMe, type AdminIdentity } from "./api";
 
 // 标签页使用异步组件：用户未打开的管理模块不进入首屏主包。
-const ReleaseManager = defineAsyncComponent(() => import("./components/ReleaseManager.vue"));
-const PatchManager = defineAsyncComponent(() => import("./components/PatchManager.vue"));
-const AnnouncementManager = defineAsyncComponent(() => import("./components/AnnouncementManager.vue"));
-const UserManager = defineAsyncComponent(() => import("./components/UserManager.vue"));
-const SupporterKeyManager = defineAsyncComponent(() => import("./components/SupporterKeyManager.vue"));
-const OpenApiKeyManager = defineAsyncComponent(() => import("./components/OpenApiKeyManager.vue"));
-const MusicSourceManager = defineAsyncComponent(() => import("./components/MusicSourceManager.vue"));
-const SystemSettings = defineAsyncComponent(() => import("./components/SystemSettings.vue"));
-const AdminUserManager = defineAsyncComponent(() => import("./components/AdminUserManager.vue"));
-const AuditLogViewer = defineAsyncComponent(() => import("./components/AuditLogViewer.vue"));
+// 加载器单独抽出来，既喂给 defineAsyncComponent，也能在启动加载动画期间
+// 主动预取对应 chunk —— 这样等界面出来时各页签的 JS 已在缓存里，切换不再闪一下空白。
+const panelLoaders = {
+  ReleaseManager: () => import("./components/ReleaseManager.vue"),
+  PatchManager: () => import("./components/PatchManager.vue"),
+  AnnouncementManager: () => import("./components/AnnouncementManager.vue"),
+  UserManager: () => import("./components/UserManager.vue"),
+  SupporterKeyManager: () => import("./components/SupporterKeyManager.vue"),
+  OpenApiKeyManager: () => import("./components/OpenApiKeyManager.vue"),
+  MusicSourceManager: () => import("./components/MusicSourceManager.vue"),
+  SystemSettings: () => import("./components/SystemSettings.vue"),
+  AdminUserManager: () => import("./components/AdminUserManager.vue"),
+  AuditLogViewer: () => import("./components/AuditLogViewer.vue"),
+};
+
+const ReleaseManager = defineAsyncComponent(panelLoaders.ReleaseManager);
+const PatchManager = defineAsyncComponent(panelLoaders.PatchManager);
+const AnnouncementManager = defineAsyncComponent(panelLoaders.AnnouncementManager);
+const UserManager = defineAsyncComponent(panelLoaders.UserManager);
+const SupporterKeyManager = defineAsyncComponent(panelLoaders.SupporterKeyManager);
+const OpenApiKeyManager = defineAsyncComponent(panelLoaders.OpenApiKeyManager);
+const MusicSourceManager = defineAsyncComponent(panelLoaders.MusicSourceManager);
+const SystemSettings = defineAsyncComponent(panelLoaders.SystemSettings);
+const AdminUserManager = defineAsyncComponent(panelLoaders.AdminUserManager);
+const AuditLogViewer = defineAsyncComponent(panelLoaders.AuditLogViewer);
+
+/**
+ * 预取所有页签 chunk。
+ *
+ * import() 按 URL 去重并缓存，所以这里提前触发后，defineAsyncComponent 再解析
+ * 同一模块会命中缓存、几乎同步完成，首次切页签不再出现「拉 JS 的空白闪烁」。
+ * 失败静默吞掉：预取只是优化，真正打开页签时还会再走一次正常加载与报错路径。
+ */
+function preloadPanels() {
+  for (const load of Object.values(panelLoaders)) {
+    load().catch(() => {});
+  }
+}
 
 const STORAGE_KEY = "taotao_admin_token";
 
@@ -221,6 +249,8 @@ function checkMobile() {
 }
 
 onMounted(() => {
+  // 启动即预取所有页签 chunk：无论走加载态还是登录页，等界面出来时 JS 都已就绪。
+  preloadPanels();
   const stored = localStorage.getItem(STORAGE_KEY);
   if (stored) {
     token.value = stored;
