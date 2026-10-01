@@ -24,6 +24,7 @@ jobs:
       server: ${{ steps.f.outputs.server == 'true' || contains(github.event.head_commit.message, '[full]') }}
       client: ${{ steps.f.outputs.client == 'true' || contains(github.event.head_commit.message, '[full]') }}
       desktop: ${{ steps.f.outputs.desktop == 'true' || contains(github.event.head_commit.message, '[full]') }}
+      autopatch: ${{ steps.f.outputs.autopatch == 'true' || contains(github.event.head_commit.message, '[full]') }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -36,6 +37,8 @@ jobs:
               - 'server/**'
             desktop:
               - 'desktop/**'
+            autopatch:
+              - 'autopatch/**'
             client:
               - 'androidApp/**'
               - 'webApp/**'
@@ -51,6 +54,28 @@ jobs:
               - 'crypto/**'
 
   # PLACEHOLDER_JOBS
+  autopatch:
+    needs: [changes, purge]
+    if: needs.changes.outputs.autopatch == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      # autopatch 是独立 JVM 工程（自带 settings），纯 ASM + JDK，不需要 Android SDK。
+      # 借用根 gradle wrapper，-p 指向它自己的构建根。
+      - name: 测试 autopatch 补丁生成器
+        run: ./gradlew -p autopatch test --console=plain --no-daemon
+      - name: 归档测试报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: autopatch-test-report
+          path: autopatch/build/reports/tests/test/
+          if-no-files-found: ignore
+
   purge:
     needs: changes
     runs-on: ubuntu-latest
