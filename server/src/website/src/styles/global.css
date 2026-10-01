@@ -879,9 +879,34 @@ a.ant-typography.card-link:hover {
     display: inline-flex;
   }
 
-  /* 窄屏 GitHub 按钮只留图标（antd 把文字包在非图标 span 里）。 */
-  .nav-github-btn > span:not(.anticon) {
+  /* 窄屏 GitHub 收成干净的圆形图标钮：胶囊壳剩个空底很难看，
+     去掉底色描边，与相邻的明暗/语言图标钮保持同一种形态。
+     文字仍要藏掉 —— antd v6 的图标包在 span.ant-btn-icon 里，文字是
+     无类名的裸 span，按「无 class 才隐藏」精确命中文字。 */
+  .nav-github-btn > span:not([class]) {
     display: none;
+  }
+
+  .nav-github-btn {
+    width: 36px;
+    height: 36px;
+    min-width: 0;
+    min-height: 0;
+    padding: 0;
+    border: none;
+    background: transparent;
+    border-radius: 50%;
+    justify-content: center;
+  }
+
+  .nav-github-btn:hover {
+    background: var(--control-bg);
+    border: none;
+    transform: none;
+  }
+
+  .nav-github-btn:active {
+    transform: scale(0.94);
   }
 
   .section {
@@ -930,6 +955,21 @@ a.ant-typography.card-link:hover {
 }
 
 @media (max-width: 560px) {
+  /* 首屏移动端居中排版：徽标、标题、按钮、链接全部居中，
+     比左对齐更像品牌站的手机观感。 */
+  .hero-copy {
+    text-align: center;
+  }
+
+  .hero-copy .kicker {
+    margin-bottom: 16px;
+  }
+
+  p.ant-typography.hero-sub {
+    margin-left: auto;
+    margin-right: auto;
+  }
+
   /* 首屏按钮窄屏纵向铺满：点按目标更大也更整齐。 */
   .hero-actions.ant-space {
     display: flex;
