@@ -217,6 +217,10 @@ jobs:
           # 后端不自建 wasm 播放器（core 单仓里上级有 Gradle 工程会误触发）；
           # 分享播放器由 client-web job 构建并发 Release，下一步拉取。
           SKIP_WEB_PLAYER: "1"
+          # job 级的 NODE_ENV=test 会被 vite 静态替换进浏览器产物，React 由此打进
+          # development 构建（体积翻倍、带运行时警告）。构建必须是生产包；
+          # 契约验证是独立 step，继续用 job 级的 test，互不影响。
+          NODE_ENV: production
         run: npm run build
       - name: 拉取分享播放器（暂用 music 仓库 share-player-latest）
         run: |
