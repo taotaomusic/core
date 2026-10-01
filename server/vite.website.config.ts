@@ -18,6 +18,24 @@ export default defineConfig({
     minify: "esbuild",
     cssMinify: true,
     sourcemap: false,
+    rollupOptions: {
+      output: {
+        // vendor 分包：react 全家桶与 antd 各自独立成 chunk。官网业务代码很小且
+        // 常改，分开后发版时 vendor 的内容哈希不变，浏览器继续吃长缓存，
+        // 只需重新下载几十 KB 的业务 chunk；全部打进一个 index 会每次全量拉 600+KB。
+        manualChunks(id: string) {
+          if (!id.includes("node_modules")) return undefined;
+          // Windows 下 id 是反斜杠路径，统一按两种分隔符匹配。
+          if (/[\\/]node_modules[\\/](react|react-dom|react-is|scheduler)[\\/]/.test(id)) {
+            return "react";
+          }
+          if (/[\\/]node_modules[\\/](antd|@ant-design|rc-[^\\/]+|dayjs)[\\/]/.test(id)) {
+            return "antd";
+          }
+          return undefined;
+        },
+      },
+    },
   },
   server: {
     // 本地调官网样式的独立端口；纯静态页面，不需要代理后端接口。
