@@ -196,6 +196,14 @@ async function bootstrap(): Promise<void> {
         },
       }),
     );
+    // /status：官网内的服务状态页（React 按 pathname 渲染），不是真实文件，
+    // 要回退到入口 HTML；响应头与静态入口同一档（CSP + no-cache）。
+    // 只精确匹配 /status，不能做成通配 SPA 回退 —— 未匹配路径必须保持 Nest 404。
+    app.getHttpAdapter().getInstance().get(/^\/status\/?$/, (_request: Request, response: Response) => {
+      response.setHeader("content-security-policy", WEBSITE_CSP);
+      response.setHeader("cache-control", "no-cache");
+      return response.sendFile(join(websiteDir, "index.html"));
+    });
   } else {
     new Logger("Bootstrap").warn("未找到官网构建产物，跳过根路径静态站点。执行 npm run build:website 生成");
   }

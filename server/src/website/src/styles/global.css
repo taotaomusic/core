@@ -839,6 +839,95 @@ a.ant-typography.card-link:hover {
   color: var(--peach-soft);
 }
 
+/* ============================== 服务状态页 ============================== */
+
+.status-page {
+  min-height: 72vh;
+}
+
+.status-toolbar {
+  margin-top: 8px;
+}
+
+/* 总览横幅：按整体状态染色（绿/红），检查中沿用主题卡片底。 */
+.status-banner {
+  padding: 16px 20px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--card);
+  margin-bottom: 24px;
+  font-weight: 600;
+  font-size: 16px;
+}
+
+.status-banner.ok {
+  background: rgba(82, 196, 26, 0.12);
+  border-color: rgba(82, 196, 26, 0.4);
+}
+
+.status-banner.fail {
+  background: rgba(255, 77, 79, 0.12);
+  border-color: rgba(255, 77, 79, 0.4);
+}
+
+/* 状态圆点：ok 绿 / fail 红 / checking 灰呼吸。 */
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.status-dot.ok {
+  background: #52c41a;
+  box-shadow: 0 0 0 3px rgba(82, 196, 26, 0.18);
+}
+
+.status-dot.fail {
+  background: #ff4d4f;
+  box-shadow: 0 0 0 3px rgba(255, 77, 79, 0.18);
+}
+
+.status-dot.checking {
+  background: var(--muted);
+  animation: status-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes status-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.status-card-head {
+  margin-bottom: 10px;
+}
+
+.ant-tag.status-tag.ok {
+  color: #52c41a;
+  border-color: rgba(82, 196, 26, 0.45);
+  background: rgba(82, 196, 26, 0.1);
+}
+
+.ant-tag.status-tag.fail {
+  color: #ff4d4f;
+  border-color: rgba(255, 77, 79, 0.45);
+  background: rgba(255, 77, 79, 0.1);
+}
+
+.ant-tag.status-tag.checking {
+  color: var(--muted);
+}
+
+.status-meta {
+  font-size: 13px;
+}
+
+.status-footer-row {
+  margin-top: 28px;
+}
+
 /* ============================== 进场动画与响应式 ============================== */
 
 .reveal {
@@ -1012,6 +1101,10 @@ a.ant-typography.card-link:hover {
 
   .player-vinyl,
   .float-chip {
+    animation: none;
+  }
+
+  .status-dot.checking {
     animation: none;
   }
 

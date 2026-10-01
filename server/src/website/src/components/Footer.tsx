@@ -21,7 +21,7 @@ export function Footer() {
               GitHub
             </a>
             <a href="/admin">{dict.footer.admin}</a>
-            <a href="/health">{dict.footer.status}</a>
+            <a href="/status">{dict.footer.status}</a>
           </Flex>
           <Text type="secondary" className="footer-copy">
             {dict.footer.copy}

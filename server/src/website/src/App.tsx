@@ -6,6 +6,7 @@ import { Footer } from "./components/Footer";
 import { Hero } from "./components/Hero";
 import { Nav } from "./components/Nav";
 import { SelfHost } from "./components/SelfHost";
+import { StatusPage } from "./components/StatusPage";
 import { useTheme } from "./hooks/useTheme";
 import { antdLocale, I18nProvider, useI18n } from "./i18n";
 import { antdTokens } from "./theme";
@@ -31,6 +32,10 @@ function ThemedSite() {
     return () => window.clearTimeout(timer);
   }, []);
 
+  // /status 是官网内的服务状态页（后端把该路径回退到入口 HTML），
+  // 这里按 pathname 决定渲染哪套页面；站点本身没有客户端路由。
+  const isStatusPage = window.location.pathname.replace(/\/+$/, "") === "/status";
+
   return (
     <ConfigProvider
       locale={antdLocale(lang)}
@@ -41,10 +46,16 @@ function ThemedSite() {
     >
       <Nav themeLight={light} onToggleTheme={toggle} />
       <main>
-        <Hero />
-        <Features />
-        <Download />
-        <SelfHost />
+        {isStatusPage ? (
+          <StatusPage />
+        ) : (
+          <>
+            <Hero />
+            <Features />
+            <Download />
+            <SelfHost />
+          </>
+        )}
       </main>
       <Footer />
     </ConfigProvider>
