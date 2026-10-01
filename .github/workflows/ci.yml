@@ -309,6 +309,7 @@ jobs:
       contents: write
     outputs:
       vn: ${{ steps.prep.outputs.vn }}
+      vc: ${{ steps.prep.outputs.vc }}
       kind: ${{ steps.prep.outputs.kind }}
     steps:
       - uses: actions/checkout@v4
@@ -349,9 +350,10 @@ jobs:
         run: |
           meta=$(find androidApp/build/outputs/apk -name output-metadata.json | head -1)
           vn=$(node -p "require('./$meta').elements[0].versionName" 2>/dev/null || echo unknown)
+          vc=$(node -p "require('./$meta').elements[0].versionCode" 2>/dev/null || echo 0)
           apk=$(find androidApp/build/outputs/apk -name '*.apk' | head -1)
           case "$apk" in *release*) kind=release;; *) kind=debug;; esac
-          echo "vn=$vn" >> "$GITHUB_OUTPUT"; echo "kind=$kind" >> "$GITHUB_OUTPUT"
+          echo "vn=$vn" >> "$GITHUB_OUTPUT"; echo "vc=$vc" >> "$GITHUB_OUTPUT"; echo "kind=$kind" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         with:
           name: android-apk
@@ -434,6 +436,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       VN: ${{ needs.client-android.outputs.vn }}
+      VC: ${{ needs.client-android.outputs.vc }}
       KIND: ${{ needs.client-android.outputs.kind }}
     steps:
       - uses: actions/checkout@v4
@@ -444,7 +447,22 @@ jobs:
         run: |
           mkdir -p out
           apk=$(find artifacts/android-apk -name '*.apk' | head -1)
-          cp "$apk" "out/TaotaoMusic-${VN}-${KIND}.apk"
+          asset="TaotaoMusic-${VN}-${KIND}.apk"
+          cp "$apk" "out/$asset"
+          # 构件上云：产出 metadata.json 供后端 webhook 补齐 versionCode/sha256。
+          # 服务器据此下发代理直链，自身不再接收或下发 APK 字节。versionCode 公开无妨（非密钥）。
+          sha=$(sha256sum "out/$asset" | awk '{print $1}')
+          size=$(stat -c %s "out/$asset")
+          notes=$(gh release view latest --json body -q '.body' 2>/dev/null || echo "")
+          node -e '
+            const [asset, vn, vc, sha, size, notes] = process.argv.slice(1);
+            const fs = require("fs");
+            fs.writeFileSync("out/metadata.json", JSON.stringify({
+              versionCode: Number(vc), versionName: vn, sha256: sha,
+              size: Number(size), apkAsset: asset, notes,
+            }, null, 2));
+          ' "$asset" "$VN" "$VC" "$sha" "$size" "$notes"
+          cat out/metadata.json
           ls -la out
       - name: 更新滚动 latest（安卓客户端，记录版本历史）
         run: |

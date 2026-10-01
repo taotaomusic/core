@@ -73,7 +73,7 @@ export class ReleaseService {
       forced,
       versionCode: target.version_code,
       versionName: target.version_name,
-      apkUrl: this.apkUrlOf(request, channel, target.version_code),
+      apkUrl: this.apkUrlOf(request, channel, target.version_code, target.apk_url),
       apkSize: target.apk_size,
       apkSha256: target.apk_sha256,
       releaseNote: target.release_note,
@@ -116,22 +116,44 @@ export class ReleaseService {
       available: true,
       patchVersion: target.patch_version,
       targetVersionCode: target.target_version_code,
-      url: this.patchUrlOf(request, channel, target.target_version_code, target.patch_version),
+      url: this.patchUrlOf(request, channel, target.target_version_code, target.patch_version, target.patch_url),
       size: target.patch_size,
       sha256: target.patch_sha256,
       note: target.note,
     };
   }
 
-  private patchUrlOf(request: Request, channel: string, targetVersionCode: number, patchVersion: number): string {
+  private patchUrlOf(
+    request: Request,
+    channel: string,
+    targetVersionCode: number,
+    patchVersion: number,
+    externalUrl?: string,
+  ): string {
+    const external = this.proxied(externalUrl);
+    if (external) return external;
     const query = channel === this.config.defaultChannel ? "" : `?channel=${encodeURIComponent(channel)}`;
     return `${this.baseUrlOf(request)}/api/v1/app/patch/${targetVersionCode}/${patchVersion}${query}`;
   }
 
-  /** 下载地址优先用配置的对外基地址；未配置时按请求推导，TLS 由 socket 或代理头判断。 */
-  private apkUrlOf(request: Request, channel: string, versionCode: number): string {
+  /** 下载地址优先用已登记的外链（上云产物）；未登记时回落到本机 /app/apk。 */
+  private apkUrlOf(request: Request, channel: string, versionCode: number, externalUrl?: string): string {
+    const external = this.proxied(externalUrl);
+    if (external) return external;
     const query = channel === this.config.defaultChannel ? "" : `?channel=${encodeURIComponent(channel)}`;
     return `${this.baseUrlOf(request)}/api/v1/app/apk/${versionCode}${query}`;
+  }
+
+  /**
+   * 给外链拼下载代理前缀提速（如 gh-proxy.org）。外链为空时返回空串，调用方回落本机。
+   * 已带代理前缀的外链不重复包裹。
+   */
+  private proxied(externalUrl?: string): string {
+    const url = (externalUrl ?? "").trim();
+    if (!url) return "";
+    const prefix = this.config.downloadProxyPrefix;
+    if (!prefix || url.startsWith(prefix)) return url;
+    return `${prefix.replace(/\/+$/, "")}/${url}`;
   }
 
   private baseUrlOf(request: Request): string {

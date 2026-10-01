@@ -25,6 +25,8 @@
 | `CORS_ALLOWED_ORIGINS` | 空 | 跨域来源白名单,白名单回显 + `Vary: Origin`;**留空不下发任何 CORS 头** |
 | `TRUST_PROXY` | 关闭 | 只有 `1`/`true` 才采信 `X-Forwarded-For`;否则用 `socket.remoteAddress`(`common/request.types.ts` 直接读 `process.env`,不经 `AppConfigService`)。只在可信反向代理之后才打开,否则 IP 白名单可被伪造请求头绕过 |
 | `PUBLIC_BASE_URL` | 空(按请求推导) | APK 和分享地址的外部基地址;生产建议显式配置,否则按代理头推导,可能生成错误协议的地址 |
+| `DOWNLOAD_PROXY_PREFIX` | 空 | 构件下载代理前缀,给上云后的 GitHub Release 直链提速(如 `https://gh-proxy.org/`)。bootstrap 下发 `apkUrl`/`patch.url` 与 desktop `latest.json` 的安装包地址时拼在直链前面;留空则下发原始直链 |
+| `GITHUB_WEBHOOK_SECRET` | 空 | GitHub Release webhook 的验签密钥(仓库 Settings→Webhooks 的 Secret)。留空则 `/api/v1/app/github-webhook` 拒绝所有请求(未配置即视为未启用) |
 | `DEFAULT_CHANNEL` | `release` | 默认发布渠道 |
 
 ## 3. 文件目录与发布

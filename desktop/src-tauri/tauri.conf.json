@@ -34,6 +34,7 @@
   "plugins": {
     "updater": {
       "endpoints": [
+        "https://music.xydaigua.cn/api/v1/desktop/updater/latest.json",
         "https://github.com/taotaomusic/core/releases/download/desktop-latest/latest.json"
       ],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDNBN0VCODk1QUZENDkwODkKUldTSmtOU3ZsYmgrT2x3N1UzL0V6N3ZKZnI5bVdUUFR2a202QWZkVjB1NGlpbWNxQjlZRVluRDIK"

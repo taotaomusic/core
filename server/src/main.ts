@@ -23,6 +23,9 @@ import { createCryptoMiddleware } from "./crypto/crypto.middleware";
 const RAW_BODY_PATHS = new Set([
   "/api/v1/app/admin/releases",
   "/api/v1/app/admin/patches",
+  // GitHub webhook：要拿原始字节算 HMAC-SHA256 验签，不能让 crypto 中间件或
+  // express.json() 碰它（JSON 重新序列化后字节变了，签名必然对不上）。
+  "/api/v1/app/github-webhook",
 ]);
 
 /**

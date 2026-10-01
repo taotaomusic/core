@@ -1,6 +1,9 @@
 import { Module } from "@nestjs/common";
 import { AdminAuthModule } from "../admin-auth/admin-auth.module";
 import { ApkService } from "./apk.service";
+import { DesktopUpdaterController } from "./desktop-updater.controller";
+import { DesktopUpdaterService } from "./desktop-updater.service";
+import { GithubWebhookController } from "./github-webhook.controller";
 import { ReleaseAdminController } from "./release-admin.controller";
 import { ReleaseController } from "./release.controller";
 import { ReleaseRepository } from "./release.repository";
@@ -13,8 +16,13 @@ import { ReleaseService } from "./release.service";
  */
 @Module({
   imports: [AdminAuthModule],
-  controllers: [ReleaseController, ReleaseAdminController],
-  providers: [ReleaseService, ReleaseRepository, ApkService],
+  controllers: [
+    ReleaseController,
+    ReleaseAdminController,
+    GithubWebhookController,
+    DesktopUpdaterController,
+  ],
+  providers: [ReleaseService, ReleaseRepository, ApkService, DesktopUpdaterService],
   exports: [ReleaseRepository],
 })
 export class ReleaseModule {}

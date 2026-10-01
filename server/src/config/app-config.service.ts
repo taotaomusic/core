@@ -38,6 +38,20 @@ export class AppConfigService {
    */
   readonly publicBaseUrl: string;
 
+  /**
+   * 构件下载代理前缀，用于给上云后的外链（GitHub Release）提速。
+   * 例如 `https://gh-proxy.org/`，服务端下发 apkUrl/patch.url 时拼在外链前面。
+   * 留空则直接下发原始外链。只作用于已登记了 apk_url/patch_url 的记录，
+   * 不影响回落本机 /app/apk 的历史记录。
+   */
+  readonly downloadProxyPrefix: string;
+
+  /**
+   * GitHub webhook 验签密钥（仓库 Settings→Webhooks 的 Secret）。
+   * 留空则 webhook 端点直接拒绝所有请求（未配置即视为未启用，避免裸奔）。
+   */
+  readonly githubWebhookSecret: string;
+
   /** 兼容旧部署的搜索并发字段；当前搜索只返回元信息，不解析播放地址。 */
   readonly searchConcurrency: number;
 
@@ -167,6 +181,8 @@ export class AppConfigService {
     this.apkDirectory = resolve(String(config.get("APK_DIR") ?? "./data/apk"));
     this.defaultChannel = String(config.get("DEFAULT_CHANNEL") ?? "release");
     this.publicBaseUrl = String(config.get("PUBLIC_BASE_URL") ?? "").replace(/\/+$/, "");
+    this.downloadProxyPrefix = String(config.get("DOWNLOAD_PROXY_PREFIX") ?? "").trim();
+    this.githubWebhookSecret = String(config.get("GITHUB_WEBHOOK_SECRET") ?? "").trim();
     this.searchConcurrency = Math.max(1, Number(config.get("SEARCH_CONCURRENCY") ?? 8));
     this.apiSweetBaseUrl = String(config.get("APISWEET_BASE_URL") ?? "https://apisweet.com").replace(
       /\/+$/,

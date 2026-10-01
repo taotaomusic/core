@@ -306,6 +306,10 @@ export async function runMigrations(pool: Pool): Promise<void> {
       );
       CREATE INDEX IF NOT EXISTS idx_app_release_lookup
         ON app_release (channel, enabled, version_code DESC);
+      -- 构件上云：apk_url 存外链（GitHub Release 等）。为空时回落到本机 /app/apk 的
+      -- apk_file 本地文件名，兼容未迁移的历史记录。两列并存，apk_file 自然淘汰后再删。
+      ALTER TABLE app_release ADD COLUMN IF NOT EXISTS apk_url text NOT NULL DEFAULT '';
+      ALTER TABLE app_release ALTER COLUMN apk_file DROP NOT NULL;
 
       CREATE TABLE IF NOT EXISTS app_channel (
         channel                    text PRIMARY KEY,
@@ -426,6 +430,9 @@ export async function runMigrations(pool: Pool): Promise<void> {
       );
       CREATE INDEX IF NOT EXISTS idx_app_patch_lookup
         ON app_patch (channel, target_version_code, enabled, patch_version DESC);
+      -- 构件上云：patch_url 存外链，为空回落本机 /app/patch 的 patch_file。
+      ALTER TABLE app_patch ADD COLUMN IF NOT EXISTS patch_url text NOT NULL DEFAULT '';
+      ALTER TABLE app_patch ALTER COLUMN patch_file DROP NOT NULL;
 
       -- ========== 管理后台企业级认证 ==========
 

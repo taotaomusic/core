@@ -10,6 +10,7 @@ export type ReleaseRecord = {
   version_code: number;
   version_name: string;
   apk_file: string;
+  apk_url: string;
   apk_size: number;
   apk_sha256: string;
   release_note: string;
@@ -28,6 +29,7 @@ export type PatchRecord = {
   target_version_code: number;
   patch_version: number;
   patch_file: string;
+  patch_url: string;
   patch_size: number;
   patch_sha256: string;
   note: string;
@@ -75,10 +77,10 @@ export class ReleaseRepository {
    */
   async upsertRelease(release: Omit<ReleaseRecord, "id" | "published_at">): Promise<void> {
     await this.database.run(
-      `INSERT INTO app_release (channel, version_code, version_name, apk_file, apk_size, apk_sha256, release_note, rollout_percent, min_sdk, enabled, published_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      `INSERT INTO app_release (channel, version_code, version_name, apk_file, apk_url, apk_size, apk_sha256, release_note, rollout_percent, min_sdk, enabled, published_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        ON CONFLICT (channel, version_code) DO UPDATE SET
-         version_name = excluded.version_name, apk_file = excluded.apk_file, apk_size = excluded.apk_size,
+         version_name = excluded.version_name, apk_file = excluded.apk_file, apk_url = excluded.apk_url, apk_size = excluded.apk_size,
          apk_sha256 = excluded.apk_sha256, release_note = excluded.release_note, min_sdk = excluded.min_sdk,
          enabled = excluded.enabled, published_at = excluded.published_at`,
       [
@@ -86,6 +88,7 @@ export class ReleaseRepository {
         release.version_code,
         release.version_name,
         release.apk_file,
+        release.apk_url,
         release.apk_size,
         release.apk_sha256,
         release.release_note,
@@ -253,10 +256,10 @@ export class ReleaseRepository {
   /** 登记或覆盖一个补丁。与 upsertRelease 一样刻意不覆盖 rollout_percent。 */
   async upsertPatch(patch: Omit<PatchRecord, "id" | "published_at">): Promise<void> {
     await this.database.run(
-      `INSERT INTO app_patch (channel, target_version_code, patch_version, patch_file, patch_size, patch_sha256, note, rollout_percent, enabled, published_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      `INSERT INTO app_patch (channel, target_version_code, patch_version, patch_file, patch_url, patch_size, patch_sha256, note, rollout_percent, enabled, published_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        ON CONFLICT (channel, target_version_code, patch_version) DO UPDATE SET
-         patch_file = excluded.patch_file, patch_size = excluded.patch_size,
+         patch_file = excluded.patch_file, patch_url = excluded.patch_url, patch_size = excluded.patch_size,
          patch_sha256 = excluded.patch_sha256, note = excluded.note,
          enabled = excluded.enabled, published_at = excluded.published_at`,
       [
@@ -264,6 +267,7 @@ export class ReleaseRepository {
         patch.target_version_code,
         patch.patch_version,
         patch.patch_file,
+        patch.patch_url,
         patch.patch_size,
         patch.patch_sha256,
         patch.note,
