@@ -22,6 +22,7 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
 import com.taotao.music.model.Song
 import com.taotao.music.playerui.theme.ApplePlayButton
 import com.taotao.music.playerui.theme.AppleStyleSlider
