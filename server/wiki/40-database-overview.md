@@ -2,7 +2,7 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-09-27
+最后更新:2026-09-30
 
 改任何数据层代码前先读本文;各表的字段语义在 41–43 各篇,运维 SQL 与索引在 [44-database-operations.md](44-database-operations.md)。
 
@@ -25,7 +25,7 @@
 | `first` | 取第一行 |
 | `all` | 取多行 |
 | `run` | 执行写操作并返回影响行数 |
-| `transaction` | 在同一连接上执行带提交/回滚的事务回调;歌单排序、发布清单替换和需要行锁的多步写入必须使用它 |
+| `transaction` | 在同一连接上执行带提交/回滚的事务回调;歌单的加歌/删歌/替换/排序、播放会话上报与清空、公告置顶切换、分享短码 upsert、禁用用户(写 `disabled_at` 并撤销刷新令牌)这类多步写入必须使用它 |
 | `ping` | 健康探测 |
 
 ## 2. 迁移机制
@@ -42,7 +42,7 @@ DatabaseService.onModuleInit
 ```
 
 - 迁移失败会回滚整组 DDL,服务不会在数据库未完成初始化时开始监听端口。
-- 没有「向下迁移」命令;`ALTER TABLE ... ADD COLUMN IF NOT EXISTS`、回填和约束补齐都集中在 `src/database/migrations.ts` 的同一事务中。
+- 没有「向下迁移」命令;`ALTER TABLE ... ADD COLUMN IF NOT EXISTS`、回填和约束补齐都集中在 `src/database/migrations.ts` 的同一事务中。该文件是**唯一的 DDL 来源**,当前共 24 张表(最新加入的是 `user_avatars`)。
 - 多实例同时启动依赖顾问锁串行建表。
 
 适合直接写进迁移的变化:新建表、新建索引、增加不破坏旧数据的幂等结构。

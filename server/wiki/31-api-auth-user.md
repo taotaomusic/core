@@ -2,7 +2,7 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-09-27
+最后更新:2026-09-30
 
 管理后台的登录体系(`/admin/auth/**`)是另一套凭据,见 [80-admin-auth-login.md](80-admin-auth-login.md);本文只讲普通用户侧。业务码语义见 [30-api-conventions.md](30-api-conventions.md)。
 
@@ -24,9 +24,10 @@ Content-Type: application/json
 
 - 成功 HTTP 201。
 - 新注册必须额外传 `email` 与 `verificationCode`;先调用 `POST /api/v1/auth/email-verification` 发送六位验证码。
-- 验证码仅存服务进程内存、10 分钟过期,校验成功即删除;发码受 `email-verification` 桶限流(每 IP 5 次/15 分钟),同邮箱 60 秒冷却。
+- 注册邮箱有域名白名单:对外仅承诺 QQ 邮箱(`qq.com`/`foxmail.com`),不满足返回 400/4008;内部测试域在服务端另行保留。邮箱统一转小写后参与查重。
+- 验证码仅存服务进程内存、10 分钟过期,校验成功即删除,累计输错 5 次作废;发码受 `email-verification` 桶限流(每 IP 5 次/15 分钟),同邮箱 60 秒冷却(命中返回 429/4290)。
 - `accessToken`、`refreshToken`、`expiresIn` 和 `user` 必须平铺在 `data` 下。
-- 并发注册依赖数据库唯一约束兜底,用户名冲突返回 409/4090。
+- 除用户名冲突 409/4090 外:邮箱已注册返回 409/4092,验证码错误或已过期返回 400/4009;并发注册最终依赖数据库唯一约束兜底。
 
 ## 2. 登录
 
@@ -61,8 +62,8 @@ POST /api/v1/auth/refresh
 
 ## 5. 用户资料
 
-- `GET /api/v1/auth/profile` 返回当前账号的 `username`、`nickname`、`avatarUrl`、`email` 与 `created_at`。
-- `PATCH /api/v1/auth/profile` 接收一个或两个字段:`nickname` 为 1–24 个非控制字符,`avatarUrl` 必须为 HTTPS 地址;传 `{"avatarUrl":null}` 可以清除头像。
+- `GET /api/v1/auth/profile` 返回当前账号的 `username`、`nickname`、`avatarUrl`、`email` 与 `created_at`;未设置昵称时回落为用户名。
+- `PATCH /api/v1/auth/profile` 接收一个或两个字段:`nickname` 为 1–24 个非控制字符,`avatarUrl` 必须为 HTTPS 地址且不超过 2048 个字符;传 `{"avatarUrl":null}` 可以清除头像,并同步删除 `user_avatars` 里的二进制行。
 - 邮箱只在本人资料接口中返回,不对外暴露。
 
 ## 6. 头像上传
@@ -74,7 +75,8 @@ Content-Type: multipart/form-data
 
 - multipart 字段名必须是 `file`,仅接受图片,最大 5 MiB。
 - 服务端按**文件魔数**嗅探 PNG / JPEG / GIF / WebP(刻意排除 SVG),不信任客户端声明的 MIME。
-- 头像存入 `user_avatars` 表(bytea),客户端只能拿到 HTTPS 图片地址;下载走公开的 `GET /files/avatars/:token`。
+- 头像存入 `user_avatars` 表(bytea),客户端只能拿到 HTTPS 图片地址;下载走公开的 `GET /files/avatars/:token`(`Content-Type` 按嗅探结果下发,`Cache-Control: public, max-age=31536000, immutable`)。
+- 每次上传都会生成新 token(128 位随机数)并覆盖旧行:旧地址随即 404,客户端与代理对旧地址的缓存天然失效;清除头像时二进制一并删除。
 - 上传成功但头像不显示时:先确认返回的 URL 与 `PUBLIC_BASE_URL`(或请求推导的来源)一致,再查 `user_avatars` 表有没有对应行(见 [72-troubleshooting-music.md](72-troubleshooting-music.md))。
 
 `PATCH /auth/profile` 的 `avatarUrl` 同样只接受 HTTPS。

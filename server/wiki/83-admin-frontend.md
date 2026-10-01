@@ -2,7 +2,7 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-09-27
+最后更新:2026-09-30
 
 后端认证链路见 80–82 各篇;本文讲 `src/frontend/` 的 Vue 管理后台、CSP 安全响应头,以及契约脚本对管理后台的断言。
 
@@ -21,8 +21,9 @@
 | `AdminUserManager.vue` / `AuditLogViewer.vue` | 调用 `/admin/auth/**` 下的路径(管理员管理 / 审计中文化展示) |
 | `IpWhitelistManager.vue` | 白名单编辑。**当前没有任何页面引用它,是孤儿组件**;白名单实际通过 `GET/POST /admin/auth/ip-whitelist/:adminId` 接口维护 |
 | `ReleaseManager.vue` / `PatchManager.vue` / `AnnouncementManager.vue` / `UserManager.vue` / `MusicSourceManager.vue` / `OpenApiKeyManager.vue` / `SupporterKeyManager.vue` | 业务管理页,各自调用对应 `/app/admin/**` 路径 |
+| `SystemSettings.vue` | 「系统设置」页:查看当前强制更新下限与可作下限的版本,抬高/取消下限(顺序约束同 `min-version` 接口,409/4091 兜底) |
 
-改后端路由时必须同步对应组件,否则页面表现为 404/4040。改 `PRIVILEGED_READ_ROLES` 接口时要同步 `App.vue` 的页签可见性(观察者不该点进只会报错的页签,见 [81-admin-roles-audit.md](81-admin-roles-audit.md))。
+`App.vue` 的页签按角色收敛:观察者看不到「用户与统计」「审计日志」;「音源账号」仅 `PRIVILEGED_READ_ROLES` 可见;「管理员」仅 `super_admin` 可见。改后端路由时必须同步对应组件,否则页面表现为 404/4040。改 `PRIVILEGED_READ_ROLES` 接口时要同步 `App.vue` 的页签可见性(观察者不该点进只会报错的页签,见 [81-admin-roles-audit.md](81-admin-roles-audit.md))。
 
 ## 3. 凭据存取
 
@@ -51,9 +52,9 @@ object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
 管理后台认证与安全头的契约断言在 `tools/verify-contract.mjs`,相关段落:
 
 1. **「管理端会话准备:强制改密与 Bearer 会话」**(必须在所有管理端断言之前跑):用 `ADMIN_INITIAL_PASSWORD` 首次登录 → 断言 `must_change_password === true` → 断言改密前访问其它管理接口是 403/4031 → 改密 204 → 新口令重登成功且不再要求改密 → 初始口令失效 4011。
-2. **「管理路由逐条无凭据探测」**:枚举脚本内 `guardedAdminRoutes` 清单的全部受保护管理路由(随音源账号、开放 Key 等新模块增长,当前约 48 条,以脚本清单为准),逐条断言无凭据时返回 **401/4013**;再断言 4 条公开路由不会被管理员守卫拦下。期望 4013 而不是 4010 是有意的:4013 说明 `AdminAuthGuard` 确实跑了,若有人把 `@Public()` 摘掉,全局访问令牌守卫会抢先返回 4010,断言同样会失败。
+2. **「管理路由逐条无凭据探测」**:枚举脚本内 `guardedAdminRoutes` 清单的全部受保护管理路由(随音源账号、创建用户等新接口增长,当前约 44 条,以脚本清单为准),逐条断言无凭据时返回 **401/4013**;再断言 4 条公开路由不会被管理员守卫拦下。期望 4013 而不是 4010 是有意的:4013 说明 `AdminAuthGuard` 确实跑了,若有人把 `@Public()` 摘掉,全局访问令牌守卫会抢先返回 4010,断言同样会失败。
 3. **「管理后台认证:账号 / 角色 / 2FA / 审计」**:匿名 4013、密码错 4011、超管登录、`/me`、管理员列表、审计日志、缺/伪造 `temp_token` 均 4011、**已移除的 `X-Admin-Token` 通道不再被接受**、伪造 `X-Forwarded-For` 被白名单拒、创建管理员 201、viewer 读列表 403/4030、viewer 提权 403/4030、`PATCH` 局部更新、**账号退避 429/4291 且不影响其它账号**、不能禁用最后一个超管 400/4000、删除管理员 204。
-4. **「业务管理接口:角色校验与审计」**:viewer 对发布放量、Windows 放量、禁用用户、发布公告、导入图片 Key 五个写接口一律 403/4030;发布、Windows 发布、公告、图片 Key 四个域的读接口对 viewer 返回 200(不能顺手把只读账号锁死);**用户列表与听歌历史对 viewer 返回 403/4030,对 `admin` 返回 200/404**;`admin` 角色能发布公告;该公告在 `admin_audit_log` 里查得到且 `admin_id` 记的是发布者本人。另有「音源账号(后台)与酷我音源接入」「单曲倒带日记」等新段落覆盖音源账号的角色边界(viewer 读清单 403/4030)与日记接口契约。
+4. **「业务管理接口:角色校验与审计」**:viewer 对发布放量、创建用户、禁用用户、发布公告、导入图片 Key 五个写接口一律 403/4030;发布、公告、图片 Key、音源可用清单四个读接口对 viewer 返回 200(不能顺手把只读账号锁死);**用户列表与听歌历史对 viewer 返回 403/4030,对 `admin` 返回 200/404**;`admin` 角色能发布公告;该公告在 `admin_audit_log` 里查得到且 `admin_id` 记的是发布者本人。另有「音源账号(后台)与酷我音源接入」「单曲倒带日记」等新段落覆盖音源账号的角色边界(viewer 读清单 403/4030)与日记接口契约。
 
 另有「安全响应头与跨域」一节断言 CSP 与 CORS,以及「头像上传:按文件头判定格式」一节断言上传的魔数校验。
 

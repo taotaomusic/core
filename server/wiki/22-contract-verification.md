@@ -2,7 +2,7 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-09-27
+最后更新:2026-09-30
 
 后端改动的验收标准是 `tools/verify-contract.mjs` 全绿(检查项数量随脚本版本变化,以实际输出为准,当前约 300 项)。本文讲验证库准备、验证实例启动、脚本运行和失败定位。数据层改动**必须**走完这里的流程;仅改文档或注释可以跳过。
 
@@ -61,13 +61,15 @@ node tools/verify-contract.mjs http://127.0.0.1:4720
 
 以验证脚本的实际汇总数量为准,必须全部通过。
 
+**脚本自己也要能读到 `EMAIL_VERIFICATION_TEST_CODE`(与服务相同的 6 位数字值)和 `ADMIN_INITIAL_PASSWORD`**:两者在脚本启动时就会读取,缺失或与启动环境不一致会直接抛错、或导致后续管理端断言连锁失败。「另一个终端」如果确实没有继承这些变量,先手动 `$env:` 设置再跑。
+
 验证实例首次启动时会自动创建默认管理员 `admin`(`super_admin`),口令取 `ADMIN_INITIAL_PASSWORD`(未设置则随机生成并只打印一次),并带「首次登录必须改密」标记。
 
 **注意**:验证库每次被 `reset-db.mjs` 清空后都要**重启服务**,让 `AdminBootstrapService` 重新创建这个账号,否则相关断言会因为登不进去而失败。
 
 ## 5. 管理端断言的顺序敏感性
 
-脚本中「管理端会话准备:强制改密与 Bearer 会话」一段必须在所有管理端断言之前跑;「管理路由逐条无凭据探测」枚举约 48 条受保护路由断言 401/4013;业务域的读写角色断言与审计断言跟在其后。段落结构见 [83-admin-frontend.md](83-admin-frontend.md) 的验证一节。
+脚本中「管理端会话准备:强制改密与 Bearer 会话」一段必须在所有管理端断言之前跑;「管理路由逐条无凭据探测」枚举约 44 条受保护路由(`guardedAdminRoutes`,覆盖 `/admin/auth/**` 与 `/app/admin/**` 的 `@AdminGuarded()` 方法,open-api-keys 走后面的读写角色断言)断言 401/4013;业务域的读写角色断言与审计断言跟在其后。段落结构见 [83-admin-frontend.md](83-admin-frontend.md) 的验证一节。
 
 修改守卫、角色或审计逻辑后,除了跑全量脚本,还应确认新增路由被收进了脚本的 `guardedAdminRoutes` 清单。
 
@@ -93,4 +95,6 @@ node tools/verify-contract.mjs http://127.0.0.1:4720
 
 ## 7. CI 上的契约验证
 
-GitHub 侧 music-server 仓库的工作流(`server/.github/workflows/backend.yml`)在 Ubuntu + PostgreSQL 16 服务容器上执行同一套验证:从 music 仓库 Release 拉取真实分享播放器(拉不到退回占位文件),起验证实例跑完整脚本,**全绿才算通过**,然后才发布 dist。见 [62-ci-cloud-build.md](62-ci-cloud-build.md)。
+现行流程在单仓 core 的根目录 `.github/workflows/ci.yml` 的 `server` job(`server/**` 或 `crypto/**` 变更触发):Ubuntu runner + PostgreSQL 16 服务容器,`DATABASE_URL` 指向容器内的 `music_verify`,环境变量与本地验证一节相同(`ADMIN_RATE_LIMIT=1000`、`NODE_ENV=test` 等)。加密 `.node` 产物由同一次 run 的 `crypto` job 经 artifact 流入,`npm run build` 后从 Release 拉取分享播放器(拉不到退回占位文件),然后 `reset-db.mjs` → `node dist/main.js` 起验证实例 → `node tools/verify-contract.mjs http://127.0.0.1:4720`,**全绿才算通过**,之后才发布 dist 到 `server-dist-latest` Release,并在 push 时构建镜像推 `ghcr.io/taotaomusic/music-server`。
+
+`server/.github/workflows/backend.yml` 是旧 music-server 独立仓库的工作流,该仓库已停用、暂保留备查,不要再按它理解现行发布链路。见 [62-ci-cloud-build.md](62-ci-cloud-build.md)。

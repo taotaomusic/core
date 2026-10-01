@@ -2,7 +2,7 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-09-27
+最后更新:2026-09-30
 
 本文覆盖搜索联想、热搜、NDJSON 搜索、播放地址、播放代理和歌词。上游协议适配的内部结构见 [11-architecture-modules.md](11-architecture-modules.md) 的 `upstream/` 一节;音源账号对播放链路的影响见 [53-feature-music-sources.md](53-feature-music-sources.md)。排障见 [72-troubleshooting-music.md](72-troubleshooting-music.md)。
 
@@ -23,9 +23,9 @@ Authorization: Bearer <accessToken>
 }
 ```
 
-- `keyword` 必填,去除首尾空白后不能为空。
+- `keyword` 必填,去除首尾空白后为空返回 400/4001。
 - `limit` 默认 10,最大 20;限制在本服务本地执行。
-- `source` 当前仅支持 `kuwo`,省略时默认使用 `kuwo`。
+- `source` 当前仅支持 `kuwo`,省略时默认使用 `kuwo`;指定其他音源返回 400/4007(该源不支持联想)。
 - 官方波点 5.9.1 调用 `search/tip/v2/list`,只传业务参数 `keyword` 与 `tipsFrom=bd`,读取 `data.resultList[].relword`。该接口没有分页参数,**不要自行添加 `pn` / `rn`**,以免联想排序或召回结果偏离官方客户端。
 
 ## 2. 热搜
@@ -72,11 +72,15 @@ Authorization: Bearer <accessToken>
 {"type":"song","data":{"id":97773,"mid":"...","favorited":false,"vip":false,"playable":true}}
 ```
 
-末行:
+末行(`meta` 为完整形状,旧客户端读不到多出的字段不受影响):
 
 ```json
-{"type":"end","meta":{"dropped":0,"droppedBySource":{},"quality":10}}
+{"type":"end","meta":{"page":1,"limit":60,"quality":10,"count":60,"dropped":0,"droppedBySource":{},"total":97773,"hasMore":true,"source":"all"}}
 ```
+
+- `keyword` 必填,为空返回 400/4001;`page` 默认 1,`num`/`limit` 二者等价(历史参数名是 `num`),默认 60、上限 60。
+- `source` 省略或 `all` 时聚合全部音源;指定单个音源时只查该源。聚合搜索允许单个上游短暂故障,另一个音源的结果照常下发,两个都失败才报上游错误。
+- `meta.count` 是实际下发条数,`total`/`hasMore` 来自上游分页信息。
 
 ### `playable` 的语义
 
@@ -107,15 +111,16 @@ Authorization: Bearer <accessToken>
 GET /api/v1/songs/97773/link?quality=10&mid=&type=
 ```
 
-- 返回上游 HTTPS 直链和实际音质。
-- 请求档位不存在时服务端降级,并设置 `fallback: true`。
+- 返回上游 HTTPS 直链和实际音质,响应字段为 `songId`、`url`、`quality`、`requestedQuality`、`kbps`、`fallback`。
+- 请求档位不存在时服务端降级,并设置 `fallback: true`(`quality != requestedQuality`)。
 
 ## 5. 播放代理
 
 `/play` 是旧客户端兼容和解析失败兜底。
 
-- Range 请求应返回 206 与 `Content-Range`。
-- 上游非 2xx 统一映射为 502,**不能透传上游 401**(否则客户端会当成自己的令牌失效去续期)。
+- Range 请求应返回 206 与 `Content-Range`;上游不支持 Range 时回落 200 全量。
+- 目标地址不在媒体域名白名单内返回 400/4002「不允许转发此地址」。
+- 上游非 2xx 统一映射为 **502/5021**,不能透传上游 401(否则客户端会当成自己的令牌失效去续期)。
 
 ## 6. 歌词
 

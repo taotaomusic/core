@@ -2,7 +2,7 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-09-27
+最后更新:2026-09-30
 
 环境变量的完整清单与每个变量的校验行为见 [21-configuration.md](21-configuration.md);契约验证的完整流程单独成篇 [22-contract-verification.md](22-contract-verification.md)。
 
@@ -28,6 +28,8 @@ cd server
 npm install
 Copy-Item .env.example .env
 ```
+
+> 仓库里的 `.env.example` 现在是 **docker-compose 部署模板**:`POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` / `APP_PORT` 只被 `docker-compose.yml` 消费,后端代码不读它们。本地开发复制后按下面的最小配置补齐 `DATABASE_URL` 等应用变量;全部变量的语义见 [21-configuration.md](21-configuration.md)。
 
 创建数据库:
 

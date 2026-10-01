@@ -2,7 +2,7 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-09-29
+最后更新:2026-09-30
 
 歌单是多端同步的核心:所有顺序操作都在事务内锁定歌单,顺序变更要求键集合与服务端完全一致。表结构细节见 [41-database-tables-core.md](41-database-tables-core.md) 的 `playlists` 一节;并发实现见 [44-database-operations.md](44-database-operations.md)。跨平台功能边界另见项目根目录 `MUSIC_CROSS_PLATFORM.md`。
 
@@ -19,14 +19,15 @@
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | `GET` | `/api/v1/playlists` | 当前账号的歌单摘要 |
-| `POST` | `/api/v1/playlists` | 创建歌单,JSON `name` 必填 |
+| `POST` | `/api/v1/playlists` | 创建歌单,JSON `name` 必填,201 |
 | `GET` | `/api/v1/playlists/{id}` | 歌单详情与歌曲 |
-| `PATCH`/`PUT` | `/api/v1/playlists/{id}` | 更新名称、简介或封面 |
+| `GET` | `/api/v1/playlists/{id}/songs` | 只取歌曲数组的别名,移动端不下载单元数据即可刷新顺序 |
+| `PATCH`/`PUT` | `/api/v1/playlists/{id}` | 更新名称、简介或封面(只更新提交的字段) |
 | `DELETE` | `/api/v1/playlists/{id}` | 删除歌单,返回 204 |
-| `POST` | `/api/v1/playlists/{id}/songs` | 添加/更新一首歌曲快照 |
-| `DELETE` | `/api/v1/playlists/{id}/songs/{source}/{songId}` | 移除歌曲 |
+| `POST` | `/api/v1/playlists/{id}/songs` | 添加/更新一首歌曲快照,重复歌曲幂等 |
+| `DELETE` | `/api/v1/playlists/{id}/songs/{source}/{songId}` | 移除歌曲,返回 `{removed, playlist}` |
 | `PATCH`/`PUT` | `/api/v1/playlists/{id}/songs/order` | 用完整键列表调整顺序(`songs`、`songIds` 或 `order`) |
-| `PUT` | `/api/v1/playlists/{id}/songs` | 完整替换歌曲集合 |
+| `PUT` | `/api/v1/playlists/{id}/songs` | 完整替换歌曲集合(`songs` 必须是数组) |
 
 ## 3. revision 与排序一致性
 

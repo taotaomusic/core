@@ -2,7 +2,7 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-09-27
+最后更新:2026-09-30
 
 本文汇总写后端代码时的结构性规则:新增模块的步骤、DTO 校验、错误处理、提交前检查。模块之间的边界与依赖规则见 [11-architecture-modules.md](11-architecture-modules.md)。
 

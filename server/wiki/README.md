@@ -17,7 +17,7 @@
 | 文档 | 核心内容 | 适用场景 |
 | --- | --- | --- |
 | [10-service-boundary.md](10-service-boundary.md) | 服务负责什么、不负责什么、外部系统边界 | 第一次接触项目、判断某个需求该不该进后端 |
-| [11-architecture-modules.md](11-architecture-modules.md) | 模块依赖图、源码职责、模块边界规则、依赖注入规则 | 准备新增模块、弄不清某个业务该写在哪个模块时 |
+| [11-architecture-modules.md](11-architecture-modules.md) | 模块依赖图、源码职责、模块边界规则、依赖注入规则、进程内状态与单实例假设 | 准备新增模块、弄不清某个业务该写在哪个模块、评估水平扩容时 |
 | [12-request-pipeline.md](12-request-pipeline.md) | 请求链路、全局守卫/拦截器/过滤器、响应阶段、原始请求体例外、静态资源 | 排查某个请求为什么被拦、要加全局行为时 |
 | [13-startup-lifecycle.md](13-startup-lifecycle.md) | 启动时序、`onModuleInit` / `onApplicationBootstrap` 的区别、误判点 | 初始化代码该写在哪、启动日志看不懂时 |
 

@@ -2,7 +2,7 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-09-27
+最后更新:2026-09-30
 
 本文覆盖 `/api/v1/admin/auth/**` 的登录链路:管理员会话、账号退避、TOTP 双因素和 LDAP/SSO 对接。代码位于 `src/admin-auth/` 和 `src/ldap/`。角色与审计见 [81-admin-roles-audit.md](81-admin-roles-audit.md),路由表与硬约束见 [82-admin-routes-data.md](82-admin-routes-data.md),前端见 [83-admin-frontend.md](83-admin-frontend.md)。普通用户的注册登录见 [31-api-auth-user.md](31-api-auth-user.md)。
 

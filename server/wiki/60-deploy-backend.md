@@ -2,7 +2,7 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-09-27
+最后更新:2026-09-30
 
 本篇是后端上服务器的操作手册。版本号与热更新的最终规则以 [项目 RELEASE.md](../../RELEASE.md) 为准;APK 发布见 [61-release-android.md](61-release-android.md),云端构建见 [62-ci-cloud-build.md](62-ci-cloud-build.md)。
 
@@ -36,7 +36,14 @@ dist/
 package-lock.json
 ```
 
-另外要**拉取加密产物**:从 tools 仓库的 Release 取 `crypto/dist/node/<linux-x64|windows-x64>/taotao_crypto.node`,按运行平台放到服务器上(loader 从 `cwd/../crypto/dist` 或 `cwd/crypto/dist` 查找,见 `server/src/crypto/native-loader.ts`)。产物缺失只会打一条 WARN 并把传输加密降级为明文,**不会阻断启动**;需要加密链路时必须就位。
+另外要**就位加密产物**:`crypto/dist/node/<linux-x64|windows-x64>/taotao_crypto.node`,loader 从 `cwd/../crypto/dist` 或 `cwd/crypto/dist` 查找(见 `server/src/crypto/native-loader.ts`)。来源二选一:
+
+- 直接用 CI 的 `server-dist-latest/server-dist.zip` —— 里面已把 `crypto/` 一并打包(2026-09 起单仓 CI 如此;注意 CI 的 server job 只取 **linux-x64** 一份 `.node`,Windows 裸机部署需按下行自行补 windows-x64 产物)。
+- 手动取:执行 `tools/fetch-crypto.ps1`(默认从 taotaomusic/core 的 `crypto-latest` Release 拉),或从该 Release 直接下载对应包。
+
+产物缺失只会打一条 WARN 并把传输加密降级为明文,**不会阻断启动**;需要加密链路时必须就位。
+
+也可以改用 Docker:`ghcr.io/taotaomusic/music-server`(CI 推送,镜像已内置 Linux 平台 `.node`)。`server/docker-compose.yml` 是现成的编排,但若里面的 `image:` 仍写旧包名 `ghcr.io/hdppppppp/music-server`,需同步改成新包名,否则拉到的是停更前的旧镜像(旧镜像注释里写的「两平台」只对旧构建成立)。
 
 目标服务器在 `dist` 同级目录执行:
 
@@ -53,7 +60,9 @@ node dist/main.js
 | --- | --- |
 | `DATABASE_URL` | 明确指向正式 PostgreSQL,不能使用验证库 |
 | `AUTH_SECRET` | 至少 32 字符随机值。**没有开发兜底值**,缺失或过短会直接拒绝启动;轮换会使全部访问令牌失效 |
-| `CRYPTO_PSK_ID` / `CRYPTO_PSK_HEX` | **生产必配**:传输加密 PSK 的标识与 32 字节 hex 原始密钥,二者缺一则握手全部失败、链路保持明文 |
+| `CRYPTO_PSK_ID` | 可选;加密 PSK 的标识,默认 `prod-v1` |
+| `CRYPTO_PSK_HEX` | 可选;64 位十六进制 PSK。**留空则启动时随机生成并照常启用加密**(PSK 经 `GET /crypto/psk` 动态下发给已登录客户端,不再要求预配)。随机生成的 PSK 重启会变、多实例不一致,生产建议配固定值(`openssl rand -hex 32`);轮换后已握手客户端需重新握手 |
+| `CRYPTO_REQUEST_LOG` | 可选;默认对 `/api/v1` 请求打一行「明文 / 加密」日志(可看出客户端是否真走加密链路),量大时设 `off` 关闭 |
 | `CORS_ALLOWED_ORIGINS` | 只在确有第三方网页要跨域读接口时才配置;默认留空即不下发任何 CORS 头 |
 | `ADMIN_INITIAL_PASSWORD` | 建议显式设置且足够强(至少 12 字符);留空则随机生成并只在首次启动日志里打印一次。两种来源都强制首登改密 |
 | `TOTP_ISSUER` | 可选;管理员 2FA 在验证器里显示的名称 |
@@ -170,8 +179,12 @@ curl.exe -i "$origin/api/v1/app/bootstrap?versionCode=1&sdk=36&deviceId=deploy-c
 curl.exe -i "$origin/api/v1/app/bootstrap?versionCode=1&sdk=36&deviceId=deploy-check" `
   -H "Authorization: Bearer expired.token"
 
-# 5. 未配置加密时握手应返回 503/5031(证明明文链路健在、加密层按预期降级)
+# 5. 加密链路:产物缺失时握手 503/5031(降级明文);产物就位时加密已启用,
+#    空 body 握手会返回 400/4006(证明加密层活着)
 curl.exe -i -X POST "$origin/api/v1/crypto/handshake" -H "content-type: application/json" -d "{}"
+
+# 6. PSK 下发接口受登录保护,无令牌必须是 401
+curl.exe -i "$origin/api/v1/crypto/psk"
 ```
 
 涉及真实账号、图片生成和发布管理的冒烟测试应使用专用测试账号,并避免在命令历史里写入令牌或 Key。
@@ -191,7 +204,7 @@ node tools/verify-contract.mjs http://127.0.0.1:4720
 
 - 先备份正式数据库。
 - 新版本首次启动会在监听端口前执行 DDL。
-- 多实例同时启动依赖顾问锁串行建表。
+- 多实例同时启动依赖顾问锁串行建表(仅指建表安全;**运行期尚不支持多实例**,限流/登录退避/2FA 票据/版本缓存都是进程内状态,扩容前必须先迁共享存储,见 [11-architecture-modules.md](11-architecture-modules.md) §4)。
 - 新增表和索引通常可直接上线;破坏性结构变化必须分阶段(见 [40-database-overview.md](40-database-overview.md))。
 - 回滚旧代码前确认旧代码能忽略新表和新列。
 - 不要在部署脚本里调用 `reset-db.mjs`。

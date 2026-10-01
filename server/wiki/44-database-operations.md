@@ -2,7 +2,7 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-09-27
+最后更新:2026-09-30
 
 本文是数据层的操作手册:并发路径的 SQL 范例、Key 运维 SQL、图片额度一致性边界、索引清单。表结构见 41–43 各篇。
 
@@ -15,6 +15,7 @@
 - 并发注册:依赖数据库唯一约束兜底。
 - 发布版本登记:依赖 `ON CONFLICT DO UPDATE`。
 - 播放清空 marker:在 `playback_history_clear_operation` 的主键冲突上保持幂等。
+- 播放会话上报:同一事务里先取「用户×历史」与「用户×会话」两把顾问锁,再 `FOR UPDATE` 读旧快照,最后 `ON CONFLICT (user_id, session_id) DO UPDATE` 只累加增长量。
 - 公告置顶:使用独立顾问锁串行化「取消旧置顶 + 设置新置顶」。
 
 ## 2. 并发 SQL 范例
@@ -46,6 +47,16 @@ RETURNING target.id, target.key;
 ### 并发注册
 
 「先查用户名、再插入」不能防并发,最终依赖 `users.username` 唯一约束。Repository 必须把唯一冲突翻译为 409/4090,不能漏成 502。
+
+### 播放会话上报与清空
+
+两个事务都用同一把「账号×历史」顾问锁串行,防止清空刚推进 `revision` 时另一事务仍按旧代际把会话写成可见:
+
+```sql
+SELECT pg_advisory_xact_lock(hashtextextended($1, 0)); -- key: '<userId>:playback-history'
+```
+
+会话上报在此之上再按 `(userId, sessionId)` 取一把会话锁(两个实例同时收到同一离线会话的重试时,避免双方都读到「尚不存在」而把完整时长重复累加),随后 `SELECT ... FOR UPDATE` 旧快照、计算增量、`INSERT ... ON CONFLICT DO UPDATE`。清空侧则在锁内先查 `playback_history_clear_operation` 命中同一 marker 就直接返回原结果。
 
 ## 3. Key 运维 SQL
 

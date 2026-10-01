@@ -2,7 +2,7 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-09-27
+最后更新:2026-09-30
 
 分享短链把一首歌变成免登录可看的公开页;试听是**转发上游音频**,服务端不落盘、不裁剪。表设计见 [41-database-tables-core.md](41-database-tables-core.md) 的 `song_share`;排障见 [72-troubleshooting-music.md](72-troubleshooting-music.md)。
 
@@ -13,9 +13,9 @@ POST /api/v1/shares/songs
 Authorization: Bearer <accessToken>
 ```
 
-- 提交 `source` 以及 `remoteId`/`songId` 或 `mid`,可选 `type`。
-- 同一账号、来源和稳定歌曲身份会**复用短码**(不重复建短链),成功 HTTP 201。
-- 分享 token 只允许 8–24 位 `[A-Za-z0-9_-]`。
+- 提交 `source`(默认 `tencent`,必须是受支持的音源)以及 `remoteId`/`songId` 或 `mid`,可选 `type`;身份不完整返回 400/4001。
+- 服务端先回源拉取歌曲资料生成快照,同一账号、来源和稳定歌曲身份会**复用短码**(不重复建短链),成功 HTTP 201,返回 `{token, url}`;`url` 是免登录分享页 `{对外基地址}/s/{token}`。
+- 分享 token 只允许 8–24 位 `[A-Za-z0-9_-]`;格式不符或查不到短码的公开读取一律 404/4045。
 - 生产必须设置 `PUBLIC_BASE_URL`,否则短链会根据代理头推导出错误协议(见 [21-configuration.md](21-configuration.md))。
 
 ## 2. 公开元数据
@@ -25,7 +25,8 @@ GET /api/v1/public/shares/{token}
 ```
 
 - 公开,不需要登录;返回普通 JSON 信封。
-- 内容:元数据、最多 60 秒试听地址和最新 100% Android APK 地址。
+- `data` 内容:`title`、`artist`、`album`、`coverUrl`、`duration`(已格式化 `mm:ss`)、`songId`、`mid`、`type`、`source`、`vip`、`previewDurationSeconds`(「最多 60 秒」与歌曲时长取小)、`previewUrl`(试听转发地址)和 `appDownloadUrl`(最新 100% 放量的 Android APK 地址)。
+- 读取会异步累计 `access_count`,失败静默,不影响响应。
 - 「最多 60 秒」**只由分享页自己守,服务端不下发任何时长限制**。
 
 ## 3. 试听转发
@@ -34,7 +35,7 @@ GET /api/v1/public/shares/{token}
 GET /api/v1/public/shares/{token}/preview
 ```
 
-- 转发上游**完整**音频(标准音质),支持 200/206/416。
+- 转发上游**完整**音频(标准音质档位 4),Range 透传,支持 200/206;Range 越界等上游非 2xx 同样按下面规则归 502。
 - 不暴露上游直链,不在服务端裁剪或缓存。
 - 上游取址失败归 **502/5020,不能是 401** —— 401 会让客户端把上游故障当成自己的令牌失效去续期。
 - 上游偶发 `110001` 风控时 `resolveLink` 会回退到 v2 低码率试听链(约 60 秒),此时分享页听到的是片段而不是整首 —— 这是全站播放路径共用的既有兜底,不是试听接口特有的问题。

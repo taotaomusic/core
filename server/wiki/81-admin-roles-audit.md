@@ -2,13 +2,13 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-09-27
+最后更新:2026-09-30
 
 登录与 2FA 见 [80-admin-auth-login.md](80-admin-auth-login.md);路由表见 [82-admin-routes-data.md](82-admin-routes-data.md)。角色矩阵的唯一出处是 `server/src/admin-auth/admin-roles.ts` —— **新增管理接口时从这里取常量,不要手写角色数组**(手写迟早会把 `viewer` 放进写权限)。
 
 ## 1. 三种角色与四组常量
 
-三种角色,定义在 `admin_users.role` 的 CHECK 约束里。权限分成三块:**后台自身**(管理员账号、审计日志、IP 白名单)、**个人数据**(用户资料与听歌历史)、**业务管理接口**(发布、Windows 发布、公告、图片 Key):
+三种角色,定义在 `admin_users.role` 的 CHECK 约束里。权限分成三块:**后台自身**(管理员账号、审计日志、IP 白名单)、**个人数据**(用户资料与听歌历史)、**业务管理接口**(发布、公告、用户、图片 Key、开放 API Key、音源账号):
 
 | 角色 | 后台自身 | 个人数据 | 业务管理接口 |
 | --- | --- | --- | --- |
@@ -104,7 +104,7 @@ TRUST_PROXY=1 或 true
 | `release.patch_publish` / `release.patch_rollout` | 热修复补丁登记与放量(`patch`) |
 | `release.config_set` / `release.config_remove` | 远端配置写入与删除(`remote_config`) |
 | `announcement.create` / `update` / `set_enabled` / `set_pinned` / `delete` | 公告生命周期(`announcement`) |
-| `user.set_disabled` / `user.delete` | 禁用与删除普通用户(`user`) |
+| `user.create` / `user.set_disabled` / `user.delete` | 创建用户(免邮箱验证码)、禁用与删除普通用户(`user`) |
 | `image_key.import` / `image_key.delete` | 图片 Key 导入与删除(`image_key`) |
 | `open_api_key.create` / `set_enabled` / `revoke` | 开放 API Key 生命周期(`open_api_key`,只记 `keyPrefix`) |
 | `music_source.create` / `update` / `enable` / `disable` / `probe` / `delete` | 音源账号生命周期(`music_source_account`) |
@@ -136,7 +136,7 @@ await this.audit.record(request, "release.rollout", "release", `${channel}#${bod
 
 `AuditLogViewer.vue` 负责把库里「域名.动作」式的英文 action 翻译成中文展示:
 
-- `ACTION_GROUPS` 按域分组(登录与账号 / 管理员 / 公告 / 客户端版本 / 音源账号 / 密钥 / 用户),既是筛选下拉的数据源,也派生出整张动作名翻译表;未收录的 action 回退显示原文。
+- `ACTION_GROUPS` 按域分组(登录与账号 / 管理员 / 公告 / 客户端版本 / 音源账号 / 密钥 / 用户),既是筛选下拉的数据源,也派生出整张动作名翻译表;未收录的 action 回退显示原文。组里还残留一个「桌面版本」分组(`desktop.*`):那是旧 Kotlin Compose 桌面端及其后端热更模块删除后的前端遗留,后端已不会再产生这些 action,下拉里选它只会查空。
 - `TARGET_TYPE_LABELS` 翻译 `target_type`(如 `music_source_account` → 音源账号)。
 - `DETAIL_KEY_LABELS` / `DETAIL_VALUE_LABELS` 把 `detail` JSON 还原成「中文键名:中文值」一行文本(布尔转是/否、字节数转 MB、放量加 %),非法 JSON 原样展示。
 
@@ -147,5 +147,5 @@ await this.audit.record(request, "release.rollout", "release", `${channel}#${bod
 - 审计写入与业务操作不在同一个事务里:先做业务、后写日志;重试可能造成重复操作。
 - `admin_audit_log` 没有留存或归档策略,全部管理端写操作(业务域加后台自身共 30+ 个 action)持续写入,表只增不减。
 - 退避只按账号计数,不按「账号 + 来源地址」:同一 NAT 出口下的其它管理员不受影响,但一个被锁的账号会让所有试图登录它的人一起等 —— 这是有意的取舍(防止换 IP 绕过)。
-- 前端的写按钮没有按角色隐藏:观察者打开发布、公告、设置页仍能看到按钮,点了才会收到 403。服务端是权威,但交互上可以再收敛。**例外是「用户与统计」** —— 该页签对观察者隐藏,因为它对应的读接口本身就不放行,留着只会点进一片报错。
+- 前端的写按钮没有按角色隐藏:观察者打开发布、公告、设置页仍能看到按钮,点了才会收到 403。服务端是权威,但交互上可以再收敛。页签层面已收敛四处:「用户与统计」「审计日志」对观察者隐藏,「音源账号」仅特权读可见,「管理员」仅超管可见 —— 它们对应的读接口本身就不放行,留着只会点进一片报错。
 - `admin_users.email` 列在界面上没有编辑入口(后端已支持)。

@@ -2,7 +2,7 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-09-27
+最后更新:2026-09-30
 
 第三方通过 API Key 调用的开放搜歌接口,前缀 `/api/v1/open/**`。模块在 `server/src/open-api/`(`OpenApiModule`,imports `MusicModule` + `UpstreamModule` + `AdminAuthModule`)。**内部 `/search` 的契约不受本文任何影响** —— 开放侧只是新增路由,不改既有 NDJSON 字段、红线和错误映射(见 [32-api-search-music.md](32-api-search-music.md))。
 
@@ -69,7 +69,7 @@ NDJSON 每行形状(`/open/search/stream`,与内部 `/search` 同格式):
 - **不下发 `audioUrl`**:外部调用方改用 `/open/songs/:id/link` 换取播放直链。
 - `lyricUrl` 指向 `/api/v1/open/songs/...`(开放侧歌词路径),不是内部 `/songs/...`。
 
-开放 JSON 端点下发 `access-control-allow-origin: *`(不带 credentials);NDJSON stream 内部已有的 `*` 同样适用。
+开放 JSON 端点下发 `access-control-allow-origin: *` 与 `access-control-allow-headers: x-api-key, authorization, content-type`(不带 credentials);NDJSON stream 内部已有的 `*` 同样适用。
 
 ## 6. 错误码与限流
 
@@ -82,9 +82,9 @@ NDJSON 每行形状(`/open/search/stream`,与内部 `/search` 同格式):
 | 方法 | 路径 | 角色 | 说明 |
 | --- | --- | --- | --- |
 | GET | `/app/admin/open-api-keys` | `READ_ROLES` | 列表(只有 `keyPrefix`,无明文) |
-| POST | `/app/admin/open-api-keys` | `WRITE_ROLES` | body `{ name }`,201,`data.apiKey` 明文**只返回一次** |
-| PATCH | `/app/admin/open-api-keys/:id` | `WRITE_ROLES` | body `{ enabled }` |
-| DELETE | `/app/admin/open-api-keys/:id` | `WRITE_ROLES` | 204 吊销 |
+| POST | `/app/admin/open-api-keys` | `WRITE_ROLES` | body `{ name }`(1–64 个字符,超限 400/4000),201,`data.apiKey` 明文**只返回一次** |
+| PATCH | `/app/admin/open-api-keys/:id` | `WRITE_ROLES` | body `{ enabled }`(布尔);id 不存在或已是目标状态 → 404/4042 |
+| DELETE | `/app/admin/open-api-keys/:id` | `WRITE_ROLES` | 204 吊销(不可逆);已吊销再删仍 404/4042,不写第二条审计 |
 
 - 写操作审计 action:`open_api_key.create` / `open_api_key.set_enabled` / `open_api_key.revoke`;审计只记 `keyPrefix`,不记明文。
 - 表 `open_api_key` 只存 `sha256(key)`,建表在 `migrations.ts`(见 [43-database-tables-admin.md](43-database-tables-admin.md))。

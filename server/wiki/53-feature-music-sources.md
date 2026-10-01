@@ -2,7 +2,7 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-09-27
+最后更新:2026-09-30
 
 酷我、波点这类需要登录态的音源,其凭据由服务端统一持有:管理后台维护账号,播放链路按 `source` 取用,**凭据只进不出**。代码分布在 `src/upstream/`(协议适配与凭据读取)和 `src/upstream/music-source-admin.*`(后台接口);表结构见 [43-database-tables-admin.md](43-database-tables-admin.md) 的 `music_source_account` 一节。
 

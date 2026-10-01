@@ -2,7 +2,7 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-09-27
+最后更新:2026-09-30
 
 启动不是「加载模块后立即监听端口」。本文讲启动的完整时序和三个关键时间点,初始化代码写错位置是启动期故障的最常见根因。
 
@@ -10,12 +10,14 @@
 
 ```text
 读取 .env / 系统环境变量
-  → validateEnvironment 校验端口、AUTH_SECRET、DATABASE_URL
+  → validateEnvironment 校验端口、AUTH_SECRET、DATABASE_URL、SMTP_PORT、
+    ADMIN_INITIAL_PASSWORD、IM_* 与 EMAIL_VERIFICATION_TEST_CODE(逐条行为见 [21-configuration.md](21-configuration.md))
   → NestFactory.create(AppModule):实例化 Module 和 Provider(构造函数在这里跑)
+  → 挂载传输加密中间件(先于 body parser;含强制加密白名单)
   → 挂载按路由分流的 JSON parser(普通 16KB、原始上传跳过)
-  → 挂载 /admin 与 /share 静态资源
+  → 挂载 /admin(CSP 先于 expressStatic)与 /share 静态资源
   → setGlobalPrefix("api/v1", exclude: ["health"])
-  → 注册全局 ValidationPipe
+  → 注册全局 ValidationPipe,关闭 x-powered-by
   → app.listen(PORT)
       ├─ app.init()
       │    ├─ onModuleInit:DatabaseService 等待 PostgreSQL → 顾问锁 → 幂等 DDL
@@ -52,6 +54,7 @@
 - **幂等迁移**:同一事务内取顾问锁 `pg_advisory_xact_lock(913720001)` 后执行全部 DDL(见 [40-database-overview.md](40-database-overview.md))。
 - **默认管理员**:`AdminBootstrapService` 找不到 `admin` 用户名才创建(`super_admin`),口令取 `ADMIN_INITIAL_PASSWORD`(未设置则随机生成并以 WARN 打印一次),带 `must_change_password = 1` 强制首登改密(见 [80-admin-auth-login.md](80-admin-auth-login.md))。已存在则跳过,重启幂等。
 - **加密产物加载**:`CryptoTransportService` 加载 `crypto/dist` 的原生产物;产物缺失或协议版本 <2 时只 WARN 并降级明文,不阻断启动(见 [37-api-crypto.md](37-api-crypto.md))。
+- **PSK 登记**:配置了 `CRYPTO_PSK_HEX` 就用固定值;未配置则随机生成一把并 WARN(重启即变、多实例不一致)。无论哪种,都经 `GET /api/v1/crypto/psk` 下发给已登录客户端,因此只要产物加载成功,加密链路即启用。
 - **会话清理定时器**:加密会话每分钟清理过期项。
 
 启动失败的具体症状与处理见 [70-troubleshooting-startup.md](70-troubleshooting-startup.md)。

@@ -2,7 +2,7 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-09-27(路由/表清单核对日:2026-09-26)
+最后更新:2026-09-30(路由/表清单核对日:2026-09-30)
 
 本页是后端源码、接口和数据库文档的导航基准。路由清单中的路径是 Controller 相对路径,除 `/health` 外实际都要加全局前缀 `/api/v1`;文件/节点/路由的具体数量以 `codegraph status` 与 `codegraph query` 实测为准,不要引用本文历史快照的数字。
 
@@ -30,7 +30,7 @@ codegraph query --path server --kind route --limit 200 --json ""
 | `src/common/` | 业务异常、鉴权、限流、信封、响应头、通用工具 | 进程内状态 |
 | `src/database/` | PostgreSQL 连接池、INT8 解析、启动迁移、事务辅助 | PostgreSQL |
 | `src/crypto/`(`CryptoModule`) | 传输层加密:`crypto.controller.ts` 的 `POST /crypto/handshake` 握手、`crypto.middleware.ts` 的 AEAD 逐块解密(挂载在 body parser 之前)、`crypto-transport.service.ts`(原生引擎加载、PSK 登记、会话清理)、`native-loader.ts` | `crypto/dist` 原生产物、`CRYPTO_PSK_ID/HEX` |
-| `src/auth/` | 注册、邮箱验证码、登录、令牌轮换、资料和头像 | `users`、`refresh_tokens`、SMTP |
+| `src/auth/` | 注册、邮箱验证码、登录、令牌轮换、资料和头像 | `users`、`refresh_tokens`、SMTP、`user_avatars`(经 `FilesModule` 的 `AvatarStoreService`) |
 | `src/mail/` | 验证码邮件发送与模板 | SMTP |
 | `src/announcement/` | 公告读取、后台上下线和置顶 | `app_announcement` |
 | `src/favorites/` | 收藏软删除、恢复和批量查询 | `favorites` |
@@ -77,18 +77,26 @@ codegraph query --path server --kind route --limit 200 --json ""
 读取 .env/系统环境变量
   → validateEnvironment
   → NestFactory.create({ bodyParser: false })
-  → DatabaseService 等待 PostgreSQL(最多 10 次,每次 1 秒)
-  → pg_advisory_xact_lock(913720001) + 幂等迁移
   → 挂载传输加密中间件(带 X-Taotao-Crypto 头的请求先做 AEAD 解密;必须先于 body parser,
-    否则拿到的是密文;无加密头请求完全透明。排除 RAW_BODY_PATHS 与 */play 音频流)
+    否则拿到的是密文;无加密头请求完全透明。排除 /api/v1 之外的静态路径、RAW_BODY_PATHS
+    与 */play 音频流;强制加密白名单内的接口拒绝明文降级,见下)
   → 挂载按路由分流的 JSON parser(普通 16KB、原始上传跳过)
+  → 挂载 /admin 与 /share 静态资源(CSP 中间件在 expressStatic 之前)
   → /api/v1 全局前缀(/health 例外)
   → 全局 ValidationPipe(transform=true)
-  → onApplicationBootstrap:AdminBootstrapService 创建默认管理员 admin(随机或 ADMIN_INITIAL_PASSWORD 口令,强制首登改密)
   → app.listen(PORT)
+      ├─ app.init()
+      │    ├─ onModuleInit:DatabaseService 等待 PostgreSQL(最多 10 次,每次 1 秒)
+      │    │    → pg_advisory_xact_lock(913720001) + 幂等迁移
+      │    └─ onApplicationBootstrap:AdminBootstrapService 创建默认管理员 admin
+      │         (随机或 ADMIN_INITIAL_PASSWORD 口令,强制首登改密);
+      │         CryptoTransportService 加载原生产物、登记 PSK、启动会话清理
+      └─ 端口开始接受连接
 ```
 
 完整时序与三个启动时间点的区别见 [13-startup-lifecycle.md](13-startup-lifecycle.md);守卫/拦截器的执行顺序见 [12-request-pipeline.md](12-request-pipeline.md)。
+
+加密中间件带一份**强制加密白名单**:链路已启用时,命中白名单且未带加密头的明文请求被拒绝(HTTP 426/4007,提示升级客户端),防止降级攻击。当前白名单只有 `GET /api/v1/favorites`。`CRYPTO_REQUEST_LOG`(默认开,设 `off` 关闭)会为每个 `/api/v1` 请求打一行「明文/加密」日志。
 
 当前原始请求体例外路径:
 
@@ -107,13 +115,13 @@ POST /api/v1/app/admin/patches
 
 ## 4. 完整路由索引
 
-以下路径均省略 `/api/v1` 前缀;`/health` 是唯一例外。总数以 CodeGraph 实测为准(2026-09-26 核对约 125 条),不要引用历史快照数字。各域接口的字段与语义细节见 30–37 各篇。
+以下路径均省略 `/api/v1` 前缀;`/health` 是唯一例外。总数以 CodeGraph 实测为准(2026-09-30 手工逐 Controller 核对 118 条),不要引用历史快照数字。各域接口的字段与语义细节见 30–37 各篇。
 
 ### 公开公告(1)
 
 - `GET /announcements`:读取最新可见公告,置顶优先,最多 20 条。
 
-### Android/后台聚合接口(39)
+### Android/后台聚合接口(40)
 
 - `GET /app/bootstrap`:公开更新检查、补丁和远程配置(契约见 [61-release-android.md](61-release-android.md))。
 - `GET /app/apk/:versionCode`、`HEAD /app/apk/:versionCode`:APK Range 下载/探测。
@@ -185,9 +193,14 @@ POST /api/v1/app/admin/patches
 - 分享:`POST /shares/songs`、`GET /public/shares/:token`、`GET /public/shares/:token/preview`。契约见 [35-api-shares.md](35-api-shares.md)。
 - IM 会话/同步:`POST /im/session`、`DELETE /im/session`、`POST /im/sync/conversations`、`POST /im/sync/channel-messages`、`POST /im/messages/revoke`、`GET /im/contacts`、`POST /im/conversations/read`。契约见 [51-feature-wukongim.md](51-feature-wukongim.md)。
 
-### 传输加密(1)
+### 传输加密(2)
 
-- `POST /crypto/handshake`:`@Public()` 握手,交换加密会话。未启用(产物缺失或协议版本过低)固定 503/5031;被拒绝(PSK 未配置、设备不匹配、报文非法)400/4013。协议见 [37-api-crypto.md](37-api-crypto.md)。
+- `GET /crypto/psk`:把当前 PSK 下发给**已登录**客户端(不加 `@Public()`,受全局访问令牌守卫保护);客户端据此完成握手,密钥不再内嵌于 App。未启用加密(产物缺失或协议版本过低)固定 503/5031。
+- `POST /crypto/handshake`:`@Public()` 握手,交换加密会话。未启用(产物缺失或协议版本过低)固定 503/5031;被拒绝(device_id 不匹配、报文非法)400/4013。协议见 [37-api-crypto.md](37-api-crypto.md)。
+
+### 用户文件(1)
+
+- `GET /files/avatars/:token`:`@Public()` 匿名头像下载(渲染方不携带访问令牌);token 是每次上传随机生成的 128 位十六进制,不可枚举,头像更新后旧地址 404/4040,响应带 `immutable` 缓存头。
 
 ### 系统(1)
 
@@ -205,7 +218,7 @@ POST /api/v1/app/admin/patches
 | 图片轮询 | 桃桃访问令牌 | 每用户 300 次 + 每 IP 1800 次/15 分钟 |
 | IM 会话 | 桃桃访问令牌 | 每用户 30 次 + 每 IP 180 次/15 分钟 |
 | IM 同步/撤回/已读 | 桃桃访问令牌 | 每用户 300 次 + 每 IP 1800 次/15 分钟 |
-| Android 后台、公告、图片 Key(读) | `AdminAuthGuard` + `RolesGuard`,`READ_ROLES` | 每 IP 60 次/15 分钟;两条凭据都不可用时 401/4013;角色不足 403/4030 |
+| Android 后台、公告、图片 Key(读) | `AdminAuthGuard` + `RolesGuard`,`READ_ROLES` | 每 IP 60 次/15 分钟;未携带 Bearer 或会话无效 401/4013;角色不足 403/4030 |
 | 用户资料与听歌历史(读) | 同上,`PRIVILEGED_READ_ROLES` | 同上;观察者看不到个人数据 |
 | 同上(写:发版、放量、改配置、公告、用户、密钥) | 同上,`WRITE_ROLES` | 同上;观察者被拒,写操作另写 `admin_audit_log` |
 | 管理后台登录、2FA、改密码 | `@Public()` 或已认证 | `admin-login`/`admin-totp`/`admin-password` 三个独立桶(见 [82-admin-routes-data.md](82-admin-routes-data.md)) |
@@ -218,7 +231,7 @@ POST /api/v1/app/admin/patches
 
 ## 6. 数据模型速览
 
-迁移当前创建 23 张表:
+迁移当前创建 24 张表:
 
 ```text
 users                         refresh_tokens
@@ -229,14 +242,14 @@ app_release                   app_channel               app_config
 app_announcement              api_key                    image_generation_task
 im_device_session             app_patch
 admin_users                   admin_sessions            admin_audit_log
-open_api_key                  music_source_account
+open_api_key                  music_source_account      user_avatars
 ```
 
 各表的字段语义:用户与播放域见 [41-database-tables-core.md](41-database-tables-core.md),发布域见 [42-database-tables-release.md](42-database-tables-release.md),管理域见 [43-database-tables-admin.md](43-database-tables-admin.md)。迁移机制与表变更流程见 [40-database-overview.md](40-database-overview.md)。
 
 主要外键和删除语义:
 
-- 用户删除会级联刷新令牌、收藏、歌单、分享、播放和 IM 设备凭据。
+- 用户删除会级联刷新令牌、收藏、歌单、分享、播放、头像二进制和 IM 设备凭据。
 - `image_generation_task.api_key_id` 使用 `ON DELETE RESTRICT`,仍有任务引用时不能删除 Key。
 - 播放清空只推进 `playback_history_state.revision`,不删除累计统计;每个 marker 另存于 `playback_history_clear_operation` 保证重试幂等。
 - `admin_sessions.admin_id` 随 `admin_users` 级联删除;`admin_audit_log.admin_id` 与 `admin_users.created_by` 是 `ON DELETE SET NULL`,管理员被删后审计仍保留、只是变成无归属。

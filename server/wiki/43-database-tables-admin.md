@@ -2,7 +2,7 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-09-27
+最后更新:2026-09-30
 
 管理域(admin 三表)、开放 Key、音源账号与图片任务的表。管理链路见 [80-admin-auth-login.md](80-admin-auth-login.md) 与 [81-admin-roles-audit.md](81-admin-roles-audit.md);图片任务见 [50-feature-image-generation.md](50-feature-image-generation.md);音源账号见 [53-feature-music-sources.md](53-feature-music-sources.md)。
 
@@ -36,7 +36,7 @@ CREATE TABLE admin_users (
 - `ip_whitelist` 是可空文本,按换行/逗号分隔;为空表示不限制。只做精确匹配,不支持 CIDR。
 - `disabled_at` 是可空毫秒时间戳。会话校验每次回表检查它,所以禁用能立即生效。
 - `created_by` 是 `ON DELETE SET NULL`:创建者被删掉后账号仍在,只是失去来源信息。
-- `must_change_password` 与 `auth_source`(`local`/`ldap`)两列的语义见 [80-admin-auth-login.md](80-admin-auth-login.md)。
+- `must_change_password`(`smallint` 0/1,默认 0,只有启动时自动创建的默认管理员置 1)与 `auth_source`(`local`/`ldap`,默认 `local`)两列由迁移以 `ADD COLUMN IF NOT EXISTS` 补齐,语义见 [80-admin-auth-login.md](80-admin-auth-login.md)。
 
 ## 2. `admin_sessions`
 
@@ -53,7 +53,7 @@ CREATE TABLE admin_sessions (
 );
 ```
 
-- **只存令牌的 SHA-256 哈希**,明文令牌只在登录响应里出现一次。有效期 24 小时。
+- **只存令牌的 SHA-256 哈希**,明文令牌只在登录响应里出现一次。有效期 24 小时(`SESSION_LIFETIME_MS`)。
 - `revoked_at` 非空即失效。
 - 删除管理员会级联删掉他的全部会话。
 - 改密码调用 `revokeAllExcept(admin_id, keepTokenHash)`,撤销该管理员的其它会话、保留当前这条(体验取舍见 [82-admin-routes-data.md](82-admin-routes-data.md))。
@@ -112,8 +112,9 @@ ALTER TABLE admin_users ADD CONSTRAINT admin_users_created_by_fkey
 | `token` / `uid` | 登录凭据 |
 | `enabled` | `smallint` 0/1(沿用全库布尔约定) |
 | `last_status` | `CHECK (last_status IN ('unknown', 'ok', 'invalid'))`,最近一次探测结果 |
-| `last_error` / `last_note` | 最近一次失败原因 / 探测到的真实音质 |
+| `last_error` / `last_note` | 最近一次失败原因 / 探测到的真实音质(如「mp3 128kbps」) |
 | `last_checked_at` | 可空 bigint |
+| `created_at` / `updated_at` | bigint 毫秒时间戳,非空 |
 
 - 全表**无外键**:凭据生命周期完全由应用层管理(音源下线不牵连用户数据)。
 - 部分唯一索引 `(source, uid) WHERE uid <> ''` 保证同一音源同一份登录凭据只有一条;uid 为空表示尚未登录的占位记录,被索引跳过。
@@ -149,5 +150,6 @@ CREATE TABLE image_generation_task (
 ```
 
 - 任务引用 Key 使用 `ON DELETE RESTRICT`,避免删除仍需轮询的 Key(删除被引用 Key 返回 404/4042)。
+- `state` 默认 `'IN_PROGRESS'`,CHECK 限定 `IN_PROGRESS` / `COMPLETED` / `FAILED` 三种取值;`completed` 是 `smallint` 0/1 布尔约定;`consumed_quota` 必须 > 0。
 - 当前**没有 `user_id` 字段**:知道合法 taskId 的任意已登录用户都能查询该任务;需要归属隔离必须先加用户外键并在创建和查询两条路径同时校验。
 - 状态机与轮询语义见 [50-feature-image-generation.md](50-feature-image-generation.md)。

@@ -2,7 +2,7 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-09-27
+最后更新:2026-09-30
 
 登录链路与 2FA 见 [80-admin-auth-login.md](80-admin-auth-login.md);角色矩阵与审计见 [81-admin-roles-audit.md](81-admin-roles-audit.md);前端实现见 [83-admin-frontend.md](83-admin-frontend.md)。
 
@@ -41,11 +41,11 @@
 | 图片 Key | `/app/admin/image-keys` | `READ_ROLES` | `WRITE_ROLES` |
 | 开放 API Key | `/app/admin/open-api-keys` | `READ_ROLES` | `WRITE_ROLES` |
 | 音源账号 | `/app/admin/music-sources*`(清单、可用项、增删改、启停、探测、短信、登录) | 清单 `PRIVILEGED_READ_ROLES`(凭据属个人信息),其余 `READ_ROLES` | `WRITE_ROLES` |
-| 用户 | `/app/admin/users` | `PRIVILEGED_READ_ROLES` | `WRITE_ROLES` |
+| 用户 | `/app/admin/users`(清单、创建、听歌历史、禁用、删除) | 清单与听歌历史 `PRIVILEGED_READ_ROLES` | `WRITE_ROLES`(创建、禁用、删除;创建免邮箱验证码,审计 `user.create`) |
 
 **守卫一律逐个方法挂,任何控制器都不例外。** 早期文档把守卫的挂法分成两类(「全是管理接口的控制器挂类上、含公开路由的逐个方法挂」),这个区分已经废弃:类级守卫在「将来给这个控制器加一个公开路由」时会静默出错,而维护者不会记得去改类级装饰器。统一用 `@AdminGuarded()` 之后,「这个路由受不受保护」在方法上一眼可见。
 
-`AnnouncementController` 同时有公开的 `GET /announcements`(客户端首页要用),它是最早被迫逐个方法挂的那个;现在其余四个控制器也统一成同样的写法。
+`AnnouncementController` 同时有公开的 `GET /announcements`(客户端首页要用),它是最早被迫逐个方法挂的那个;现在其余业务管理控制器(release / users / image-keys / open-api-keys / music-sources)也统一成同样的写法。
 
 ## 3. 限流分桶
 
