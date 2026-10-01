@@ -6,6 +6,7 @@ import { Public } from "../common/decorators/public.decorator";
 import { RawResponse } from "../common/decorators/raw-response.decorator";
 import type { AdminAuthenticatedRequest } from "../common/request.types";
 import { AdminAuditService } from "../admin-auth/admin-audit.service";
+import { AdminSettingKeys, AdminSettingRepository } from "../admin-setting/admin-setting.repository";
 import { AppConfigService } from "../config/app-config.service";
 import { ReleaseRepository } from "./release.repository";
 import { DesktopUpdaterService } from "./desktop-updater.service";
@@ -51,6 +52,7 @@ export class GithubWebhookController {
     private readonly config: AppConfigService,
     private readonly releases: ReleaseRepository,
     private readonly audit: AdminAuditService,
+    private readonly settings: AdminSettingRepository,
     private readonly desktopUpdater: DesktopUpdaterService,
   ) {}
 
@@ -58,7 +60,7 @@ export class GithubWebhookController {
   @HttpCode(HttpStatus.OK)
   async receive(@Req() request: Request): Promise<{ ok: true; handled: string }> {
     const raw = await this.readRawBody(request);
-    this.verifySignature(request, raw);
+    this.verifySignature(request, raw, await this.resolveSecret());
 
     const event = String(request.headers["x-github-event"] ?? "");
     if (event !== "release") return { ok: true, handled: `ignored:event=${event || "none"}` };
@@ -172,12 +174,20 @@ export class GithubWebhookController {
   }
 
   /**
+   * 取验签密钥：优先后台「系统设置」里配置的值，其次回落环境变量 `GITHUB_WEBHOOK_SECRET`
+   * （便于空库首次引导）。两者都空视为未启用。
+   */
+  private async resolveSecret(): Promise<string> {
+    const fromDb = await this.settings.getValue(AdminSettingKeys.githubWebhookSecret);
+    return fromDb || this.config.githubWebhookSecret;
+  }
+
+  /**
    * 校验 `X-Hub-Signature-256`：`sha256=` + HMAC-SHA256(raw, secret)，timingSafeEqual 比对。
    * 未配置 secret 直接拒绝——未启用即视为关闭，绝不放行未验签请求。
    */
-  private verifySignature(request: Request, raw: Buffer): void {
-    const secret = this.config.githubWebhookSecret;
-    if (!secret) throw ApiErrors.serviceUnavailable(5031, "GITHUB_WEBHOOK_SECRET 未配置，webhook 未启用");
+  private verifySignature(request: Request, raw: Buffer, secret: string): void {
+    if (!secret) throw ApiErrors.serviceUnavailable(5031, "webhook 密钥未配置，webhook 未启用");
     const provided = String(request.headers["x-hub-signature-256"] ?? "");
     const expected = "sha256=" + createHmac("sha256", secret).update(raw).digest("hex");
     const a = Buffer.from(provided);

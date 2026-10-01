@@ -11,6 +11,7 @@ import { SecurityHeadersInterceptor } from "./common/interceptors/security-heade
 import { RateLimitGuard } from "./common/rate-limit/rate-limit.guard";
 import { RateLimitService } from "./common/rate-limit/rate-limit.service";
 import { AppConfigModule } from "./config/config.module";
+import { AdminSettingModule } from "./admin-setting/admin-setting.module";
 import { DatabaseModule } from "./database/database.module";
 import { FilesModule } from "./files/files.module";
 import { FavoritesModule } from "./favorites/favorites.module";
@@ -56,6 +57,7 @@ import { CryptoModule } from "./crypto/crypto.module";
     ImModule,
     LdapModule,
     ReleaseModule,
+    AdminSettingModule,
     SongShareModule,
     UserAdminModule,
     MusicSourceAdminModule,

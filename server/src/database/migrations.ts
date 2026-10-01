@@ -325,6 +325,16 @@ export async function runMigrations(pool: Pool): Promise<void> {
         updated_at       bigint NOT NULL
       );
 
+      -- 管理端系统设置的键值存储（区别于 app_config：那是下发给客户端的远端配置，
+      -- 这里是只在服务端消费的运维配置/密钥，例如 GitHub webhook 验签密钥）。
+      -- 值存明文，服务端运行时按原文读取（如 HMAC 验签需要原始密钥）；
+      -- 读接口一律回掩码，绝不回传明文，也绝不写进审计。
+      CREATE TABLE IF NOT EXISTS admin_setting (
+        key        text PRIMARY KEY,
+        value      text NOT NULL DEFAULT '',
+        updated_at bigint NOT NULL
+      );
+
       -- 公告独立于热更新配置：公告需要保留历史、支持上下线，不适合塞进单值键值表。
       CREATE TABLE IF NOT EXISTS app_announcement (
         id           integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

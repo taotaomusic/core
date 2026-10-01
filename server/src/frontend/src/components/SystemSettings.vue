@@ -34,6 +34,39 @@
       </el-form>
     </el-card>
 
+    <el-card shadow="never" class="card" v-if="webhookAvailable">
+      <template #header>GitHub Webhook 密钥</template>
+
+      <el-alert type="info" :closable="false" show-icon style="margin-bottom: 18px">
+        <template #title>发版自动登记用的验签密钥，可在此轮换，无需改服务器环境变量</template>
+        在仓库 Settings → Webhooks 里把 Secret 设成同一个值，事件选 Releases，
+        URL 指向 <code>/api/v1/app/github-webhook</code>。留空保存即关闭 webhook。
+      </el-alert>
+
+      <el-descriptions :column="1" border style="margin-bottom: 18px">
+        <el-descriptions-item label="当前状态">
+          <el-tag :type="webhook.set ? 'success' : 'info'" size="small">
+            {{ webhook.set ? `已配置（${webhook.masked}）` : "未配置" }}
+          </el-tag>
+        </el-descriptions-item>
+      </el-descriptions>
+
+      <el-form label-width="110px">
+        <el-form-item label="设为">
+          <el-input
+            v-model="webhookInput"
+            type="password"
+            show-password
+            placeholder="输入新密钥；留空并保存可清除"
+            style="max-width: 420px"
+          />
+        </el-form-item>
+        <el-form-item>
+          <el-button type="primary" :loading="savingWebhook" @click="saveWebhook">保存密钥</el-button>
+        </el-form-item>
+      </el-form>
+    </el-card>
+
     <el-card shadow="never" class="card">
       <template #header>连通性</template>
       <el-descriptions :column="1" border>
@@ -78,6 +111,15 @@ const loading = ref(false);
 const saving = ref(false);
 const tokenOk = ref<boolean | null>(null);
 
+const webhook = ref<{ set: boolean; masked: string }>({ set: false, masked: "" });
+const webhookAvailable = ref(false);
+const webhookInput = ref("");
+const savingWebhook = ref(false);
+
+interface SettingsSummary {
+  githubWebhookSecret: { set: boolean; masked: string };
+}
+
 const apiBase = `${window.location.origin}/api/v1`;
 
 const rolledOut = computed(() =>
@@ -109,6 +151,15 @@ async function refresh() {
   } finally {
     loading.value = false;
   }
+  // 独立 try：webhook 密钥是特权读（viewer 会 403），失败只隐藏这张卡，
+  // 不连累本页其它内容。viewer 看不到这块是预期行为。
+  try {
+    const settings = await apiGet<SettingsSummary>("/app/admin/settings", props.adminToken);
+    webhook.value = settings.githubWebhookSecret;
+    webhookAvailable.value = true;
+  } catch {
+    webhookAvailable.value = false;
+  }
 }
 
 async function submit() {
@@ -138,6 +189,31 @@ async function submit() {
 
 function forgetToken() {
   emit("forget-token");
+}
+
+async function saveWebhook() {
+  if (webhook.value.set && webhookInput.value === "") {
+    try {
+      await ElMessageBox.confirm("留空保存会清除密钥并关闭 webhook，确定吗？", "确认", { type: "warning" });
+    } catch {
+      return;
+    }
+  }
+  savingWebhook.value = true;
+  try {
+    const result = await apiPostJson<{ set: boolean; masked: string }>(
+      "/app/admin/settings/github-webhook-secret",
+      props.adminToken,
+      { value: webhookInput.value },
+    );
+    webhook.value = result;
+    webhookInput.value = "";
+    ElMessage.success(result.set ? "已保存密钥" : "已清除密钥");
+  } catch (error) {
+    ElMessage.error(`保存失败：${(error as Error).message}`);
+  } finally {
+    savingWebhook.value = false;
+  }
 }
 </script>
 
