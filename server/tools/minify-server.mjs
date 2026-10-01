@@ -20,7 +20,7 @@ const outputDirectory = resolve("dist");
  * 但**分步构建**（技能里推荐的那种：`tsc` → `minify` → …）在已构建过的目录上再跑一次时，
  * `dist/share-player` 是存在的，于是被误压。2026-09-21 实际踩到。
  */
-const BROWSER_BUNDLE_DIRECTORIES = new Set(["public", "share-player"]);
+const BROWSER_BUNDLE_DIRECTORIES = new Set(["public", "share-player", "website"]);
 
 async function javascriptFiles(directory) {
   const entries = await readdir(directory, { withFileTypes: true });

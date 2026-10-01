@@ -19,8 +19,8 @@
     "sourceMap": false
   },
   "include": ["src/**/*.ts"],
-  // 管理面板（Vue）不参与后端编译：它是浏览器入口，编进 dist 只是死重量，
-  // 而且 rootDir 是 src，会在产物里多出一个 dist/frontend/main.js。
-  // 前端应由自己的构建工具（vite 等）处理。
-  "exclude": ["src/frontend"]
+  // 浏览器前端（管理面板 Vue / 官网 React）不参与后端编译：它们是浏览器入口，
+  // 编进 dist 只是死重量，而且 rootDir 是 src，会在产物里多出多余的 JS。
+  // 两边都应由自己的构建工具（vite 等）处理。
+  "exclude": ["src/frontend", "src/website"]
 }

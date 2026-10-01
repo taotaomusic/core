@@ -50,6 +50,24 @@ function resolveSharePlayerDir(): string | null {
 }
 
 /**
+ * 官网（React 单页）构建产物目录。
+ *
+ * 源码目录 `src/website` 也有 index.html，但那是给 vite 的模板，里面引用的是
+ * 未经打包的 TSX；把它当静态目录会直接把 TSX 原文吐给浏览器、页面白屏且不报错。
+ * 因此除了 index.html 还要求 `assets/` 存在 —— 只有构建产物才有。
+ */
+function resolveWebsiteDir(): string | null {
+  const candidates = [
+    join(__dirname, "website"), // npm start：dist/ → dist/website
+    join(__dirname, "..", "dist", "website"), // npm run dev：src/ → dist/website
+  ];
+  return (
+    candidates.find((dir) => existsSync(join(dir, "index.html")) && existsSync(join(dir, "assets"))) ??
+    null
+  );
+}
+
+/**
  * 管理后台的 Content-Security-Policy。
  *
  * 用 Express 中间件而不是 Nest 拦截器：`express.static` 在路由之前直接吐出
@@ -74,6 +92,27 @@ const ADMIN_CSP = [
   "script-src 'self'",
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https:",
+  "font-src 'self' data:",
+  "connect-src 'self'",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+].join("; ");
+
+/**
+ * 官网首页的 Content-Security-Policy，随静态资源一起下发（同样是 express.static
+ * 拦截器盖不住的部分，必须用 setHeaders 挂在响应上）。
+ *
+ * 比管理后台更紧一档：官网不依赖任何内联脚本，也不写任何行内样式
+ * （样式全部在构建出的 CSS 文件里），所以 style-src 不放 'unsafe-inline'。
+ * 给官网加视觉时禁止 style="..." 行内写法，否则会被这条 CSP 静默拦掉。
+ */
+const WEBSITE_CSP = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self'",
+  "img-src 'self' data:",
   "font-src 'self' data:",
   "connect-src 'self'",
   "object-src 'none'",
@@ -132,6 +171,32 @@ async function bootstrap(): Promise<void> {
     );
   } else {
     new Logger("Bootstrap").warn("未找到管理后台构建产物，跳过静态资源。执行 npm run build:frontend 生成");
+  }
+
+  // 官网固定托管在根路径 /：React 单页（构建产物 dist/website），没有路由、没有 SPA 回退，
+  // 未匹配的路径仍由 Nest 返回 404。挂在 /admin 与 /share 之后注册不影响它们 ——
+  // express.static 只响应真实存在的文件，二者目录互不重叠。
+  // CSP 与缓存档位都通过 setHeaders 下发：vite 产物带内容哈希（assets/），可以 immutable
+  // 长缓存；入口 HTML 决定哈希文件名，必须 no-cache 协商，否则发版后用户拿到的还是旧资源名。
+  const websiteDir = resolveWebsiteDir();
+  if (websiteDir) {
+    app.use(
+      "/",
+      expressStatic(websiteDir, {
+        etag: true,
+        lastModified: true,
+        setHeaders: (response: Response, filePath: string) => {
+          response.setHeader("content-security-policy", WEBSITE_CSP);
+          const isHashedAsset = filePath.split(/[\\/]/).includes("assets");
+          response.setHeader(
+            "cache-control",
+            isHashedAsset ? "public, max-age=31536000, immutable" : "no-cache",
+          );
+        },
+      }),
+    );
+  } else {
+    new Logger("Bootstrap").warn("未找到官网构建产物，跳过根路径静态站点。执行 npm run build:website 生成");
   }
 
   // 分享页只托管 Kotlin/Wasm 静态产物；歌曲身份和试听地址仍由公开 API 按短码读取。
