@@ -17,6 +17,8 @@ data class Song(
     val album: String = "",
     val subtitle: String = "",
     val releaseTime: String = "",
+    val refrainStartMs: Long? = null,
+    val refrainEndMs: Long? = null,
     /**
      * 上游的 songMID 与歌曲类型，解析播放地址时要原样带回服务端。
      * [remoteId] 为 0 的歌只能靠 [mid] 解析，缺了它这些歌永远拿不到地址。

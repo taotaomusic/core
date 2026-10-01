@@ -1,6 +1,9 @@
 package com.taotao.music.playerui
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Pause
@@ -157,6 +160,8 @@ fun PlayerPlaybackDetails(
             PlayerProgress(
                 positionMs = state.positionMs,
                 durationMs = state.durationMs,
+                refrainStartMs = state.refrainStartMs,
+                refrainEndMs = state.refrainEndMs,
                 onSeek = actions.onSeek,
                 onSeekFinished = actions.onSeekFinished,
             )
@@ -194,18 +199,29 @@ fun PlayerPlaybackDetails(
 fun PlayerProgress(
     positionMs: Long,
     durationMs: Long,
+    refrainStartMs: Long? = null,
+    refrainEndMs: Long? = null,
     onSeek: (Long) -> Unit,
     onSeekFinished: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val progress = normalizedPlayerProgress(positionMs, durationMs)
-    AppleStyleSlider(
-        progress = progress,
-        onProgressChange = { onSeek(playerPositionForProgress(it, durationMs)) },
-        onProgressChangeFinished = onSeekFinished,
-        enabled = durationMs > 0L,
-        modifier = modifier,
-    )
+    Box(modifier) {
+        AppleStyleSlider(
+            progress = progress,
+            onProgressChange = { onSeek(playerPositionForProgress(it, durationMs)) },
+            onProgressChangeFinished = onSeekFinished,
+            enabled = durationMs > 0L,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        val start = (refrainStartMs ?: -1L).toFloat() / durationMs.coerceAtLeast(1L)
+        val end = (refrainEndMs ?: -1L).toFloat() / durationMs.coerceAtLeast(1L)
+        if (start in 0f..1f && end > start) {
+            Canvas(Modifier.matchParentSize()) {
+                drawLine(Color(0xFFFF6B6B), Offset(size.width * start, size.height / 2), Offset(size.width * end.coerceAtMost(1f), size.height / 2), strokeWidth = 5.dp.toPx())
+            }
+        }
+    }
 }
 
 /** 三端共用的循环、上一首、播放、下一首控制区。 */

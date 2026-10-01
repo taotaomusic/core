@@ -779,6 +779,8 @@ class TencentMusicApi(
             lyricUri = lyricUri(remoteId, normalizedSource),
             favorited = favorited,
             source = normalizedSource,
+            refrainStartMs = data.optLong("refrainStartMs").takeIf { it > 0L },
+            refrainEndMs = data.optLong("refrainEndMs").takeIf { it > 0L },
         )
     }
 
@@ -802,6 +804,8 @@ class TencentMusicApi(
             lyricUri = lyricUri(numericId, mid, source),
             favorited = favorited,
             source = source,
+            refrainStartMs = optLong("refrainStartMs").takeIf { it > 0L },
+            refrainEndMs = optLong("refrainEndMs").takeIf { it > 0L },
         )
     }
 

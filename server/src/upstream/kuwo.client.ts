@@ -268,6 +268,8 @@ export class KuwoClient implements MusicSourceClient, MusicSourceCredentialManag
       // 反而失去意义，所以不报。
       pay: "",
       interval: duration,
+      refrainStartMs: info.refrainStartMs,
+      refrainEndMs: info.refrainEndMs,
       tiers,
     };
   }
@@ -624,6 +626,8 @@ export class KuwoClient implements MusicSourceClient, MusicSourceCredentialManag
       subtitle: song.subtitle ?? "",
       time: "",
       interval: song.durationSeconds ?? 0,
+      refrainStartMs: song.refrainStartMs,
+      refrainEndMs: song.refrainEndMs,
       cover: song.cover ?? "",
       pay: "",
       // `undefined` 按可播处理，只有明确为 false 才置灰 —— 判据见 [searchSongs]。

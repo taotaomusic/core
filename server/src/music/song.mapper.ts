@@ -44,6 +44,8 @@ export type Song = {
   favorited: boolean;
   /** 音乐数据源。新客户端据此把后续链接、歌词与收藏请求路由到同一上游。 */
   source: MusicSource;
+  refrainStartMs?: number;
+  refrainEndMs?: number;
 };
 
 /** 音质档位上限。实测上游 `qualityInfo` 到 18（NAC），README 里写的 16 是旧的。 */
@@ -119,6 +121,8 @@ export class SongMapper {
       playable: item.playable !== false,
       favorited,
       source,
+      refrainStartMs: item.refrainStartMs,
+      refrainEndMs: item.refrainEndMs,
     };
   }
 

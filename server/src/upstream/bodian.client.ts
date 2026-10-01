@@ -29,6 +29,8 @@ export interface Song {
   durationSeconds?: number;
   /** 副标题，例如「《声生不息》综艺」。 */
   subtitle?: string;
+  refrainStartMs?: number;
+  refrainEndMs?: number;
   /**
    * 这首歌能否真的取到播放地址。
    *
@@ -129,6 +131,8 @@ export interface MusicInfo {
   lrcInfo?: { lrc?: number; lrcx?: number };
   /** 官方单曲信息接口声明的资源目录；是否有权限仍以取址接口的实际响应为准。 */
   audios?: AdvertisedAudio[];
+  refrainStartMs?: number;
+  refrainEndMs?: number;
 }
 
 export interface MvInfo {
@@ -845,6 +849,8 @@ export class BodianClient {
       cover: s.albumPic || "",
       durationSeconds: Number(s.duration) || 0,
       subtitle: s.subtitle || "",
+      refrainStartMs: Number.isFinite(Number(s.payInfo?.refrain_start)) ? Number(s.payInfo.refrain_start) : undefined,
+      refrainEndMs: Number.isFinite(Number(s.payInfo?.refrain_end)) ? Number(s.payInfo.refrain_end) : undefined,
       // listen_fragment 是匿名/试听权限，不是“歌曲已下线”。会员账号应允许进入
       // 原生权益取址，由 audioUrl 的业务码给出最终结论。
       playable: this.hasCredentials() || String(s.payInfo?.listen_fragment ?? "0") !== "1",
@@ -952,6 +958,8 @@ export class BodianClient {
       duration: Number(d.data?.duration) || 0,
       lrcInfo: d.data?.lrc_info,
       audios: Array.isArray(d.data?.audios) ? d.data.audios : [],
+      refrainStartMs: Number.isFinite(Number(d.data?.payInfo?.refrain_start)) ? Number(d.data.payInfo.refrain_start) : undefined,
+      refrainEndMs: Number.isFinite(Number(d.data?.payInfo?.refrain_end)) ? Number(d.data.payInfo.refrain_end) : undefined,
     };
   }
 

@@ -11,6 +11,8 @@ data class PlayerUiState(
     val durationMs: Long = 0L,
     val repeatMode: PlayerRepeatMode = PlayerRepeatMode.OFF,
     val errorMessage: String? = null,
+    val refrainStartMs: Long? = song.refrainStartMs,
+    val refrainEndMs: Long? = song.refrainEndMs,
 )
 
 /** 跨平台播放循环模式；各端在适配层转换为自己的播放器枚举。 */

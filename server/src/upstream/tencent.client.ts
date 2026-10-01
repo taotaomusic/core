@@ -31,6 +31,8 @@ export type UpstreamSong = {
    * ⚠️ **2026-09-19 起不再据此丢歌**，而是逐首下发让客户端置灰。原因见 [SearchResult.dropped]。
    */
   playable?: boolean;
+  refrainStartMs?: number;
+  refrainEndMs?: number;
 };
 
 /**
@@ -73,6 +75,8 @@ export type UpstreamSongInfo = {
   pay: string;
   interval: number;
   tiers: QualityTier[];
+  refrainStartMs?: number;
+  refrainEndMs?: number;
 };
 
 /**
