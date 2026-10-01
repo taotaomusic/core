@@ -104,14 +104,15 @@ const ADMIN_CSP = [
  * 官网首页的 Content-Security-Policy，随静态资源一起下发（同样是 express.static
  * 拦截器盖不住的部分，必须用 setHeaders 挂在响应上）。
  *
- * 比管理后台更紧一档：官网不依赖任何内联脚本，也不写任何行内样式
- * （样式全部在构建出的 CSS 文件里），所以 style-src 不放 'unsafe-inline'。
- * 给官网加视觉时禁止 style="..." 行内写法，否则会被这条 CSP 静默拦掉。
+ * script-src 收得比管理后台还紧：官网没有内联脚本。style-src 放开
+ * 'unsafe-inline' 与后台同理 —— antd v6 的 cssinjs 在运行时往页面里注入
+ * <style> 标签，卡死这条整个站点会变成无样式页面。除了组件库注入，
+ * 自写样式禁止任何行内 style。
  */
 const WEBSITE_CSP = [
   "default-src 'self'",
   "script-src 'self'",
-  "style-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data:",
   "font-src 'self' data:",
   "connect-src 'self'",

@@ -1,0 +1,129 @@
+/** 中文文案字典（默认语言）。en.ts 的结构必须与本文件保持一致（见 Dict 类型）。 */
+export const zh = {
+  brand: "桃桃音乐",
+  docTitle: "桃桃音乐 · 跨平台私人音乐播放器",
+  nav: {
+    features: "功能",
+    download: "下载",
+    selfhost: "自部署",
+    github: "GitHub",
+    themeTitle: "切换明暗",
+    langTitle: "English",
+  },
+  hero: {
+    badge: "自建音乐服务 · 三端同步",
+    titleBefore: "你的私人曲库，",
+    titleAccent: "随处可听",
+    sub: "桃桃音乐是一套可完全自建的跨平台音乐播放服务：Android、Windows、Web 三端一个账号听到底，歌单、收藏与播放进度云端同步，还有逐字歌词、多档音质与一键分享试听。",
+    android: "下载 Android 版",
+    desktop: "下载 Windows 版",
+    more: "了解功能",
+    metaPrefix: "开源仓库 ",
+    repo: "taotaomusic/core",
+    metaSuffix: " · 数据完全自持 · 免费使用",
+    playerTitle: "桃桃小夜曲",
+    playerArtist: "示例曲目 · 无损",
+    playerLyric: "把喜欢的歌，一遍一遍唱给你听",
+    chipLossless: "无损音质",
+    chipLyrics: "逐字歌词",
+    chipSync: "云端同步",
+  },
+  features: {
+    kicker: "功能特性",
+    title: "听歌这件事，本来就该这么顺",
+    desc: "客户端与服务端共同打磨的日常体验，而不是功能的简单堆叠。",
+    items: [
+      {
+        icon: "cloud" as const,
+        title: "云端歌单同步",
+        desc: "歌单、收藏、最近播放与播放进度全部上云，换设备登录即接续上次的进度。",
+      },
+      {
+        icon: "mic" as const,
+        title: "逐字歌词",
+        desc: "卡拉OK式逐字刷新高亮，播放到哪个字就亮哪个字，跟唱不再抢拍。",
+      },
+      {
+        icon: "equalizer" as const,
+        title: "多档音质",
+        desc: "从标准到无损多档音质自由切换，按网络与流量情况随手调整。",
+      },
+      {
+        icon: "search" as const,
+        title: "聚合搜索",
+        desc: "一次搜索覆盖多个音源，试听、收藏与下载在同一条结果里完成。",
+      },
+      {
+        icon: "link" as const,
+        title: "分享试听",
+        desc: "任意歌曲生成短链接，对方浏览器打开即听，不需要安装任何客户端。",
+      },
+      {
+        icon: "shield" as const,
+        title: "传输加密",
+        desc: "自研传输加密层保护敏感接口，密钥由服务端动态下发，客户端零硬编码。",
+      },
+    ],
+  },
+  download: {
+    kicker: "多端下载",
+    title: "三端覆盖，各取所需",
+    desc: "所有安装包由统一 CI 构建并签名发布，版本号连续、可回溯。",
+    android: {
+      title: "Android",
+      desc: "滚动构建的签名 APK，与桌面端功能同源，歌单、收藏与播放进度云端同步。",
+      meta: "APK · GitHub Release 滚动更新",
+      action: "获取 APK",
+    },
+    windows: {
+      title: "Windows 桌面版",
+      desc: "原生窗口体验，应用内自动更新已启用，装一次即可长期自动跟进新版。",
+      meta: "MSI / 安装器 · 支持签名校验的自动更新",
+      action: "获取安装包",
+    },
+    web: {
+      title: "Web 分享播放器",
+      desc: "在 App 内点「分享」生成短链接，任何现代浏览器打开即可试听，无需登录。",
+      link: "https://你的域名/s/xxxxxxxx",
+      note: "入口在 App 内 · 无需下载",
+    },
+  },
+  selfhost: {
+    kicker: "自部署",
+    title: "为自部署而生",
+    desc: "服务端是标准的 NestJS + PostgreSQL 应用，一条命令即可跑起来；每次发布前都会在独立验证库上跑完 300+ 项接口契约检查，全绿才出包。",
+    hint: "镜像跟随仓库发布，latest / 语义化版本 / 提交短哈希三个 tag 任选。",
+    cards: [
+      {
+        icon: "box" as const,
+        title: "Docker 部署",
+        desc: "一条命令拉起运行时镜像，直接复用已通过契约验证的构建产物。",
+      },
+      {
+        icon: "badge-check" as const,
+        title: "契约验证",
+        desc: "接口行为由 300+ 项自动化契约锁定，升级不会悄悄破坏客户端。",
+      },
+      {
+        icon: "dashboard" as const,
+        title: "管理后台",
+        desc: "角色分级、两步验证、强制改密与操作审计一应俱全。",
+        link: "打开管理后台 →",
+      },
+      {
+        icon: "code" as const,
+        title: "开放 API",
+        desc: "分享、歌单等能力以 REST 形式开放，方便接入自己的自动化流程。",
+        link: "",
+      },
+    ],
+  },
+  footer: {
+    slogan: "桃桃音乐 · 让喜欢的歌随时在耳边",
+    admin: "管理入口",
+    status: "服务状态",
+    copy: "© 2026 桃桃音乐",
+  },
+};
+
+export type Dict = typeof zh;
