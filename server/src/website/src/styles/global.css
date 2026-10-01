@@ -870,9 +870,15 @@ a.ant-typography.card-link:hover {
     gap: 8px;
   }
 
-  /* 窄屏行内锚点收进抽屉菜单（Drawer），只留品牌 + 图标按钮组。 */
+  /* 窄屏行内锚点收进抽屉菜单（Drawer），只留品牌 + 图标按钮组。
+     推右的 margin-left:auto 原本挂在链接上，链接 display:none 后力没了，
+     要把 auto 挪到操作组上，否则按钮簇贴在品牌旁边、右边留一大块空白。 */
   .nav-links {
     display: none;
+  }
+
+  .nav-actions {
+    margin-left: auto;
   }
 
   .nav-menu-btn {
