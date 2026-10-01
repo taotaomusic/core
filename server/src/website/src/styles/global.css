@@ -260,6 +260,11 @@ p.ant-typography.section-desc {
   margin-inline-end: 0;
 }
 
+/* 抽屉菜单按钮：桌面不显示，窄屏替代行内锚点。 */
+.nav-menu-btn {
+  display: none;
+}
+
 /* ============================== 首屏 ============================== */
 
 /* 加载入场动画：文案自上而下错峰淡入上移，装饰卡自右滑入；
@@ -865,14 +870,13 @@ a.ant-typography.card-link:hover {
     gap: 8px;
   }
 
-  /* 窄屏保留导航锚点（很短），GitHub 只留图标省宽度。 */
+  /* 窄屏行内锚点收进抽屉菜单（Drawer），只留品牌 + 图标按钮组。 */
   .nav-links {
-    gap: 0;
+    display: none;
   }
 
-  .nav-links a {
-    padding: 8px 9px;
-    font-size: 14px;
+  .nav-menu-btn {
+    display: inline-flex;
   }
 
   /* 窄屏 GitHub 按钮只留图标（antd 把文字包在非图标 span 里）。 */
@@ -922,6 +926,35 @@ a.ant-typography.card-link:hover {
 
   .selfhost-command code {
     font-size: 12px;
+  }
+}
+
+@media (max-width: 560px) {
+  /* 首屏按钮窄屏纵向铺满：点按目标更大也更整齐。 */
+  .hero-actions.ant-space {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    width: 100%;
+  }
+
+  .hero-actions .ant-space-item {
+    width: 100%;
+  }
+
+  .hero-actions .ant-btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  /* 命令示例窄屏折行展示，代替难看的横向滚动条。 */
+  .selfhost-command {
+    overflow-x: hidden;
+  }
+
+  .selfhost-command code {
+    white-space: pre-wrap;
+    word-break: break-all;
   }
 }
 
