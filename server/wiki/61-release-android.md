@@ -2,7 +2,7 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-10-01
+最后更新:2026-10-02
 
 本篇是 Android 版本发布的服务端操作:登记、验证、灰度、抬高下限,以及 `/app/bootstrap` 必须守住的热更新契约。版本号铁律以 [项目 RELEASE.md](../../RELEASE.md) 为准;热更新设计动机见 [HOT_UPDATE.md](../../HOT_UPDATE.md);排障见 [73-troubleshooting-release.md](73-troubleshooting-release.md)。
 
@@ -28,8 +28,8 @@ APK 下载(`/app/apk/{versionCode}`)必须支持:
 
 APK 由单仓 taotaomusic/core 根 CI 的 `client-android` job 构建(**Windows** runner,`incrementVersion` 依赖 PowerShell),流程见 [62-ci-cloud-build.md](62-ci-cloud-build.md):
 
-- 签名 Secrets(`ANDROID_KEYSTORE_BASE64`、`ANDROID_STORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD`)配置在 **taotaomusic/core** 仓库;job 把 keystore 还原为根目录 `taotao-release.jks` 并写入 `local.properties` 后跑 `:androidApp:assembleRelease`。
-- **未配置这些 Secrets 时自动改走 `:androidApp:assembleDebug`**,产 Debug 包(文件名 `TaotaoMusic-<版本>-debug.apk`),仅验证工具链;两种情况都会发布到 core 的滚动 Release `latest`。
+- 签名 Secrets 配置在 **taotaomusic/core** 仓库:`ANDROID_KEYSTORE_BASE64`(keystore 的 base64,名称沿用)+ `TAOTAO_STORE_PASSWORD` / `TAOTAO_KEY_ALIAS` / `TAOTAO_KEY_PASSWORD`(2026-10-02 起 Secret 名对齐为 `TAOTAO_*`,与本地 `local.properties` 的变量名一致;workflow 内 env 变量名仍是 `ANDROID_*`,不受影响)。job 把 keystore 还原为根目录 `taotao-release.jks` 并写入 `local.properties` 后跑 `:androidApp:assembleRelease`。
+- **未配置 `ANDROID_KEYSTORE_BASE64` 时自动改走 `:androidApp:assembleDebug`**,产 Debug 包(文件名 `TaotaoMusic-<版本>-debug.apk`),仅验证工具链;两种情况都会发布到 core 的滚动 Release `latest`。
 - 登记发布时版本号取自构建产物 `output-metadata.json`(CI 也用它判定 release/debug),不能读 `version.properties`。
 
 ### 本地构建

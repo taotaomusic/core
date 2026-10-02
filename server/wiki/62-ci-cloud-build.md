@@ -2,7 +2,7 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-10-01
+最后更新:2026-10-02
 
 正式构建在 GitHub 侧由**单仓 [taotaomusic/core](https://github.com/taotaomusic/core)** 的统一工作流承担:根目录 `.github/workflows/ci.yml` 用 `dorny/paths-filter` 按改动路径只构建相关部分,一处改动不重跑无关 job。本文讲与后端直接相关的部分;三仓快照的旧机制已废弃,末尾保留一段备查。
 
@@ -28,7 +28,7 @@
 
 | job | runner | 跑的条件 | 产物 |
 | --- | --- | --- | --- |
-| `crypto` | ubuntu | crypto 或 server 或 client 有改动 | Android `.so` + Node `.node`(同 run artifact + Release `crypto-latest`) |
+| `crypto` | ubuntu | crypto 或 server 或 client 有改动 | Android `.so` + Node `.node`(同 run artifact + Release `crypto-latest`;源码未变时复用缓存) |
 | `server` | ubuntu | server 或 crypto 有改动 | `server-dist-latest` Release + ghcr 镜像 |
 | `client-android` | **windows** | client 或 crypto 有改动 | APK(artifact,由 `client-publish` 发布) |
 | `client-web` | ubuntu | client 有改动 | Release `share-player-latest` |
@@ -38,6 +38,7 @@
 要点:
 
 - **加密产物在同一次 run 内经 `upload-artifact` / `download-artifact` 流转**:`server` job 取 `crypto-node-linux`,`client-android` job 取 `crypto-android`,不再跨仓、跨 Release 拉取。
+- **crypto 产物按源码哈希缓存**(2026-10-02 起):`crypto-src/out` 以 `hashFiles('crypto-src/**')` 为 key。命中时跳过工具链/NDK 安装、fmt/clippy/测试、双平台编译与混淆校验,直接把缓存产物 upload 给下游,且**不重发** `crypto-latest`(Release 保持上一次真实构建的版本);rust 源码有变才全量重跑。
 - crypto 有改动时 server 和客户端也会连带重建(它们都消费加密产物);反向不成立。
 - `client-web` 固定在 **Linux** 跑:Windows runner 上 npm 刚生成的 `wasm-opt.cmd` shim 偶发被占用导致进程启动失败,Linux 的 POSIX shim 无此问题。该 job 还负责 `kotlin-js-store` 锁文件自愈:漂移时以 Linux 解析为准回写仓库(`[skip ci]` 提交)。
 - PSK 已改为后端动态下发(见 [37-api-crypto.md](37-api-crypto.md)),产物不含密钥,流水线无需注入任何 PSK 相关 Secret;`CRYPTIFY_KEY` 只用于 `.so` 的编译期字符串混淆。

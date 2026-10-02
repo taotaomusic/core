@@ -125,7 +125,7 @@
    - 新审计 action:同步 [81-admin-roles-audit.md](81-admin-roles-audit.md) 与前端 `AuditLogViewer.vue` 的 `ACTION_GROUPS`。
 4. **安全第一**:不在文档中写入真实密码、API Key、数据库连接串或签名信息;示例密钥只能使用明显的占位文本(例如 `替换为真实Key`)。
 5. **可执行性**:文档中的命令应能从标注的工作目录直接执行。
-6. **加密同步**:加密层源码在 monorepo 的 `crypto-src/`(Rust,core/jni/node/wasm 四 crate),由 core 仓库根 CI 的 `crypto` job 在同一次 run 内交叉编译并经 artifact 流转给下游 job,同时发 Release `crypto-latest`;本地取产物用 `tools/fetch-crypto.ps1`(默认拉 core 的 `crypto-latest`)。改协议格式或密钥规则去 `crypto-src/` 改,同步更新它的 `README.md` 与 `SECURITY.md`;`crypto/dist/` 只放产物,不放文档、不手改。(旧三仓快照同步已废弃,见 [62-ci-cloud-build.md](62-ci-cloud-build.md)。)
+6. **加密同步**:加密层源码在 monorepo 的 `crypto-src/`(Rust,core/jni/node/wasm 四 crate),由 core 仓库根 CI 的 `crypto` job 在同一次 run 内交叉编译并经 artifact 流转给下游 job,同时发 Release `crypto-latest`(crypto 源码未变时复用产物缓存、不重发);本地取产物用 `tools/fetch-crypto.ps1`(默认拉 core 的 `crypto-latest`)。改协议格式或密钥规则去 `crypto-src/` 改,同步更新它的 `README.md` 与 `SECURITY.md`;`crypto/dist/` 只放产物,不放文档、不手改。(旧三仓快照同步已废弃,见 [62-ci-cloud-build.md](62-ci-cloud-build.md)。)
 7. **索引同步**:新增或删除路由、表、环境变量或模块后先刷新 CodeGraph,再更新 [00-code-index.md](00-code-index.md) 和对应专题;不要凭旧 README 猜测路由。
 8. **时效标注**:每篇文档头部保留「最后更新」日期;修改当天更新它。
 
