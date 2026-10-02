@@ -171,6 +171,19 @@ export class MusicController {
     return this.songInfo(this.songKeyOf(id, mid, selectedSource), selectedSource);
   }
 
+  @Get("songs/:id/mv")
+  async mv(
+    @Param("id", ParseIntPipe) id: number,
+    @Query("source") source?: string,
+  ) {
+    const selectedSource = this.sourceOf(source);
+    const client = this.registry.of(selectedSource);
+    if (!client.getMvInfo) throw ApiErrors.badRequest(4001, `${client.displayName}暂不支持 MV`);
+    const mv = await client.getMvInfo(id);
+    if (!mv) throw ApiErrors.upstream("MV 信息不可用");
+    return mv;
+  }
+
   /**
    * 最近播放补全资料的批量入口。客户端一次最多请求 60 首，服务端分批并发访问上游，
    * 避免新设备拉 500 条历史时发出 500 个移动端 HTTP 请求。

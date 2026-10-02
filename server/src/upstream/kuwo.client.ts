@@ -274,6 +274,11 @@ export class KuwoClient implements MusicSourceClient, MusicSourceCredentialManag
     };
   }
 
+  async getMvInfo(musicId: number | string) {
+    const client = await this.clientOf();
+    return client.getMvInfo(musicId);
+  }
+
   /**
    * 解析播放地址，按档位阶梯降级。
    *
