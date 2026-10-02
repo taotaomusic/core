@@ -333,10 +333,33 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           if ([string]::IsNullOrWhiteSpace($env:ANDROID_KEYSTORE_BASE64)) {
+            Write-Host "未配 ANDROID_KEYSTORE_BASE64：退回 Debug 包，仅验证工具链"
             Add-Content -Path $env:GITHUB_OUTPUT -Value "signed=false"
           } else {
+            # 诊断：只打印每个 Secret 的长度，绝不打印值。某项为 0 即说明该 Secret 为空或名字写错。
+            Write-Host ("Secret 长度 — base64={0} store={1} alias={2} key={3}" -f `
+              $env:ANDROID_KEYSTORE_BASE64.Length, $env:ANDROID_STORE_PASSWORD.Length, `
+              $env:ANDROID_KEY_ALIAS.Length, $env:ANDROID_KEY_PASSWORD.Length)
+            # 守卫：base64 有值就必须四项齐全，否则硬失败——绝不把空密码写进 local.properties
+            # 伪装成 signed=true（那会在 packageRelease 报「password was incorrect」，误导排查）。
+            $missing = @()
+            if ([string]::IsNullOrWhiteSpace($env:ANDROID_STORE_PASSWORD)) { $missing += "ANDROID_STORE_PASSWORD" }
+            if ([string]::IsNullOrWhiteSpace($env:ANDROID_KEY_ALIAS))      { $missing += "ANDROID_KEY_ALIAS" }
+            if ([string]::IsNullOrWhiteSpace($env:ANDROID_KEY_PASSWORD))   { $missing += "ANDROID_KEY_PASSWORD" }
+            if ($missing.Count -gt 0) {
+              throw "已配 ANDROID_KEYSTORE_BASE64 但以下签名 Secret 为空：$($missing -join ', ')。请在仓库 Secrets 里补齐，名称须完全一致。"
+            }
             [IO.File]::WriteAllBytes("taotao-release.jks", [Convert]::FromBase64String($env:ANDROID_KEYSTORE_BASE64))
-            @("TAOTAO_STORE_PASSWORD=$env:ANDROID_STORE_PASSWORD","TAOTAO_KEY_ALIAS=$env:ANDROID_KEY_ALIAS","TAOTAO_KEY_PASSWORD=$env:ANDROID_KEY_PASSWORD") | Set-Content local.properties
+            # 用 .NET 无 BOM UTF-8 写：Set-Content 可能加 BOM，令首行 key 读不到 → 空密码。
+            $lines = "TAOTAO_STORE_PASSWORD=$env:ANDROID_STORE_PASSWORD`nTAOTAO_KEY_ALIAS=$env:ANDROID_KEY_ALIAS`nTAOTAO_KEY_PASSWORD=$env:ANDROID_KEY_PASSWORD`n"
+            [IO.File]::WriteAllText("local.properties", $lines, (New-Object System.Text.UTF8Encoding $false))
+            # 本机先验一遍 store 密码，CI 早失败好过拖到 packageRelease。
+            $kt = "$env:JAVA_HOME\bin\keytool.exe"
+            if (Test-Path $kt) {
+              & $kt -list -keystore taotao-release.jks -storepass $env:ANDROID_STORE_PASSWORD -alias $env:ANDROID_KEY_ALIAS *> $null
+              if ($LASTEXITCODE -ne 0) { throw "keytool 自检失败：store 密码或别名与 keystore 不符（exit $LASTEXITCODE）。" }
+              Write-Host "keytool 自检通过：keystore / 密码 / 别名 一致。"
+            }
             Add-Content -Path $env:GITHUB_OUTPUT -Value "signed=true"
           }
       - name: 构建 APK
