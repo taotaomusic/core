@@ -1,4 +1,3 @@
-// 触发 client-android 以验证 CI 签名注入修复（无功能影响）。
 import java.util.Properties
 
 plugins {

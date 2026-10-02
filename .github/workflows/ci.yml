@@ -328,9 +328,9 @@ jobs:
         shell: pwsh
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_STORE_PASSWORD: ${{ secrets.TAOTAO_STORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.TAOTAO_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.TAOTAO_KEY_PASSWORD }}
         run: |
           if ([string]::IsNullOrWhiteSpace($env:ANDROID_KEYSTORE_BASE64)) {
             Write-Host "未配 ANDROID_KEYSTORE_BASE64：退回 Debug 包，仅验证工具链"
