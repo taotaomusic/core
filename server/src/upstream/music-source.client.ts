@@ -134,7 +134,7 @@ export interface MusicSourceClient {
   /** 单曲信息与**真实可用**的音质档位。 */
   requestSongInfo(key: SongKey): Promise<UpstreamSongInfo>;
 
-  getMvInfo?(musicId: number | string): Promise<Record<string, unknown> | null>;
+  getMvInfo?(musicId: number | string): Promise<unknown | null>;
 
   /**
    * 解析播放地址。
