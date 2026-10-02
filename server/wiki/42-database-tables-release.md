@@ -2,16 +2,17 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-09-30
+最后更新:2026-10-01
 
 Android 发布与公告域的表。发布操作流程见 [61-release-android.md](61-release-android.md)。
 
 ## 1. `app_release`
 
-保存 APK 文件名、大小、sha256、灰度比例、最低 SDK 和发布状态。
+保存 APK 外链/文件名、大小、sha256、灰度比例、最低 SDK 和发布状态。
 
 - `enabled` 是 `smallint` 0/1,**不能改成 PostgreSQL boolean**(全库布尔约定,见 [40-database-overview.md](40-database-overview.md))。
 - `UNIQUE (channel, version_code)` 用于登记同版本时更新元数据。
+- `apk_url`(2026-10-01 起构件上云):存发布构件外链(带 `DOWNLOAD_PROXY_PREFIX` 前缀的 GitHub Release 代理直链),为空回落本机 `/app/apk` 的 `apk_file`;`apk_file` 已放宽为可空,历史记录兼容,自然淘汰后再删。
 
 ## 2. `app_channel`
 
@@ -33,7 +34,8 @@ Android 发布与公告域的表。发布操作流程见 [61-release-android.md]
 
 ## 5. `app_patch`
 
-Android 补丁按 `(channel, target_version_code, patch_version)` 唯一,保存文件大小、sha256、灰度比例、启用状态和说明。
+Android 补丁按 `(channel, target_version_code, patch_version)` 唯一,保存外链/文件名、文件大小、sha256、灰度比例、启用状态和说明。
 
 - 补丁只对指定宿主 `target_version_code` 有效,**不能当成「高版本 APK」处理**。
+- `patch_url`(构件上云):存补丁外链,为空回落本机 `/app/patch` 的 `patch_file`(`patch_file` 已放宽为可空)。
 - 发布与放量流程见 [61-release-android.md](61-release-android.md)。

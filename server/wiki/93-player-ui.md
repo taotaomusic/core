@@ -2,7 +2,7 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-09-30
+最后更新:2026-10-01
 
 本篇讲 `player-ui/` 模块:定位与实际消费方、主题体系、核心组件清单、各端接入点,以及插槽注入的设计约定。安卓端怎么用这些组件见 [90-client-android.md](90-client-android.md),模型层(`Song` 等)见 [94-shared-module.md](94-shared-module.md)。本篇不讲页面业务逻辑,也不讲后端接口。
 
@@ -81,7 +81,7 @@ token 刻度速查(改组件时对号入座,不要自创新档):
 | `PlayerArtworkSlot` | 封面插槽:统一阴影与裁切,内容由调用方注入(安卓是黑胶唱片机,Web 是静态封面) |
 | `PlayerSongHeader` | 歌名 + 歌手行,VIP 角标等走 `titleTrailingContent` 一类尾部插槽 |
 | `PlayerPlaybackDetails` | 标题、元数据、进度、控制键的纵向组装 |
-| `PlayerProgress` | 进度条(苹果风格滑杆),时间换算用 `PlayerUiModels` 的公共函数 |
+| `PlayerProgress` | 进度条(苹果风格滑杆),时间换算用 `PlayerUiModels` 的公共函数;时长与区间完整时以红细线(#FF6B6B)标出高潮区间(`refrainStartMs`/`refrainEndMs`,见 [95-playback-refrain.md](95-playback-refrain.md)) |
 | `PlayerTransportControls` | 播放/上下曲/循环等传输控制,按 `PlayerCapabilities` 裁剪 |
 
 `SharedSongRow` 的参数即插槽全集:`song`(数据)、`artworkContent`(封面)、`onClick`(整行点击)、`active`(正在播放高亮)、`subtitle` / `downloaded` / `durationLabel`(展示变体)、`supportingContent` 与 `trailingContent`(行内附加内容)。安卓侧 `SongRow` 就是在 `trailingContent` 里补了拖把与更多菜单。

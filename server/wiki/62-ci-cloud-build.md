@@ -2,7 +2,7 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-09-30
+最后更新:2026-10-01
 
 正式构建在 GitHub 侧由**单仓 [taotaomusic/core](https://github.com/taotaomusic/core)** 的统一工作流承担:根目录 `.github/workflows/ci.yml` 用 `dorny/paths-filter` 按改动路径只构建相关部分,一处改动不重跑无关 job。本文讲与后端直接相关的部分;三仓快照的旧机制已废弃,末尾保留一段备查。
 
@@ -71,25 +71,36 @@ ghcr.io/taotaomusic/music-server
 - `client-web`:构建 `:webApp:wasmJsBrowserDistribution`,打包发布到滚动 Release **`share-player-latest`**(后端 server job 与本地 `build:web-player` 之外的分发渠道)。
 - `desktop`:Tauri + Rust,版本号同样是根 `VERSION` + 构建号;未配 `TAURI_SIGNING_PRIVATE_KEY` 时出无签名安装包、不产更新清单(不让 desktop 构建变红),配好后自动更新(`latest.json`)生效。产物发滚动 Release **`desktop-latest`**,旧资产按版本清理、只留本次与 `latest.json`。
 
-## 5. 版本号现状
+## 5. 发版分发:构件上云 + webhook + 代理直链(2026-10-01 起)
+
+后端在分发链路里退化为**只出元数据的控制面**,不再接收/下发安装包字节:
+
+- `client-android` / `client-publish` 发版时除 APK 外再产出 `metadata.json`(`versionCode`、`versionName`、`sha256`、`size`、`apkAsset`、历史 notes)一起传上滚动 Release `latest`。
+- `POST /api/v1/app/github-webhook`(公开路由)用 `X-Hub-Signature-256` 验签(`GITHUB_WEBHOOK_SECRET`),收到发版事件后拉取 `metadata.json` 自动登记版本、补齐 versionCode/sha256;手工登记仍是兜底(见 [61-release-android.md](61-release-android.md))。
+- `app_release.apk_url` / `app_patch.patch_url` 新列存构件外链(带 `DOWNLOAD_PROXY_PREFIX` 前缀的代理直链),为空回落本机 `/app/apk`、`/app/patch` 的本地文件(`apk_file`/`patch_file` 已放宽为可空,见 [42-database-tables-release.md](42-database-tables-release.md))。
+- 桌面自动更新走后端代理:`GET /api/v1/desktop/updater/latest.json`(公开)代理 Tauri 更新清单,**只改写未签名的 url**,签名校验不受影响;`tauri.conf.json` 的 endpoints 服务器优先、GitHub `desktop-latest` 兜底(客户端侧见 [91-client-desktop.md](91-client-desktop.md))。
+
+新增配置 `DOWNLOAD_PROXY_PREFIX`、`GITHUB_WEBHOOK_SECRET`(见 [21-configuration.md](21-configuration.md))。
+
+## 6. 版本号现状
 
 - **后端与桌面端**:版本 = 根 `VERSION` + `GITHUB_RUN_NUMBER`,只存在于构建产物的元数据里(`package.json` / `tauri.conf.json`),不回写仓库;历史记录在各自 Release 说明里。
 - **Android**:仍由 `version.properties` 单调递增驱动(见 [61-release-android.md](61-release-android.md) 的铁律),CI 与本地构建口径一致。
 - 后端部署包本身的版本在 Release `server-dist-latest` 的版本历史里可查。
 
-## 6. 仓库与 Release 一览
+## 7. 仓库与 Release 一览
 
 - **taotaomusic/core**(主仓):全部代码 + 统一 CI;滚动 Release 有 `crypto-latest`、`server-dist-latest`、`share-player-latest`、`latest`(安卓)、`desktop-latest`。本地取加密产物用 `tools/fetch-crypto.ps1`,默认也是从 core 的 `crypto-latest` 拉。
 - **gitee origin**:全量备份,不跑构建。
 - **hdppppppp/music / music-server / tools**(旧三仓):暂时保留、**不再更新**;`share-player.zip` 目前仍从 music 仓库的 `share-player-latest` 拉取(新仓库的 `client-web` job 也发同名 Release,迁移完成后应切过来)。
 
-## 7. 与本地发布的关系
+## 8. 与本地发布的关系
 
 - 云端构建与本地构建等价(同一提交);本地发布流程见 [60-deploy-backend.md](60-deploy-backend.md) 与 [61-release-android.md](61-release-android.md)。
 - 无论是本地还是云端构建,登记版本号只能取 `output-metadata.json`,不能读构建后的 `version.properties`(见 [61-release-android.md](61-release-android.md))。
 - 本地开发取加密产物:`tools/fetch-crypto.ps1`(core 的 `crypto-latest`),或在 `crypto-src/` 下 `cargo build`(见 [37-api-crypto.md](37-api-crypto.md))。
 
-## 8. 历史:三仓快照(已废弃,仅备查)
+## 9. 历史:三仓快照(已废弃,仅备查)
 
 2026-09 之前,GitHub 侧由 `tools/sync-repos.ps1` **手动**把 monorepo 快照成三个仓库分别构建:
 

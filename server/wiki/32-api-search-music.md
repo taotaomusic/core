@@ -2,7 +2,7 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-09-30
+最后更新:2026-10-01
 
 本文覆盖搜索联想、热搜、NDJSON 搜索、播放地址、播放代理和歌词。上游协议适配的内部结构见 [11-architecture-modules.md](11-architecture-modules.md) 的 `upstream/` 一节;音源账号对播放链路的影响见 [53-feature-music-sources.md](53-feature-music-sources.md)。排障见 [72-troubleshooting-music.md](72-troubleshooting-music.md)。
 
@@ -94,6 +94,10 @@ Authorization: Bearer <accessToken>
 ### `dropped` 的语义
 
 `dropped` 是**上游返回了、但没有下发**的条数。**目前恒为 0** —— 酷我也不再丢歌了。字段与 `droppedBySource` 都**不能删**:装机的旧客户端会读 `dropped` 做算术,拿到 `undefined` 会算出 `NaN`。保留它们只为契约兼容,不再承载信息。
+
+### `refrainStartMs` / `refrainEndMs`(高潮区间)
+
+搜索与歌曲详情的歌曲对象带这两个字段(毫秒),来自酷我官方 `payInfo.refrain_start/refrain_end` 的服务端透传;上游缺失时为 null,**不伪造默认值**。客户端在进度条上以红细线标出高潮范围,seek 计算不受影响。字段语义与实测样本见 [95-playback-refrain.md](95-playback-refrain.md)。
 
 ### 红线
 

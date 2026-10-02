@@ -42,7 +42,7 @@ codegraph query --path server --kind route --limit 200 --json ""
 | `src/upstream/` | 多音源协议适配和错误收敛:腾讯/网易/酷我客户端、波点(Bodian)客户端与 KPK 签名复刻、`music-source-account.repository.ts` 音源账号凭据、`music-source.registry.ts` 注册表分派、`music-source-admin.controller.ts` 音源账号后台管理 | 外部音乐 API、`music_source_account` |
 | `src/shares/` | 歌曲短链、公开元数据、试听转发 | `song_share`、`StreamService` |
 | `src/image-generation/` | 图片任务、Key 池、额度预扣和状态轮询 | `api_key`、`image_generation_task`、ApiSweet |
-| `src/release/` | Android APK/补丁、灰度、最低版本和远程配置 | `app_release`、`app_patch`、`app_channel`、`app_config` |
+| `src/release/` | Android APK/补丁、灰度、最低版本、远程配置、发版 webhook 与桌面更新代理 | `app_release`、`app_patch`、`app_channel`、`app_config` |
 | `src/im/` | 悟空 IM 会话凭据和同步代理 | `im_device_session`、悟空 IM HTTP API |
 | `src/user-admin/` | 后台用户列表、播放统计、禁用和删除 | `users`、refresh/playback 外键级联 |
 | `src/admin-auth/` | 管理后台账号、数据库会话、TOTP 2FA、角色守卫、IP 白名单和审计 | `admin_users`、`admin_sessions`、`admin_audit_log` |
@@ -115,7 +115,7 @@ POST /api/v1/app/admin/patches
 
 ## 4. 完整路由索引
 
-以下路径均省略 `/api/v1` 前缀;`/health` 是唯一例外。总数以 CodeGraph 实测为准(2026-09-30 手工逐 Controller 核对 118 条),不要引用历史快照数字。各域接口的字段与语义细节见 30–37 各篇。
+以下路径均省略 `/api/v1` 前缀;`/health` 是唯一例外。总数以 CodeGraph 实测为准(2026-10-01 手工逐 Controller 核对 120 条),不要引用历史快照数字。各域接口的字段与语义细节见 30–37 各篇。
 
 ### 公开公告(1)
 
@@ -136,6 +136,11 @@ POST /api/v1/app/admin/patches
 - `POST /app/admin/users`、`GET /app/admin/users`、`GET /app/admin/users/:id/playback`、`POST /app/admin/users/:id/disabled`、`DELETE /app/admin/users/:id`:用户管理(后台创建免邮箱验证码,审计 `user.create`)与播放统计。
 - `GET /app/admin/open-api-keys`、`POST /app/admin/open-api-keys`、`PATCH /app/admin/open-api-keys/:id`、`DELETE /app/admin/open-api-keys/:id`:开放 API Key 列表、创建(明文只返回一次)、启停和吊销;走管理员会话,读 `READ_ROLES`,写 `WRITE_ROLES`(见 [36-api-open.md](36-api-open.md))。
 - `GET /app/admin/music-sources`、`GET /app/admin/music-sources/available`、`POST /app/admin/music-sources`、`PATCH /app/admin/music-sources/:id`、`PUT /app/admin/music-sources/:id/enabled`、`POST /app/admin/music-sources/:id/probe`、`DELETE /app/admin/music-sources/:id`、`POST /app/admin/music-sources/sms`、`POST /app/admin/music-sources/login`:音源账号(酷我/波点)后台管理,细节见 [53-feature-music-sources.md](53-feature-music-sources.md)。
+
+### 发版分发(2)
+
+- `POST /app/github-webhook`:GitHub 发版 webhook(`X-Hub-Signature-256` 验签),收到 Release 事件后拉 `metadata.json` 自动登记安卓版本(机制见 [62-ci-cloud-build.md](62-ci-cloud-build.md))。
+- `GET /desktop/updater/latest.json`:Tauri 桌面更新清单代理,只改写未签名 url,签名校验不受影响(见 [91-client-desktop.md](91-client-desktop.md))。
 
 ### 认证与资料(13)
 

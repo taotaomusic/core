@@ -2,7 +2,7 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-09-30
+最后更新:2026-10-01
 
 本篇讲 `shared/` 模块:跨端共享的数据模型、歌词(LRC/YRC)解析与音质规则,以及这些字段与后端接口响应的对应关系。组件层见 [93-player-ui.md](93-player-ui.md),安卓端整体见 [90-client-android.md](90-client-android.md)。本篇不讲网络层——`TencentMusicApi` 等请求实现属于 androidApp,不在这里。
 
@@ -42,6 +42,7 @@ shared/src/commonTest/kotlin/com/taotao/music/model/
 | `vip` | 上游标记的付费/版权限制,搜索结果直接下发,界面据此加标记 |
 | `playable` | **实测能不能拿到播放地址**,与 `vip` 是两件事;`false` 时列表置灰标注、点击不发起播放。酷我上大量正版热门曲(周杰伦全系列等)属于「上游标它付费或实测下线」——搜索**照常列出**,只是不可播。默认 `true`:只有服务端明确下发 `false` 才置灰,缺字段按可播处理 |
 | `favorited` | 是否已收藏,搜索结果里由服务端下发的权威值 |
+| `refrainStartMs` / `refrainEndMs` | 歌曲高潮区间(毫秒),来自上游 `payInfo.refrain_*` 经服务端透传,搜索与详情解析时保留;缺失为 null,不伪造默认值。进度条红细线标记用,见 [95-playback-refrain.md](95-playback-refrain.md) |
 | `localQuality` | 已下载本地文件对应的音质档位;null 表示不是本地文件,或是旧版本下载时没记录 |
 | `color` | 封面占位色(Long),无图时的兜底 |
 

@@ -1,6 +1,6 @@
-# 桃桃音乐后端文档中心
+# 桃桃音乐文档中心
 
-这里是桃桃音乐后端的专题文档目录。文档按主题拆成约 40 篇短文,每篇只负责一个主题;修改功能时应同步更新对应专题,避免把内容继续堆回单篇长文。
+这里是桃桃音乐的项目专题文档目录(后端 + 客户端各端)。文档按主题拆成约 46 篇短文,每篇只负责一个主题;修改功能时应同步更新对应专题,避免把内容继续堆回单篇长文。
 
 每篇文档头部带「最后更新」日期。发现某篇长期未动又拿不准是否过期时,先按 [00-code-index.md](00-code-index.md) 的 CodeGraph 流程核对源码,再决定改哪篇。
 
@@ -88,6 +88,17 @@
 | [82-admin-routes-data.md](82-admin-routes-data.md) | 管理路由表、限流分桶、三张表模型、启动期硬约束 | 加管理路由、排查启动即失败时 |
 | [83-admin-frontend.md](83-admin-frontend.md) | Vue 管理后台组件、CSP 与安全响应头、契约断言 | 改管理后台前端、调安全头时 |
 
+### 客户端(90–95)
+
+| 文档 | 核心内容 | 适用场景 |
+| --- | --- | --- |
+| [90-client-android.md](90-client-android.md) | 安卓端架构、导航三处同步、播放/队列链路、与后端契约、关键功能落点、发布与热更新 | 改安卓端代码、找功能实现位置时 |
+| [91-client-desktop.md](91-client-desktop.md) | Windows 桌面端(Tauri 2 + React):CORS 与能力白名单、传输加密、自动更新、构建调试 | 改桌面端、换后端域名、排查更新问题时 |
+| [92-client-web.md](92-client-web.md) | Web 分享播放器(Kotlin/Wasm):60 秒试听、构建产物分发、浏览器侧限制 | 改分享页、排查 wasm 构建时 |
+| [93-player-ui.md](93-player-ui.md) | player-ui 跨端播放组件库:主题 token、PlayerSurface 部件族、SharedSongRow、状态模型 | 改播放 UI 组件时 |
+| [94-shared-module.md](94-shared-module.md) | shared 共享模块:Song 模型、歌词解析、音质规则、与接口字段映射 | 改数据模型/歌词解析/音质规则时 |
+| [95-playback-refrain.md](95-playback-refrain.md) | 歌曲高潮区间(refrain)字段透传与进度条标记 | 改搜索/详情字段、进度条渲染时 |
+
 ## 🔗 上位文档
 
 项目级文档,位于项目根目录:
@@ -114,7 +125,7 @@
    - 新审计 action:同步 [81-admin-roles-audit.md](81-admin-roles-audit.md) 与前端 `AuditLogViewer.vue` 的 `ACTION_GROUPS`。
 4. **安全第一**:不在文档中写入真实密码、API Key、数据库连接串或签名信息;示例密钥只能使用明显的占位文本(例如 `替换为真实Key`)。
 5. **可执行性**:文档中的命令应能从标注的工作目录直接执行。
-6. **加密同步**:加密层源码在 monorepo 的 `crypto-src/`(Rust,core/jni/node/wasm 四 crate),由 `tools/sync-repos.ps1` 快照推到 GitHub `hdppppppp/tools` 仓库交叉编译,产物发 Release 后经 `tools/fetch-crypto.ps1` 落回本仓库 `crypto/dist/`。改协议格式或密钥规则去 `crypto-src/` 改,同步更新它的 `README.md` 与 `SECURITY.md`;`crypto/dist/` 只放产物,不放文档、不手改。
+6. **加密同步**:加密层源码在 monorepo 的 `crypto-src/`(Rust,core/jni/node/wasm 四 crate),由 core 仓库根 CI 的 `crypto` job 在同一次 run 内交叉编译并经 artifact 流转给下游 job,同时发 Release `crypto-latest`;本地取产物用 `tools/fetch-crypto.ps1`(默认拉 core 的 `crypto-latest`)。改协议格式或密钥规则去 `crypto-src/` 改,同步更新它的 `README.md` 与 `SECURITY.md`;`crypto/dist/` 只放产物,不放文档、不手改。(旧三仓快照同步已废弃,见 [62-ci-cloud-build.md](62-ci-cloud-build.md)。)
 7. **索引同步**:新增或删除路由、表、环境变量或模块后先刷新 CodeGraph,再更新 [00-code-index.md](00-code-index.md) 和对应专题;不要凭旧 README 猜测路由。
 8. **时效标注**:每篇文档头部保留「最后更新」日期;修改当天更新它。
 
@@ -126,6 +137,12 @@
 2. [12-request-pipeline.md](12-request-pipeline.md) → [13-startup-lifecycle.md](13-startup-lifecycle.md):理解一个请求从进入到返回经过什么,以及启动的三个时间点。
 3. [20-development-setup.md](20-development-setup.md) → [21-configuration.md](21-configuration.md):把本地服务跑起来。
 4. [30-api-conventions.md](30-api-conventions.md) → [40-database-overview.md](40-database-overview.md):写接口与写 Repository 前的红线。
+
+### 客户端开发者(首次接触)
+
+1. [90-client-android.md](90-client-android.md) / [91-client-desktop.md](91-client-desktop.md) / [92-client-web.md](92-client-web.md):先读自己端的那篇,拿到模块结构与网络层铁律。
+2. [30-api-conventions.md](30-api-conventions.md):信封、业务码与兼容性红线;改字段前过一遍。
+3. [94-shared-module.md](94-shared-module.md) → [93-player-ui.md](93-player-ui.md):跨端共享的数据模型与播放组件。
 
 ### 维护图片生成
 

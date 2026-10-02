@@ -2,7 +2,7 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-09-30
+最后更新:2026-10-01
 
 本篇是 Android 版本发布的服务端操作:登记、验证、灰度、抬高下限,以及 `/app/bootstrap` 必须守住的热更新契约。版本号铁律以 [项目 RELEASE.md](../../RELEASE.md) 为准;热更新设计动机见 [HOT_UPDATE.md](../../HOT_UPDATE.md);排障见 [73-troubleshooting-release.md](73-troubleshooting-release.md)。
 
@@ -71,6 +71,8 @@ curl.exe -X POST "https://你的域名/api/v1/app/admin/releases?versionCode=版
 
 发布登记依赖 `ON CONFLICT DO UPDATE`:同渠道同版本号重复登记会更新元数据(表约束见 [42-database-tables-release.md](42-database-tables-release.md))。
 
+**2026-10-01 起云端发版可免手工登记**:CI 的 `client-publish` 发版时把 APK 与 `metadata.json`(versionCode/versionName/sha256/size)一起传上 Release `latest`;配好 `GITHUB_WEBHOOK_SECRET` 后,`POST /app/github-webhook` 收到 GitHub webhook 会自动拉取并登记版本。上面的手工登记仍然可用,也是 webhook 失联时的兜底(机制见 [62-ci-cloud-build.md](62-ci-cloud-build.md))。
+
 ## 4. 下载验证
 
 ```powershell
@@ -82,6 +84,8 @@ curl.exe -o NUL -w "%{http_code}`n" -H "Range: bytes=999999999-" "https://你的
 ```
 
 全量下载后再次核对 sha256 和文件大小。
+
+**构件上云后的路径说明**:`app_release.apk_url` 有值时,bootstrap 与下载链接下发的是带 `DOWNLOAD_PROXY_PREFIX` 前缀的 GitHub Release 代理直链,服务器不再转发字节;`apk_url` 为空(历史登记)才由本机 `/app/apk` 提供字节。本节的 Range/416 探针验证的是回落路径,直链路径以 GitHub Release 侧为准(机制见 [62-ci-cloud-build.md](62-ci-cloud-build.md))。
 
 ## 5. 灰度与全量
 
