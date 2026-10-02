@@ -65,7 +65,7 @@ export class GithubWebhookController {
     const event = String(request.headers["x-github-event"] ?? "");
     if (event !== "release") return { ok: true, handled: `ignored:event=${event || "none"}` };
 
-    const payload = this.parse(raw);
+    const payload = this.parse(request, raw);
     const action = payload.action ?? "";
     // published / released：首次发布；edited：资产或说明被改（CI clobber 上传会触发）。
     if (!["published", "released", "edited"].includes(action)) {
@@ -197,9 +197,22 @@ export class GithubWebhookController {
     }
   }
 
-  private parse(raw: Buffer): GithubWebhookPayload {
+  /**
+   * 解析负载，兼容 GitHub webhook 两种 Content-Type：
+   * - `application/json`：body 即 JSON 原文。
+   * - `application/x-www-form-urlencoded`（GitHub 默认）：body 形如 `payload=<URL 编码的 JSON>`，
+   *   必须先取出 `payload` 字段再解析。签名始终按原始字节算，故此处解码不影响验签。
+   */
+  private parse(request: Request, raw: Buffer): GithubWebhookPayload {
+    let text = raw.toString("utf8");
+    const contentType = String(request.headers["content-type"] ?? "");
+    if (contentType.includes("application/x-www-form-urlencoded")) {
+      const payload = new URLSearchParams(text).get("payload");
+      if (!payload) throw ApiErrors.badRequest(4005, "webhook 表单负载缺少 payload 字段");
+      text = payload;
+    }
     try {
-      return JSON.parse(raw.toString("utf8")) as GithubWebhookPayload;
+      return JSON.parse(text) as GithubWebhookPayload;
     } catch {
       throw ApiErrors.badRequest(4005, "webhook 负载不是合法 JSON");
     }
