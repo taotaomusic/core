@@ -124,7 +124,7 @@
               <template #label>
                 <div class="tab-label"><el-icon><Setting /></el-icon> <span v-show="!isMobile || tab === 'settings'">系统设置</span></div>
               </template>
-              <SystemSettings :admin-token="token" @forget-token="forgetToken" />
+              <SystemSettings :admin-token="token" :role="role" @forget-token="forgetToken" />
             </el-tab-pane>
           </el-tabs>
         </div>

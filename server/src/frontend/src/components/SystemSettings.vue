@@ -34,7 +34,22 @@
       </el-form>
     </el-card>
 
-    <el-card shadow="never" class="card" v-if="webhookAvailable">
+    <el-card shadow="never" class="card">
+      <template #header>连通性</template>
+      <el-descriptions :column="1" border>
+        <el-descriptions-item label="API 根地址">{{ apiBase }}</el-descriptions-item>
+        <el-descriptions-item label="管理令牌">
+          <el-tag :type="tokenOk === null ? 'info' : tokenOk ? 'success' : 'danger'" size="small">
+            {{ tokenOk === null ? "未验证" : tokenOk ? "有效" : "无效或已变更" }}
+          </el-tag>
+          <el-button link type="primary" style="margin-left: 10px" @click="forgetToken">
+            清除并重新输入
+          </el-button>
+        </el-descriptions-item>
+      </el-descriptions>
+    </el-card>
+
+    <el-card shadow="never" class="card" v-if="canSeeWebhook">
       <template #header>GitHub Webhook 密钥</template>
 
       <el-alert type="info" :closable="false" show-icon style="margin-bottom: 18px">
@@ -45,7 +60,8 @@
 
       <el-descriptions :column="1" border style="margin-bottom: 18px">
         <el-descriptions-item label="当前状态">
-          <el-tag :type="webhook.set ? 'success' : 'info'" size="small">
+          <el-tag v-if="!webhookLoaded" type="info" size="small">读取中…</el-tag>
+          <el-tag v-else :type="webhook.set ? 'success' : 'info'" size="small">
             {{ webhook.set ? `已配置（${webhook.masked}）` : "未配置" }}
           </el-tag>
         </el-descriptions-item>
@@ -66,21 +82,6 @@
         </el-form-item>
       </el-form>
     </el-card>
-
-    <el-card shadow="never" class="card">
-      <template #header>连通性</template>
-      <el-descriptions :column="1" border>
-        <el-descriptions-item label="API 根地址">{{ apiBase }}</el-descriptions-item>
-        <el-descriptions-item label="管理令牌">
-          <el-tag :type="tokenOk === null ? 'info' : tokenOk ? 'success' : 'danger'" size="small">
-            {{ tokenOk === null ? "未验证" : tokenOk ? "有效" : "无效或已变更" }}
-          </el-tag>
-          <el-button link type="primary" style="margin-left: 10px" @click="forgetToken">
-            清除并重新输入
-          </el-button>
-        </el-descriptions-item>
-      </el-descriptions>
-    </el-card>
   </div>
 </template>
 
@@ -100,8 +101,11 @@ interface Bootstrap {
   update: { minSupportedVersionCode: number };
 }
 
-const props = defineProps<{ adminToken: string }>();
+const props = defineProps<{ adminToken: string; role: string }>();
 const emit = defineEmits<{ (event: "forget-token"): void }>();
+
+/** 密钥是特权读（viewer 后端会 403），据角色同步决定是否渲染该卡，避免异步插卡导致版面跳动。 */
+const canSeeWebhook = computed(() => props.role === "super_admin" || props.role === "admin");
 
 const releases = ref<ReleaseRow[]>([]);
 const patchCount = ref(0);
@@ -112,7 +116,7 @@ const saving = ref(false);
 const tokenOk = ref<boolean | null>(null);
 
 const webhook = ref<{ set: boolean; masked: string }>({ set: false, masked: "" });
-const webhookAvailable = ref(false);
+const webhookLoaded = ref(false);
 const webhookInput = ref("");
 const savingWebhook = ref(false);
 
@@ -151,14 +155,16 @@ async function refresh() {
   } finally {
     loading.value = false;
   }
-  // 独立 try：webhook 密钥是特权读（viewer 会 403），失败只隐藏这张卡，
-  // 不连累本页其它内容。viewer 看不到这块是预期行为。
-  try {
-    const settings = await apiGet<SettingsSummary>("/app/admin/settings", props.adminToken);
-    webhook.value = settings.githubWebhookSecret;
-    webhookAvailable.value = true;
-  } catch {
-    webhookAvailable.value = false;
+  // 卡片是否渲染由角色同步决定（见 canSeeWebhook），这里只填充状态数据：
+  // 非特权角色不请求，特权角色拉取失败也只停在「读取中」，不插/撤卡、不跳版面。
+  if (canSeeWebhook.value) {
+    try {
+      const settings = await apiGet<SettingsSummary>("/app/admin/settings", props.adminToken);
+      webhook.value = settings.githubWebhookSecret;
+      webhookLoaded.value = true;
+    } catch {
+      webhookLoaded.value = false;
+    }
   }
 }
 
