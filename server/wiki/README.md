@@ -1,8 +1,24 @@
 # 桃桃音乐文档中心
 
-这里是桃桃音乐的项目专题文档目录(后端 + 客户端各端)。文档按主题拆成约 46 篇短文,每篇只负责一个主题;修改功能时应同步更新对应专题,避免把内容继续堆回单篇长文。
+这里是桃桃音乐的项目专题文档目录(后端 + 客户端各端)。文档按主题拆成约 48 篇短文,每篇只负责一个主题;修改功能时应同步更新对应专题,避免把内容继续堆回单篇长文。
 
 每篇文档头部带「最后更新」日期。发现某篇长期未动又拿不准是否过期时,先按 [00-code-index.md](00-code-index.md) 的 CodeGraph 流程核对源码,再决定改哪篇。
+
+## 🗺️ 架构全景图
+
+```text
+  androidApp(Android)   desktop(Tauri 2)   webApp 分享播放器   管理后台 + 官网
+        |                     |                  |                  |
+        +----- HTTPS /api/v1(可选传输加密)-----+------------------+
+                                       |
+                                       v
+                             server(NestJS,/api/v1)
+                          /            |             \
+                 PostgreSQL      上游音源(酷我(波点)/腾讯/网易)、图片上游、悟空 IM
+                                       ^
+                                       | 发版 webhook(构件上云后回注 server)
+  CI(GitHub Actions) --构建--> 各端 Release(APK / 桌面包 / 加密产物)
+```
 
 ## 📚 文档导航
 
@@ -53,21 +69,23 @@
 | [43-database-tables-admin.md](43-database-tables-admin.md) | admin_users、admin_sessions、admin_audit_log、open_api_key、music_source_account、api_key、image_generation_task | 查管理域/凭据域字段语义、外键删除语义时 |
 | [44-database-operations.md](44-database-operations.md) | 并发 SQL 范例、Key 运维 SQL、图片额度一致性、索引清单 | 写并发路径、运维额度、评估查询性能时 |
 
-### 功能专题(50–53)
+### 功能专题(50–54)
 
 | 文档 | 核心内容 | 适用场景 |
 | --- | --- | --- |
 | [50-feature-image-generation.md](50-feature-image-generation.md) | gpt-image-2 任务、Key 池、额度扣减归还、状态轮询 | 维护图片生成、Key 池、额度时 |
 | [51-feature-wukongim.md](51-feature-wukongim.md) | 悟空 IM 接入、端口基线、凭据签发、频道同步 | 接入或排查聊天链路时 |
 | [53-feature-music-sources.md](53-feature-music-sources.md) | 音源账号(酷我/波点)、凭据管理、KPK 签名、探测与缓存 | 维护音源账号、排查「搜得到放不出」时 |
+| [54-feature-website.md](54-feature-website.md) | React+antd+Vite 官网、挂载 /、CSP 与 vendor 分包、/status 服务状态页 | 改官网、排查状态页或官网构建时 |
 
-### 发布与部署(60–62)
+### 发布与部署(60–63)
 
 | 文档 | 核心内容 | 适用场景 |
 | --- | --- | --- |
 | [60-deploy-backend.md](60-deploy-backend.md) | 后端构建 6 步、部署文件、生产配置检查、systemd、nginx、回滚 | 部署后端、改生产环境时 |
 | [61-release-android.md](61-release-android.md) | APK 构建/登记/下载验证、灰度、最低版本、热更新契约 | 发 Android 版本、排灰度问题时 |
 | [62-ci-cloud-build.md](62-ci-cloud-build.md) | GitHub Actions 云端构建、三仓快照同步、版本号收编 | 同步仓库、用云端产物发版时 |
+| [63-ci-autopatch.md](63-ci-autopatch.md) | autopatch 方法级热修补丁自动生成、CI job、与 app_patch 下发链路的关系 | 生成/排查热修补丁时 |
 
 ### 排障(70–74)
 
@@ -128,6 +146,27 @@
 6. **加密同步**:加密层源码在 monorepo 的 `crypto-src/`(Rust,core/jni/node/wasm 四 crate),由 core 仓库根 CI 的 `crypto` job 在同一次 run 内交叉编译并经 artifact 流转给下游 job,同时发 Release `crypto-latest`(crypto 源码未变时复用产物缓存、不重发);本地取产物用 `tools/fetch-crypto.ps1`(默认拉 core 的 `crypto-latest`)。改协议格式或密钥规则去 `crypto-src/` 改,同步更新它的 `README.md` 与 `SECURITY.md`;`crypto/dist/` 只放产物,不放文档、不手改。(旧三仓快照同步已废弃,见 [62-ci-cloud-build.md](62-ci-cloud-build.md)。)
 7. **索引同步**:新增或删除路由、表、环境变量或模块后先刷新 CodeGraph,再更新 [00-code-index.md](00-code-index.md) 和对应专题;不要凭旧 README 猜测路由。
 8. **时效标注**:每篇文档头部保留「最后更新」日期;修改当天更新它。
+
+## 🎯 按任务速查
+
+| 任务 | 先读 |
+| --- | --- |
+| 查环境变量的含义与默认值 | [21-configuration.md](21-configuration.md) |
+| 本地起后端、跑契约验证 | [20-development-setup.md](20-development-setup.md) + [22-contract-verification.md](22-contract-verification.md) |
+| 部署后端 | [60-deploy-backend.md](60-deploy-backend.md) |
+| 发 Android 版 / 看 CI | [61-release-android.md](61-release-android.md) + [62-ci-cloud-build.md](62-ci-cloud-build.md) |
+| 排查搜不到 / 放不出 | [72-troubleshooting-music.md](72-troubleshooting-music.md) + [53-feature-music-sources.md](53-feature-music-sources.md) |
+| 登录 401 / 管理后台进不去 | [71-troubleshooting-auth.md](71-troubleshooting-auth.md) |
+| 看到错误码想定位 | [74-error-codes.md](74-error-codes.md) |
+| 改数据表 | [40-database-overview.md](40-database-overview.md) |
+| 加管理接口 | [81-admin-roles-audit.md](81-admin-roles-audit.md) + [82-admin-routes-data.md](82-admin-routes-data.md) |
+| 换桌面端的后端域名 | [91-client-desktop.md](91-client-desktop.md) |
+| 改播放 UI 组件 | [93-player-ui.md](93-player-ui.md) |
+| 改 Song 字段 / 歌词解析 | [94-shared-module.md](94-shared-module.md) |
+| 排查传输加密链路 | [37-api-crypto.md](37-api-crypto.md) |
+| 改官网 / 排查状态页 | [54-feature-website.md](54-feature-website.md) |
+| 生成 / 排查热修补丁 | [63-ci-autopatch.md](63-ci-autopatch.md) + [61-release-android.md](61-release-android.md) |
+| 查 MV 接口 / 高潮区间字段 | [32-api-search-music.md](32-api-search-music.md) + [95-playback-refrain.md](95-playback-refrain.md) |
 
 ## 📖 推荐阅读路径
 

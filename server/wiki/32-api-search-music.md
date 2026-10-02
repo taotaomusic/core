@@ -2,9 +2,9 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-10-01
+最后更新:2026-10-02
 
-本文覆盖搜索联想、热搜、NDJSON 搜索、播放地址、播放代理和歌词。上游协议适配的内部结构见 [11-architecture-modules.md](11-architecture-modules.md) 的 `upstream/` 一节;音源账号对播放链路的影响见 [53-feature-music-sources.md](53-feature-music-sources.md)。排障见 [72-troubleshooting-music.md](72-troubleshooting-music.md)。
+本文覆盖搜索联想、热搜、NDJSON 搜索、播放地址、播放代理、歌词和 MV 信息。上游协议适配的内部结构见 [11-architecture-modules.md](11-architecture-modules.md) 的 `upstream/` 一节;音源账号对播放链路的影响见 [53-feature-music-sources.md](53-feature-music-sources.md)。排障见 [72-troubleshooting-music.md](72-troubleshooting-music.md)。
 
 ## 1. 搜索联想
 
@@ -97,7 +97,7 @@ Authorization: Bearer <accessToken>
 
 ### `refrainStartMs` / `refrainEndMs`(高潮区间)
 
-搜索与歌曲详情的歌曲对象带这两个字段(毫秒),来自酷我官方 `payInfo.refrain_start/refrain_end` 的服务端透传;上游缺失时为 null,**不伪造默认值**。客户端在进度条上以红细线标出高潮范围,seek 计算不受影响。字段语义与实测样本见 [95-playback-refrain.md](95-playback-refrain.md)。
+目前**只有 `/search` 响应**的歌曲对象带这两个字段(毫秒):波点协议解析出 `payInfo.refrain_start/refrain_end`,服务端只做改名透传(值本身就是毫秒);上游缺失时为 null,**不伪造默认值**。歌曲详情(`songInfo`)映射暂未携带,客户端已预留解析。客户端在进度条上以主题强调色标出高潮范围,seek 计算不受影响。字段语义与实测样本见 [95-playback-refrain.md](95-playback-refrain.md)。
 
 ### 红线
 
@@ -136,3 +136,22 @@ GET /api/v1/songs/97773/link?quality=10&mid=&type=
 
 - 请求的 `quality` 档位由上游音质阶梯决定降级路径;`fallback: true` 表示实际下发的音质低于请求档位。
 - 酷我/波点链路的取址依赖服务端音源账号凭据;凭据失效时表现为「搜得到放不出」,处理见 [53-feature-music-sources.md](53-feature-music-sources.md)。
+
+## 8. MV 信息
+
+```http
+GET /api/v1/songs/97773/mv?source=kuwo
+Authorization: Bearer <accessToken>
+```
+
+返回普通 JSON 信封,`data` 是上游官方 `service/mv/info` 响应里的 `mv` 对象,字段**原样透传、不改名**:
+
+- `mid`:MV 的数字 ID;`name`:MV 名称;`coverUrl`:封面地址。
+- `highUrl` / `lowUrl`:高、低两档清晰度的播放地址;`highP2pid` / `lowP2pid` 与 `highBitrate` / `lowBitrate` 分别是这两档对应的 P2P ID 与码率。
+- `mvDuration`:MV 时长。
+
+- 路径参数是**歌曲的酷我数字 ID**(搜索结果里的 `data.id`),不是 MV 的 ID;只接受数字,不接受 `mid`(酷我没有 mid)。
+- `source` 必须显式传 `kuwo`:省略时与 `/songs/:id/link` 一样默认按腾讯音乐解析,而腾讯/网易适配器没有实现 MV 能力,只会拿到 400/4001「QQ 音乐暂不支持 MV」;未知音源 400/4001「不支持的音乐来源」。
+- 鉴权与搜索一致:路由未标 `@Public()`,走全局访问令牌守卫;该路由未配置限流桶。
+- **歌曲没有 MV**(上游业务码不是 200,或响应里没有 `mv` 对象):适配器统一归为「取不到」,服务端报 **502/5020「MV 信息不可用」**;上游的具体业务码**不透传**。
+- **音源不支持 MV**:400/4001,文案「{音源名}暂不支持 MV」。

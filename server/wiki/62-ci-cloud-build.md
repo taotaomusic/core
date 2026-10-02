@@ -10,7 +10,7 @@
 
 - 触发:push 到 `main`,以及在 Actions 页手动 `workflow_dispatch`。
 - `concurrency` 按 ref 取消进行中的旧 run,同一分支同时只有一条流水线。
-- 第一个 job `changes` 跑 `dorny/paths-filter@v3`,输出四个开关:
+- 第一个 job `changes` 跑 `dorny/paths-filter@v3`,输出五个开关:
 
 | 开关 | 命中路径 |
 | --- | --- |
@@ -18,10 +18,11 @@
 | `server` | `server/**` |
 | `desktop` | `desktop/**` |
 | `client` | `androidApp/**`、`webApp/**`、`player-ui/**`、`shared/**`、`build-logic/**`、`patch/**`、`gradle/**`、`*.gradle*`、`gradle.properties`、`settings.gradle*`、`version.properties`、`crypto/**` |
+| `autopatch` | `autopatch/**` |
 
 两个提交信息魔法字:
 
-- `[full]` —— 强制四个开关全部为真,全量构建。
+- `[full]` —— 强制五个开关全部为真,全量构建。
 - `[purge]` —— 先删除仓库里**全部**旧 Release,随后各 job 重建干净的滚动 Release(用于清理历史遗留)。
 
 ## 2. job 一览
@@ -34,6 +35,8 @@
 | `client-web` | ubuntu | client 有改动 | Release `share-player-latest` |
 | `client-publish` | ubuntu | `client-android` 成功 | Release `latest`(滚动,APK) |
 | `desktop` | windows | desktop 或 crypto 有改动 | Release `desktop-latest`(Tauri) |
+| `autopatch` | ubuntu | `autopatch/**` 有改动 | 无 Release;测试报告 artifact `autopatch-test-report`(见 [63-ci-autopatch.md](63-ci-autopatch.md)) |
+| `purge` | ubuntu | 无条件进入,但仅提交信息含 `[purge]` 时执行删除 | 无(删除全部旧 Release,由随后各 job 重建) |
 
 要点:
 
