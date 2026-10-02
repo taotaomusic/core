@@ -106,25 +106,39 @@ jobs:
         working-directory: crypto-src
     steps:
       - uses: actions/checkout@v4
+      # 产物缓存:按 crypto-src 全部源码哈希做 key。rust 没变 → 命中 → 跳过下面全部重活
+      # (工具链/NDK/编译/校验),只把缓存里的 out/ 直接 upload 给下游 client/server/desktop。
+      # out/ 相对 workspace,不受 job 的 working-directory 影响(与 upload-artifact 路径一致)。
+      - name: 复用 crypto 产物(源码未变时跳过编译)
+        id: crypto-cache
+        uses: actions/cache@v4
+        with:
+          path: crypto-src/out
+          key: crypto-out-${{ hashFiles('crypto-src/**') }}
       - uses: dtolnay/rust-toolchain@stable
+        if: steps.crypto-cache.outputs.cache-hit != 'true'
         with:
           targets: aarch64-linux-android
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+        if: steps.crypto-cache.outputs.cache-hit != 'true'
         with:
           workspaces: crypto-src
           key: unified-crypto
       - name: 缓存 Android NDK（省去每次约 700MB 下载安装）
+        if: steps.crypto-cache.outputs.cache-hit != 'true'
         uses: actions/cache@v4
         with:
           path: /usr/local/lib/android/sdk/ndk/${{ env.NDK_VERSION }}
           key: ndk-${{ env.NDK_VERSION }}
       - name: 格式 / Clippy / 单元测试
+        if: steps.crypto-cache.outputs.cache-hit != 'true'
         run: |
           cargo fmt --all -- --check
           cargo clippy --workspace --all-targets -- -D warnings
           cargo test --workspace --lib
       - name: 安装 Android NDK
+        if: steps.crypto-cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
@@ -137,6 +151,7 @@ jobs:
           echo "NDK_ROOT=$SDK/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
           echo "$SDK/ndk/$NDK_VERSION/toolchains/llvm/prebuilt/linux-x86_64/bin" >> "$GITHUB_PATH"
       - name: 构建 Android .so（仅 arm64-v8a；APK 只打包这个 ABI）
+        if: steps.crypto-cache.outputs.cache-hit != 'true'
         env:
           # CRYPTIFY_KEY 只在真正构建 .so 时设：字符串混淆的编译期密钥。
           # **不能**放到 job 级 env，否则 fmt/clippy/test 步骤也带上它——
@@ -151,13 +166,16 @@ jobs:
           mkdir -p out/android/arm64-v8a
           cp target/aarch64-linux-android/release/libtaotao_crypto_jni.so out/android/arm64-v8a/libtaotao_crypto.so
       - name: 构建 Node .node（linux-x64）
+        if: steps.crypto-cache.outputs.cache-hit != 'true'
         run: |
           cargo build --release -p taotao-crypto-node
           mkdir -p out/node/linux-x64
           cp target/release/libtaotao_crypto_node.so out/node/linux-x64/taotao_crypto.node
       - name: 校验字符串混淆（KDF 标签已明文，见脚本）
+        if: steps.crypto-cache.outputs.cache-hit != 'true'
         run: bash tools/check-obfuscated.sh out/android/arm64-v8a/libtaotao_crypto.so
       - name: 端到端冒烟（node）
+        if: steps.crypto-cache.outputs.cache-hit != 'true'
         run: node tools/smoke-test.cjs out/node/linux-x64/taotao_crypto.node
       - uses: actions/upload-artifact@v4
         with:
@@ -170,7 +188,7 @@ jobs:
           path: crypto-src/out/node
           if-no-files-found: error
       - name: 发布 crypto-latest（本地开发 fetch-crypto 用）
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' && steps.crypto-cache.outputs.cache-hit != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
