@@ -2,7 +2,6 @@ package com.taotao.music.playerui
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.Canvas
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
@@ -19,6 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -218,8 +218,19 @@ fun PlayerProgress(
         val start = (refrainStartMs ?: -1L).toFloat() / durationMs.coerceAtLeast(1L)
         val end = (refrainEndMs ?: -1L).toFloat() / durationMs.coerceAtLeast(1L)
         if (start in 0f..1f && end > start) {
+            // 高潮区间标记：用主题强调色在轨道上叠一段圆头胶囊，和 4dp 轨道同高、随明暗主题走。
+            // 此前写死 #FF6B6B 且比轨道还粗（5dp），既不随主题变、又像把轨道染了色；
+            // 现在改成与轨道同高、圆头收尾的强调色段，读起来是「标记」而不是「变色的轨道」。
+            val refrainColor = MaterialTheme.colorScheme.primary
             Canvas(Modifier.matchParentSize()) {
-                drawLine(Color(0xFFFF6B6B), Offset(size.width * start, size.height / 2), Offset(size.width * end.coerceAtMost(1f), size.height / 2), strokeWidth = 5.dp.toPx())
+                val y = size.height / 2
+                drawLine(
+                    color = refrainColor,
+                    start = Offset(size.width * start, y),
+                    end = Offset(size.width * end.coerceAtMost(1f), y),
+                    strokeWidth = 4.dp.toPx(),
+                    cap = StrokeCap.Round,
+                )
             }
         }
     }
