@@ -41,11 +41,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.graphics.Color
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
@@ -69,9 +66,6 @@ import com.taotao.music.ui.theme.AnimationDurations
 import com.taotao.music.ui.theme.LocalReduceMotion
 import com.taotao.music.ui.theme.TaotaoCoral
 import android.net.Uri
-import androidx.media3.common.MediaItem
-import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.ui.PlayerView
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collectLatest
@@ -107,7 +101,6 @@ internal fun PlayerDetailPage(
     onAddToPlaylist: ((Song) -> Unit)? = null,
     isFavorite: (Song) -> Boolean,
     onToggleSongFavorite: (Song) -> Unit,
-    onMessage: (String) -> Unit,
     favorited: Boolean,
     onToggleFavorite: () -> Unit,
     playbackQuality: Int,
@@ -115,6 +108,7 @@ internal fun PlayerDetailPage(
     sleepTimerRemainingMs: Long,
     sleepTimerWaitingSongEnd: Boolean,
     onOpenSleepTimer: () -> Unit,
+    onOpenMv: (Song) -> Unit,
 ) {
     // 播放器维护唯一进度源；拖动期间才暂存本地位置，松手立即交回播放器同步。
     var draggedPositionMs by remember(song) { mutableIntStateOf(audioPlayer.positionMs) }
@@ -130,7 +124,6 @@ internal fun PlayerDetailPage(
     // 解析结果按原文缓存，避免每帧进度变化都重新解析整段歌词。
     val lyric = remember(lyricText, lyricWords) { LyricParser.parse(lyricText, lyricWords) }
     var showQueue by remember { mutableStateOf(false) }
-    var mvUrl by remember(song) { mutableStateOf<String?>(null) }
     // 时长和播放态直接读播放器暴露的状态，不再各自轮询。
     val durationMs = audioPlayer.durationMs
     val actualPlaying = audioPlayer.isPlaying
@@ -352,14 +345,8 @@ internal fun PlayerDetailPage(
                     Icon(Icons.Default.Share, "分享歌曲", tint = TaotaoCoral)
                 }
                 if (song.source == TencentMusicApi.SEARCH_SOURCE_KUWO && song.remoteId?.let { it > 0L } == true) {
-                    IconButton(onClick = {
-                        detailScope.launch {
-                            val mv = withContext(Dispatchers.IO) { runCatching { musicApi.requestMv(song) }.getOrNull() }
-                            val url = mv?.highUrl ?: mv?.lowUrl
-                            if (url.isNullOrBlank()) onMessage("暂无可播放 MV")
-                            else mvUrl = url
-                        }
-                    }) {
+                    // MV 拉取与播放都交给独立的 MV 播放页，这里只负责跳转。
+                    IconButton(onClick = { onOpenMv(song) }) {
                         Icon(Icons.Default.VideoLibrary, "播放 MV", tint = TaotaoCoral)
                     }
                 }
@@ -402,30 +389,6 @@ internal fun PlayerDetailPage(
             onPlayNext = onPlayNext,
             isFavorite = isFavorite,
             onToggleFavorite = onToggleSongFavorite,
-        )
-    }
-    mvUrl?.let { url ->
-        MvPlayerDialog(url = url, onDismiss = { mvUrl = null })
-    }
-}
-
-@Composable
-private fun MvPlayerDialog(url: String, onDismiss: () -> Unit) {
-    val context = LocalContext.current
-    val player = remember(url) {
-        ExoPlayer.Builder(context).build().apply {
-            setMediaItem(MediaItem.fromUri(url))
-            prepare()
-            playWhenReady = true
-        }
-    }
-    androidx.compose.runtime.DisposableEffect(player) {
-        onDispose { player.release() }
-    }
-    Dialog(onDismissRequest = onDismiss) {
-        AndroidView(
-            factory = { viewContext -> PlayerView(viewContext).apply { this.player = player } },
-            modifier = Modifier.fillMaxWidth().height(240.dp),
         )
     }
 }

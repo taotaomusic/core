@@ -74,13 +74,14 @@ internal fun TaotaoAppPreAuthEffects(state: TaotaoAppState) {
      * 交回系统默认行为（退出应用）—— 这样不必自己去拿 onBackPressedDispatcher。
      */
     BackHandler(
-        enabled = state.showPlayerDetail || state.showSearchPage || state.showSettingsPage ||
-            state.showProfilePage || state.playlist.selected != null || state.mineLibrarySection != null ||
-            state.diarySong != null,
+        enabled = state.mvSong != null || state.showPlayerDetail || state.showSearchPage ||
+            state.showSettingsPage || state.showProfilePage || state.playlist.selected != null ||
+            state.mineLibrarySection != null || state.diarySong != null,
     ) {
         when {
-            // 与 currentPage 一致：详情页盖在日记之上，返回时先退详情再退日记；
-            // 播放记录是日记的下级页，返回时也要先退它。
+            // 与 currentPage 一致：MV 播放页盖在详情页之上，返回先退 MV；
+            // 详情页盖在日记之上，再退详情，播放记录是日记的下级页最后退。
+            state.mvSong != null -> state.mvSong = null
             state.showPlayerDetail -> state.showPlayerDetail = false
             state.showDiaryRecords -> state.showDiaryRecords = false
             state.diarySong != null -> state.diarySong = null

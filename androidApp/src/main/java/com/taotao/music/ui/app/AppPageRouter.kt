@@ -1,6 +1,7 @@
 package com.taotao.music.ui.app
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -11,9 +12,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
+import com.taotao.music.model.Song
 import com.taotao.music.playerui.SharedSectionHeader
 import com.taotao.music.playerui.SharedSectionLevel
 import com.taotao.music.playerui.theme.TaotaoSpacing
@@ -29,6 +34,7 @@ import com.taotao.music.ui.library.MusicLibraryPage
 import com.taotao.music.ui.library.PlaybackHistoryPage
 import com.taotao.music.ui.library.SongDiaryPage
 import com.taotao.music.ui.mine.MinePage
+import com.taotao.music.ui.player.MvPlayerPage
 import com.taotao.music.ui.player.PlayerDetailPage
 import com.taotao.music.ui.player.QualitySheetKind
 import com.taotao.music.ui.playlist.PlaylistDetailPage
@@ -59,6 +65,8 @@ internal fun TaotaoAppPageRouter(
     innerPadding: PaddingValues,
 ) {
     val currentPage = when {
+        // MV 播放页盖在详情页之上：它是从详情页点 MV 按钮进入的浮层。
+        state.mvSong != null -> "mv-player"
         state.showPlayerDetail -> "detail"
         state.diarySong != null && state.showDiaryRecords -> "diary-records"
         state.diarySong != null -> "song-diary"
@@ -100,14 +108,25 @@ internal fun TaotaoAppPageRouter(
         label = "页面切换",
     ) { page ->
         // 日记两页要沉浸式绘制顶部珊瑚渐变（画到状态栏底下），顶部内边距由页面自己用
-        // statusBarsPadding 让开；其余页面维持 Scaffold 的统一顶部内边距。
-        val pagePadding = if (page == "song-diary" || page == "diary-records") {
-            PaddingValues(bottom = innerPadding.calculateBottomPadding())
-        } else {
-            innerPadding
+        // statusBarsPadding 让开；MV 页是全屏黑底沉浸页，系统栏内边距全部由页面自己处理；
+        // 其余页面维持 Scaffold 的统一顶部内边距。
+        val pagePadding = when (page) {
+            "mv-player" -> PaddingValues(0.dp)
+            "song-diary", "diary-records" -> PaddingValues(bottom = innerPadding.calculateBottomPadding())
+            else -> innerPadding
         }
         Box(Modifier.fillMaxSize().padding(pagePadding)) {
             when (page) {
+                // 退出动画期间 mvSong 已被置空：保持黑底而不是直接空着，
+                // 否则浅色 Scaffold 背景会在 MV 页淡出时闪一帧。
+                "mv-player" -> {
+                    val mvTarget = state.mvSong
+                    if (mvTarget != null) {
+                        MvPlayerPageRoute(state, mvTarget)
+                    } else {
+                        Box(Modifier.fillMaxSize().background(Color.Black))
+                    }
+                }
                 "ai" -> AiStudioPage(
                     signedIn = state.signedIn,
                     submitting = state.imageGenerating,
@@ -281,10 +300,32 @@ private fun HomePage(state: TaotaoAppState) {
     }
 }
 
+/**
+ * MV 播放页装配。
+ *
+ * 进入页面时暂停歌曲并记住进入前是否在播，退出时接着原来的状态继续 ——
+ * 不做互斥的话 MV 声音会和歌曲音频叠在一起。记忆值放在 remember 里，
+ * 重组不会重读；页面盖住详情页，期间歌曲不可能被切走。
+ */
+@Composable
+private fun MvPlayerPageRoute(state: TaotaoAppState, song: Song) {
+    val wasPlaying = remember { state.audioPlayer.isPlaying }
+    DisposableEffect(Unit) {
+        state.audioPlayer.pause()
+        onDispose {
+            if (wasPlaying) state.audioPlayer.resume()
+        }
+    }
+    MvPlayerPage(
+        song = song,
+        musicApi = state.musicApi,
+        onBack = { state.mvSong = null },
+    )
+}
+
 /** 播放详情页装配：队列、收藏、下载、音质与定时关闭全部来自全局状态。 */
 @Composable
-private fun PlayerDetailPageRoute(state: TaotaoAppState) {
-    PlayerDetailPage(
+private fun PlayerDetailPageRoute(state: TaotaoAppState) {    PlayerDetailPage(
         song = state.playbackSongs[state.selectedIndex.coerceIn(state.playbackSongs.indices)],
         audioPlayer = state.audioPlayer,
         isPlaying = state.isPlaying,
@@ -328,7 +369,6 @@ private fun PlayerDetailPageRoute(state: TaotaoAppState) {
         onShare = { state.requestSongShare(state.playbackSongs[state.selectedIndex.coerceIn(state.playbackSongs.indices)]) },
         isFavorite = { song -> state.favoritesStore.contains(song) },
         onToggleSongFavorite = { song -> state.toggleFavorite(song) },
-        onMessage = { state.message = it },
         favorited = remember(state.selectedIndex, state.favoriteRevision, state.playbackSongs) {
             state.playbackSongs.getOrNull(state.selectedIndex)?.let { state.favoritesStore.contains(it) } == true
         },
@@ -340,6 +380,7 @@ private fun PlayerDetailPageRoute(state: TaotaoAppState) {
         sleepTimerRemainingMs = state.audioPlayer.sleepTimerRemainingMs,
         sleepTimerWaitingSongEnd = state.audioPlayer.sleepTimerWaitingSongEnd,
         onOpenSleepTimer = { state.showSleepTimerDialog = true },
+        onOpenMv = { state.mvSong = it },
     )
 }
 

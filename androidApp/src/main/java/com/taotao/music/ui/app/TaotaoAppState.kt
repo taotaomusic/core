@@ -149,6 +149,8 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
     var playbackSongs by mutableStateOf(emptyList<Song>())
     var selectedIndex by mutableIntStateOf(0)
     var showPlayerDetail by mutableStateOf(false)
+    // MV 播放页盖在详情页之上；非空即显示。只从详情页的 MV 按钮进入。
+    var mvSong by mutableStateOf<Song?>(null)
     var showSearchPage by mutableStateOf(false)
     var showSettingsPage by mutableStateOf(false)
     var showSleepTimerDialog by mutableStateOf(false)
