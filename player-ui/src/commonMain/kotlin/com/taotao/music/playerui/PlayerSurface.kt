@@ -207,7 +207,9 @@ fun PlayerPlaybackDetails(
 
 private fun formatPlayerTime(milliseconds: Long): String {
     val totalSeconds = (milliseconds / 1000L).coerceAtLeast(0L)
-    return "%02d:%02d".format(totalSeconds / 60L, totalSeconds % 60L)
+    val minutes = (totalSeconds / 60L).toString().padStart(2, '0')
+    val seconds = (totalSeconds % 60L).toString().padStart(2, '0')
+    return "$minutes:$seconds"
 }
 
 /** 三端共用的播放进度条，拖动结束事件由平台层提交给实际播放器。 */
