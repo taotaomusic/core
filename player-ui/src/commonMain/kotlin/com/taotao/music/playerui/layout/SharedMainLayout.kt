@@ -1,5 +1,10 @@
 package com.taotao.music.playerui.layout
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -52,7 +57,13 @@ fun SharedMainLayout(
         modifier = modifier.fillMaxSize(),
         containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
-            if (!hideBottomBar) {
+            // 收起/展开带方向动画，与沉浸浮层（如 MV 播放页）的升起落下保持同一节奏，
+            // 硬切会让底栏在浮层还在过渡时就突然出现或消失。
+            AnimatedVisibility(
+                visible = !hideBottomBar,
+                enter = expandVertically() + fadeIn(),
+                exit = shrinkVertically() + fadeOut(),
+            ) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()

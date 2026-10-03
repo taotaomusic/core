@@ -1,7 +1,11 @@
 package com.taotao.music.ui.app
 
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.foundation.background
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -14,10 +18,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.unit.dp
 import com.taotao.music.model.Song
 import com.taotao.music.playerui.SharedSectionHeader
 import com.taotao.music.playerui.SharedSectionLevel
@@ -44,8 +47,11 @@ import com.taotao.music.ui.search.SearchPage
 import com.taotao.music.ui.settings.SettingsPage
 import com.taotao.music.ui.chat.ChatPageHost
 import com.taotao.music.data.im.ImConnectionInfo
+import com.taotao.music.ui.theme.AnimationCurves
+import com.taotao.music.ui.theme.AnimationDurations
 import com.taotao.music.ui.theme.LocalReduceMotion
 import com.taotao.music.ui.theme.pageTransition
+import com.taotao.music.ui.theme.taotaoTween
 import com.taotao.music.update.UpdateStage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -54,8 +60,10 @@ import kotlinx.coroutines.withContext
 /**
  * 页面分发：把 currentPage 映射到具体页面并把全局状态装配进去。
  *
- * 详情页是最顶层浮层：从日记页点迷你播放器要能盖在日记之上进入详情，
+ * 详情页是最顶层页面：从日记页点迷你播放器要能盖在日记之上进入详情，
  * 所以它必须排在 song-diary 前面，否则 diarySong 非空时详情永远显示不出来。
+ * MV 播放页不是页面分支，而是盖在详情之上的独立浮层（见 [MvPlayerOverlay]）：
+ * 从详情进出 MV 只动浮层本身，详情页保持在组合中原位不动，返回时不重播升起动画。
  */
 @Composable
 internal fun TaotaoAppPageRouter(
@@ -65,8 +73,6 @@ internal fun TaotaoAppPageRouter(
     innerPadding: PaddingValues,
 ) {
     val currentPage = when {
-        // MV 播放页盖在详情页之上：它是从详情页点 MV 按钮进入的浮层。
-        state.mvSong != null -> "mv-player"
         state.showPlayerDetail -> "detail"
         state.diarySong != null && state.showDiaryRecords -> "diary-records"
         state.diarySong != null -> "song-diary"
@@ -108,25 +114,15 @@ internal fun TaotaoAppPageRouter(
         label = "页面切换",
     ) { page ->
         // 日记两页要沉浸式绘制顶部珊瑚渐变（画到状态栏底下），顶部内边距由页面自己用
-        // statusBarsPadding 让开；MV 页是全屏黑底沉浸页，系统栏内边距全部由页面自己处理；
-        // 其余页面维持 Scaffold 的统一顶部内边距。
-        val pagePadding = when (page) {
-            "mv-player" -> PaddingValues(0.dp)
-            "song-diary", "diary-records" -> PaddingValues(bottom = innerPadding.calculateBottomPadding())
-            else -> innerPadding
+        // statusBarsPadding 让开；其余页面维持 Scaffold 的统一顶部内边距。
+        // MV 播放页已拆成独立浮层，不再走页面内边距。
+        val pagePadding = if (page == "song-diary" || page == "diary-records") {
+            PaddingValues(bottom = innerPadding.calculateBottomPadding())
+        } else {
+            innerPadding
         }
         Box(Modifier.fillMaxSize().padding(pagePadding)) {
             when (page) {
-                // 退出动画期间 mvSong 已被置空：保持黑底而不是直接空着，
-                // 否则浅色 Scaffold 背景会在 MV 页淡出时闪一帧。
-                "mv-player" -> {
-                    val mvTarget = state.mvSong
-                    if (mvTarget != null) {
-                        MvPlayerPageRoute(state, mvTarget)
-                    } else {
-                        Box(Modifier.fillMaxSize().background(Color.Black))
-                    }
-                }
                 "ai" -> AiStudioPage(
                     signedIn = state.signedIn,
                     submitting = state.imageGenerating,
@@ -262,6 +258,42 @@ internal fun TaotaoAppPageRouter(
                 else -> HomePage(state)
             }
         }
+    }
+    // MV 播放页浮层：组合顺序就是绘制层级，它画在 AnimatedContent 里的所有页面之上。
+    MvPlayerOverlay(state)
+}
+
+/**
+ * MV 播放页浮层。
+ *
+ * 不参与页面 AnimatedContent：进出 MV 只动浮层本身，详情页保持在组合中原位不动，
+ * 返回时不会重播升起动画。退出动画期间 mvSong 已被置空，用 lastSong 快照撑住
+ * 画面到动画结束，否则会闪一帧浅色背景。
+ */
+@Composable
+private fun MvPlayerOverlay(state: TaotaoAppState) {
+    val reduceMotion = LocalReduceMotion.current
+    val lastSong = remember { mutableStateOf<Song?>(null) }
+    state.mvSong?.let { lastSong.value = it }
+    // 与详情页同一套手势语言：从底部升起，关闭时落回（降级动效只保留透明度）。
+    val enter = if (reduceMotion) {
+        fadeIn(taotaoTween(AnimationDurations.FADE))
+    } else {
+        slideInVertically(
+            animationSpec = taotaoTween(AnimationDurations.SHEET, easing = AnimationCurves.emphasizedIn),
+        ) { height -> height } + fadeIn(taotaoTween(AnimationDurations.MICRO))
+    }
+    val exit = if (reduceMotion) {
+        fadeOut(taotaoTween(AnimationDurations.FADE))
+    } else {
+        slideOutVertically(
+            animationSpec = taotaoTween(AnimationDurations.SHEET, easing = AnimationCurves.emphasizedOut),
+        ) { height -> height } + fadeOut(
+            animationSpec = taotaoTween(AnimationDurations.SHEET, easing = AnimationCurves.standardOut),
+        )
+    }
+    AnimatedVisibility(visible = state.mvSong != null, enter = enter, exit = exit) {
+        lastSong.value?.let { song -> MvPlayerPageRoute(state, song) }
     }
 }
 
