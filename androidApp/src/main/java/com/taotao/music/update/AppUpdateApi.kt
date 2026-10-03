@@ -16,6 +16,8 @@ import java.net.URL
  */
 class AppUpdateApi(private val tokenProvider: TokenProvider?) {
 
+    // GitHub 直链由服务端保存，客户端优先走代理；代理不可用时由下载器回退原链。
+
     fun bootstrap(versionCode: Long, sdk: Int, deviceId: String, channel: String = "release"): BootstrapResult {
         val query = "?channel=${channel}&versionCode=$versionCode&sdk=$sdk&deviceId=$deviceId"
         val connection = (URL("${TencentMusicApi.ENDPOINT}$PATH_BOOTSTRAP$query").openConnection() as HttpURLConnection).apply {
@@ -47,7 +49,7 @@ class AppUpdateApi(private val tokenProvider: TokenProvider?) {
 
     private fun releaseOf(update: JSONObject?): UpdateRelease? {
         if (update == null || !update.optBoolean("available")) return null
-        val apkUrl = update.optString("apkUrl")
+        val apkUrl = proxyUrlOf(update.optString("apkUrl"))
         val versionCode = update.optLong("versionCode")
         if (apkUrl.isBlank() || versionCode <= 0L) return null
         return UpdateRelease(
@@ -63,7 +65,7 @@ class AppUpdateApi(private val tokenProvider: TokenProvider?) {
     /** 服务端还没部署补丁功能时这个字段不存在，按"没有补丁"处理即可。 */
     private fun patchOf(patch: JSONObject?): AvailablePatch? {
         if (patch == null || !patch.optBoolean("available")) return null
-        val url = patch.optString("url")
+        val url = proxyUrlOf(patch.optString("url"))
         val patchVersion = patch.optInt("patchVersion")
         val targetVersionCode = patch.optLong("targetVersionCode")
         if (url.isBlank() || patchVersion <= 0 || targetVersionCode <= 0L) return null
@@ -80,6 +82,12 @@ class AppUpdateApi(private val tokenProvider: TokenProvider?) {
     private fun configOf(config: JSONObject?): Map<String, String> {
         if (config == null) return emptyMap()
         return config.keys().asSequence().associateWith { config.optString(it) }
+    }
+
+    private fun proxyUrlOf(url: String): String {
+        val value = url.trim()
+        if (!value.startsWith("https://github.com/")) return value
+        return "https://gh-proxy.org/$value"
     }
 
     private companion object {

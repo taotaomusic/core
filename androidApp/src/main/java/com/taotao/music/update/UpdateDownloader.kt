@@ -28,6 +28,23 @@ class UpdateDownloader(context: Context) {
      * 必须在后台线程调用。
      */
     fun download(release: UpdateRelease, onProgress: (Int) -> Unit): File {
+        val candidates = buildList {
+            add(release.apkUrl)
+            proxyFallbackOf(release.apkUrl)?.let(::add)
+        }.distinct()
+        var lastFailure: Throwable? = null
+        for (url in candidates) {
+            try {
+                return downloadFrom(url, release, onProgress)
+            } catch (failure: Exception) {
+                lastFailure = failure
+                File(directory, "${release.versionCode}.apk.part").delete()
+            }
+        }
+        throw IllegalStateException("更新包下载失败：代理和原始地址均不可用", lastFailure)
+    }
+
+    private fun downloadFrom(url: String, release: UpdateRelease, onProgress: (Int) -> Unit): File {
         completedApk(release)?.let { return it }
         directory.mkdirs()
         // 清掉其它版本的残留分片，避免旧版本升级包长期占用存储。
@@ -41,7 +58,7 @@ class UpdateDownloader(context: Context) {
             downloaded = 0L
         }
 
-        val connection = (URL(release.apkUrl).openConnection() as HttpURLConnection).apply {
+        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 15_000
             readTimeout = 30_000
@@ -108,7 +125,11 @@ class UpdateDownloader(context: Context) {
         return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
+    private fun proxyFallbackOf(url: String): String? =
+        url.removePrefix(PROXY_PREFIX).takeIf { it != url && it.startsWith("https://github.com/") }
+
     private companion object {
         const val DIRECTORY = "update"
+        const val PROXY_PREFIX = "https://gh-proxy.org/"
     }
 }
