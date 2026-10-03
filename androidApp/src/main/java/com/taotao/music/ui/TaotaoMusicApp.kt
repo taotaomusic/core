@@ -4,6 +4,7 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.Composable
 import com.taotao.music.data.AppearanceMode
 import com.taotao.music.ui.app.TaotaoAppContent
+import com.taotao.music.ui.app.TaotaoAppOpenLinkEffect
 import com.taotao.music.ui.app.TaotaoAppPreAuthEffects
 import com.taotao.music.ui.app.TaotaoAppSessionGuard
 import com.taotao.music.ui.app.TaotaoAppSignedInEffects
