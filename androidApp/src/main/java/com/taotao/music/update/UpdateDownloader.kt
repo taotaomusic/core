@@ -125,11 +125,23 @@ class UpdateDownloader(context: Context) {
         return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
-    private fun proxyFallbackOf(url: String): String? =
-        url.removePrefix(PROXY_PREFIX).takeIf { it != url && it.startsWith("https://github.com/") }
+    /**
+     * 从代理地址里剥回 GitHub 直链。
+     *
+     * 服务端下发的地址可能已拼上代理前缀（DOWNLOAD_PROXY_PREFIX），客户端自己也可能
+     * 拼过。前缀是可配置的、会换（gh-proxy 只是目前的一个），所以这里不认具体前缀，
+     * 只要「某个前缀 + 完整 GitHub 直链」的形态就剥出直链做回退候选 —— 代理整体
+     * 失效时用户始终还有一条直连的路。
+     */
+    private fun proxyFallbackOf(url: String): String? {
+        val index = url.indexOf(GITHUB_DIRECT)
+        // index == 0 说明地址本身就是直链，没有可剥的前缀。
+        if (index <= 0) return null
+        return url.substring(index)
+    }
 
     private companion object {
         const val DIRECTORY = "update"
-        const val PROXY_PREFIX = "https://gh-proxy.org/"
+        const val GITHUB_DIRECT = "https://github.com/"
     }
 }
