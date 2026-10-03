@@ -254,7 +254,28 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
             val localDownloads = withContext(Dispatchers.IO) { downloadManager.listDownloaded() }
             val queueWithLocalFiles = bindDownloadedSongs(queue, localDownloads)
             val requestedSong = queueWithLocalFiles[index]
-            val isLocalFile = requestedSong.audioUri?.startsWith("file:") == true
+            // 历史队列/旧版本缓存可能没有高潮区间；播放入队时补齐并回写队列，
+            // 避免详情页临时拉到数据后，迷你播放器和下一次恢复又丢失标记。
+            val queueWithMetadata = if (
+                !requestedSong.audioUri.orEmpty().startsWith("file:") &&
+                requestedSong.remoteId?.let { it > 0L } == true &&
+                (requestedSong.refrainStartMs == null || requestedSong.refrainEndMs == null)
+            ) {
+                val refreshed = withContext(Dispatchers.IO) {
+                    runCatching { musicApi.requestSongInfoForPlayback(requestedSong, qualityStore.playbackQuality().value) }
+                        .getOrNull()
+                }
+                if (refreshed != null && (refreshed.refrainStartMs != null || refreshed.refrainEndMs != null)) {
+                    queueWithLocalFiles.toMutableList().also { items ->
+                        items[index] = requestedSong.copy(
+                            refrainStartMs = refreshed.refrainStartMs,
+                            refrainEndMs = refreshed.refrainEndMs,
+                        )
+                    }
+                } else queueWithLocalFiles
+            } else queueWithLocalFiles
+            val requestedSongWithMetadata = queueWithMetadata[index]
+            val isLocalFile = requestedSongWithMetadata.audioUri?.startsWith("file:") == true
             // remoteId 是别的模块的 public 属性，Kotlin 不做智能转换，先取成局部变量。
             val remoteId = requestedSong.remoteId
             // 下载过就直接放本地文件。搜索结果里的歌与已下载的是同一个 remoteId，
@@ -262,18 +283,18 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
             // 网络歌曲统一用占位地址入队，真正的上游直链在取流那一刻才解析 ——
             // 直链是限时的，存进队列后冷启动恢复时就失效了。
             val playable = when {
-                isLocalFile -> requestedSong
-                !isLocalFile && (remoteId?.let { it > 0L } == true || !requestedSong.mid.isNullOrBlank()) -> requestedSong.copy(
+                isLocalFile -> requestedSongWithMetadata
+                !isLocalFile && (remoteId?.let { it > 0L } == true || !requestedSongWithMetadata.mid.isNullOrBlank()) -> requestedSongWithMetadata.copy(
                     audioUri = TencentMusicApi.placeholderUri(
                         remoteId,
-                        requestedSong.mid,
-                        requestedSong.type,
+                        requestedSongWithMetadata.mid,
+                        requestedSongWithMetadata.type,
                         qualityStore.playbackQuality().value,
-                        requestedSong.source,
-                    ) ?: requestedSong.audioUri,
-                    lyricUri = requestedSong.lyricUri ?: TencentMusicApi.lyricUri(remoteId, requestedSong.mid, requestedSong.source),
+                        requestedSongWithMetadata.source,
+                    ) ?: requestedSongWithMetadata.audioUri,
+                    lyricUri = requestedSongWithMetadata.lyricUri ?: TencentMusicApi.lyricUri(remoteId, requestedSongWithMetadata.mid, requestedSongWithMetadata.source),
                 )
-                else -> requestedSong
+                else -> requestedSongWithMetadata
             }
             if (playable.audioUri.isNullOrBlank()) {
                 message = "歌曲暂时没有可用播放链接"
