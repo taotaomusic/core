@@ -97,7 +97,7 @@ Authorization: Bearer <accessToken>
 
 ### `refrainStartMs` / `refrainEndMs`(高潮区间)
 
-目前**只有 `/search` 响应**的歌曲对象带这两个字段(毫秒):波点协议解析出 `payInfo.refrain_start/refrain_end`,服务端只做改名透传(值本身就是毫秒);上游缺失时为 null,**不伪造默认值**。歌曲详情(`songInfo`)映射暂未携带,客户端已预留解析。客户端在进度条上以主题强调色标出高潮范围,seek 计算不受影响。字段语义与实测样本见 [95-playback-refrain.md](95-playback-refrain.md)。
+`/search`、`GET /songs/:id/info` 与 `GET /songs/batch-info` 的歌曲对象都带这两个字段(毫秒):波点协议解析出 `payInfo.refrain_start/refrain_end`,服务端只做改名透传(值本身就是毫秒);上游缺失时键不存在,**不伪造默认值**(QQ 音乐与网易云源恒缺失)。客户端在进度条上以主题强调色标出高潮范围,seek 计算不受影响。字段语义与实测样本见 [95-playback-refrain.md](95-playback-refrain.md)。
 
 ### 红线
 

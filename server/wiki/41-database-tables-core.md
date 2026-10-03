@@ -95,6 +95,7 @@
 保存分享 token、用户、来源、稳定歌曲身份和元数据快照。
 
 - `token` 为 8–24 位短码,`(user_id, source, song_id)` 唯一。
+- `refrain_start_ms` / `refrain_end_ms`(integer 可空):创建分享时从上游快照落库的高潮区间毫秒值,只有酷我源会有值;NULL 即上游没给,metadata 下发时两键一起缺席,不伪造 0。
 - **不存任何音频文件路径** —— 试听是转发上游音频,不是缓存,也不能保存上游限时直链(旧库的 `preview_file` 列已在迁移里删除)。
 - `access_count`、`enabled` 和时间字段用于公开分享统计与失效控制。
 - `source` 的 CHECK 已扩到 `('tencent', 'netease', 'kuwo')`。旧库的约束是建表时的旧白名单,`CREATE TABLE IF NOT EXISTS` 改不动它 —— 迁移里用条件 DO 块查 `pg_constraint`,确认旧定义确实不含 `kuwo` 时才 `DROP` 后重建(「修改已有表约束」的第二个实际用例,见 [40-database-overview.md](40-database-overview.md))。

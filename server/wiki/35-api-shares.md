@@ -25,7 +25,7 @@ GET /api/v1/public/shares/{token}
 ```
 
 - 公开,不需要登录;返回普通 JSON 信封。
-- `data` 内容:`title`、`artist`、`album`、`coverUrl`、`duration`(已格式化 `mm:ss`)、`songId`、`mid`、`type`、`source`、`vip`、`previewDurationSeconds`(「最多 60 秒」与歌曲时长取小)、`previewUrl`(试听转发地址)和 `appDownloadUrl`(最新 100% 放量的 Android APK 地址)。
+- `data` 内容:`title`、`artist`、`album`、`coverUrl`、`duration`(已格式化 `mm:ss`)、`songId`、`mid`、`type`、`source`、`vip`、`previewDurationSeconds`(「最多 60 秒」与歌曲时长取小)、`previewUrl`(试听转发地址)和 `appDownloadUrl`(最新 100% 放量的 Android APK 地址)。酷我源的分享还带 `refrainStartMs` / `refrainEndMs`(整曲毫秒,快照落 NULL 时两键一起缺席、不伪造 0),语义见 [95-playback-refrain.md](95-playback-refrain.md)。
 - 读取会异步累计 `access_count`,失败静默,不影响响应。
 - 「最多 60 秒」**只由分享页自己守,服务端不下发任何时长限制**。
 
