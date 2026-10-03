@@ -380,6 +380,22 @@ jobs:
             }
             Add-Content -Path $env:GITHUB_OUTPUT -Value "signed=true"
           }
+      - name: 生成本次运行唯一 Android 版本号
+        shell: pwsh
+        run: |
+          $file = "version.properties"
+          $props = @{}
+          Get-Content $file | ForEach-Object {
+            if ($_ -match '^([^=]+)=(.*)$') { $props[$matches[1]] = $matches[2] }
+          }
+          # version.properties 保持基线；用 GitHub Actions 运行号生成单调版本，
+          # 避免每次干净 checkout 都重新产出同一个 1.0.243 / versionCode。
+          $run = [int]$env:GITHUB_RUN_NUMBER
+          $props['VERSION_CODE'] = ([int]$props['VERSION_CODE']) + $run
+          $parts = $props['VERSION_NAME'].Split('.')
+          $parts[2] = ([int]$parts[2]) + $run
+          [IO.File]::WriteAllLines($file, @("VERSION_CODE=$($props['VERSION_CODE'])", "VERSION_NAME=$($parts -join '.')"), (New-Object System.Text.UTF8Encoding($false)))
+          Write-Host "Android version => $($parts -join '.') ($($props['VERSION_CODE']))"
       - name: 构建 APK
         shell: pwsh
         env:
@@ -601,9 +617,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: bash ../tools/release-log.sh desktop-latest "桌面客户端" "$(tr -d '[:space:]' < ../VERSION).${GITHUB_RUN_NUMBER}"
-
-
-
 
 
 

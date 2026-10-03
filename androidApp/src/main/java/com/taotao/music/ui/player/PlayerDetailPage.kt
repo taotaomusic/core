@@ -42,6 +42,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -66,7 +69,9 @@ import com.taotao.music.ui.theme.AnimationDurations
 import com.taotao.music.ui.theme.LocalReduceMotion
 import com.taotao.music.ui.theme.TaotaoCoral
 import android.net.Uri
-import android.content.Intent
+import androidx.media3.common.MediaItem
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.PlayerView
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collectLatest
@@ -120,14 +125,16 @@ internal fun PlayerDetailPage(
     // key 不一致就会出现「状态被清空、拉取逻辑却不重跑」的空白歌词和收藏状态丢失。
     var lyricText by remember(song.lyricUri, song.remoteId, song.mid) { mutableStateOf<String?>(null) }
     var lyricWords by remember(song.lyricWordsUri, song.remoteId, song.mid) { mutableStateOf<String?>(null) }
+    var refrainStartMs by remember(song) { mutableStateOf(song.refrainStartMs) }
+    var refrainEndMs by remember(song) { mutableStateOf(song.refrainEndMs) }
     // 解析结果按原文缓存，避免每帧进度变化都重新解析整段歌词。
     val lyric = remember(lyricText, lyricWords) { LyricParser.parse(lyricText, lyricWords) }
     var showQueue by remember { mutableStateOf(false) }
+    var mvUrl by remember(song) { mutableStateOf<String?>(null) }
     // 时长和播放态直接读播放器暴露的状态，不再各自轮询。
     val durationMs = audioPlayer.durationMs
     val actualPlaying = audioPlayer.isPlaying
     val detailScope = rememberCoroutineScope()
-    val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     // key 必须是稳定的标识而不是整个 song：换音质或解析地址后队列里的 Song 会被换成新副本，
     // 用 song 做 key 会重建 Animatable，封面转到一半突然弹回 0°。
@@ -155,6 +162,15 @@ internal fun PlayerDetailPage(
         }.getOrElse { null to null }
         lyricText = loaded.first
         lyricWords = loaded.second
+    }
+    LaunchedEffect(song.remoteId, song.source, song.refrainStartMs, song.refrainEndMs) {
+        if (refrainStartMs == null || refrainEndMs == null) {
+            val refreshed = withContext(Dispatchers.IO) {
+                runCatching { musicApi.requestSongInfoForPlayback(song) }.getOrNull()
+            }
+            refrainStartMs = refreshed?.refrainStartMs
+            refrainEndMs = refreshed?.refrainEndMs
+        }
     }
     // positionMs 是本次组合从播放器 State 读取出的普通值，不能再放进无 key 的
     // remember/derivedStateOf：那会把首次进入页面时的数值闭包起来，后续进度不再刷新。
@@ -279,6 +295,8 @@ internal fun PlayerDetailPage(
                 isPlaying = actualPlaying,
                 positionMs = positionMs.toLong(),
                 durationMs = durationMs.toLong(),
+                refrainStartMs = refrainStartMs,
+                refrainEndMs = refrainEndMs,
                 repeatMode = when (repeatMode) {
                     androidx.media3.common.Player.REPEAT_MODE_ONE -> PlayerRepeatMode.ONE
                     androidx.media3.common.Player.REPEAT_MODE_ALL -> PlayerRepeatMode.ALL
@@ -339,7 +357,7 @@ internal fun PlayerDetailPage(
                             val mv = withContext(Dispatchers.IO) { runCatching { musicApi.requestMv(song) }.getOrNull() }
                             val url = mv?.highUrl ?: mv?.lowUrl
                             if (url.isNullOrBlank()) onMessage("暂无可播放 MV")
-                            else context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                            else mvUrl = url
                         }
                     }) {
                         Icon(Icons.Default.VideoLibrary, "播放 MV", tint = TaotaoCoral)
@@ -384,6 +402,30 @@ internal fun PlayerDetailPage(
             onPlayNext = onPlayNext,
             isFavorite = isFavorite,
             onToggleFavorite = onToggleSongFavorite,
+        )
+    }
+    mvUrl?.let { url ->
+        MvPlayerDialog(url = url, onDismiss = { mvUrl = null })
+    }
+}
+
+@Composable
+private fun MvPlayerDialog(url: String, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val player = remember(url) {
+        ExoPlayer.Builder(context).build().apply {
+            setMediaItem(MediaItem.fromUri(url))
+            prepare()
+            playWhenReady = true
+        }
+    }
+    androidx.compose.runtime.DisposableEffect(player) {
+        onDispose { player.release() }
+    }
+    Dialog(onDismissRequest = onDismiss) {
+        AndroidView(
+            factory = { viewContext -> PlayerView(viewContext).apply { this.player = player } },
+            modifier = Modifier.fillMaxWidth().height(240.dp),
         )
     }
 }

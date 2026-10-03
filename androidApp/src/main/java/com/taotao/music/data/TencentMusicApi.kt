@@ -812,6 +812,11 @@ class TencentMusicApi(
         )
     }
 
+    fun requestSongInfoForPlayback(song: Song, quality: Int = AudioQuality.Default.value): Song {
+        val id = song.remoteId?.takeIf { it > 0L } ?: return song
+        return requestSongInfo(id, quality, song.favorited, song.source)
+    }
+
     /** mid-only 收藏没有数字 ID 时的可播放占位项；服务端会在取流时按 mid 解析。 */
     private fun unavailableSong(
         identity: String,
