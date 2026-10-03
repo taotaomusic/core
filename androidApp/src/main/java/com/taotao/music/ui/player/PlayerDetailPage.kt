@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Timer
+import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -40,6 +41,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -64,6 +66,7 @@ import com.taotao.music.ui.theme.AnimationDurations
 import com.taotao.music.ui.theme.LocalReduceMotion
 import com.taotao.music.ui.theme.TaotaoCoral
 import android.net.Uri
+import android.content.Intent
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collectLatest
@@ -124,6 +127,7 @@ internal fun PlayerDetailPage(
     val durationMs = audioPlayer.durationMs
     val actualPlaying = audioPlayer.isPlaying
     val detailScope = rememberCoroutineScope()
+    val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     // key 必须是稳定的标识而不是整个 song：换音质或解析地址后队列里的 Song 会被换成新副本，
     // 用 song 做 key 会重建 Animatable，封面转到一半突然弹回 0°。
@@ -328,6 +332,18 @@ internal fun PlayerDetailPage(
                 }
                 IconButton(onClick = onShare) {
                     Icon(Icons.Default.Share, "分享歌曲", tint = TaotaoCoral)
+                }
+                if (song.source == TencentMusicApi.SEARCH_SOURCE_KUWO && song.remoteId?.let { it > 0L } == true) {
+                    IconButton(onClick = {
+                        detailScope.launch {
+                            val mv = withContext(Dispatchers.IO) { runCatching { musicApi.requestMv(song) }.getOrNull() }
+                            val url = mv?.highUrl ?: mv?.lowUrl
+                            if (url.isNullOrBlank()) onMessage("暂无可播放 MV")
+                            else context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                        }
+                    }) {
+                        Icon(Icons.Default.VideoLibrary, "播放 MV", tint = TaotaoCoral)
+                    }
                 }
                 // 本地文件仍保留远端身份，可以和在线播放歌曲一样加入云端歌单。
                 if (

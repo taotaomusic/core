@@ -57,6 +57,16 @@ class TencentMusicApi(
     data class FavoriteLibrary(val ids: Set<String>, val songs: List<Song>)
     /** 服务端生成的稳定分享短链；客户端只负责交给系统分享面板。 */
     data class SongShare(val token: String, val url: String)
+    data class MvInfo(
+        val mid: String,
+        val name: String,
+        val coverUrl: String?,
+        val highUrl: String?,
+        val lowUrl: String?,
+        val durationMs: Long,
+        val highBitrate: Int,
+        val lowBitrate: Int,
+    )
 
     /**
      * 云端歌单中的歌曲快照。
@@ -339,6 +349,26 @@ class TencentMusicApi(
                     ),
                 )
             }
+        }
+    }
+
+    fun requestMv(song: Song): MvInfo {
+        val id = song.remoteId?.takeIf { it > 0L } ?: throw IllegalArgumentException("MV 需要歌曲 ID")
+        val source = encode(song.source.ifBlank { DEFAULT_SOURCE })
+        return authorized("/api/v1/songs/$id/mv?source=$source") { connection ->
+            val root = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+            check(root.optInt("code") == 0) { root.optString("message", "获取 MV 失败") }
+            val data = root.optJSONObject("data") ?: error("暂无 MV")
+            MvInfo(
+                mid = data.optString("mid"),
+                name = data.optString("name", song.title),
+                coverUrl = data.optString("coverUrl").ifBlank { null },
+                highUrl = data.optString("highUrl").ifBlank { null },
+                lowUrl = data.optString("lowUrl").ifBlank { null },
+                durationMs = data.optLong("mvDuration").let { if (it < 10_000L) it * 1000L else it },
+                highBitrate = data.optInt("highBitrate"),
+                lowBitrate = data.optInt("lowBitrate"),
+            )
         }
     }
 

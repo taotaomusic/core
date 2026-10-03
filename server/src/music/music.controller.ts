@@ -244,6 +244,8 @@ export class MusicController {
       coverUrl: info.cover,
       vip: info.pay.includes("付费"),
       durationSeconds: info.interval,
+      refrainStartMs: info.refrainStartMs,
+      refrainEndMs: info.refrainEndMs,
       // size 为 0 的档位这首歌没有，直接不下发，客户端不用自己过滤。
       qualities: info.tiers
         .filter((tier) => tier.size > 0)
