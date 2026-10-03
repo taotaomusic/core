@@ -363,14 +363,18 @@ class TencentMusicApi(
                 mid = data.optString("mid"),
                 name = data.optString("name", song.title),
                 coverUrl = data.optString("coverUrl").ifBlank { null },
-                highUrl = data.optString("highUrl").ifBlank { null },
-                lowUrl = data.optString("lowUrl").ifBlank { null },
+                // 酷我官方仍返回 http://bd-bj.kuwo.cn，Android 网络安全策略会拒绝明文视频流；
+                // 同一资源支持 HTTPS，客户端统一升级后再交给 Media3。
+                highUrl = data.optString("highUrl").httpsMediaUrl(),
+                lowUrl = data.optString("lowUrl").httpsMediaUrl(),
                 durationMs = data.optLong("mvDuration").let { if (it < 10_000L) it * 1000L else it },
                 highBitrate = data.optInt("highBitrate"),
                 lowBitrate = data.optInt("lowBitrate"),
             )
         }
     }
+
+    private fun String.httpsMediaUrl(): String? = trim().takeIf { it.isNotBlank() }?.replaceFirst("http://", "https://")
 
     /**
      * 解析播放地址。
