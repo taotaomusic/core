@@ -183,7 +183,7 @@ fun PlayerPlaybackDetails(
             }
             val refrainStart = state.refrainStartMs
             val refrainEnd = state.refrainEndMs
-            if (durationMs > 0L && refrainStart != null && refrainEnd != null && refrainEnd > refrainStart) {
+            if (state.durationMs > 0L && refrainStart != null && refrainEnd != null && refrainEnd > refrainStart) {
                 Text(
                     text = "高潮 ${formatPlayerTime(refrainStart)}–${formatPlayerTime(refrainEnd)}",
                     color = MaterialTheme.colorScheme.primary,
