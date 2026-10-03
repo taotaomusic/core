@@ -181,6 +181,16 @@ fun PlayerPlaybackDetails(
                     style = MaterialTheme.typography.labelMedium,
                 )
             }
+            val refrainStart = state.refrainStartMs
+            val refrainEnd = state.refrainEndMs
+            if (durationMs > 0L && refrainStart != null && refrainEnd != null && refrainEnd > refrainStart) {
+                Text(
+                    text = "高潮 ${formatPlayerTime(refrainStart)}–${formatPlayerTime(refrainEnd)}",
+                    color = MaterialTheme.colorScheme.primary,
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.padding(top = TaotaoSpacing.xxs),
+                )
+            }
         }
 
         Spacer(Modifier.height(TaotaoSpacing.xxl))
@@ -193,6 +203,11 @@ fun PlayerPlaybackDetails(
             trailingContent = controlTrailingContent,
         )
     }
+}
+
+private fun formatPlayerTime(milliseconds: Long): String {
+    val totalSeconds = (milliseconds / 1000L).coerceAtLeast(0L)
+    return "%02d:%02d".format(totalSeconds / 60L, totalSeconds % 60L)
 }
 
 /** 三端共用的播放进度条，拖动结束事件由平台层提交给实际播放器。 */
