@@ -169,6 +169,9 @@ export type Song = {
   duration?: string;
   /** 服务端侧的原样 songId（歌单/最近播放返回），排序与删除按它回传，避免 id/mid 推断错位 */
   remoteId?: string;
+  /** 歌曲高潮区间（毫秒，酷我源才有值；其他音源键缺席，缺失即键不存在，0 视为无效） */
+  refrainStartMs?: number;
+  refrainEndMs?: number;
 };
 
 export type SearchResult = { songs: Song[]; total: number; hasMore: boolean };
@@ -191,6 +194,9 @@ export async function searchSongs(keyword: string, page = 1): Promise<SearchResu
     if (rec?.type === "song" && rec.data) {
       const d = rec.data;
       if (Number(d.id) > 0 || d.mid) {
+        // 高潮区间只认正毫秒：0 与键缺失等价，统一归一成 undefined
+        const refrainStartMs = Number(d.refrainStartMs);
+        const refrainEndMs = Number(d.refrainEndMs);
         songs.push({
           id: Number(d.id) || 0,
           title: d.title || "未知歌曲",
@@ -204,6 +210,8 @@ export async function searchSongs(keyword: string, page = 1): Promise<SearchResu
           vip: !!d.vip,
           playable: !!d.playable,
           favorited: !!d.favorited,
+          refrainStartMs: refrainStartMs > 0 ? refrainStartMs : undefined,
+          refrainEndMs: refrainEndMs > 0 ? refrainEndMs : undefined,
         });
       }
     } else if (rec?.type === "end" && rec.meta) {
@@ -323,6 +331,9 @@ export async function fetchSongInfos(source: string, ids: string[], mids: string
     // songId 与请求侧口径一致：纯数字是远端 id，否则本身就是 mid（酷我部分歌只有 mid）
     const raw = String(it?.songId ?? "");
     const numeric = /^\d+$/.test(raw);
+    // 高潮区间只认正毫秒：0 与键缺失等价（收藏/最近播放补全元数据时顺带入队）
+    const refrainStartMs = Number(it?.refrainStartMs);
+    const refrainEndMs = Number(it?.refrainEndMs);
     return {
       id: numeric ? Number(raw) : 0,
       title: it?.title || "未知歌曲",
@@ -333,6 +344,8 @@ export async function fetchSongInfos(source: string, ids: string[], mids: string
       coverUrl: it?.coverUrl || undefined,
       vip: !!it?.vip,
       duration: formatSeconds(it?.durationSeconds),
+      refrainStartMs: refrainStartMs > 0 ? refrainStartMs : undefined,
+      refrainEndMs: refrainEndMs > 0 ? refrainEndMs : undefined,
     };
   });
 }
@@ -380,6 +393,52 @@ export async function fetchQualityTiers(song: Song): Promise<QualityTier[]> {
   return list
     .map((t) => ({ quality: Number(t?.quality), label: String(t?.label ?? ""), size: Number(t?.size) }))
     .filter((t) => Number.isFinite(t.quality));
+}
+
+/** 单曲 info 的轻量结果：只关心高潮区间两个字段（毫秒，酷我源才有值）。 */
+export type SongRefrainInfo = { refrainStartMs?: number; refrainEndMs?: number };
+
+/**
+ * 拉取歌曲高潮区间（复用 /api/v1/songs/:id/info，data 顶层与 qualities 并列带这两个字段）。
+ * 供播放时兜底补拉：歌单/最近播放/收藏入队的歌来自服务端快照，快照不带区间。
+ */
+export async function fetchSongRefrain(song: Song): Promise<SongRefrainInfo> {
+  const q = new URLSearchParams({ source: song.source || "kuwo" });
+  if (song.mid) q.set("mid", song.mid);
+  const resp = await authedGet(`/api/v1/songs/${song.id}/info?${q}`, "application/json");
+  const data = await unwrap(resp);
+  // 只认正毫秒：0 与键缺失等价，统一归一成 undefined
+  const start = Number(data?.refrainStartMs);
+  const end = Number(data?.refrainEndMs);
+  return {
+    refrainStartMs: start > 0 ? start : undefined,
+    refrainEndMs: end > 0 ? end : undefined,
+  };
+}
+
+/** 高潮区间在进度条上的归一结果：start/end 为 0..1 轨道比例，startMs/endMs 供 mm:ss 文案。 */
+export type SongRefrainRange = {
+  start: number;
+  end: number;
+  startMs: number;
+  endMs: number;
+};
+
+/**
+ * 把歌曲的高潮区间按当前时长归一成进度条比例：时长有效（>0）、两值齐全且
+ * end > start 才算有效；比例收敛到 0..1（终点超出时长夹到 1，负起点夹到 0）。
+ * 无效返回 null，界面据此不渲染标记与小字。
+ */
+export function refrainRangeOf(song: Song | null, durationSec: number): SongRefrainRange | null {
+  if (!song || !(durationSec > 0)) return null;
+  const startMs = song.refrainStartMs;
+  const endMs = song.refrainEndMs;
+  if (startMs == null || endMs == null || endMs <= startMs) return null;
+  const total = durationSec * 1000;
+  const start = Math.min(1, Math.max(0, startMs / total));
+  const end = Math.min(1, Math.max(0, endMs / total));
+  // 收敛后退化成一个点（如区间整体越出时长）同样视为无效
+  return end > start ? { start, end, startMs, endMs } : null;
 }
 
 /** 任意音质档位的中文名（与 shared AudioQuality.kt 的 labelOfQuality 同口径），档位标签兜底用。 */

@@ -7,6 +7,7 @@ import {
   fetchFavorites,
   fetchPlaylists,
   fetchSongInfos,
+  fetchSongRefrain,
   labelOfQuality,
   readableError,
   removeFavorite,
@@ -434,11 +435,42 @@ export function AppProvider(props: { children: ReactNode; onExpired: () => void 
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, [flushSession]);
 
+  /**
+   * 播放开始时后台兜底补拉当前曲的高潮区间并回写队列（对标安卓入队补齐，只补当前一首）：
+   * 歌单/最近播放/收藏入队的歌来自服务端快照，快照不带 refrain 两个字段；搜索结果自带无需补。
+   * 回写只改这首歌的 refrain 字段，不动其他状态；失败静默（下次播放同歌再试）。
+   * 桌面端没有本地文件播放，安卓按 file: 地址排除本地文件的分支在这里天然不成立。
+   */
+  const ensureCurrentRefrain = useCallback((song: Song, i: number) => {
+    // 无远端身份（既无 id 又无 mid）无法调 info 接口；区间已齐全也无需补
+    if (!(song.id > 0) && !song.mid) return;
+    if (song.refrainStartMs != null && song.refrainEndMs != null) return;
+    const key = songKeyOf(song);
+    void fetchSongRefrain(song)
+      .then((refrain) => {
+        // 回写前确认队列第 i 首仍是同一首歌：快速切歌/整列换队列后定位不到就放弃，
+        // 不按远端身份猜测位置，避免把区间写到另一首同键歌曲上
+        const list = queueRef.current;
+        if (i < 0 || i >= list.length || songKeyOf(list[i]) !== key) return;
+        // 服务端没给区间（如非酷我源）就不写，保持「键不存在」的原样
+        if (refrain.refrainStartMs == null && refrain.refrainEndMs == null) return;
+        const next = list.slice();
+        next[i] = { ...next[i], refrainStartMs: refrain.refrainStartMs, refrainEndMs: refrain.refrainEndMs };
+        queueRef.current = next;
+        setQueue(next);
+      })
+      .catch(() => {
+        // 静默：补拉失败不影响播放
+      });
+  }, []);
+
   const playAt = useCallback(
     async (i: number) => {
       const list = queueRef.current;
       if (i < 0 || i >= list.length) return;
       const song = list[i];
+      // 播放开始即后台补拉当前曲缺失的高潮区间（不阻塞、不等待，与 resolveLink 并行）
+      ensureCurrentRefrain(song, i);
       // 换歌/重播前先把旧会话快照落 outbox 并异步发送。此时 el.src 还没换、
       // 旧曲仍在播：若 resolveLink 失败，会话未终结，心跳会继续累计。
       flushSession();
@@ -478,7 +510,7 @@ export function AppProvider(props: { children: ReactNode; onExpired: () => void 
         toast(msg);
       }
     },
-    [toast, flushSession],
+    [toast, flushSession, ensureCurrentRefrain],
   );
 
   /** 整列设为队列并从第 i 首开始播放。 */

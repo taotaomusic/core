@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { absoluteUrl } from "../api";
+import { absoluteUrl, refrainRangeOf } from "../api";
 import { useApp } from "../state/AppState";
 import { hideOnError } from "./img";
 import {
@@ -34,6 +34,8 @@ export function PlayerBar() {
   const empty = !current;
   // 细进度条为纯展示：duration 未知（0）时保持 0%
   const pct = app.duration > 0 ? Math.min(100, (app.position / app.duration) * 100) : 0;
+  // 高潮区间标记：与进度条同用一个真实时长做分母，区间无效（缺值/时长未知）时不渲染
+  const refrain = refrainRangeOf(current, app.duration);
   // 已关闭过的错误不再显示；出现新错误（文案不同）会再次浮出
   const showError = !!app.playError && app.playError !== dismissedError;
 
@@ -65,6 +67,13 @@ export function PlayerBar() {
       </div>
       {current && (
         <div className="playerbar-progress">
+          {/* 高潮区间标记段：叠在轨道上的强调色圆头胶囊，纯展示（对标安卓迷你条） */}
+          {refrain && (
+            <div
+              className="playerbar-progress-refrain"
+              style={{ left: `${refrain.start * 100}%`, width: `${(refrain.end - refrain.start) * 100}%` }}
+            />
+          )}
           <div className="playerbar-progress-fill" style={{ width: `${pct}%` }} />
         </div>
       )}

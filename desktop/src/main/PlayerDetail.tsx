@@ -5,6 +5,7 @@ import {
   fetchQualityTiers,
   labelOfQuality,
   readableError,
+  refrainRangeOf,
   SessionExpired,
   type QualityTier,
 } from "../api";
@@ -202,6 +203,8 @@ export function PlayerDetail() {
   // 拖动中优先显示预览位置，否则用实时播放位置
   const shownSec = dragSec ?? app.position;
   const pct = duration > 0 ? Math.min(100, (shownSec / duration) * 100) : 0;
+  // 高潮区间标记与小字：与进度条同用一个真实时长做分母；区间无效（缺值/时长未知）时都不显示
+  const refrain = refrainRangeOf(current, duration);
   // 定时关闭：顶栏按钮高亮 / 按钮文案 / 悬浮提示 / 弹窗中与剩余时间对应的分钟选项
   const sleepOn = app.sleepPendingStop || app.sleepRemainingSec != null;
   const sleepLabel = app.sleepPendingStop
@@ -415,10 +418,23 @@ export function PlayerDetail() {
                   onPointerUp={onTrackUp}
                 >
                   <div className="pd-track-fill" style={{ width: `${pct}%` }} />
+                  {/* 高潮区间标记段：叠在轨道上的强调色圆头胶囊（对标安卓 PlayerProgress） */}
+                  {refrain && (
+                    <div
+                      className="pd-track-refrain"
+                      style={{ left: `${refrain.start * 100}%`, width: `${(refrain.end - refrain.start) * 100}%` }}
+                    />
+                  )}
                   <div className="pd-track-thumb" style={{ left: `${pct}%` }} />
                 </div>
                 <span className="pd-time">{duration > 0 ? formatTime(duration) : "--:--"}</span>
               </div>
+              {/* 高潮区间小字：区间有效才显示，位置与进度条上的标记段对应 */}
+              {refrain && (
+                <div className="pd-refrain">
+                  高潮 {formatTime(refrain.startMs / 1000)}–{formatTime(refrain.endMs / 1000)}
+                </div>
+              )}
               <div className="pd-quick">
                 <button className="pd-quick-btn" disabled={sharing} onClick={() => { void startShare(); }}>
                   <IconShare size={15} />

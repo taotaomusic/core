@@ -34,7 +34,8 @@
             await wait(200);
             return new Response(
               Array.from({ length: 12 }, (_, i) =>
-                JSON.stringify({ type: "song", data: { id: i + 1, title: `mock 歌曲 ${i + 1}`, artist: "mock 歌手", source: "kuwo", coverUrl: "", playable: true } }),
+                // refrainStartMs/refrainEndMs：假数据也带高潮区间，#mock 下可直接看进度条标记效果
+                JSON.stringify({ type: "song", data: { id: i + 1, title: `mock 歌曲 ${i + 1}`, artist: "mock 歌手", source: "kuwo", coverUrl: "", playable: true, refrainStartMs: 45000, refrainEndMs: 90000 } }),
               ).join("\n") + "\n" + JSON.stringify({ type: "end", meta: { total: 12, hasMore: false } }),
               { status: 200, headers: { "Content-Type": "application/x-ndjson" } },
             );
