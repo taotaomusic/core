@@ -1,10 +1,13 @@
 package com.taotao.music.ui.player
 
 import android.app.Activity
+import android.content.pm.ActivityInfo
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -26,6 +29,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay
@@ -62,6 +67,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -82,8 +89,10 @@ import kotlinx.coroutines.withContext
 /**
  * 独立的 MV 播放页。
  *
- * 取代旧的「Dialog + 裸 PlayerView」弹窗：全屏沉浸黑底、模糊封面氛围、
- * 自定义控制层（播放/暂停、进度拖动、高清/标清切换）、缓冲与错误兜底。
+ * 全屏黑底沉浸式：竖屏时视频区垂直居中（封面模糊打底、歌曲信息跟在视频下方），
+ * 底部导航与迷你播放器由 SharedMainLayout 的 hideBottomBar 收起；控制层支持
+ * 播放/暂停、进度拖动、高清/标清切换与横屏全屏。
+ *
  * 歌曲音频的暂停与恢复由路由层（AppPageRouter 的 [MvPlayerPageRoute]）负责，
  * 这里只管 MV 自己的播放，两边互不掺和。
  */
@@ -104,119 +113,171 @@ internal fun MvPlayerPage(
             .onFailure { loadError = it.message ?: "获取 MV 失败，请稍后重试" }
     }
 
-    // 黑底沉浸页要把系统栏图标翻成浅色，否则亮色主题下图标压在黑底上看不见；
-    // 退出页面时恢复主题原本的明暗（Theme.kt 按应用主题统一设置过）。
+    // ---- 全屏：横屏铺满并隐藏系统栏；返回键先退全屏再退页面 ----
+    var isFullscreen by remember { mutableStateOf(false) }
+    BackHandler(enabled = isFullscreen) { isFullscreen = false }
+
     val view = LocalView.current
+    // 黑底页面要把系统栏图标翻成浅色，退出时交还主题原本的明暗（Theme.kt 统一设置过）。
+    // 方向与系统栏收起跟随 isFullscreen 单一状态源；页面销毁时全部恢复，
+    // 否则从全屏返回后应用会一直横屏、其他页面摸不到系统栏。
     DisposableEffect(Unit) {
-        val window = (view.context as? Activity)?.window
-        val controller = window?.let { WindowCompat.getInsetsController(window, view) }
+        val activity = view.context as? Activity
+        val controller = activity?.window?.let { WindowCompat.getInsetsController(it, view) }
         val previousLight = controller?.isAppearanceLightStatusBars
         controller?.isAppearanceLightStatusBars = false
         controller?.isAppearanceLightNavigationBars = false
         onDispose {
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            activity?.window?.let { window ->
+                WindowCompat.getInsetsController(window, view).run {
+                    systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
+                    show(WindowInsetsCompat.Type.systemBars())
+                }
+            }
             previousLight?.let { light ->
                 controller?.isAppearanceLightStatusBars = light
                 controller?.isAppearanceLightNavigationBars = light
             }
         }
     }
+    LaunchedEffect(isFullscreen) {
+        val activity = view.context as? Activity ?: return@LaunchedEffect
+        activity.requestedOrientation = if (isFullscreen) {
+            ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        } else {
+            ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        }
+        WindowCompat.getInsetsController(activity.window, view).run {
+            // 收起的系统栏用「边缘轻扫临时呼出」的沉浸模式，呼出几秒后自动回落。
+            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            if (isFullscreen) hide(WindowInsetsCompat.Type.systemBars())
+            else show(WindowInsetsCompat.Type.systemBars())
+        }
+    }
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
-        // 模糊封面打底，给纯黑页面一点来自歌曲本身的氛围。低版本系统不支持 blur
-        // 时退化为「低透明度清晰封面 + 深色遮罩」，观感依然成立。
-        mvInfo?.coverUrl?.let { cover ->
-            AsyncImage(
-                model = ImageRequest.Builder(LocalContext.current).data(cover).build(),
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                alpha = 0.4f,
-                modifier = Modifier.fillMaxSize().blur(48.dp),
-            )
-            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.55f)))
+        // 模糊封面打底，给竖屏的纯黑页面一点来自歌曲本身的氛围；全屏时画面
+        // 本身铺满，不再铺背景。低版本系统不支持 blur 时退化为「低透明度清晰
+        // 封面 + 深色遮罩」，观感依然成立。
+        if (!isFullscreen) {
+            mvInfo?.coverUrl?.let { cover ->
+                AsyncImage(
+                    model = ImageRequest.Builder(LocalContext.current).data(cover).build(),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    alpha = 0.4f,
+                    modifier = Modifier.fillMaxSize().blur(48.dp),
+                )
+                Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.55f)))
+            }
         }
 
+        // 顶栏、视频与信息区都挂在同一个 Column 里，竖横切换只改尺寸与显隐，
+        // 不换组合分支 —— 否则播放器的 remember 状态会被丢弃，旋转就重新缓冲。
         Column(
             Modifier
                 .fillMaxSize()
                 .statusBarsPadding()
                 .navigationBarsPadding(),
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = TaotaoSpacing.xs),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                IconButton(onClick = onBack) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = Color.White)
-                }
-                Text(
-                    "MV",
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold,
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.weight(1f),
-                    textAlign = TextAlign.Center,
-                )
-                // 与左侧返回按钮等宽占位，让标题真正居中。
-                Spacer(Modifier.size(TaotaoSizes.iconMd + TaotaoSpacing.md))
-            }
-            MvVideoArea(
-                mvInfo = mvInfo,
-                loadError = loadError,
-                onRetryLoad = { loadGeneration++ },
-            )
-            // 视频下方是 MV 对应的歌曲信息，信息不依赖拉取结果，加载中也能先显示。
-            Column(Modifier.fillMaxWidth().padding(horizontal = TaotaoSpacing.lg, vertical = TaotaoSpacing.md)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+            AnimatedVisibility(visible = !isFullscreen, enter = fadeIn(tween(150)), exit = fadeOut(tween(150))) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = TaotaoSpacing.xs),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = Color.White)
+                    }
                     Text(
-                        mvInfo?.name?.takeIf { it.isNotBlank() } ?: song.title,
+                        "MV",
                         color = Color.White,
+                        fontWeight = FontWeight.Bold,
                         style = MaterialTheme.typography.titleMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false),
+                        modifier = Modifier.weight(1f),
+                        textAlign = TextAlign.Center,
                     )
-                    Spacer(Modifier.width(TaotaoSpacing.sm))
-                    Surface(
-                        shape = RoundedCornerShape(4.dp),
-                        color = Color.Transparent,
-                        border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.4f)),
-                    ) {
-                        Text(
-                            "MV",
-                            color = Color.White.copy(alpha = 0.75f),
-                            style = MaterialTheme.typography.labelSmall,
-                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
-                        )
+                    // 与左侧返回按钮等宽占位，让标题真正居中。
+                    Spacer(Modifier.size(TaotaoSizes.iconMd + TaotaoSpacing.md))
+                }
+            }
+            Box(
+                Modifier.weight(1f).fillMaxWidth(),
+                contentAlignment = Alignment.Center,
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    MvVideoArea(
+                        mvInfo = mvInfo,
+                        loadError = loadError,
+                        onRetryLoad = { loadGeneration++ },
+                        isFullscreen = isFullscreen,
+                        onToggleFullscreen = { isFullscreen = !isFullscreen },
+                    )
+                    // 视频下方是 MV 对应的歌曲信息；信息不依赖拉取结果，加载中也能先显示。
+                    AnimatedVisibility(visible = !isFullscreen, enter = fadeIn(tween(150)), exit = fadeOut(tween(150))) {
+                        Column(
+                            Modifier.padding(horizontal = TaotaoSpacing.lg, vertical = TaotaoSpacing.md),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    mvInfo?.name?.takeIf { it.isNotBlank() } ?: song.title,
+                                    color = Color.White,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f, fill = false),
+                                )
+                                Spacer(Modifier.width(TaotaoSpacing.sm))
+                                Surface(
+                                    shape = RoundedCornerShape(4.dp),
+                                    color = Color.Transparent,
+                                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.4f)),
+                                ) {
+                                    Text(
+                                        "MV",
+                                        color = Color.White.copy(alpha = 0.75f),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
+                                    )
+                                }
+                            }
+                            Text(
+                                song.artist,
+                                color = Color.White.copy(alpha = 0.65f),
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(top = TaotaoSpacing.xxs),
+                            )
+                        }
                     }
                 }
-                Text(
-                    song.artist,
-                    color = Color.White.copy(alpha = 0.65f),
-                    style = MaterialTheme.typography.bodySmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(top = TaotaoSpacing.xxs),
-                )
             }
         }
     }
 }
 
-/** 视频区域：16:9 固定比例，承载加载中、拉取失败与播放器三种互斥状态。 */
+/** 视频区域：竖屏 16:9 居中，全屏铺满；承载加载中、拉取失败与播放器三种互斥状态。 */
 @Composable
 private fun MvVideoArea(
     mvInfo: TencentMusicApi.MvInfo?,
     loadError: String?,
     onRetryLoad: () -> Unit,
+    isFullscreen: Boolean,
+    onToggleFullscreen: () -> Unit,
 ) {
     Box(
-        Modifier
-            .fillMaxWidth()
-            .aspectRatio(16f / 9f)
+        (if (isFullscreen) Modifier.fillMaxSize() else Modifier.fillMaxWidth().aspectRatio(16f / 9f))
             .background(Color(0xFF101010)),
+        contentAlignment = Alignment.Center,
     ) {
         when {
-            mvInfo != null -> MvPlayerSurface(mvInfo)
+            mvInfo != null -> MvPlayerSurface(
+                mvInfo = mvInfo,
+                isFullscreen = isFullscreen,
+                onToggleFullscreen = onToggleFullscreen,
+            )
             loadError != null -> MvStatusFallback(message = loadError, onRetry = onRetryLoad)
             else -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = TaotaoCoral)
@@ -228,11 +289,15 @@ private fun MvVideoArea(
 /**
  * MV 播放面：ExoPlayer + 自定义控制层。
  *
- * 控制层（中央播放按钮、底部进度与清晰度条）在播放中 3.5 秒无操作后自动收起，
- * 点击视频任意位置呼出；暂停、拖动进度时保持常显。
+ * 控制层（中央播放按钮、底部进度与清晰度/全屏条）在播放中 3.5 秒无操作后自动收起，
+ * 点击视频任意位置呼出；暂停、拖动进度或刚切换全屏时保持常显。
  */
 @Composable
-private fun MvPlayerSurface(mvInfo: TencentMusicApi.MvInfo) {
+private fun MvPlayerSurface(
+    mvInfo: TencentMusicApi.MvInfo,
+    isFullscreen: Boolean,
+    onToggleFullscreen: () -> Unit,
+) {
     val context = LocalContext.current
     // 默认高清；上游只给到标清流时直接用标清。
     var preferHigh by remember(mvInfo) { mutableStateOf(mvInfo.highUrl != null) }
@@ -305,8 +370,9 @@ private fun MvPlayerSurface(mvInfo: TencentMusicApi.MvInfo) {
     }
 
     var controlsVisible by remember { mutableStateOf(true) }
-    // 播放中 3.5 秒无操作自动收起；暂停与拖动进度时保持常显，方便继续操作。
-    LaunchedEffect(controlsVisible, isPlaying, dragging) {
+    // 播放中 3.5 秒无操作自动收起；暂停、拖动进度与刚进全屏时保持常显，
+    // 否则用户找不到退出全屏的按钮。
+    LaunchedEffect(controlsVisible, isPlaying, dragging, isFullscreen) {
         if (controlsVisible && isPlaying && !dragging) {
             delay(3500L)
             controlsVisible = false
@@ -338,8 +404,7 @@ private fun MvPlayerSurface(mvInfo: TencentMusicApi.MvInfo) {
             factory = { viewContext ->
                 PlayerView(viewContext).apply {
                     this.player = player
-                    // 自带控制器风格与应用脱节，全部换成自绘控制层；
-                    // 自带的角标缓冲动画一并关掉，用页面自绘的居中缓冲圈。
+                    // 自带控制器风格与应用脱节，全部换成自绘控制层。
                     useController = false
                 }
             },
@@ -439,7 +504,6 @@ private fun MvPlayerSurface(mvInfo: TencentMusicApi.MvInfo) {
                     }
                     Row(
                         Modifier.fillMaxWidth().padding(top = TaotaoSpacing.xxs),
-                        horizontalArrangement = Arrangement.End,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         MvQualityChip(
@@ -457,6 +521,20 @@ private fun MvPlayerSurface(mvInfo: TencentMusicApi.MvInfo) {
                             enabled = !mvInfo.lowUrl.isNullOrBlank(),
                             onClick = { switchQuality(false) },
                         )
+                        Spacer(Modifier.weight(1f))
+                        IconButton(
+                            onClick = {
+                                onToggleFullscreen()
+                                // 竖横切换后重置收起计时，保证退出全屏按钮至少停留一轮可见。
+                                controlsVisible = true
+                            },
+                        ) {
+                            Icon(
+                                if (isFullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
+                                if (isFullscreen) "退出全屏" else "全屏",
+                                tint = Color.White,
+                            )
+                        }
                     }
                 }
             }

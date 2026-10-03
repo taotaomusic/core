@@ -10,7 +10,9 @@
     <!-- Android 9 及以下保存 AI 图片到公共图库需要运行时授权；Android 10 起走 MediaStore 无需该权限。 -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
     <application android:name=".TaotaoApplication" android:theme="@style/Theme.Taotao" android:label="桃桃音乐" android:icon="@drawable/app_icon" android:roundIcon="@drawable/app_icon">
-        <activity android:name=".MainActivity" android:screenOrientation="portrait" android:exported="true">
+        <!-- configChanges：MV 播放页全屏要在竖横屏间切换，声明后由页面自行处理，
+             避免 Activity 重建打断播放（ExoPlayer 与页面状态全部保留）。 -->
+        <activity android:name=".MainActivity" android:screenOrientation="portrait" android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden" android:exported="true">
             <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
             <!-- 应用内 Deep Link：taotaomusic://open 可唤起桃桃音乐。 -->
             <intent-filter>

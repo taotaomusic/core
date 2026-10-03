@@ -75,6 +75,8 @@ internal fun TaotaoAppContent(state: TaotaoAppState, darkTheme: Boolean) {
                     )
                 },
                 onNavigationSelected = { target -> state.switchTab(target) },
+                // MV 播放页是全屏沉浸页，迷你播放器和底部导航一起让位。
+                hideBottomBar = state.mvSong != null,
                 miniPlayerContent = {
                     val reduceMotion = LocalReduceMotion.current
                     AnimatedVisibility(

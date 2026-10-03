@@ -44,50 +44,54 @@ fun SharedMainLayout(
     onNavigationSelected: (Int) -> Unit,
     miniPlayerContent: @Composable () -> Unit,
     modifier: Modifier = Modifier,
+    /** 沉浸式页面（如 MV 播放页）盖住底部时置 true：Scaffold 收起迷你播放器与导航栏，正文铺满全屏。 */
+    hideBottomBar: Boolean = false,
     content: @Composable (PaddingValues) -> Unit,
 ) {
     Scaffold(
         modifier = modifier.fillMaxSize(),
         containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.95f)),
-            ) {
-                Box(modifier = Modifier.fillMaxWidth()) {
-                    miniPlayerContent()
-                }
-                NavigationBar(
-                    containerColor = Color.Transparent,
-                    tonalElevation = TaotaoElevation.flat,
-                    windowInsets = WindowInsets.navigationBars,
+            if (!hideBottomBar) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.95f)),
                 ) {
-                    navigationItems.forEach { item ->
-                        val selected = selectedNavigationId == item.id
-                        NavigationBarItem(
-                            selected = selected,
-                            onClick = { onNavigationSelected(item.id) },
-                            icon = {
-                                Icon(
-                                    imageVector = item.icon,
-                                    contentDescription = item.contentDescription,
-                                )
-                            },
-                            label = {
-                                Text(
-                                    text = item.label,
-                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-                                )
-                            },
-                            colors = NavigationBarItemDefaults.colors(
-                                indicatorColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f),
-                                selectedIconColor = MaterialTheme.colorScheme.primary,
-                                selectedTextColor = MaterialTheme.colorScheme.primary,
-                                unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                                unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                            ),
-                        )
+                    Box(modifier = Modifier.fillMaxWidth()) {
+                        miniPlayerContent()
+                    }
+                    NavigationBar(
+                        containerColor = Color.Transparent,
+                        tonalElevation = TaotaoElevation.flat,
+                        windowInsets = WindowInsets.navigationBars,
+                    ) {
+                        navigationItems.forEach { item ->
+                            val selected = selectedNavigationId == item.id
+                            NavigationBarItem(
+                                selected = selected,
+                                onClick = { onNavigationSelected(item.id) },
+                                icon = {
+                                    Icon(
+                                        imageVector = item.icon,
+                                        contentDescription = item.contentDescription,
+                                    )
+                                },
+                                label = {
+                                    Text(
+                                        text = item.label,
+                                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                                    )
+                                },
+                                colors = NavigationBarItemDefaults.colors(
+                                    indicatorColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f),
+                                    selectedIconColor = MaterialTheme.colorScheme.primary,
+                                    selectedTextColor = MaterialTheme.colorScheme.primary,
+                                    unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                ),
+                            )
+                        }
                     }
                 }
             }
