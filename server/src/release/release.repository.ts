@@ -70,6 +70,27 @@ export class ReleaseRepository {
   }
 
   /**
+   * 当前**全量可用**的最高版本的完整发布记录，供分享页拼「下载完整版」地址。
+   *
+   * 与 [latestFullyRolledOut] 是同一条查询，只是多带出 `apk_url` 等字段：
+   * 发版链路改为 GitHub Release 外链后服务器不再落盘安装包字节，
+   * 分享页需要外链本身才能拼出可用的下载地址（见 ReleaseService.shareAppDownloadUrl）。
+   */
+  async latestFullyRolledOutRelease(channel: string): Promise<ReleaseRecord | undefined> {
+    const cached = this.latestVersion.getRelease();
+    if (cached !== undefined) return cached ?? undefined;
+    const row = await this.database.first<ReleaseRecord>(
+      `SELECT * FROM app_release
+       WHERE channel = $1 AND enabled = 1 AND rollout_percent >= 100
+       ORDER BY version_code DESC
+       LIMIT 1`,
+      [channel],
+    );
+    this.latestVersion.setRelease(row ?? null);
+    return row ?? undefined;
+  }
+
+  /**
    * 登记或更新一个版本。
    *
    * `DO UPDATE SET` 里**刻意没有 `rollout_percent`**：重新上传同一个版本号时

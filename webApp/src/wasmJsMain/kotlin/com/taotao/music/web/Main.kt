@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -86,6 +87,14 @@ private val ShareContentMaxWidth = 480.dp
 
 /** 「下载完整版」按钮的固定高度。 */
 private val DownloadButtonHeight = 52.dp
+
+/**
+ * 分享页唤起 App 的深链接 scheme。
+ *
+ * 安卓端 Manifest 声明了 `taotaomusic://open`（BROWSABLE），参数键与
+ * `com.taotao.music.data.parseOpenSongLink` 一一对应，两端必须同步改。
+ */
+private const val OpenAppScheme = "taotaomusic://open"
 
 /** 封面缺失时那颗 ♫ 占位符的字号：要撑满整个圆形底衬。 */
 private val FallbackGlyphSize = 96.sp
@@ -237,6 +246,25 @@ private fun SharePlayerPage(share: ShareSong) {
                 Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(TaotaoSizes.iconSm))
                 Text("下载桃桃音乐，完整播放", modifier = Modifier.padding(start = TaotaoSpacing.xs))
             }
+            // 「在桃桃音乐中打开」只在安卓设备上出现：桌面浏览器没有该 scheme 的接收方，
+            // 点了只会弹「未知协议」错误；iOS 本来就没有桃桃音乐。装了 App 的用户
+            // 点它即可把这首歌接续到 App 里完整播放，不必再下一个安装包。
+            val openAppUrl = remember(share) { if (runningOnAndroid()) share.openAppUrl() else null }
+            openAppUrl?.let { url ->
+                Spacer(Modifier.height(TaotaoSpacing.sm))
+                Button(
+                    onClick = { window.location.href = url },
+                    modifier = Modifier.fillMaxWidth().height(DownloadButtonHeight),
+                    shape = TaotaoShapes.small,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                    ),
+                ) {
+                    Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(TaotaoSizes.iconSm))
+                    Text("打开桃桃音乐，接续完整播放", modifier = Modifier.padding(start = TaotaoSpacing.xs))
+                }
+            }
             Text(
                 text = "标准音质 · 最多 60 秒试听",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -284,9 +312,49 @@ private suspend fun loadImageBitmap(url: String): ImageBitmap {
 @JsFun("(array, index) => array[index]")
 private external fun int8At(array: Int8Array, index: Int): Int
 
+/** 深链接的参数值里会出现标题、封面直链等非 ASCII 字符，逐值走百分号编码。 */
+@JsFun("(value) => encodeURIComponent(value)")
+private external fun encodeURIComponent(value: String): String
+
+@JsFun("() => navigator.userAgent")
+private external fun navigatorUserAgent(): String
+
 private fun formatTime(milliseconds: Long): String {
     val seconds = (milliseconds.coerceAtLeast(0L) / 1_000L).toInt()
     return "${seconds / 60}:${(seconds % 60).toString().padStart(2, '0')}"
+}
+
+/** 只有安卓设备才显示「打开」入口：iOS 没有桃桃音乐，桌面浏览器点自定义 scheme 只会报错。 */
+private fun runningOnAndroid(): Boolean =
+    navigatorUserAgent().contains("Android", ignoreCase = true)
+
+/**
+ * 拼接「在桃桃音乐中打开」的深链接。
+ *
+ * 歌曲缺身份（既无数字 ID 也无 mid）时返回 null，按钮随之隐藏；演示卡没有身份，
+ * 走的正是这条路。参数键与安卓端 `parseOpenSongLink` 一一对应，两端必须同步改。
+ */
+private fun ShareSong.openAppUrl(): String? {
+    val id = song.remoteId?.takeIf { it > 0L }
+    val mid = song.mid?.takeIf { it.isNotBlank() }
+    if (id == null && mid == null) return null
+    val parts = mutableListOf<String>()
+    fun add(key: String, value: String) {
+        parts.add("$key=${encodeURIComponent(value)}")
+    }
+    id?.let { add("id", it.toString()) }
+    mid?.let { add("mid", it) }
+    song.type?.let { add("type", it.toString()) }
+    add("source", song.source.ifBlank { "tencent" })
+    add("title", song.title)
+    add("artist", song.artist)
+    if (song.album.isNotBlank()) add("album", song.album)
+    song.coverUri?.takeIf { it.isNotBlank() }?.let { add("cover", it) }
+    if (song.duration.isNotBlank()) add("duration", song.duration)
+    if (song.vip) add("vip", "1")
+    refrainStartMs?.let { add("rs", it.toString()) }
+    refrainEndMs?.let { add("re", it.toString()) }
+    return "$OpenAppScheme?${parts.joinToString("&")}"
 }
 
 /** Canvas/Wasm 不会稳定继承浏览器系统字体，所有 Material3 文本样式显式使用内置中文字体。 */

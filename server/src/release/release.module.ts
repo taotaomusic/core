@@ -14,6 +14,7 @@ import { ReleaseService } from "./release.service";
  * 热更新：客户端引导、安装包分发与发布管理。
  *
  * 导出 [ReleaseRepository]：全局的版本号响应头拦截器要用它取「当前全量可用的最高版本」。
+ * 导出 [ReleaseService]：分享页元数据要用它拼与安卓更新同一套的「下载完整版」地址。
  */
 @Module({
   imports: [AdminAuthModule, AdminSettingModule],
@@ -24,6 +25,6 @@ import { ReleaseService } from "./release.service";
     DesktopUpdaterController,
   ],
   providers: [ReleaseService, ReleaseRepository, ApkService, DesktopUpdaterService],
-  exports: [ReleaseRepository],
+  exports: [ReleaseRepository, ReleaseService],
 })
 export class ReleaseModule {}

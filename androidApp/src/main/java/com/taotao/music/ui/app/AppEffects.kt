@@ -10,10 +10,12 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.taotao.music.data.parseOpenSongLink
 import com.taotao.music.ui.common.playbackSongId
 import com.taotao.music.ui.common.playbackSource
 import kotlinx.coroutines.Dispatchers
@@ -345,5 +347,27 @@ internal fun TaotaoAppSignedInEffects(state: TaotaoAppState) {
     // 输入停止 250ms 后请求联想；LaunchedEffect 会自动取消上一关键词的在途协程。
     LaunchedEffect(state.showSearchPage, state.search.keyword) {
         state.search.refreshSuggestions(state.showSearchPage)
+    }
+}
+
+/**
+ * 分享页「在桃桃音乐中打开」的深链接：把 Web 端正在听的歌接续到 App 里完整播放。
+ *
+ * 链接可能在登录页或强制更新页期间就到达，所以刻意放在登录门禁之后消费 ——
+ * 登录完成的一刻自动接续播放，用户不需要二次点击。播放走与点击搜索结果完全相同的
+ * [TaotaoAppState.playSong] 链路（绑本地下载、占位地址、补高潮区间都在里面）。
+ *
+ * 参数残缺的链接解析即得 null，静默忽略，不打扰用户。挂载位置必须在
+ * [TaotaoAppSignedInEffects] 之后：先保证播放器的连接副作用已注册，播放请求才不会落空。
+ */
+@Composable
+internal fun TaotaoAppOpenLinkEffect(state: TaotaoAppState, pendingOpenLink: String?, onOpenLinkConsumed: () -> Unit) {
+    val openSong = remember(pendingOpenLink) { parseOpenSongLink(pendingOpenLink) }
+    LaunchedEffect(state.signedIn, openSong) {
+        if (!state.signedIn) return@LaunchedEffect
+        val song = openSong ?: return@LaunchedEffect
+        onOpenLinkConsumed()
+        state.playSong(listOf(song), 0)
+        state.message = "已从分享链接接续播放"
     }
 }

@@ -2,7 +2,7 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-10-01
+最后更新:2026-10-03
 
 本篇讲 Kotlin/Wasm 分享播放器:定位与入口、技术栈、播放链路与 60 秒试听、与后端的契约、构建分发链路、CI 与浏览器侧限制。分享短链的后端契约见 [35-api-shares.md](35-api-shares.md),复用的组件库与模型见 [93-player-ui.md](93-player-ui.md) 与 [94-shared-module.md](94-shared-module.md);与桌面端(Tauri webview)的网络层差异对比见 [91-client-desktop.md](91-client-desktop.md),云端构建与版本号见 [62-ci-cloud-build.md](62-ci-cloud-build.md)。分享创建侧的客户端 UI 不在本篇:安卓在 `ui/common/Share.kt`(90 篇),桌面在 `api.createSongShare`(91 篇)。
 
@@ -10,8 +10,9 @@
 
 - 分享播放器是 `/s/{token}` 短链指向的**免登录单页**:安卓/桌面端经 `POST /api/v1/shares/songs` 生成短链(35 篇),任何人在浏览器打开即可试听最多 60 秒并跳转下载完整版。
 - 服务端把 `dist/share-player/` 托管在独立前缀 `/share` 下,`GET /s/{token}` 返回改写 `<base>` 后的入口 HTML(`server/src/main.ts`,响应 `no-cache` 每次协商);歌曲身份、封面与试听地址由公开接口 `GET /api/v1/public/shares/{token}` 提供(普通 JSON 信封,35 篇第 2 节)。
-- 页面结构(`Main.kt`):品牌标题 → 圆形封面 → player-ui 的 `PlayerCompactLayout`(进度条 + 播放/暂停)→「下载桃桃音乐,完整播放」按钮 →「标准音质 · 最多 60 秒试听」说明;整页经 `BoxWithConstraints` 居中。
-- 「下载完整版」按钮跳 `appDownloadUrl`——服务端拼的**最新 100% 放量** Android APK 后端直链(`/api/v1/app/apk/{version}`,见 `song-share.service.ts`);token 取不到时的演示卡缺省 `/download`。
+- 页面结构(`Main.kt`):品牌标题 → 圆形封面 → player-ui 的 `PlayerCompactLayout`(进度条 + 播放/暂停)→「下载桃桃音乐,完整播放」按钮 →「打开桃桃音乐,接续完整播放」按钮(仅安卓 UA 且歌曲有身份时出现)→「标准音质 · 最多 60 秒试听」说明;整页经 `BoxWithConstraints` 居中。
+- 「下载完整版」按钮跳 `appDownloadUrl`——服务端按与安卓整包更新同一套规则拼的**最新 100% 放量** Android 版本下载地址(登记了 GitHub 外链返回拼 `DOWNLOAD_PROXY_PREFIX` 的代理外链,未登记才回落本机 `/api/v1/app/apk/{version}`,见 `song-share.service.ts` → `ReleaseService.shareAppDownloadUrl`);token 取不到时的演示卡缺省 `/download`。**历史包袱提醒:发版链路改为 GitHub Release 外链后服务器不落盘安装包字节,本机 `/app/apk` 端点对现行版本必然 404「文件缺失」——2026-10 之前分享页按钮失修的根因。**
+- 「打开桃桃音乐」按钮把当前歌拼成 `taotaomusic://open?...` 深链接跳转,由安卓 App(Manifest 声明 + `data/OpenSongLink.kt` 解析)接续完整播放;**参数键与安卓解析器一一对应,两端必须同步改**。仅在 `navigator.userAgent` 含 `Android` 时渲染(桌面/iOS 没有 scheme 接收方,自定义 scheme 会弹「未知协议」错误);歌曲既无数字 ID 也无 mid 时同样隐藏(演示卡走这条路)。参数值逐个 `encodeURIComponent`(经 `@JsFun` 外联)。
 - token 在 `Main.kt` 里从 `window.location.pathname` 取最后一段(排除 `s` 本身);取不到时渲染 `demoShareSong()` 演示卡,方便纯前端调试(演示卡 `previewUrl` 为空串,不发声是正常路径)。
 - 服务端只是**静态托管**:分享页不落任何会话状态,歌曲身份每次都按短码现查,元数据里的试听/下载地址都是响应时现拼的。
 - 前缀分工:`/s/{token}` 只出协商的入口 HTML,静态资源全在 `/share` 前缀(版本化目录)下;两个前缀别混用。
@@ -57,7 +58,7 @@
 | 创建分享(需登录) | `POST /api/v1/shares/songs` | 201 返回 `{token,url}`;`source` 走 `isMusicSource` 白名单,不认识的音源 400/4001;`mid` 最长 128(35 篇) |
 | 读元数据(公开) | `GET /api/v1/public/shares/{token}` | 普通 `{code,data}` 信封;`@RateLimit("app")`;读一次顺手 `noteAccess` 记访问 |
 | 听试听(公开) | `GET /api/v1/public/shares/{token}/preview` | `@RawResponse()` **裸音频流**,转发上游完整音频,不裁剪不缓存;`previewUrl` 由服务端按请求的 public base 现拼,是同源绝对地址 |
-| 下载完整版 | `GET /api/v1/app/apk/{version}`(即 `appDownloadUrl`) | 最新 100% 放量的 Android APK 地址,由后端下发 |
+| 下载完整版 | `appDownloadUrl`(服务端现拼) | 与安卓整包更新同一套:GitHub 外链 + `DOWNLOAD_PROXY_PREFIX` 代理优先,未登记外链才回落 `GET /api/v1/app/apk/{version}` |
 
 - 元数据 `data` 字段:`title`、`artist`、`album`、`coverUrl`、`duration`(已格式化 `mm:ss`)、`songId`、`mid`、`type`、`source`、`vip`、`previewDurationSeconds`、`previewUrl`、`appDownloadUrl`。
 - 客户端解析只有 `parseShareSong` 一个入口,信封/裸对象双兼容,**新增字段不要绕过它**;`requiredString` 对 `title` / `artist` 缺失直接抛错,由页面转成 ERROR 态。

@@ -20,9 +20,12 @@ import kotlinx.coroutines.launch
  * - [com.taotao.music.ui.app.TaotaoAppState]：全局状态与操作（播放、收藏、歌单、搜索、统计）。
  * - 本文件：组合入口 —— 状态容器、登录与强制更新门禁、副作用挂载。
  * - [TaotaoAppContent]：主骨架、页面分发与弹窗装配。
+ *
+ * [pendingOpenLink] 是分享页唤起（`taotaomusic://open`）的链接原文，由 Activity 在
+ * 启动与 onNewIntent 时送入；消费掉后经 [onOpenLinkConsumed] 通知 Activity 复位。
  */
 @Composable
-fun TaotaoMusicApp() {
+fun TaotaoMusicApp(pendingOpenLink: String?, onOpenLinkConsumed: () -> Unit) {
     val state = rememberTaotaoAppState()
     /** 外观：跟随系统时读系统设置，手动选择则覆盖它。 */
     val darkTheme = when (state.appearance) {
@@ -57,5 +60,6 @@ fun TaotaoMusicApp() {
     }
 
     TaotaoAppSignedInEffects(state)
+    TaotaoAppOpenLinkEffect(state, pendingOpenLink, onOpenLinkConsumed)
     TaotaoAppContent(state, darkTheme)
 }

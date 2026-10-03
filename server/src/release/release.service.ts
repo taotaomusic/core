@@ -95,6 +95,20 @@ export class ReleaseService {
   }
 
   /**
+   * 分享页「下载完整版」按钮的下载地址。
+   *
+   * 与安卓整包更新（[apkUrlOf]）同一套规则：登记了 GitHub 外链就返回**拼上代理前缀的
+   * 外链**，没登记才回落本机 `/app/apk`。发版链路改为 webhook 登记外链后服务器不再
+   * 落盘安装包字节，分享页若仍指向本机端点必然 404「文件缺失」。
+   * 没有可下发的版本时返回空串，由调用方兜底。
+   */
+  async shareAppDownloadUrl(request: Request, channel: string): Promise<string> {
+    const release = await this.releases.latestFullyRolledOutRelease(channel);
+    if (!release) return "";
+    return this.apkUrlOf(request, channel, release.version_code, release.apk_url);
+  }
+
+  /**
    * 这个宿主版本该拿哪个补丁。
    *
    * 只在**没有可用整包更新**时才下发补丁：既然能装新版本，就没必要再打补丁 ——

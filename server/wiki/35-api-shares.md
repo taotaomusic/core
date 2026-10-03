@@ -2,7 +2,7 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-09-30
+最后更新:2026-10-03
 
 分享短链把一首歌变成免登录可看的公开页;试听是**转发上游音频**,服务端不落盘、不裁剪。表设计见 [41-database-tables-core.md](41-database-tables-core.md) 的 `song_share`;排障见 [72-troubleshooting-music.md](72-troubleshooting-music.md)。
 
@@ -25,7 +25,7 @@ GET /api/v1/public/shares/{token}
 ```
 
 - 公开,不需要登录;返回普通 JSON 信封。
-- `data` 内容:`title`、`artist`、`album`、`coverUrl`、`duration`(已格式化 `mm:ss`)、`songId`、`mid`、`type`、`source`、`vip`、`previewDurationSeconds`(「最多 60 秒」与歌曲时长取小)、`previewUrl`(试听转发地址)和 `appDownloadUrl`(最新 100% 放量的 Android APK 地址)。酷我源的分享还带 `refrainStartMs` / `refrainEndMs`(整曲毫秒,快照落 NULL 时两键一起缺席、不伪造 0),语义见 [95-playback-refrain.md](95-playback-refrain.md)。
+- `data` 内容:`title`、`artist`、`album`、`coverUrl`、`duration`(已格式化 `mm:ss`)、`songId`、`mid`、`type`、`source`、`vip`、`previewDurationSeconds`(「最多 60 秒」与歌曲时长取小)、`previewUrl`(试听转发地址)和 `appDownloadUrl`(最新 100% 放量 Android 版本的下载地址:登记了 GitHub 外链就返回拼上 `DOWNLOAD_PROXY_PREFIX` 的代理外链,未登记才回落本机 `/api/v1/app/apk/{version}`,与安卓整包更新 `apkUrlOf` 同一套;没有任何可下发版本时回落公开基地址)。酷我源的分享还带 `refrainStartMs` / `refrainEndMs`(整曲毫秒,快照落 NULL 时两键一起缺席、不伪造 0),语义见 [95-playback-refrain.md](95-playback-refrain.md)。
 - 读取会异步累计 `access_count`,失败静默,不影响响应。
 - 「最多 60 秒」**只由分享页自己守,服务端不下发任何时长限制**。
 

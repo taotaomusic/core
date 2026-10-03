@@ -1,4 +1,5 @@
 import { Global, Injectable, Module } from "@nestjs/common";
+import type { ReleaseRecord } from "./release.repository";
 
 /**
  * 「当前全量可用的最高版本号」缓存。
@@ -16,6 +17,8 @@ import { Global, Injectable, Module } from "@nestjs/common";
 export class LatestVersionCache {
   /** undefined 表示还没查过;null 表示查过但没有可下发的版本。 */
   private value: number | null | undefined = undefined;
+  /** 与 value 同一条查询带出的完整发布记录；undefined 未查过，null 查过但没有。 */
+  private release: ReleaseRecord | null | undefined = undefined;
   /** 宿主版本 → 已全量放量的最新补丁；同样供响应热路径同步读取。 */
   private readonly patches = new Map<number, number | null>();
 
@@ -27,8 +30,17 @@ export class LatestVersionCache {
     this.value = versionCode;
   }
 
+  getRelease(): ReleaseRecord | null | undefined {
+    return this.release;
+  }
+
+  setRelease(record: ReleaseRecord | null): void {
+    this.release = record;
+  }
+
   invalidate(): void {
     this.value = undefined;
+    this.release = undefined;
     this.patches.clear();
   }
 

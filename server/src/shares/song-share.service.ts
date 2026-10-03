@@ -4,7 +4,7 @@ import type { Request, Response } from "express";
 import { ApiErrors } from "../common/api.exception";
 import { AppConfigService } from "../config/app-config.service";
 import { StreamService } from "../music/stream.service";
-import { ReleaseRepository } from "../release/release.repository";
+import { ReleaseService } from "../release/release.service";
 import type { MusicSource, SongKey } from "../upstream/music-source.client";
 import { MusicSourceRegistry } from "../upstream/music-source.registry";
 import { SongShareRepository, type SongShareRecord, type SongShareSnapshot } from "./song-share.repository";
@@ -43,7 +43,7 @@ export class SongShareService {
   constructor(
     private readonly config: AppConfigService,
     private readonly repository: SongShareRepository,
-    private readonly releases: ReleaseRepository,
+    private readonly release: ReleaseService,
     private readonly registry: MusicSourceRegistry,
     private readonly stream: StreamService,
   ) {}
@@ -83,7 +83,9 @@ export class SongShareService {
     const share = await this.requiredShare(token);
     void this.repository.noteAccess(token).catch(() => undefined);
     const base = this.publicBaseOf(request);
-    const latestVersion = await this.releases.latestFullyRolledOut(this.config.defaultChannel);
+    // 与安卓整包更新同一套：优先代理提速后的 GitHub 外链，没有外链或版本才回落本机。
+    // 现行发版链路字节在 GitHub、服务器不落盘，本机 /app/apk 端点只对历史登记有效。
+    const appDownloadUrl = await this.release.shareAppDownloadUrl(request, this.config.defaultChannel);
     return {
       title: share.title,
       artist: share.artist,
@@ -101,9 +103,7 @@ export class SongShareService {
       vip: share.vip === 1,
       previewDurationSeconds: Math.min(PREVIEW_SECONDS, share.duration_seconds || PREVIEW_SECONDS),
       previewUrl: `${base}/api/v1/public/shares/${share.token}/preview`,
-      appDownloadUrl: latestVersion
-        ? `${base}/api/v1/app/apk/${latestVersion}`
-        : base,
+      appDownloadUrl: appDownloadUrl || base,
     };
   }
 

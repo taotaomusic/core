@@ -2,7 +2,7 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-09-30
+最后更新:2026-10-03
 
 本篇讲安卓客户端的模块定位、构建与版本号、包结构、导航实现、关键功能的位置,以及它依赖后端时不能破坏的契约。页面组件与主题的跨端复用在 [93-player-ui.md](93-player-ui.md),共享数据模型在 [94-shared-module.md](94-shared-module.md);发布操作细节以 [61-release-android.md](61-release-android.md) 为准。本篇不讲后端实现,也不讲桌面端(`desktop/`,Tauri + React,独立演进)。
 
@@ -111,6 +111,7 @@
 | 队列管理 | `ui/player/PlaybackQueueSheet.kt` | 三个 Tab:当前队列 / 最近播放 / 本地歌曲;正文视口高度固定,避免列表长短反复改变 BottomSheet 高度;当前队列支持拖动排序与「只保留当前」 |
 | 单曲倒带日记 | `ui/library/MineLibraryPages.kt` + `TencentMusicApi.songDiary` | 按歌聚合的播放回顾画像与逐条记录;入口在歌曲更多菜单与收藏/历史列表,`onOpenDiary` 统一走 `openSongDiary` |
 | 分享短链 | `ui/common/Share.kt` | 平台层生成短链(服务端 `/shares/songs`)后调系统分享面板;公开分享页免登录可开 |
+| 分享页唤起(深链接) | `data/OpenSongLink.kt` + `ui/app/AppEffects.kt` 的 `TaotaoAppOpenLinkEffect` | 解析 `taotaomusic://open?...`(Web 分享页「打开桃桃音乐」按钮拼的)还原成 `Song` 接续进 `playSong`;**参数键与 webApp `Main.kt` 的 `openAppUrl` 一一对应,两端必须同步改**;`MainActivity` 是 `singleTask`(已开 App 时链接经 `onNewIntent` 送达),链接在登录门禁之后消费——登录完成的一刻自动接播,残缺参数(无 ID 无 mid、缺标题/歌手)静默忽略 |
 | 收藏 / 歌单 / 最近播放 / 分享 | `ui/library/`、`ui/playlist/`、`ui/common/Share.kt` | 收藏本地优先 + 后台同步账号;歌单写操作走 `PlaylistState`(账号代际绑定,退出/换号取消旧请求并拒绝回写) |
 | 搜索联想 | `ui/app/SearchState.kt` | 输入停止 250ms 后请求联想,上一关键词的在途协程由 `LaunchedEffect` 自动取消;热搜打开搜索页时刷新,失败保持空列表、不阻断正常搜索 |
 | 下载 | `data/OfflineDownloadManager.kt` 等 | 下载完成后歌曲落库并关联音质档位(`Song.localQuality`);本地歌曲页删除走确认弹窗(`state.pendingDelete`) |
