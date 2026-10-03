@@ -473,6 +473,13 @@ async function main() {
       sharePreviewTotal > 100_000,
     `${sharePreviewResponse.status} ${sharePreviewResponse.headers.get("content-type")} ${sharePreviewResponse.headers.get("content-range")} ${sharePreviewBytes.length}`,
   );
+  // 高潮区间（refrainStartMs/refrainEndMs）只有酷我源的快照里有值。腾讯源没给，
+  // metadata 就必须让两个键**一起缺席** —— 缺失即缺失，不能用 0 占位。
+  check(
+    "非酷我源分享的元数据不含高潮区间键",
+    shareMetadataBody.data?.refrainStartMs === undefined && shareMetadataBody.data?.refrainEndMs === undefined,
+    JSON.stringify(shareMetadataBody.data ?? {}).slice(0, 200),
+  );
 
   section("收藏");
   const added = await fetch(`${base}/api/v1/favorites/tencent/97773`, { method: "POST", headers: { authorization: `Bearer ${token}` } });
@@ -2068,6 +2075,43 @@ async function main() {
     "酷我搜索结果的 source 字段回填为 kuwo",
     kuwoSongs.every((line) => line.data?.source === "kuwo"),
     kuwoSongs[0]?.data?.source,
+  );
+
+  // ---------- 分享链路的高潮区间透传 ----------
+  //
+  // 酷我上游在 payInfo 里带 refrain_start/end（毫秒），/search 与 /songs/:id/info
+  // 已透传为 refrainStartMs/refrainEndMs；分享快照必须原样落库、metadata 原样下发。
+  // 用例歌曲从上面**真实搜索结果**里挑带区间的歌，不硬编码歌曲 ID —— 上游曲库随时会变。
+  // 万一上游这次一条区间都没回，就退化为「两个键一起缺席或取值合法」的宽容断言。
+  const kuwoRefrainLine = kuwoSongs.find(
+    (line) => Number(line.data?.refrainStartMs) > 0 && Number(line.data?.refrainEndMs) > Number(line.data?.refrainStartMs),
+  );
+  const kuwoShareTarget = kuwoRefrainLine ?? kuwoSongs[0];
+  const kuwoShareResponse = await fetch(`${base}/api/v1/shares/songs`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({ source: "kuwo", remoteId: kuwoShareTarget?.data?.id }),
+  });
+  const kuwoShareBody = await kuwoShareResponse.json();
+  const kuwoShareToken = kuwoShareBody.data?.token;
+  check(
+    "登录后可创建酷我歌曲短链",
+    kuwoShareResponse.status === 201 && /^[A-Za-z0-9_-]{8,24}$/.test(kuwoShareToken ?? ""),
+    `${kuwoShareResponse.status} ${JSON.stringify(kuwoShareBody).slice(0, 160)}`,
+  );
+  const kuwoShareMetadataResponse = await fetch(`${base}/api/v1/public/shares/${kuwoShareToken}`);
+  const kuwoShareMetadataBody = await kuwoShareMetadataResponse.json();
+  const kuwoRefrainStart = kuwoShareMetadataBody.data?.refrainStartMs;
+  const kuwoRefrainEnd = kuwoShareMetadataBody.data?.refrainEndMs;
+  check(
+    "酷我分享元数据按下发高潮区间（正毫秒且 start<end，与搜索透传一致；上游未给则两个键一起缺席）",
+    (kuwoRefrainStart === undefined) === (kuwoRefrainEnd === undefined) &&
+      (kuwoRefrainStart === undefined ||
+        (Number.isFinite(kuwoRefrainStart) && kuwoRefrainStart > 0 &&
+          Number.isFinite(kuwoRefrainEnd) && kuwoRefrainEnd > 0 && kuwoRefrainStart < kuwoRefrainEnd)) &&
+      (kuwoRefrainLine == null ||
+        (kuwoRefrainStart === kuwoRefrainLine.data.refrainStartMs && kuwoRefrainEnd === kuwoRefrainLine.data.refrainEndMs)),
+    JSON.stringify(kuwoShareMetadataBody.data ?? {}).slice(0, 200),
   );
 
   // ---------- 翻页起点（防「第一页拿到第二页的歌」回归）----------

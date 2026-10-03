@@ -184,6 +184,13 @@ private fun SharePlayerPage(share: ShareSong) {
         isBuffering = audioState.isBuffering,
         positionMs = audioState.positionMs,
         durationMs = audioState.durationMs,
+        // 高潮区间：透传给共用 PlayerProgress（轨道上叠画标记段 + 「高潮 mm:ss–mm:ss」小字）。
+        // 进度条分母是 60 秒试听时长，但 positionMs 与高潮区间本就是同一套整曲毫秒坐标
+        // （试听守的正是整曲前 60 秒），原始值落在轨道上的位置天然正确，无需换算；
+        // 高潮整体落在试听窗口之外（起点比例 > 1）时由组件内 0..1 收敛规则不画，
+        // 文案区仍会显示绝对时间。区间无效（缺一或 end<=start）同样由组件守卫不画。
+        refrainStartMs = share.refrainStartMs?.toLong(),
+        refrainEndMs = share.refrainEndMs?.toLong(),
         repeatMode = PlayerRepeatMode.ONE,
         errorMessage = audioState.errorMessage,
     )

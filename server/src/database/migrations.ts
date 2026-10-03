@@ -150,6 +150,10 @@ export async function runMigrations(pool: Pool): Promise<void> {
         album            text NOT NULL DEFAULT '',
         cover_url        text,
         duration_seconds integer NOT NULL DEFAULT 0 CHECK (duration_seconds >= 0),
+        -- 高潮区间（酷我上游 payInfo 的毫秒偏移，其他音源为 NULL）。毫秒偏移远小于 int4
+        -- 上限，按本文件头部的类型规则用 integer，不用会被类型解析器转成字符串的 bigint。
+        refrain_start_ms integer,
+        refrain_end_ms   integer,
         vip              smallint NOT NULL DEFAULT 0 CHECK (vip IN (0, 1)),
         enabled          smallint NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
         access_count     integer NOT NULL DEFAULT 0 CHECK (access_count >= 0),
@@ -158,6 +162,10 @@ export async function runMigrations(pool: Pool): Promise<void> {
         UNIQUE (user_id, source, song_id)
       );
       CREATE INDEX IF NOT EXISTS idx_song_share_lookup ON song_share (source, song_id, enabled);
+
+      -- 老库补列：高潮区间是后加的两列，已存在的 song_share 靠这两条幂等 ALTER 补齐。
+      ALTER TABLE song_share ADD COLUMN IF NOT EXISTS refrain_start_ms integer;
+      ALTER TABLE song_share ADD COLUMN IF NOT EXISTS refrain_end_ms integer;
 
       -- 旧库里的 preview_file 存的是「服务端裁出的 60 秒试听文件」文件名。裁剪取消后它恒为 NULL，
       -- 留着只会让人以为这张表还在缓存音频，因此显式删掉；新建库的建表语句里已经没有它。

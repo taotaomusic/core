@@ -66,6 +66,10 @@ export class SongShareService {
       album: info.album.trim(),
       cover_url: info.cover.trim() || null,
       duration_seconds: Math.max(0, Math.trunc(info.interval)),
+      // 高潮区间只有酷我源会给（UpstreamSongInfo 上是可选字段，QQ/网易源为 undefined）。
+      // 字段缺失就落 null，与快照「缺什么不伪造什么」的约定一致。
+      refrain_start_ms: info.refrainStartMs ?? null,
+      refrain_end_ms: info.refrainEndMs ?? null,
       vip: info.pay.includes("付费") ? 1 : 0,
     };
     const share = await this.repository.upsert(userId, this.newToken(), snapshot);
@@ -86,6 +90,10 @@ export class SongShareService {
       album: share.album,
       coverUrl: share.cover_url,
       duration: this.durationLabel(share.duration_seconds),
+      // 高潮区间（整曲毫秒）。只有酷我源的快照里有值，非 null 才下发 ——
+      // 缺省即缺失，不伪造 0 占位，客户端按「键缺席 = 没有区间」处理。
+      ...(share.refrain_start_ms != null ? { refrainStartMs: share.refrain_start_ms } : {}),
+      ...(share.refrain_end_ms != null ? { refrainEndMs: share.refrain_end_ms } : {}),
       songId: share.remote_id,
       mid: share.mid,
       type: share.song_type,

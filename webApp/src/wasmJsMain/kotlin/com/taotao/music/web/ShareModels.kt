@@ -12,6 +12,10 @@ data class ShareSong(
     val previewUrl: String,
     val appDownloadUrl: String,
     val previewDurationSeconds: Int,
+    /** 高潮区间起点（整曲毫秒）。仅酷我源下发；键缺席或 null 落 null，不伪造 0。 */
+    val refrainStartMs: Int? = null,
+    /** 高潮区间终点（整曲毫秒）。仅酷我源下发；键缺席或 null 落 null，不伪造 0。 */
+    val refrainEndMs: Int? = null,
 )
 
 /** 兼容服务端统一信封与直接对象，便于分享页由 CDN 或 NestJS 托管。 */
@@ -37,6 +41,8 @@ fun parseShareSong(payload: String): ShareSong {
         previewUrl = data.requiredString("previewUrl"),
         appDownloadUrl = data.string("appDownloadUrl").ifBlank { "/download" },
         previewDurationSeconds = data.string("previewDurationSeconds").toIntOrNull()?.coerceIn(1, 60) ?: 60,
+        refrainStartMs = data.string("refrainStartMs").toIntOrNull(),
+        refrainEndMs = data.string("refrainEndMs").toIntOrNull(),
     )
 }
 

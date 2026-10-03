@@ -15,6 +15,8 @@ export type SongShareRecord = {
   album: string;
   cover_url: string | null;
   duration_seconds: number;
+  refrain_start_ms: number | null;
+  refrain_end_ms: number | null;
   vip: number;
   enabled: number;
   access_count: number;
@@ -24,7 +26,7 @@ export type SongShareRecord = {
 
 export type SongShareSnapshot = Pick<
   SongShareRecord,
-  "source" | "song_id" | "remote_id" | "mid" | "song_type" | "title" | "artist" | "album" | "cover_url" | "duration_seconds" | "vip"
+  "source" | "song_id" | "remote_id" | "mid" | "song_type" | "title" | "artist" | "album" | "cover_url" | "duration_seconds" | "refrain_start_ms" | "refrain_end_ms" | "vip"
 >;
 
 @Injectable()
@@ -37,8 +39,8 @@ export class SongShareRepository {
       const result = await client.query<SongShareRecord>(
         `INSERT INTO song_share
            (token, user_id, source, song_id, remote_id, mid, song_type, title, artist, album,
-            cover_url, duration_seconds, vip, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $14)
+            cover_url, duration_seconds, refrain_start_ms, refrain_end_ms, vip, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $16)
          ON CONFLICT (user_id, source, song_id) DO UPDATE SET
            remote_id = excluded.remote_id,
            mid = excluded.mid,
@@ -48,6 +50,8 @@ export class SongShareRepository {
            album = excluded.album,
            cover_url = excluded.cover_url,
            duration_seconds = excluded.duration_seconds,
+           refrain_start_ms = excluded.refrain_start_ms,
+           refrain_end_ms = excluded.refrain_end_ms,
            vip = excluded.vip,
            enabled = 1,
            updated_at = excluded.updated_at
@@ -65,6 +69,8 @@ export class SongShareRepository {
           song.album,
           song.cover_url,
           song.duration_seconds,
+          song.refrain_start_ms,
+          song.refrain_end_ms,
           song.vip,
           now,
         ],
