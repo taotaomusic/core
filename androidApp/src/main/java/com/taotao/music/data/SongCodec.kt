@@ -41,6 +41,9 @@ object SongCodec {
         put("album", song.album)
         put("subtitle", song.subtitle)
         put("releaseTime", song.releaseTime)
+        // 高潮区间用 0 表示缺失，与网络解析 `takeIf { it > 0L }` 的判定一致。
+        put("refrainStartMs", song.refrainStartMs ?: 0L)
+        put("refrainEndMs", song.refrainEndMs ?: 0L)
         // mid 与 type 必须一起持久化：冷启动恢复队列后还要靠它们去解析播放地址。
         put("mid", song.mid)
         put("type", song.type)
@@ -63,6 +66,9 @@ object SongCodec {
         album = data.optString("album"),
         subtitle = data.optString("subtitle"),
         releaseTime = data.optString("releaseTime"),
+        // optLong 对缺失键返回 0：旧版本缓存没有这两个键时自然落 null，无需额外兼容代码。
+        refrainStartMs = data.optLong("refrainStartMs").takeIf { it > 0L },
+        refrainEndMs = data.optLong("refrainEndMs").takeIf { it > 0L },
         mid = data.optText("mid"),
         type = if (data.has("type") && !data.isNull("type")) data.optInt("type") else null,
         vip = data.optBoolean("vip"),

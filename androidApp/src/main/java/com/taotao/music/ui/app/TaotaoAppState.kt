@@ -344,6 +344,27 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
     }
 
     /**
+     * 详情页补拉到高潮区间后回写队列并落盘，迷你播放器与下次冷启动恢复才不会丢标记。
+     *
+     * 按实例身份定位队列里的那首歌：定位不到（队列已被整条换掉）就直接放弃，
+     * 不能按 remoteId 猜位置把区间写到另一首同 ID 的歌上。值没变化时也不重复落盘。
+     */
+    fun applyResolvedRefrain(song: Song, startMs: Long?, endMs: Long?) {
+        val index = playbackSongs.indexOfFirst { it === song }
+        if (index < 0) return
+        val current = playbackSongs[index]
+        if (current.refrainStartMs == startMs && current.refrainEndMs == endMs) return
+        playbackSongs = playbackSongs.toMutableList().also { items ->
+            items[index] = current.copy(refrainStartMs = startMs, refrainEndMs = endMs)
+        }
+        // 先在主线程取快照与进度，再交给 IO 线程写盘，与 togglePlayback 的落盘节奏一致。
+        val queueSnapshot = playbackSongs
+        val indexSnapshot = index
+        val positionSnapshot = audioPlayer.currentPositionMs()
+        scope.launch(Dispatchers.IO) { playbackStateStore.save(queueSnapshot, indexSnapshot, positionSnapshot) }
+    }
+
+    /**
      * 手动上一首/下一首必须按目标歌曲重新发起完整播放，不能只移动 Media3 的队列游标。
      * 歌单歌曲还需要在 [playSong] 中重新绑定本机下载文件；只 seek 会绕过这一步。
      */

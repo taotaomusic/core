@@ -108,6 +108,7 @@ internal fun PlayerDetailPage(
     sleepTimerRemainingMs: Long,
     sleepTimerWaitingSongEnd: Boolean,
     onOpenSleepTimer: () -> Unit,
+    onRefrainResolved: (Song, Long?, Long?) -> Unit,
     onOpenMv: (Song) -> Unit,
 ) {
     // 播放器维护唯一进度源；拖动期间才暂存本地位置，松手立即交回播放器同步。
@@ -161,8 +162,14 @@ internal fun PlayerDetailPage(
             val refreshed = withContext(Dispatchers.IO) {
                 runCatching { musicApi.requestSongInfoForPlayback(song) }.getOrNull()
             }
-            refrainStartMs = refreshed?.refrainStartMs
-            refrainEndMs = refreshed?.refrainEndMs
+            // 只在真的拉到区间时才覆盖：上游没给的不能把本地已有的非空值写成 null。
+            // 拉到后回写全局队列，迷你播放器与冷启动恢复才不会丢标记；
+            // 父级换入带区间的新 song 实例后，上面的 remember(song) 会自动带上新值。
+            if (refreshed != null && (refreshed.refrainStartMs != null || refreshed.refrainEndMs != null)) {
+                refrainStartMs = refreshed.refrainStartMs
+                refrainEndMs = refreshed.refrainEndMs
+                onRefrainResolved(song, refreshed.refrainStartMs, refreshed.refrainEndMs)
+            }
         }
     }
     // positionMs 是本次组合从播放器 State 读取出的普通值，不能再放进无 key 的

@@ -380,6 +380,7 @@ private fun PlayerDetailPageRoute(state: TaotaoAppState) {    PlayerDetailPage(
         sleepTimerRemainingMs = state.audioPlayer.sleepTimerRemainingMs,
         sleepTimerWaitingSongEnd = state.audioPlayer.sleepTimerWaitingSongEnd,
         onOpenSleepTimer = { state.showSleepTimerDialog = true },
+        onRefrainResolved = { song, startMs, endMs -> state.applyResolvedRefrain(song, startMs, endMs) },
         onOpenMv = { state.mvSong = it },
     )
 }

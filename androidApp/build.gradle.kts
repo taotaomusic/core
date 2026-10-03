@@ -65,6 +65,8 @@ dependencies {
     implementation(project(":shared"))
     implementation(project(":player-ui"))
     testImplementation(kotlin("test"))
+    // 本地单元测试的 mockable android.jar 里 org.json 方法会抛 not mocked，需要真实实现才能测 SongCodec。
+    testImplementation("org.json:json:20240303")
     implementation(platform("androidx.compose:compose-bom:2024.12.01"))
     implementation("androidx.activity:activity-compose:1.10.0")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
