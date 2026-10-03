@@ -263,7 +263,11 @@ private fun MvPlayerSurface(mvInfo: TencentMusicApi.MvInfo) {
         player.prepare()
         player.play()
     }
-    LaunchedEffect(mvInfo) { loadSource(activeUrl, 0L) }
+    LaunchedEffect(mvInfo) {
+        // 上游可能两条流都为空：这时不装载播放器，直接给错误态。
+        val url = activeUrl
+        if (url == null) playbackError = "没有可用的 MV 播放地址" else loadSource(url, 0L)
+    }
 
     DisposableEffect(player) {
         val listener = object : Player.Listener {
@@ -311,7 +315,7 @@ private fun MvPlayerSurface(mvInfo: TencentMusicApi.MvInfo) {
 
     val togglePlayback = {
         when {
-            playbackError != null -> loadSource(activeUrl, positionMs)
+            playbackError != null -> activeUrl?.let { loadSource(it, positionMs) }
             hasEnded -> {
                 hasEnded = false
                 player.seekTo(0L)
@@ -334,9 +338,9 @@ private fun MvPlayerSurface(mvInfo: TencentMusicApi.MvInfo) {
             factory = { viewContext ->
                 PlayerView(viewContext).apply {
                     this.player = player
-                    // 自带控制器风格与应用脱节，全部换成自绘控制层。
+                    // 自带控制器风格与应用脱节，全部换成自绘控制层；
+                    // 自带的角标缓冲动画一并关掉，用页面自绘的居中缓冲圈。
                     useController = false
-                    setShowBufferingWhenPlaying(false)
                 }
             },
             update = { it.player = player },
@@ -358,7 +362,11 @@ private fun MvPlayerSurface(mvInfo: TencentMusicApi.MvInfo) {
             }
         }
         playbackError?.let { message ->
-            MvStatusFallback(message = message, onRetry = { loadSource(activeUrl, positionMs) })
+            // 地址缺失时重试没有意义，只有网络型错误才给重试入口。
+            MvStatusFallback(
+                message = message,
+                onRetry = activeUrl?.let { url -> { loadSource(url, positionMs) } },
+            )
         }
 
         AnimatedVisibility(
