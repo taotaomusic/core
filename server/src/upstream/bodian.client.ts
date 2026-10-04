@@ -29,6 +29,14 @@ export interface Song {
   durationSeconds?: number;
   /** 副标题，例如「《声生不息》综艺」。 */
   subtitle?: string;
+  /**
+   * 上游条目自带的歌手 / 专辑 ID。**仅波点的歌曲条目有**，是歌曲行
+   * 「查看歌手 / 查看专辑」跳详情页的钥匙。缺席 = 上游没给，映射处用
+   * `Number(...) || undefined` 把 0 / 缺失一并收敛成 undefined —— 下游契约是
+   * 「正数或整个键缺席」，绝不发 0。
+   */
+  artistId?: number;
+  albumId?: number;
   refrainStartMs?: number;
   refrainEndMs?: number;
   /**
@@ -928,6 +936,9 @@ export class BodianClient {
       cover: this.httpsImage(s.albumPic),
       durationSeconds: Number(s.duration) || 0,
       subtitle: s.subtitle || "",
+      // 0 / 缺失一律收敛成 undefined：下游契约是「正数或整个键缺席」，绝不发 0。
+      artistId: Number(s.artistId) || undefined,
+      albumId: Number(s.albumId) || undefined,
       refrainStartMs: Number.isFinite(Number(s.payInfo?.refrain_start)) ? Number(s.payInfo.refrain_start) : undefined,
       refrainEndMs: Number.isFinite(Number(s.payInfo?.refrain_end)) ? Number(s.payInfo.refrain_end) : undefined,
       // listen_fragment 是匿名/试听权限，不是“歌曲已下线”。会员账号应允许进入
@@ -939,33 +950,45 @@ export class BodianClient {
   /**
    * 歌手搜索。上游的 `songNum` / `albumNum` 在这里就地改成契约名
    * `songCount` / `albumCount`；`pic` 原样透传（可能为空串）。
+   *
+   * 返回值带 `total`：实测 `search/artist/list` 的 `data.total` 是与 `rn` 无关的
+   * **整表总数**（「周杰伦」实测 53），`GET /search/artists` 分页路由据此算
+   * `hasMore`；`/search` 流的区块行只取第 1 页，用不到它。
    */
-  async searchArtists(keyword: string, page: number = 1, size: number = 5): Promise<Artist[]> {
+  async searchArtists(keyword: string, page: number = 1, size: number = 5): Promise<{ artists: Artist[]; total: number }> {
     const d = await this.signedGet(`${BASE_URL}search/artist/list`, { pn: this.upstreamPage(page), rn: size, keyword });
-    return (d.data?.resultList || []).map((s: any) => ({
-      id: Number(s.artistId),
-      name: String(s.name ?? ""),
-      pic: this.httpsImage(s.pic),
-      songCount: Number(s.songNum) || 0,
-      albumCount: Number(s.albumNum) || 0,
-    }));
+    return {
+      artists: (d.data?.resultList || []).map((s: any) => ({
+        id: Number(s.artistId),
+        name: String(s.name ?? ""),
+        pic: this.httpsImage(s.pic),
+        songCount: Number(s.songNum) || 0,
+        albumCount: Number(s.albumNum) || 0,
+      })),
+      total: Number(d.data?.total) || 0,
+    };
   }
 
   /**
    * 专辑搜索。上游的 `musicCount` 改名为契约的 `songCount`，`pic` / `showtime`
    * 原样透传（都可能缺失或为空串）；超长的 `info` 简介与 `artists` 数组**不映射**，直接丢弃。
+   *
+   * 返回值带 `total`，取法与语义同 [searchArtists]（「周杰伦」实测 103）。
    */
-  async searchAlbums(keyword: string, page: number = 1, size: number = 5): Promise<Album[]> {
+  async searchAlbums(keyword: string, page: number = 1, size: number = 5): Promise<{ albums: Album[]; total: number }> {
     const d = await this.signedGet(`${BASE_URL}search/album/list`, { pn: this.upstreamPage(page), rn: size, keyword });
-    return (d.data?.resultList || []).map((s: any) => ({
-      id: Number(s.albumId || s.id),
-      name: String(s.name ?? ""),
-      pic: this.httpsImage(s.pic),
-      artist: String(s.artist ?? ""),
-      artistId: Number(s.artistId) || 0,
-      songCount: Number(s.musicCount) || 0,
-      showtime: String(s.showtime ?? ""),
-    }));
+    return {
+      albums: (d.data?.resultList || []).map((s: any) => ({
+        id: Number(s.albumId || s.id),
+        name: String(s.name ?? ""),
+        pic: this.httpsImage(s.pic),
+        artist: String(s.artist ?? ""),
+        artistId: Number(s.artistId) || 0,
+        songCount: Number(s.musicCount) || 0,
+        showtime: String(s.showtime ?? ""),
+      })),
+      total: Number(d.data?.total) || 0,
+    };
   }
 
   async searchPlaylists(keyword: string, page: number = 1, size: number = 5): Promise<Playlist[]> {
@@ -1023,8 +1046,15 @@ export class BodianClient {
       .slice(0, size);
   }
 
-  async search(type: string, keyword: string, page: number = 1, size: number = 5): Promise<any[]> {
-    const map: Record<string, (kw: string, p: number, s: number) => Promise<any[]>> = {
+  /**
+   * 按 type 分发的便捷搜索入口。
+   *
+   * ⚠️ **本方法当前全项目零引用**，属于复刻版遗留的通用分发器；别按它的形状推断
+   * 各 search 方法的真实返回 —— 歌手 / 专辑两族自 2026-10 起返回 `{items, total}`
+   * 信封（见 [searchArtists] / [searchAlbums]），其余仍是纯数组，所以只能放宽成 `any`。
+   */
+  async search(type: string, keyword: string, page: number = 1, size: number = 5): Promise<any> {
+    const map: Record<string, (kw: string, p: number, s: number) => Promise<any>> = {
       music: this.searchSongs.bind(this),
       artist: this.searchArtists.bind(this),
       album: this.searchAlbums.bind(this),
@@ -1065,6 +1095,9 @@ export class BodianClient {
       cover: this.httpsImage(s.albumPic),
       durationSeconds: Number(s.duration) || 0,
       subtitle: s.subtitle || "",
+      // 0 / 缺失一律收敛成 undefined，与 [searchSongs] 同一套写法：绝不发 0。
+      artistId: Number(s.artistId) || undefined,
+      albumId: Number(s.albumId) || undefined,
       refrainStartMs: Number(s.payInfo?.refrain_start) > 0 ? Number(s.payInfo.refrain_start) : undefined,
       refrainEndMs: Number(s.payInfo?.refrain_end) > 0 ? Number(s.payInfo.refrain_end) : undefined,
       // 判据与 [searchSongs] 逐字一致，见该方法内的说明。

@@ -477,6 +477,60 @@ private fun SearchPageRoute(state: TaotaoAppState) {
         // 页面开关与互跳时收起对方的逻辑集中在状态层（openArtistPage / openAlbumPage）。
         onArtistClick = { state.openArtistPage(it) },
         onAlbumClick = { state.openAlbumPage(it) },
+        // ---- 四标签（综合 / 单曲 / 歌手 / 专辑）----
+        searchTab = state.search.searchTab,
+        onTabSelected = { state.search.selectTab(it) },
+        tabArtists = state.search.tabArtists,
+        tabArtistsLoading = state.search.tabArtistsLoading,
+        tabArtistsLoadingMore = state.search.tabArtistsLoadingMore,
+        tabArtistsHasMore = state.search.tabArtistsHasMore,
+        tabArtistsError = state.search.tabArtistsError,
+        tabArtistsTotal = state.search.tabArtistsTotal,
+        tabAlbums = state.search.tabAlbums,
+        tabAlbumsLoading = state.search.tabAlbumsLoading,
+        tabAlbumsLoadingMore = state.search.tabAlbumsLoadingMore,
+        tabAlbumsHasMore = state.search.tabAlbumsHasMore,
+        tabAlbumsError = state.search.tabAlbumsError,
+        tabAlbumsTotal = state.search.tabAlbumsTotal,
+        onEnsureTabArtists = { state.search.ensureTabArtists() },
+        onEnsureTabAlbums = { state.search.ensureTabAlbums() },
+        onLoadMoreTabArtists = { state.search.loadMoreTabArtists() },
+        onLoadMoreTabAlbums = { state.search.loadMoreTabAlbums() },
+        // 歌曲行菜单「查看歌手」：从歌曲构造跳转目标。pic 传 null —— 歌手头像不等于
+        // 歌曲封面，详情到达前的头部先用歌手名兜底，头像由歌手页自己拉资料。
+        onOpenArtist = { song ->
+            song.artistId?.let { artistId ->
+                state.openArtistPage(
+                    ArtistSearchResult(
+                        source = song.source,
+                        id = artistId,
+                        name = song.artist,
+                        pic = null,
+                        songCount = 0,
+                        albumCount = 0,
+                    ),
+                )
+            }
+        },
+        // 「查看专辑」：专辑封面就是歌曲封面，详情到达前可直接显示；歌曲行没有的
+        // songCount / showtime 交给专辑页详情补全。artistId 为 null 时传 0，
+        // 专辑页对 0 会隐藏「歌手名」跳转入口，不会带出无效跳转。
+        onOpenAlbum = { song ->
+            song.albumId?.let { albumId ->
+                state.openAlbumPage(
+                    AlbumSearchResult(
+                        source = song.source,
+                        id = albumId,
+                        name = song.album,
+                        pic = song.coverUri,
+                        artist = song.artist,
+                        artistId = song.artistId ?: 0L,
+                        songCount = 0,
+                        showtime = "",
+                    ),
+                )
+            }
+        },
         searchSession = state.search.generation,
     )
 }

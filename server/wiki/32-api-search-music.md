@@ -4,7 +4,7 @@
 
 最后更新:2026-10-04
 
-本文覆盖搜索联想、热搜、NDJSON 搜索、播放地址、播放代理、歌词和 MV 信息。上游协议适配的内部结构见 [11-architecture-modules.md](11-architecture-modules.md) 的 `upstream/` 一节;音源账号对播放链路的影响见 [53-feature-music-sources.md](53-feature-music-sources.md)。排障见 [72-troubleshooting-music.md](72-troubleshooting-music.md)。
+本文覆盖搜索联想、热搜、NDJSON 搜索、歌手 / 专辑分页搜索、播放地址、播放代理、歌词和 MV 信息。上游协议适配的内部结构见 [11-architecture-modules.md](11-architecture-modules.md) 的 `upstream/` 一节;音源账号对播放链路的影响见 [53-feature-music-sources.md](53-feature-music-sources.md)。排障见 [72-troubleshooting-music.md](72-troubleshooting-music.md)。
 
 ## 1. 搜索联想
 
@@ -94,6 +94,14 @@ song 行之前可以出现两类先行行(单音源模式且该音源支持时):
 - `source` 省略或 `all` 时聚合全部音源;指定单个音源时只查该源。聚合搜索允许单个上游短暂故障,另一个音源的结果照常下发,两个都失败才报上游错误。
 - `meta.count` 是实际下发条数,`total`/`hasMore` 来自上游分页信息。
 
+### song 行的 `artistId` / `albumId`(可选)
+
+song data 带两个**可选**字段:上游歌曲条目自带的歌手 / 专辑 ID,是歌曲行「查看歌手 / 查看专辑」跳详情页(`GET /api/v1/artists/:id` / `GET /api/v1/albums/:id`,见第 9 节)的钥匙。
+
+- **仅波点提供**(腾讯 / 网易的歌曲条目没有这组 ID,恒缺席);上游有就发,没有就不发。
+- **正数或整个键缺席,绝不发 0 / null** —— 缺席的键就是「上游没给」,客户端不要用 0 当哨兵判断。
+- 旧客户端不认识该字段会自动忽略,完全向后兼容。
+
 ### `playable` 的语义
 
 `playable` 是**这首歌能不能拿到播放地址**。`false` 时客户端必须置灰并标注,不要发起播放(发起也只会拿到一句「没有可用播放链接」)。
@@ -118,8 +126,32 @@ song 行之前可以出现两类先行行(单音源模式且该音源支持时):
 - `coverUrl` 是绝对 HTTPS。
 - `lyricUrl` 是带 `/api/v1/` 的相对路径。
 - `favorited`、`vip`、`playable` 是 boolean。
+- `artistId` / `albumId` 要么整个键缺席,要么是正数(绝不发 0 / null)。
 - 响应头包含 `X-Accel-Buffering: no`。
 - 搜索只返回元信息,不逐首解析播放地址。
+
+### 歌手 / 专辑分页搜索(搜索页四标签)
+
+第 3 节流里的 artist / album 区块是搜索落地页顶部的展示位(最多 3 / 6 条、仅第 1 页);搜索页「歌手」「专辑」独立标签的完整列表走下面两条分页路由,区块行为不受影响:
+
+```http
+GET /api/v1/search/artists?keyword=周杰伦&page=1&num=30&source=kuwo
+GET /api/v1/search/albums?keyword=周杰伦&page=1&num=30&source=kuwo
+Authorization: Bearer <accessToken>
+```
+
+返回普通 JSON 信封,`data = {artists | albums, meta}`,`meta = {page, num, total, hasMore}`:
+
+```json
+{"code":0,"message":"success","data":{"artists":[{"source":"kuwo","id":336,"name":"周杰伦","pic":"https://...","songCount":1750,"albumCount":49}],"meta":{"page":1,"num":30,"total":53,"hasMore":true}}}
+```
+
+- 行结构与第 3 节流的 artist / album 行**完全同构**(含 `source`;专辑行含 `artist` / `artistId` / `songCount` / `showtime`),客户端原样复用搜索页的歌手 / 专辑行组件。
+- `total` 用上游的**整表总数**(波点 `data.total`,实测「周杰伦」歌手 53、专辑 103),不是本页条数;`hasMore = page * num < total`,翻页判断客户端自己做。
+- `page` 默认 1,`num` 默认 30、上限 60;`keyword` 去除首尾空白后为空 400/4001。
+- `source` 缺省 `kuwo`(当前只有波点提供);`source=all` 与未知音源 400/4001(照详情族 `detailSourceOf` 的写法),音源未实现该能力 400/4007。
+- 鉴权与 `/search` 一致:未标 `@Public()`,走全局访问令牌守卫。
+- 分页语义与搜索族一致:上游 `pn` 0 基,服务端过 `upstreamPage()`(page-1)换算;契约验证用「page=2 与 page=1 的 id 集合无交叠」守住。
 
 ## 4. 播放地址
 
@@ -170,7 +202,7 @@ Authorization: Bearer <accessToken>
 
 ## 9. 歌手与专辑详情
 
-数据来源是第 3 节 `/search` 流里的 artist / album 行:客户端拿到 `source` + `id` 后回这里取详情与列表。六条路由全部要登录(未标 `@Public()`,走全局访问令牌守卫),`source` 缺省 `kuwo`(这两族详情当前只有酷我/波点提供);`source=all` 一律 400/4001 拒绝(详情必须有确定的音源,聚合没有单一上游可分派);路径 ID 非正整数 400/4001;音源未实现该能力 400/4007「{音源名}不支持…」;实体取不到(上游业务码非 200)502/5020「详情不可用」。
+数据来源是第 3 节 `/search` 流里的 artist / album 行,以及 song 行的 `artistId` / `albumId`(2026-10 起「查看歌手 / 查看专辑」从歌曲行直达详情页):客户端拿到 `source` + `id` 后回这里取详情与列表。六条路由全部要登录(未标 `@Public()`,走全局访问令牌守卫),`source` 缺省 `kuwo`(这两族详情当前只有酷我/波点提供);`source=all` 一律 400/4001 拒绝(详情必须有确定的音源,聚合没有单一上游可分派);路径 ID 非正整数 400/4001;音源未实现该能力 400/4007「{音源名}不支持…」;实体取不到(上游业务码非 200)502/5020「详情不可用」。
 
 ### 歌手详情
 

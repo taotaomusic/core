@@ -37,11 +37,12 @@ export class SearchService {
    * 行序固定为 **artist 行 → album 行 → song 行 → end 行**。artist / album 两类行
    * （2026-10 新增）只在**单音源模式 + 第 1 页**且该音源的适配器实现了 `searchArtists` /
    * `searchAlbums` 时输出（当前只有酷我/波点支持），条数上限见 [MAX_SEARCH_ARTISTS] /
-   * [MAX_SEARCH_ALBUMS]；翻页不再重复下发（区块是搜索落地页的顶部展示位，客户端
-   * 翻页时保留第 1 页的区块即可）；`source=all` 聚合模式**一律不输出** —— 聚合的腾讯/网易
-   * 没有这个能力，多源同名义歌手的去重是另一档复杂度，刻意不做。这两段与歌曲搜索**并行**
-   * 发起（Promise.allSettled），失败时**整段省略**，绝不能连累 song 行。客户端对未知
-   * type 静默跳过，旧版本拿到这两类行只会忽略，向后兼容。
+   * [MAX_SEARCH_ALBUMS]；调用处固定传 page=1，分页能力由 `GET /search/artists` /
+   * `GET /search/albums` 两条路由承载；翻页不再重复下发（区块是搜索落地页的顶部展示位，
+   * 客户端翻页时保留第 1 页的区块即可）；`source=all` 聚合模式**一律不输出** —— 聚合的
+   * 腾讯/网易没有这个能力，多源同名义歌手的去重是另一档复杂度，刻意不做。这两段与歌曲
+   * 搜索**并行**发起（Promise.allSettled），失败时**整段省略**，绝不能连累 song 行。
+   * 客户端对未知 type 静默跳过，旧版本拿到这两类行只会忽略，向后兼容。
    *
    * 这里**不再解析播放地址**。早先每首歌都要向上游多要一次播放链接、还要探测首字节，
    * 20 首约 1.8 秒、60 首最坏能打 240 次上游请求；而客户端拿到后又会把这个地址丢掉，
@@ -68,12 +69,12 @@ export class SearchService {
     // 歌手/专辑搜索与歌曲搜索**并行**发起（Promise.allSettled），不增加串行延迟：
     // 任一段失败就整段省略，绝不能连累 song 行。适配器没实现可选方法时 `?.` 短路成
     // undefined，allSettled 把它当 fulfilled 的 undefined，同样按缺失处理。
-    // 区块只在第 1 页下发 —— 翻页重复发同样内容纯属浪费上游与带宽。
+    // 区块只在第 1 页下发（page=1 写死在这里）—— 翻页重复发同样内容纯属浪费上游与带宽。
     const entitySearches =
       singleClient && page === 1
         ? Promise.allSettled([
-            singleClient.searchArtists?.(keyword, MAX_SEARCH_ARTISTS),
-            singleClient.searchAlbums?.(keyword, MAX_SEARCH_ALBUMS),
+            singleClient.searchArtists?.(keyword, 1, MAX_SEARCH_ARTISTS),
+            singleClient.searchAlbums?.(keyword, 1, MAX_SEARCH_ALBUMS),
           ])
         : undefined;
 
@@ -131,17 +132,19 @@ export class SearchService {
     const entitySource = singleClient?.source;
 
     // 契约顺序：artist 行 → album 行 → song 行 → end 行。
-    // 上游失败（rejected）或没实现方法（fulfilled 且值不是数组）时**整段省略**：
-    // 不输出空区块、不占位，song 行照常下发。
-    if (artistOutcome?.status === "fulfilled" && Array.isArray(artistOutcome.value) && entitySource) {
-      for (const artist of artistOutcome.value) {
+    // 上游失败（rejected）、没实现方法（fulfilled 且值是 undefined）或召回为空时
+    // **整段省略**：不输出空区块、不占位，song 行照常下发。
+    const artistRows = artistOutcome?.status === "fulfilled" ? artistOutcome.value?.artists : undefined;
+    if (Array.isArray(artistRows) && entitySource) {
+      for (const artist of artistRows) {
         response.write(
           `${JSON.stringify({ type: "artist", data: { ...artist, source: entitySource } })}\n`,
         );
       }
     }
-    if (albumOutcome?.status === "fulfilled" && Array.isArray(albumOutcome.value) && entitySource) {
-      for (const album of albumOutcome.value) {
+    const albumRows = albumOutcome?.status === "fulfilled" ? albumOutcome.value?.albums : undefined;
+    if (Array.isArray(albumRows) && entitySource) {
+      for (const album of albumRows) {
         response.write(
           `${JSON.stringify({ type: "album", data: { ...album, source: entitySource } })}\n`,
         );

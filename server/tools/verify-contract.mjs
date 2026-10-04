@@ -2114,6 +2114,24 @@ async function main() {
     JSON.stringify(kuwoAlbums).slice(0, 220),
   );
 
+  // ---------- song 行的 artistId / albumId（2026-10 新增，歌曲行「查看歌手/专辑」的钥匙）----------
+  //
+  // 契约钉死「正数或整个键缺席，绝不发 0 / null」。首条 song 行直接断言 artistId > 0
+  // （实测歌曲条目都带这组 ID，「周杰伦」首条 → 歌手 336）；albumId 容许个别歌缺席
+  // （合成曲 / 单曲的边缘情形），但**一旦出现必须是正数** —— 0 / null 都是形状破坏。
+  const kuwoEntitySongRows = kuwoEntityLines.filter((line) => line.type === "song");
+  check(
+    "kuwo song 行首条带正数 artistId（查看歌手的钥匙）",
+    typeof kuwoEntitySongRows[0]?.data?.artistId === "number" && kuwoEntitySongRows[0].data.artistId > 0,
+    JSON.stringify(kuwoEntitySongRows[0]?.data ?? {}).slice(0, 200),
+  );
+  check(
+    "kuwo song 行的 albumId 每条都是 undefined 或正数（绝不发 0 / null）",
+    kuwoEntitySongRows.every((line) => line.data?.albumId === undefined
+      || (typeof line.data.albumId === "number" && line.data.albumId > 0)),
+    JSON.stringify(kuwoEntitySongRows.map((line) => line.data?.albumId)),
+  );
+
   // ---------- 歌手与专辑详情路由（2026-10 新增）----------
   //
   // 六条详情路由的 200 + 形状断言。实体挑**实测稳定的固定 ID**：歌手 336、专辑
@@ -2308,6 +2326,116 @@ async function main() {
     "腾讯源没有歌手详情能力，被拒 400 且 code 4007",
     tencentArtistDetail.status === 400 && tencentArtistDetailBody.code === 4007,
     `${tencentArtistDetail.status} ${JSON.stringify(tencentArtistDetailBody).slice(0, 160)}`,
+  );
+
+  // ---------- 搜索页四标签：歌手 / 专辑分页搜索（2026-10 新增）----------
+  //
+  // 与 /search 流的区块行（最多 3 / 6 条、仅第 1 页）不同，这两条是完整的分页列表，
+  // 行结构与区块行**完全同构**。meta.total 用上游 data.total 的整表总数（实测
+  // 「周杰伦」歌手 53 / 专辑 103）；分页语义与搜索族一致（上游 pn 0 基，服务端过
+  // upstreamPage() 换算），用「page=2 与 page=1 的 id 无交叠」守住。
+  const kuwoSearchArtistsRes = await fetch(
+    `${base}/api/v1/search/artists?keyword=${encodeURIComponent("周杰伦")}&page=1&num=10&source=kuwo`,
+    { headers: { authorization: `Bearer ${token}` } },
+  );
+  const kuwoSearchArtistsBody = await kuwoSearchArtistsRes.json();
+  const kuwoSearchArtistRows = kuwoSearchArtistsBody.data?.artists ?? [];
+  check(
+    "歌手分页搜索返回 200 且行与 /search 的 artist 行同构",
+    kuwoSearchArtistsRes.status === 200
+      && kuwoSearchArtistsBody.code === 0
+      && kuwoSearchArtistRows.length > 0 && kuwoSearchArtistRows.length <= 10
+      && kuwoSearchArtistRows.every((artist) => artist?.source === "kuwo"
+        && typeof artist?.id === "number" && artist.id > 0
+        && typeof artist?.name === "string" && artist.name.length > 0
+        && typeof artist?.pic === "string"
+        && typeof artist?.songCount === "number"
+        && typeof artist?.albumCount === "number"),
+    `${kuwoSearchArtistsRes.status} ${JSON.stringify(kuwoSearchArtistsBody).slice(0, 220)}`,
+  );
+  check(
+    "歌手分页搜索的 meta 信封正确（total 数字、hasMore = page*num < total）",
+    detailMetaShape(kuwoSearchArtistsBody.data?.meta, 1, 10)
+      && kuwoSearchArtistsBody.data.meta.total > 0,
+    JSON.stringify(kuwoSearchArtistsBody.data?.meta),
+  );
+  const kuwoSearchArtistsPage2 = await (await fetch(
+    `${base}/api/v1/search/artists?keyword=${encodeURIComponent("周杰伦")}&page=2&num=10&source=kuwo`,
+    { headers: { authorization: `Bearer ${token}` } },
+  )).json();
+  const kuwoSearchArtistPage1Ids = new Set(kuwoSearchArtistRows.map((artist) => artist.id));
+  check(
+    "歌手分页搜索 page=2 前进（与 page=1 的 id 无交叠）",
+    kuwoSearchArtistsPage2.code === 0
+      && (kuwoSearchArtistsPage2.data?.artists ?? []).length > 0
+      && kuwoSearchArtistsPage2.data.artists.every((artist) => !kuwoSearchArtistPage1Ids.has(artist?.id)),
+    JSON.stringify({
+      "p1 首条": kuwoSearchArtistRows[0]?.id,
+      "p2 首条": kuwoSearchArtistsPage2.data?.artists?.[0]?.id,
+    }),
+  );
+
+  const kuwoSearchAlbumsRes = await fetch(
+    `${base}/api/v1/search/albums?keyword=${encodeURIComponent("周杰伦")}&page=1&num=10&source=kuwo`,
+    { headers: { authorization: `Bearer ${token}` } },
+  );
+  const kuwoSearchAlbumsBody = await kuwoSearchAlbumsRes.json();
+  const kuwoSearchAlbumRows = kuwoSearchAlbumsBody.data?.albums ?? [];
+  check(
+    "专辑分页搜索返回 200 且行与 /search 的 album 行同构",
+    kuwoSearchAlbumsRes.status === 200
+      && kuwoSearchAlbumsBody.code === 0
+      && kuwoSearchAlbumRows.length > 0 && kuwoSearchAlbumRows.length <= 10
+      && kuwoSearchAlbumRows.every((album) => album?.source === "kuwo"
+        && typeof album?.id === "number" && album.id > 0
+        && typeof album?.name === "string" && album.name.length > 0
+        && typeof album?.pic === "string"
+        && typeof album?.artist === "string"
+        && typeof album?.artistId === "number"
+        && typeof album?.songCount === "number"
+        && typeof album?.showtime === "string"),
+    `${kuwoSearchAlbumsRes.status} ${JSON.stringify(kuwoSearchAlbumsBody).slice(0, 220)}`,
+  );
+  check(
+    "专辑分页搜索的 meta 信封正确（total 数字、hasMore = page*num < total）",
+    detailMetaShape(kuwoSearchAlbumsBody.data?.meta, 1, 10)
+      && kuwoSearchAlbumsBody.data.meta.total > 0,
+    JSON.stringify(kuwoSearchAlbumsBody.data?.meta),
+  );
+  const kuwoSearchAlbumsPage2 = await (await fetch(
+    `${base}/api/v1/search/albums?keyword=${encodeURIComponent("周杰伦")}&page=2&num=10&source=kuwo`,
+    { headers: { authorization: `Bearer ${token}` } },
+  )).json();
+  const kuwoSearchAlbumPage1Ids = new Set(kuwoSearchAlbumRows.map((album) => album.id));
+  check(
+    "专辑分页搜索 page=2 前进（与 page=1 的 id 无交叠）",
+    kuwoSearchAlbumsPage2.code === 0
+      && (kuwoSearchAlbumsPage2.data?.albums ?? []).length > 0
+      && kuwoSearchAlbumsPage2.data.albums.every((album) => !kuwoSearchAlbumPage1Ids.has(album?.id)),
+    JSON.stringify({
+      "p1 首条": kuwoSearchAlbumRows[0]?.id,
+      "p2 首条": kuwoSearchAlbumsPage2.data?.albums?.[0]?.id,
+    }),
+  );
+
+  // 空 keyword 与 /search 同语义：4001，两个新路由一致。
+  const kuwoSearchArtistsEmptyKeyword = await fetch(`${base}/api/v1/search/artists?keyword=`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  const kuwoSearchArtistsEmptyBody = await kuwoSearchArtistsEmptyKeyword.json();
+  check(
+    "歌手分页搜索空关键词 400 且 code 4001",
+    kuwoSearchArtistsEmptyKeyword.status === 400 && kuwoSearchArtistsEmptyBody.code === 4001,
+    `${kuwoSearchArtistsEmptyKeyword.status} ${JSON.stringify(kuwoSearchArtistsEmptyBody).slice(0, 160)}`,
+  );
+  const kuwoSearchAlbumsEmptyKeyword = await fetch(`${base}/api/v1/search/albums?keyword=`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  const kuwoSearchAlbumsEmptyBody = await kuwoSearchAlbumsEmptyKeyword.json();
+  check(
+    "专辑分页搜索空关键词 400 且 code 4001",
+    kuwoSearchAlbumsEmptyKeyword.status === 400 && kuwoSearchAlbumsEmptyBody.code === 4001,
+    `${kuwoSearchAlbumsEmptyKeyword.status} ${JSON.stringify(kuwoSearchAlbumsEmptyBody).slice(0, 160)}`,
   );
 
   // ---------- 分享链路的高潮区间透传 ----------

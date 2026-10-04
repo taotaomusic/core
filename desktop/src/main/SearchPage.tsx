@@ -1,9 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
+import type { ReactNode, UIEvent } from "react";
 import {
   absoluteUrl,
   fetchHotSearches,
   fetchSuggestions,
   readableError,
+  searchAlbumsPaged,
+  searchArtistsPaged,
   searchSongs,
   SessionExpired,
   songKeyOf,
@@ -23,6 +26,9 @@ import {
   setPaused,
 } from "./searchHistory";
 import "./search.css";
+
+/** 搜索结果四标签：all=综合（横排区块 + 歌曲列表）、songs=单曲、artists=歌手、albums=专辑。 */
+type SearchTab = "all" | "songs" | "artists" | "albums";
 
 /** 搜索小图标（放大镜），用于联想列表行首。 */
 function SearchIcon() {
@@ -46,9 +52,11 @@ function SearchIcon() {
 /**
  * 独立搜索页，占满主内容区，对标安卓端 SearchPage。
  * 三态视图：无词未搜索 → 搜索历史 + 热门搜索；有词未搜索 → 联想列表；
- * 已搜索 → 结果列表（骨架屏 / 错误 / 空态 / 无限滚动）。
+ * 已搜索 → 四标签结果页（综合 / 单曲 / 歌手 / 专辑）。四个标签体常驻挂载、
+ * 显隐切换：综合 = 歌手/专辑横排 + 歌曲列表，单曲 = 仅歌曲列表（同一份数据），
+ * 歌手/专辑 = 分页卡片流（首次切入才拉第一页，滚动近底自动翻页）。
  * 搜索历史只存本机不上传；会话过期由 AppState 层统一处理。
- * 结果区的歌手/专辑横排点击后经 onOpenArtist / onOpenAlbum 跳转歌手主页与专辑页。
+ * 结果区与歌曲行「⋯」菜单点击后经 onOpenArtist / onOpenAlbum 跳转歌手主页与专辑页。
  */
 export function SearchPage({
   onOpenArtist,
@@ -72,6 +80,10 @@ export function SearchPage({
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState("");
+  // 结果四标签当前项
+  const [tab, setTab] = useState<SearchTab>("all");
+  // 搜索代次：每次提交搜索 +1，作为歌手/专辑卡片流的 remount key（新搜索即清空重置）
+  const [searchEpoch, setSearchEpoch] = useState(0);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const genRef = useRef(0); // 搜索代次计数：旧响应不得覆盖新结果
@@ -175,6 +187,8 @@ export function SearchPage({
     setAlbums([]);
     setHasMore(false);
     setTotal(0);
+    setTab("all"); // 新搜索回到「综合」标签
+    setSearchEpoch((n) => n + 1); // 递增代次：歌手/专辑卡片流经 key 重挂载整体清空
     void runSearch(word, 1, []);
   }
 
@@ -211,6 +225,40 @@ export function SearchPage({
   const kwEmpty = keyword.trim() === "";
   const showDiscover = !hasSearched && kwEmpty; // 搜索历史 + 热门搜索
   const showSuggest = !hasSearched && !kwEmpty; // 联想列表
+
+  /** 歌曲行菜单「查看歌手」：歌手头像与歌曲封面不是一回事，pic 不传、由歌手页自行兜底。 */
+  function openSongArtist(song: Song) {
+    const id = song.artistId;
+    if (id == null || !(id > 0)) return;
+    onOpenArtist({ source: song.source, id, name: song.artist });
+  }
+
+  /** 歌曲行菜单「查看专辑」：专辑封面就是歌曲封面，带上 pic 让专辑页先出骨架。 */
+  function openSongAlbum(song: Song) {
+    const id = song.albumId;
+    if (id == null || !(id > 0)) return;
+    onOpenAlbum({
+      source: song.source,
+      id,
+      name: song.album,
+      pic: song.coverUrl,
+      artist: song.artist,
+    });
+  }
+
+  // 综合/单曲两个标签共用同一份歌曲列表配置（各自持有一份 SongList 实例，播放/翻页行为一致）
+  const songListProps = {
+    songs,
+    loading,
+    error,
+    emptyHint: "没有找到相关歌曲，换个关键词再试试",
+    hasMore,
+    total,
+    onLoadMore: loadMore,
+    loadingMore,
+    onOpenArtist: openSongArtist,
+    onOpenAlbum: openSongAlbum,
+  };
 
   return (
     <div className="sp-root">
@@ -338,27 +386,101 @@ export function SearchPage({
 
         {hasSearched && (
           <>
-            {/* 歌手/专辑横排：仅酷我源下发，无数据时整块不渲染、不占位 */}
-            {(artists.length > 0 || albums.length > 0) && (
-              <div className="sp-strips">
-                {artists.length > 0 && (
-                  <ArtistStrip artists={artists} onOpenArtist={onOpenArtist} />
-                )}
-                {albums.length > 0 && (
-                  <AlbumStrip albums={albums} onOpenAlbum={onOpenAlbum} />
-                )}
-              </div>
-            )}
-            <SongList
-              songs={songs}
-              loading={loading}
-              error={error}
-              emptyHint="没有找到相关歌曲，换个关键词再试试"
-              hasMore={hasMore}
-              total={total}
-              onLoadMore={loadMore}
-              loadingMore={loadingMore}
-            />
+            {/* 四标签切换：分段控件视觉与歌手页内嵌标签一致 */}
+            <div className="sp-tabs" role="tablist">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={tab === "all"}
+                className={`sp-tab${tab === "all" ? " on" : ""}`}
+                onClick={() => setTab("all")}
+              >
+                综合
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={tab === "songs"}
+                className={`sp-tab${tab === "songs" ? " on" : ""}`}
+                onClick={() => setTab("songs")}
+              >
+                单曲
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={tab === "artists"}
+                className={`sp-tab${tab === "artists" ? " on" : ""}`}
+                onClick={() => setTab("artists")}
+              >
+                歌手
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={tab === "albums"}
+                className={`sp-tab${tab === "albums" ? " on" : ""}`}
+                onClick={() => setTab("albums")}
+              >
+                专辑
+              </button>
+            </div>
+
+            {/* 综合：歌手/专辑横排 + 歌曲列表（原有布局） */}
+            <div className="sp-pane" style={{ display: tab === "all" ? "flex" : "none" }}>
+              {(artists.length > 0 || albums.length > 0) && (
+                <div className="sp-strips">
+                  {artists.length > 0 && <ArtistStrip artists={artists} onOpenArtist={onOpenArtist} />}
+                  {albums.length > 0 && <AlbumStrip albums={albums} onOpenAlbum={onOpenAlbum} />}
+                </div>
+              )}
+              <SongList {...songListProps} />
+            </div>
+
+            {/* 单曲：仅歌曲列表，同一份 songs 数据 */}
+            <div className="sp-pane" style={{ display: tab === "songs" ? "flex" : "none" }}>
+              <SongList {...songListProps} />
+            </div>
+
+            {/* 歌手：分页卡片流；key 含搜索代次，新搜索即整体重置 */}
+            <div className="sp-pane" style={{ display: tab === "artists" ? "flex" : "none" }}>
+              <PagedCardFlow<SearchArtist>
+                key={`artists-${searchEpoch}`}
+                active={tab === "artists"}
+                fetchPage={(page) =>
+                  searchArtistsPaged(keyword, page).then((r) => ({
+                    items: r.artists,
+                    total: r.total,
+                    hasMore: r.hasMore,
+                  }))
+                }
+                keyOf={(a) => `${a.source}:${a.id}`}
+                noun="位歌手"
+                loadingHint="正在加载歌手…"
+                emptyHint="没有找到相关歌手，换个关键词再试试"
+                renderCard={(a) => <ArtistCard artist={a} onOpenArtist={onOpenArtist} />}
+              />
+            </div>
+
+            {/* 专辑：分页卡片流 */}
+            <div className="sp-pane" style={{ display: tab === "albums" ? "flex" : "none" }}>
+              <PagedCardFlow<SearchAlbum>
+                key={`albums-${searchEpoch}`}
+                active={tab === "albums"}
+                fetchPage={(page) =>
+                  searchAlbumsPaged(keyword, page).then((r) => ({
+                    items: r.albums,
+                    total: r.total,
+                    hasMore: r.hasMore,
+                  }))
+                }
+                keyOf={(al) => `${al.source}:${al.id}`}
+                noun="张专辑"
+                loadingHint="正在加载专辑…"
+                emptyHint="没有找到相关专辑，换个关键词再试试"
+                renderCard={(al) => <AlbumCard album={al} onOpenAlbum={onOpenAlbum} />}
+              />
+            </div>
           </>
         )}
       </div>
@@ -366,7 +488,7 @@ export function SearchPage({
   );
 }
 
-/** 歌手横排区块：圆形头像 + 名字（单行省略）+「N 首」；点击跳转歌手主页。 */
+/** 歌手横排区块：卡片复用 ArtistCard（圆形头像 + 名字 +「N 首」）。 */
 function ArtistStrip({
   artists,
   onOpenArtist,
@@ -381,27 +503,14 @@ function ArtistStrip({
       </div>
       <div className="sp-hscroll">
         {artists.map((a) => (
-          <div
-            key={`${a.source}:${a.id}`}
-            className="sp-artist-item"
-            title={`查看歌手「${a.name}」`}
-            onClick={() =>
-              onOpenArtist({ source: a.source, id: a.id, name: a.name, pic: a.pic })
-            }
-          >
-            <ArtistAvatar pic={a.pic} name={a.name} />
-            <div className="sp-artist-meta">
-              <span className="sp-artist-name">{a.name}</span>
-              {a.songCount != null && <span className="sp-artist-sub">{a.songCount} 首</span>}
-            </div>
-          </div>
+          <ArtistCard key={`${a.source}:${a.id}`} artist={a} onOpenArtist={onOpenArtist} />
         ))}
       </div>
     </section>
   );
 }
 
-/** 专辑横排区块：圆角封面 + 专辑名（最多两行省略）+ 歌手名小字；点击跳转专辑页。 */
+/** 专辑横排区块：卡片复用 AlbumCard（圆角封面 + 专辑名 + 歌手名小字）。 */
 function AlbumStrip({
   albums,
   onOpenAlbum,
@@ -416,28 +525,71 @@ function AlbumStrip({
       </div>
       <div className="sp-hscroll">
         {albums.map((al) => (
-          <div
-            key={`${al.source}:${al.id}`}
-            className="sp-album-item"
-            title={`查看专辑「${al.name}」`}
-            onClick={() =>
-              onOpenAlbum({
-                source: al.source,
-                id: al.id,
-                name: al.name,
-                pic: al.pic,
-                artist: al.artist,
-                artistId: al.artistId,
-              })
-            }
-          >
-            <AlbumCover pic={al.pic} />
-            <span className="sp-album-name">{al.name}</span>
-            {al.artist && <span className="sp-album-artist">{al.artist}</span>}
-          </div>
+          <AlbumCard key={`${al.source}:${al.id}`} album={al} onOpenAlbum={onOpenAlbum} />
         ))}
       </div>
     </section>
+  );
+}
+
+/**
+ * 歌手卡片：圆形头像 + 名字（单行省略）+「N 首」；点击跳转歌手主页。
+ * 横排区块（综合标签）与歌手标签卡片流共用同一视觉。
+ */
+function ArtistCard({
+  artist,
+  onOpenArtist,
+}: {
+  artist: SearchArtist;
+  onOpenArtist: (target: ArtistTarget) => void;
+}) {
+  return (
+    <div
+      className="sp-artist-item"
+      title={`查看歌手「${artist.name}」`}
+      onClick={() =>
+        onOpenArtist({ source: artist.source, id: artist.id, name: artist.name, pic: artist.pic })
+      }
+    >
+      <ArtistAvatar pic={artist.pic} name={artist.name} />
+      <div className="sp-artist-meta">
+        <span className="sp-artist-name">{artist.name}</span>
+        {artist.songCount != null && <span className="sp-artist-sub">{artist.songCount} 首</span>}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 专辑卡片：圆角封面 + 专辑名（最多两行省略）+ 歌手名小字；点击跳转专辑页。
+ * 横排区块（综合标签）与专辑标签卡片流共用同一视觉。
+ */
+function AlbumCard({
+  album,
+  onOpenAlbum,
+}: {
+  album: SearchAlbum;
+  onOpenAlbum: (target: AlbumTarget) => void;
+}) {
+  return (
+    <div
+      className="sp-album-item"
+      title={`查看专辑「${album.name}」`}
+      onClick={() =>
+        onOpenAlbum({
+          source: album.source,
+          id: album.id,
+          name: album.name,
+          pic: album.pic,
+          artist: album.artist,
+          artistId: album.artistId,
+        })
+      }
+    >
+      <AlbumCover pic={album.pic} />
+      <span className="sp-album-name">{album.name}</span>
+      {album.artist && <span className="sp-album-artist">{album.artist}</span>}
+    </div>
   );
 }
 
@@ -474,6 +626,154 @@ export function AlbumCover({ pic }: { pic?: string }) {
         />
       ) : (
         <span className="note">♪</span>
+      )}
+    </div>
+  );
+}
+
+/**
+ * 分页卡片流（搜索结果的歌手/专辑标签体共用）：首次激活才拉第一页（未激活不预取），
+ * 滚动近底部自动翻页，新页按 keyOf 去重拼接（与歌曲列表翻页同口径）。
+ * 新搜索由调用方经 key 重挂载整体重置；fetchPage 经镜像 ref 读取最新闭包，
+ * 避免父组件重渲染引发重复加载。
+ */
+function PagedCardFlow<T>({
+  fetchPage,
+  active,
+  keyOf,
+  noun,
+  loadingHint,
+  emptyHint,
+  renderCard,
+}: {
+  /** 按页码拉取一页卡片数据（调用方绑定关键词与接口）。 */
+  fetchPage: (page: number) => Promise<{ items: T[]; total: number; hasMore: boolean }>;
+  /** 本标签是否处于激活态：首次激活才拉第一页。 */
+  active: boolean;
+  /** 卡片身份键（source:id）：翻页去重与渲染 key。 */
+  keyOf: (item: T) => string;
+  /** 量词名词（如「位歌手」「张专辑」），用于收口页脚文案。 */
+  noun: string;
+  /** 首屏加载提示文案。 */
+  loadingHint: string;
+  /** 空列表提示文案。 */
+  emptyHint: string;
+  /** 渲染单张卡片（视觉复用横排区块的 sp-artist-item / sp-album-item）。 */
+  renderCard: (item: T) => ReactNode;
+}) {
+  const [items, setItems] = useState<T[]>([]);
+  const [total, setTotal] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [error, setError] = useState("");
+  const [loaded, setLoaded] = useState(false); // 第一页已尝试过（成功或失败）：防止重复自动加载
+
+  const fetchRef = useRef(fetchPage); // 最新拉取函数：异步回调里经它调用，不闭包捕获旧值
+  fetchRef.current = fetchPage;
+  const itemsRef = useRef<T[]>([]); // 最新数据快照：翻页合并去重用
+  const pageRef = useRef(0); // 已加载到的页码
+  const busyRef = useRef(false); // 翻页请求进行中，防滚动事件重复触发
+  const hasMoreRef = useRef(false); // hasMore 镜像：滚动闭包读最新值
+  const genRef = useRef(0); // 代数计数：重试后旧响应作废
+  const startedRef = useRef(false); // 首次激活已启动过拉取，避免 active 抖动引发重复自动加载
+
+  /** 拉取一页：首屏整体替换，翻页按 keyOf 去重拼接。 */
+  function loadPage(page: number) {
+    const gen = ++genRef.current;
+    const isFirst = page === 1;
+    busyRef.current = true;
+    if (isFirst) {
+      itemsRef.current = [];
+      setItems([]);
+      setError("");
+      setLoading(true);
+    } else {
+      setLoadingMore(true);
+    }
+    void (async () => {
+      try {
+        const r = await fetchRef.current(page);
+        if (genRef.current !== gen) return; // 已有更新的加载，丢弃旧响应
+        // 以请求前结果为快照，新页按身份 key 去重后拼接，避免分页重叠出现重复卡片
+        const seen = new Set(itemsRef.current.map(keyOf));
+        const merged = isFirst
+          ? r.items
+          : [...itemsRef.current, ...r.items.filter((it) => !seen.has(keyOf(it)))];
+        itemsRef.current = merged;
+        setItems(merged);
+        setTotal(r.total);
+        hasMoreRef.current = r.hasMore;
+        setHasMore(r.hasMore);
+        pageRef.current = page;
+        setLoaded(true);
+      } catch (e) {
+        if (genRef.current !== gen) return;
+        if (e instanceof SessionExpired) return; // 会话过期由 AppState 层统一处理
+        setError(readableError(e));
+        setLoaded(true); // 失败也算已尝试：自动加载不再重入，改由重试按钮触发
+      } finally {
+        if (genRef.current === gen) {
+          busyRef.current = false;
+          if (isFirst) setLoading(false);
+          else setLoadingMore(false);
+        }
+      }
+    })();
+  }
+
+  // 首次切到本标签时拉第一页（startedRef 防止 active/loading 抖动引发重复自动加载）
+  useEffect(() => {
+    if (!active || startedRef.current) return;
+    startedRef.current = true;
+    loadPage(1);
+  }, [active]);
+
+  // 卸载时作废在途响应
+  useEffect(() => {
+    return () => {
+      genRef.current++;
+    };
+  }, []);
+
+  /** 无限滚动：距底不足 300px 且允许加载时翻下一页；并发去抖由 busy 标记保证。 */
+  function handleScroll(e: UIEvent<HTMLDivElement>) {
+    if (busyRef.current || !hasMoreRef.current || loading || loadingMore) return;
+    const el = e.currentTarget;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 300) loadPage(pageRef.current + 1);
+  }
+
+  return (
+    <div className="sp-pane-scroll" onScroll={handleScroll}>
+      {loading && <p className="detail-center-hint">{loadingHint}</p>}
+      {!loading && error !== "" && items.length === 0 && (
+        <div className="detail-center-block">
+          <p className="detail-center-hint err">{error}</p>
+          <button type="button" className="detail-retry" onClick={() => loadPage(1)}>
+            重试
+          </button>
+        </div>
+      )}
+      {!loading && error === "" && loaded && items.length === 0 && (
+        <p className="detail-center-hint">{emptyHint}</p>
+      )}
+      {items.length > 0 && (
+        <div className="sp-cards">
+          {items.map((it) => (
+            <Fragment key={keyOf(it)}>{renderCard(it)}</Fragment>
+          ))}
+        </div>
+      )}
+      {!loading && error !== "" && items.length > 0 && (
+        <p className="songrow-more-err">{error}（可继续下滑重试）</p>
+      )}
+      {loadingMore && <p className="songrow-foot">正在加载更多…</p>}
+      {!loadingMore && items.length > 0 && !hasMore && (
+        <p className="songrow-foot">
+          {total > items.length
+            ? `已显示全部 ${items.length} ${noun}（共 ${total} ${noun}）`
+            : `已显示全部 ${items.length} ${noun}`}
+        </p>
       )}
     </div>
   );

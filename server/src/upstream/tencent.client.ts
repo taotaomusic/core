@@ -10,6 +10,13 @@ export type UpstreamSong = {
   title?: string;
   singer?: string;
   album?: string;
+  /**
+   * 上游的歌手 / 专辑 ID。**仅波点的歌曲条目自带**（腾讯 / 网易恒缺席），是歌曲行
+   * 「查看歌手 / 查看专辑」跳详情页的钥匙。缺席 = 上游没给，适配器不得伪造 ——
+   * 下游契约是「正数或整个键缺席，绝不发 0 / null」。
+   */
+  artistId?: number;
+  albumId?: number;
   subtitle?: string;
   time?: string;
   interval?: number;

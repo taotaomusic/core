@@ -68,6 +68,8 @@ class SongCodecTest {
             favorited = true,
             localQuality = 3,
             source = "netease",
+            artistId = 88L,
+            albumId = 660L,
         )
 
         val decoded = SongCodec.decode(SongCodec.encode(song))
@@ -77,6 +79,44 @@ class SongCodecTest {
         assertEquals("song-mid-001", decoded?.mid)
         assertEquals(1, decoded?.type)
         assertEquals("netease", decoded?.source)
+    }
+
+    @Test
+    fun `歌手与专辑 ID 随编解码往返保留`() {
+        // 88 / 660 模拟酷我搜索结果下发的正数 ID；它们是歌曲行「查看歌手 / 查看专辑」
+        // 菜单的跳转钥匙，冷启动恢复队列后必须原样还在。
+        val song = Song(
+            title = "测试歌曲",
+            artist = "测试歌手",
+            duration = "03:30",
+            color = 0L,
+            remoteId = 9527L,
+            source = "kuwo",
+            artistId = 88L,
+            albumId = 660L,
+        )
+
+        val decoded = SongCodec.decode(SongCodec.encode(song))
+
+        assertEquals(88L, decoded?.artistId)
+        assertEquals(660L, decoded?.albumId)
+    }
+
+    @Test
+    fun `旧版本缓存缺歌手专辑 ID 键时解码为 null`() {
+        // 模拟升级前写进 SharedPreferences 的历史队列：没有 artistId / albumId 键。
+        // optLong 对缺失键返回 0，takeIf 把它挡成 null，菜单项据此隐藏，不需要迁移代码。
+        val legacy = JSONObject().apply {
+            put("title", "测试歌曲")
+            put("artist", "测试歌手")
+            put("duration", "03:30")
+            put("color", 0xFFFFB4A2)
+        }.toString()
+
+        val decoded = SongCodec.decode(legacy)
+
+        assertNull(decoded?.artistId)
+        assertNull(decoded?.albumId)
     }
 
     private fun song(

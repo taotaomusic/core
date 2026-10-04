@@ -213,16 +213,21 @@ export interface MusicSourceClient {
   }>>;
 
   /**
-   * 歌手搜索，产出 `/search` 流的 artist 行。只有上游提供该能力时才实现；
-   * 调用方必须先判断方法存在。条数上限由调用方控制，返回值保持上游排序。
+   * 歌手搜索（分页），产出 `/search` 流的 artist 行与 `GET /search/artists` 分页路由的
+   * 行列表。只有上游提供该能力时才实现；调用方必须先判断方法存在。
+   *
+   * [page] 是 1 基页码，由适配器自行换算成上游的分页参数：`/search` 流的区块行固定传
+   * 1（区块只在第 1 页下发），分页路由透传调用方的页码。返回值保持上游排序；
+   * [total] 是上游给的**整表总数**，调用方据此算 `hasMore`，不要拿本页条数凑数 ——
+   * 整倍数页会误判成「没有下一页」。
    */
-  searchArtists?(keyword: string, limit: number): Promise<UpstreamArtist[]>;
+  searchArtists?(keyword: string, page: number, limit: number): Promise<{ artists: UpstreamArtist[]; total: number }>;
 
   /**
-   * 专辑搜索，产出 `/search` 流的 album 行。只有上游提供该能力时才实现；
-   * 调用方必须先判断方法存在。条数上限由调用方控制，返回值保持上游排序。
+   * 专辑搜索（分页），产出 `/search` 流的 album 行与 `GET /search/albums` 分页路由的
+   * 行列表。页码与 `total` 的语义同 [searchArtists]。
    */
-  searchAlbums?(keyword: string, limit: number): Promise<UpstreamAlbum[]>;
+  searchAlbums?(keyword: string, page: number, limit: number): Promise<{ albums: UpstreamAlbum[]; total: number }>;
 
   /**
    * 歌手详情，产出 `GET /api/v1/artists/:id` 的 `data.artist`（`source` 由调用方补）。

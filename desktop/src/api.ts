@@ -172,6 +172,9 @@ export type Song = {
   /** 歌曲高潮区间（毫秒，酷我源才有值；其他音源键缺席，缺失即键不存在，0 视为无效） */
   refrainStartMs?: number;
   refrainEndMs?: number;
+  /** 关联歌手/专辑的远端 id（/search 的酷我源才下发；其他音源或非搜索来源键缺席，非正数视为无效） */
+  artistId?: number;
+  albumId?: number;
 };
 
 /** 搜索结果里的歌手条目：仅酷我源下发，其他音源没有 artist 行；pic 可能为空。 */
@@ -258,7 +261,8 @@ function albumOfRemoteData(d: any): SearchAlbum | null {
 }
 
 /** 搜索：/api/v1/search 返回裸 NDJSON（{type:"song",data} / {type:"artist"|"album",data} /
- *  {type:"end",meta}）；artist/album 行只由酷我源下发，且出现在所有 song 行之前。 */
+ *  {type:"end",meta}）；artist/album 行只由酷我源下发，且出现在所有 song 行之前。
+ *  song 行可携带 artistId/albumId（同样仅酷我源下发），供「⋯」菜单跳歌手/专辑详情。 */
 export async function searchSongs(keyword: string, page = 1): Promise<SearchResult> {
   const q = new URLSearchParams({ keyword, page: String(page), num: "60", quality: "4", source: "kuwo" });
   const resp = await authedGet(`/api/v1/search?${q}`, "application/x-ndjson, application/json");
@@ -296,6 +300,9 @@ export async function searchSongs(keyword: string, page = 1): Promise<SearchResu
           favorited: !!d.favorited,
           refrainStartMs: refrainStartMs > 0 ? refrainStartMs : undefined,
           refrainEndMs: refrainEndMs > 0 ? refrainEndMs : undefined,
+          // 关联歌手/专辑 id：非正数与键缺席等价，统一归一成 undefined
+          artistId: Number(d.artistId) > 0 ? Number(d.artistId) : undefined,
+          albumId: Number(d.albumId) > 0 ? Number(d.albumId) : undefined,
         });
       }
     } else if (rec?.type === "artist" && rec.data) {
@@ -355,6 +362,32 @@ export async function fetchHotSearches(limit = 10): Promise<string[]> {
   const data = await unwrap(resp);
   if (!Array.isArray(data)) return [];
   return data.map((it: any) => String(it?.keyword ?? "")).filter((k) => k.length > 0);
+}
+
+/** 搜索歌手分页结果：信封 data.artists + data.meta 归一后的形状。 */
+export type PagedSearchArtists = { artists: SearchArtist[]; page: number; total: number; hasMore: boolean };
+
+/** 搜索专辑分页结果：信封 data.albums + data.meta 归一后的形状。 */
+export type PagedSearchAlbums = { albums: SearchAlbum[]; page: number; total: number; hasMore: boolean };
+
+/** 搜索歌手分页（/api/v1/search/artists，仅酷我源提供；行结构与 /search 歌手区块同构，复用同一归一）。 */
+export async function searchArtistsPaged(keyword: string, page: number, num = 30): Promise<PagedSearchArtists> {
+  const q = new URLSearchParams({ keyword, page: String(page), num: String(num), source: "kuwo" });
+  const resp = await authedGet(`/api/v1/search/artists?${q}`, "application/json");
+  const data = await unwrap(resp);
+  const list: any[] = Array.isArray(data?.artists) ? data.artists : [];
+  const artists = list.map(artistOfRemoteData).filter((a): a is SearchArtist => a !== null);
+  return { ...pagedMetaOf(data?.meta, page), artists };
+}
+
+/** 搜索专辑分页（/api/v1/search/albums，仅酷我源提供；行结构与 /search 专辑区块同构，复用同一归一）。 */
+export async function searchAlbumsPaged(keyword: string, page: number, num = 30): Promise<PagedSearchAlbums> {
+  const q = new URLSearchParams({ keyword, page: String(page), num: String(num), source: "kuwo" });
+  const resp = await authedGet(`/api/v1/search/albums?${q}`, "application/json");
+  const data = await unwrap(resp);
+  const list: any[] = Array.isArray(data?.albums) ? data.albums : [];
+  const albums = list.map(albumOfRemoteData).filter((a): a is SearchAlbum => a !== null);
+  return { ...pagedMetaOf(data?.meta, page), albums };
 }
 
 // ---- 歌手与专辑详情 ----

@@ -46,4 +46,14 @@ data class Song(
     val localQuality: Int? = null,
     /** 音乐来源。腾讯与网易的歌曲 ID 可能相同，桌面端所有云端操作都按来源区分。 */
     val source: String = "tencent",
+    /**
+     * 音源内的歌手 ID，歌曲行「查看歌手」菜单跳歌手主页的钥匙。
+     * 目前只有酷我搜索结果下发（正数）；其他音源或旧服务端缺键时为 null，菜单项随之隐藏。
+     */
+    val artistId: Long? = null,
+    /**
+     * 音源内的专辑 ID，歌曲行「查看专辑」菜单跳专辑主页的钥匙。
+     * 下发规则与 [artistId] 相同（酷我独有）；为 null 时菜单项不显示。
+     */
+    val albumId: Long? = null,
 )

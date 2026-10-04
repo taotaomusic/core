@@ -343,6 +343,46 @@ class TencentMusicApi(
         }
     }
 
+    /**
+     * 「歌手」标签的分页搜索（`GET /api/v1/search/artists`）。
+     *
+     * 与 [search] 的 NDJSON 流不同，这里是普通 JSON 信封（{code, message, data}），
+     * `authorized()` 的 401 重放只会产出一份完整结果；行结构与搜索区块的
+     * [ArtistSearchResult] 完全同构，直接复用解析。[num] 服务端缺省 30、上限 60。
+     */
+    fun searchArtistsPaged(
+        keyword: String,
+        page: Int = 1,
+        num: Int = DEFAULT_CATALOG_PAGE_NUM,
+    ): PagedList<ArtistSearchResult> {
+        val query = "?keyword=${encode(keyword.trim())}" +
+            "&page=${page.coerceAtLeast(1)}&num=${num.coerceIn(1, MAX_CATALOG_PAGE_NUM)}" +
+            "&source=${encode(SEARCH_SOURCE_KUWO)}"
+        return authorized("/api/v1/search/artists$query") { connection ->
+            val root = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+            check(root.optInt("code") == 0) { root.optString("message", "无法搜索歌手") }
+            val data = root.optJSONObject("data") ?: JSONObject()
+            data.toPagedList(arrayName = "artists", parse = { row -> row.toArtistSearchResult() })
+        }
+    }
+
+    /** 「专辑」标签的分页搜索（`GET /api/v1/search/albums`）。其余约定同 [searchArtistsPaged]。 */
+    fun searchAlbumsPaged(
+        keyword: String,
+        page: Int = 1,
+        num: Int = DEFAULT_CATALOG_PAGE_NUM,
+    ): PagedList<AlbumSearchResult> {
+        val query = "?keyword=${encode(keyword.trim())}" +
+            "&page=${page.coerceAtLeast(1)}&num=${num.coerceIn(1, MAX_CATALOG_PAGE_NUM)}" +
+            "&source=${encode(SEARCH_SOURCE_KUWO)}"
+        return authorized("/api/v1/search/albums$query") { connection ->
+            val root = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+            check(root.optInt("code") == 0) { root.optString("message", "无法搜索专辑") }
+            val data = root.optJSONObject("data") ?: JSONObject()
+            data.toPagedList(arrayName = "albums", parse = { row -> row.toAlbumSearchResult() })
+        }
+    }
+
     /** 搜索框联想词，服务端已按波点官方顺序裁剪。 */
     fun searchSuggestions(keyword: String, limit: Int = 10): List<String> {
         if (keyword.isBlank()) return emptyList()
@@ -1661,6 +1701,10 @@ class TencentMusicApi(
             source = source,
             refrainStartMs = optLong("refrainStartMs").takeIf { it > 0L },
             refrainEndMs = optLong("refrainEndMs").takeIf { it > 0L },
+            // 歌手 / 专辑 ID 只有酷我搜索结果下发（契约：正数或键缺席）；其他音源缺键时
+            // optLong 返回 0，统一归一成 null，歌曲行菜单据此隐藏「查看歌手 / 查看专辑」。
+            artistId = optLong("artistId").takeIf { it > 0L },
+            albumId = optLong("albumId").takeIf { it > 0L },
         )
     }
 

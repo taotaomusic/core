@@ -30,6 +30,15 @@ export type Song = {
   mid?: string;
   /** 上游的歌曲类型，解析播放地址时要原样带回去。 */
   type?: number;
+  /**
+   * 上游的歌手 / 专辑 ID。**仅波点提供**（腾讯 / 网易的歌曲条目没有这组 ID，恒缺席），
+   * 是歌曲行「查看歌手 / 查看专辑」跳 `GET /artists/:id` / `GET /albums/:id` 详情页的
+   * 钥匙。契约钉死「正数或整个键缺席，绝不发 0 / null」—— 缺席的键就是「上游没给」；
+   * 旧客户端不认识该字段会自动忽略，完全向后兼容。
+   */
+  artistId?: number;
+  /** 上游的专辑 ID。语义与 [artistId] 相同，对应「查看专辑」入口。 */
+  albumId?: number;
   /** 是否为付费/VIP 歌曲。搜索结果里本来就有 `pay` 字段，之前一直没读。 */
   vip: boolean;
   /**
@@ -116,6 +125,10 @@ export class SongMapper {
       audioUrl: hasIdentity ? `${playBase}/api/v1/songs/${id > 0 ? id : 0}/play?${playParams}` : undefined,
       mid: mid || undefined,
       type: item.type,
+      // 上游有才发：协议层已把 0 收敛成 undefined，这里再兜一道；JSON.stringify 会
+      // 丢弃 undefined 键，所以「没有」的形态就是整个键缺席，绝不发 0 / null。
+      artistId: item.artistId || undefined,
+      albumId: item.albumId || undefined,
       vip: (item.pay ?? "").includes("付费"),
       // 只有酷我会判断；`undefined`（QQ 音乐 / 网易云）按可播处理。
       playable: item.playable !== false,

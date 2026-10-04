@@ -19,6 +19,20 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 /**
+ * 搜索结果页的四个标签。
+ *
+ * 「综合」是原有布局（歌手 / 专辑区块 + 歌曲列表）；其余三个标签各看一类数据。
+ * 标签本身是纯界面状态，但「歌手 / 专辑」标签的分页数据必须在状态层持有 ——
+ * 它们有独立于歌曲的翻页、去重与代次校验。
+ */
+internal enum class SearchTab(val label: String) {
+    OVERVIEW("综合"),
+    SONGS("单曲"),
+    ARTISTS("歌手"),
+    ALBUMS("专辑"),
+}
+
+/**
  * 搜索域状态与操作：关键词、逐行下发的结果流、分页、历史与联想。
  *
  * 原先全部内联在主 Composable 里；抽出后由全局状态容器持有，
@@ -56,6 +70,33 @@ internal class SearchState(
     var searchArtists by mutableStateOf(emptyList<ArtistSearchResult>())
     var searchAlbums by mutableStateOf(emptyList<AlbumSearchResult>())
 
+    /** 当前结果标签；新搜索发起时回到「综合」。 */
+    var searchTab by mutableStateOf(SearchTab.OVERVIEW)
+        private set
+
+    // ---- 「歌手」标签的分页状态：写法与上面的歌曲分页同口径（代次 + 基线快照拼接 + 空页收口）----
+    var tabArtists by mutableStateOf(emptyList<ArtistSearchResult>())
+    var tabArtistsLoading by mutableStateOf(false)
+    var tabArtistsLoadingMore by mutableStateOf(false)
+    var tabArtistsPage by mutableIntStateOf(1)
+    var tabArtistsHasMore by mutableStateOf(false)
+    /** 该标签首屏失败时给出的占位文案；成功后清空。 */
+    var tabArtistsError by mutableStateOf<String?>(null)
+    /** 首屏是否已成功拉过；失败时保持 false，重新进标签会自动重试。 */
+    var tabArtistsLoaded by mutableStateOf(false)
+    /** 名下歌手总数（服务端 meta.total），只用于尾部提示。 */
+    var tabArtistsTotal by mutableIntStateOf(0)
+
+    // ---- 「专辑」标签的分页状态：字段口径与 [tabArtists] 完全一致 ----
+    var tabAlbums by mutableStateOf(emptyList<AlbumSearchResult>())
+    var tabAlbumsLoading by mutableStateOf(false)
+    var tabAlbumsLoadingMore by mutableStateOf(false)
+    var tabAlbumsPage by mutableIntStateOf(1)
+    var tabAlbumsHasMore by mutableStateOf(false)
+    var tabAlbumsError by mutableStateOf<String?>(null)
+    var tabAlbumsLoaded by mutableStateOf(false)
+    var tabAlbumsTotal by mutableIntStateOf(0)
+
     /** 打开搜索页时重置结果区；页面开关本身由全局状态管理。 */
     fun openPage() {
         generation += 1
@@ -69,6 +110,8 @@ internal class SearchState(
         hasMore = false
         total = 0
         isLoadingMore = false
+        searchTab = SearchTab.OVERVIEW
+        resetTabResults()
     }
 
     /** 输入框每次变化：更新关键词并清掉上一次的结果与错误。 */
@@ -79,6 +122,7 @@ internal class SearchState(
         searchArtists = emptyList()
         searchAlbums = emptyList()
         error = null
+        resetTabResults()
     }
 
     /** 热搜/快捷词：直接填入并发起搜索。 */
@@ -104,6 +148,10 @@ internal class SearchState(
             searchAlbums = emptyList()
             page = 1
             hasMore = false
+            // 新搜索把标签带回「综合」并清空歌手 / 专辑标签的数据，
+            // 旧关键词的标签结果不能混进新一轮搜索的标签里。
+            searchTab = SearchTab.OVERVIEW
+            resetTabResults()
             val result = runCatching {
                 withContext(Dispatchers.IO) {
                     musicApi.search(
@@ -188,6 +236,162 @@ internal class SearchState(
                 .onFailure { onMessage(it.message ?: "加载更多失败") }
             isLoadingMore = false
         }
+    }
+
+    // ---- 结果标签（歌手 / 专辑的分页搜索）----
+
+    /**
+     * 切换结果标签。「歌手 / 专辑」标签在首次进入时触发首屏拉取；失败后 [tabArtistsLoaded] /
+     * [tabAlbumsLoaded] 保持 false，切走再切回来就是重试。
+     */
+    fun selectTab(tab: SearchTab) {
+        if (searchTab == tab) return
+        searchTab = tab
+        when (tab) {
+            SearchTab.ARTISTS -> ensureTabArtists()
+            SearchTab.ALBUMS -> ensureTabAlbums()
+            SearchTab.OVERVIEW, SearchTab.SONGS -> Unit
+        }
+    }
+
+    /** 「歌手」标签首屏：已加载或正在加载则跳过，保证切回标签不会重复请求。 */
+    fun ensureTabArtists() {
+        val query = keyword.trim()
+        if (query.isBlank() || tabArtistsLoaded || tabArtistsLoading) return
+        val requestGeneration = generation
+        tabArtistsLoading = true
+        scope.launch {
+            val result = runCatching {
+                withContext(Dispatchers.IO) { musicApi.searchArtistsPaged(query) }
+            }
+            // 校验代次：期间用户可能已发起新搜索，旧关键词的歌手不能写进新搜索的标签。
+            if (requestGeneration != generation) return@launch
+            result
+                .onSuccess { page ->
+                    tabArtists = dedupeTabArtists(page.items)
+                    tabArtistsPage = page.page
+                    tabArtistsHasMore = page.hasMore && page.items.isNotEmpty()
+                    tabArtistsTotal = page.total.toInt()
+                    tabArtistsError = null
+                    tabArtistsLoaded = true
+                }
+                .onFailure { tabArtistsError = it.message ?: "歌手搜索失败" }
+            tabArtistsLoading = false
+        }
+    }
+
+    /** 「歌手」标签滚到近底部时拉下一页；基线快照与空页收口的理由见 [loadMore]。 */
+    fun loadMoreTabArtists() {
+        val query = keyword.trim()
+        if (query.isBlank() || tabArtistsLoading || tabArtistsLoadingMore || !tabArtistsHasMore) return
+        val requestGeneration = generation
+        val nextPage = tabArtistsPage + 1
+        val base = tabArtists
+        tabArtistsLoadingMore = true
+        scope.launch {
+            val result = runCatching {
+                withContext(Dispatchers.IO) {
+                    musicApi.searchArtistsPaged(keyword = query, page = nextPage)
+                }
+            }
+            if (requestGeneration != generation) return@launch
+            result
+                .onSuccess { page ->
+                    tabArtists = dedupeTabArtists(base + page.items)
+                    tabArtistsPage = nextPage
+                    tabArtistsHasMore = page.hasMore && page.items.isNotEmpty()
+                    tabArtistsTotal = page.total.toInt()
+                }
+                .onFailure { onMessage(it.message ?: "加载更多失败") }
+            tabArtistsLoadingMore = false
+        }
+    }
+
+    /** 「专辑」标签首屏，口径与 [ensureTabArtists] 相同。 */
+    fun ensureTabAlbums() {
+        val query = keyword.trim()
+        if (query.isBlank() || tabAlbumsLoaded || tabAlbumsLoading) return
+        val requestGeneration = generation
+        tabAlbumsLoading = true
+        scope.launch {
+            val result = runCatching {
+                withContext(Dispatchers.IO) { musicApi.searchAlbumsPaged(query) }
+            }
+            if (requestGeneration != generation) return@launch
+            result
+                .onSuccess { page ->
+                    tabAlbums = dedupeTabAlbums(page.items)
+                    tabAlbumsPage = page.page
+                    tabAlbumsHasMore = page.hasMore && page.items.isNotEmpty()
+                    tabAlbumsTotal = page.total.toInt()
+                    tabAlbumsError = null
+                    tabAlbumsLoaded = true
+                }
+                .onFailure { tabAlbumsError = it.message ?: "专辑搜索失败" }
+            tabAlbumsLoading = false
+        }
+    }
+
+    /** 「专辑」标签滚到近底部时拉下一页，口径与 [loadMoreTabArtists] 相同。 */
+    fun loadMoreTabAlbums() {
+        val query = keyword.trim()
+        if (query.isBlank() || tabAlbumsLoading || tabAlbumsLoadingMore || !tabAlbumsHasMore) return
+        val requestGeneration = generation
+        val nextPage = tabAlbumsPage + 1
+        val base = tabAlbums
+        tabAlbumsLoadingMore = true
+        scope.launch {
+            val result = runCatching {
+                withContext(Dispatchers.IO) {
+                    musicApi.searchAlbumsPaged(keyword = query, page = nextPage)
+                }
+            }
+            if (requestGeneration != generation) return@launch
+            result
+                .onSuccess { page ->
+                    tabAlbums = dedupeTabAlbums(base + page.items)
+                    tabAlbumsPage = nextPage
+                    tabAlbumsHasMore = page.hasMore && page.items.isNotEmpty()
+                    tabAlbumsTotal = page.total.toInt()
+                }
+                .onFailure { onMessage(it.message ?: "加载更多失败") }
+            tabAlbumsLoadingMore = false
+        }
+    }
+
+    /** 把「歌手 / 专辑」标签的分页数据复位成初始态。新搜索与开关页面时调用。 */
+    private fun resetTabResults() {
+        tabArtists = emptyList()
+        tabArtistsLoading = false
+        tabArtistsLoadingMore = false
+        tabArtistsPage = 1
+        tabArtistsHasMore = false
+        tabArtistsError = null
+        tabArtistsLoaded = false
+        tabArtistsTotal = 0
+        tabAlbums = emptyList()
+        tabAlbumsLoading = false
+        tabAlbumsLoadingMore = false
+        tabAlbumsPage = 1
+        tabAlbumsHasMore = false
+        tabAlbumsError = null
+        tabAlbumsLoaded = false
+        tabAlbumsTotal = 0
+    }
+
+    /**
+     * 歌手标签按「音源 + ID」判重：上游翻页边界可能吐出重复行，拼接后统一收口，
+     * 否则内容 key 会撞车。同名同 ID 只保留先到的。
+     */
+    private fun dedupeTabArtists(items: List<ArtistSearchResult>): List<ArtistSearchResult> {
+        val seen = HashSet<String>()
+        return items.filter { seen.add("${it.source}#${it.id}") }
+    }
+
+    /** 专辑标签的判重，口径同 [dedupeTabArtists]。 */
+    private fun dedupeTabAlbums(items: List<AlbumSearchResult>): List<AlbumSearchResult> {
+        val seen = HashSet<String>()
+        return items.filter { seen.add("${it.source}#${it.id}") }
     }
 
     // ---- 搜索历史 ----

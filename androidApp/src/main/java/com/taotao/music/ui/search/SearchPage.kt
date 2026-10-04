@@ -32,6 +32,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -79,6 +80,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.toSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
@@ -98,6 +100,11 @@ import com.taotao.music.playerui.theme.TaotaoShapes
 import com.taotao.music.playerui.theme.TaotaoSizes
 import com.taotao.music.playerui.theme.TaotaoSpacing
 import com.taotao.music.playerui.theme.TaotaoTypeScale
+// 「歌手 / 专辑」标签的失败占位与统计缩写复用歌手页已有的内部组件：同一模块内
+// internal 可见，避免在搜索页再长一份一模一样的实现。
+import com.taotao.music.ui.app.SearchTab
+import com.taotao.music.ui.artist.CatalogInlineStatus
+import com.taotao.music.ui.artist.formatCatalogCount
 
 /**
  * 单个历史 chip 的文字宽度上限。
@@ -167,6 +174,39 @@ fun SearchPage(
     onArtistClick: (ArtistSearchResult) -> Unit = {},
     /** 点击专辑项；专辑页尚未实现，由调用方决定反馈方式。 */
     onAlbumClick: (AlbumSearchResult) -> Unit = {},
+    // ---- 四标签（综合 / 单曲 / 歌手 / 专辑）----
+    /** 当前结果标签；新搜索发起时状态层会回到「综合」。 */
+    searchTab: SearchTab = SearchTab.OVERVIEW,
+    /** 切换标签；「歌手 / 专辑」的首屏拉取由状态层在切换时触发，页面只上报意图。 */
+    onTabSelected: (SearchTab) -> Unit = {},
+    /** 「歌手」标签的分页数据与状态。 */
+    tabArtists: List<ArtistSearchResult> = emptyList(),
+    tabArtistsLoading: Boolean = false,
+    tabArtistsLoadingMore: Boolean = false,
+    tabArtistsHasMore: Boolean = false,
+    tabArtistsError: String? = null,
+    /** 名下歌手总数，只用于尾部「已显示全部」提示。 */
+    tabArtistsTotal: Int = 0,
+    /** 「专辑」标签的分页数据与状态，字段口径与歌手标签一致。 */
+    tabAlbums: List<AlbumSearchResult> = emptyList(),
+    tabAlbumsLoading: Boolean = false,
+    tabAlbumsLoadingMore: Boolean = false,
+    tabAlbumsHasMore: Boolean = false,
+    tabAlbumsError: String? = null,
+    tabAlbumsTotal: Int = 0,
+    /** 「歌手 / 专辑」标签首屏失败后的重试入口（状态层里与首次进标签是同一个函数）。 */
+    onEnsureTabArtists: () -> Unit = {},
+    onEnsureTabAlbums: () -> Unit = {},
+    /** 歌手 / 专辑标签滚到近底部时拉下一页。 */
+    onLoadMoreTabArtists: () -> Unit = {},
+    onLoadMoreTabAlbums: () -> Unit = {},
+    /**
+     * 歌曲行菜单「查看歌手」，入参是歌曲本身；为空或歌曲没带 artistId 时菜单项隐藏。
+     * 跳转目标由调用方从歌曲构造（歌手头像不等于歌曲封面，pic 传 null 让歌手页自拉资料）。
+     */
+    onOpenArtist: ((Song) -> Unit)? = null,
+    /** 歌曲行菜单「查看专辑」，可见条件同 [onOpenArtist]（要求歌曲带 albumId）。 */
+    onOpenAlbum: ((Song) -> Unit)? = null,
     /** 保留兼容当前调用链；搜索结果不再需要逐条入场状态。 */
     searchSession: Int = 0,
 ) {
@@ -309,8 +349,11 @@ fun SearchPage(
         }
         AnimatedVisibility(
             // 命中了区块但歌曲全被预筛掉时不弹空态：那仍是「搜到了」，继续显示区块。
+            // 歌手 / 专辑标签自带各自的数据源与空态，这里的「没有找到相关歌曲」只属于
+            // 综合与单曲两个以歌曲为准的标签，否则会一页出现两个空态。
             visible = hasSearched && !isSearching && songs.isEmpty() && errorMessage.isNullOrBlank() &&
-                artists.isEmpty() && albums.isEmpty(),
+                artists.isEmpty() && albums.isEmpty() &&
+                (searchTab == SearchTab.OVERVIEW || searchTab == SearchTab.SONGS),
             enter = contentFadeIn(),
             exit = contentFadeOut(),
         ) {
@@ -322,85 +365,241 @@ fun SearchPage(
         }
         if (hasSearched) {
             val listState = rememberLazyListState()
-            // 歌手 / 专辑区块各占列表顶部一个 item，预取阈值要把它们计入，
-            // 否则触发点会随区块出现而后移，「加载更多」就拉晚了。
-            val leadingItemCount = (if (artists.isNotEmpty()) 1 else 0) + (if (albums.isNotEmpty()) 1 else 0)
-            // 滚到距歌曲列表底部 6 项以内就预取下一页，等真滚到底再拉会有明显的空档。
-            val shouldLoadMore by remember(listState, songs.size, leadingItemCount) {
+            // 四标签切换行：视觉沿用歌手页的内嵌胶囊标签（选中主色胶囊、未选中浅底）。
+            SearchTabRow(
+                currentTab = searchTab,
+                onSelect = onTabSelected,
+                modifier = Modifier.padding(top = TaotaoSpacing.xs, bottom = TaotaoSpacing.xxs),
+            )
+            // 「综合」标签的歌手 / 专辑区块各占列表顶部一个 item，预取阈值要把它们计入，
+            // 否则触发点会随区块出现而后移，「加载更多」就拉晚了；其余标签没有前置区块。
+            val leadingItemCount = if (searchTab == SearchTab.OVERVIEW) {
+                (if (artists.isNotEmpty()) 1 else 0) + (if (albums.isNotEmpty()) 1 else 0)
+            } else {
+                0
+            }
+            // 滚到距列表底部 6 项以内就预取下一页，等真滚到底再拉会有明显的空档。
+            // 专辑标签是双列网格，条目按行折半计数（与歌手页的专辑网格同一口径）；
+            // 条目数不足以滚出预取窗口时不触发，靠 hasMore 收口。
+            val shouldLoadMore by remember(
+                listState, searchTab, leadingItemCount, songs.size, tabArtists.size, tabAlbums.size,
+            ) {
                 derivedStateOf {
-                    val last = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: return@derivedStateOf false
-                    songs.isNotEmpty() && last >= songs.size - 6 + leadingItemCount
+                    val last = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index
+                        ?: return@derivedStateOf false
+                    when (searchTab) {
+                        SearchTab.OVERVIEW -> songs.isNotEmpty() && last >= songs.size - 6 + leadingItemCount
+                        SearchTab.SONGS -> songs.isNotEmpty() && last >= songs.size - 6
+                        SearchTab.ARTISTS -> tabArtists.size > 6 && last >= tabArtists.size - 6
+                        SearchTab.ALBUMS -> tabAlbums.size > 6 && last >= (tabAlbums.size + 1) / 2 - 6
+                    }
                 }
             }
-            LaunchedEffect(shouldLoadMore) { if (shouldLoadMore) onLoadMore() }
+            // 预取按当前标签分派；标签与各列表长度都是 key，切换标签后重新评估，
+            // 不会把上一标签的加载请求错发给当前标签。
+            LaunchedEffect(shouldLoadMore, searchTab, songs.size, tabArtists.size, tabAlbums.size) {
+                when {
+                    shouldLoadMore && (searchTab == SearchTab.OVERVIEW || searchTab == SearchTab.SONGS) -> onLoadMore()
+                    shouldLoadMore && searchTab == SearchTab.ARTISTS -> onLoadMoreTabArtists()
+                    shouldLoadMore && searchTab == SearchTab.ALBUMS -> onLoadMoreTabAlbums()
+                }
+            }
 
             LazyColumn(
                 Modifier.fillMaxSize(),
                 state = listState,
                 verticalArrangement = Arrangement.spacedBy(TaotaoSpacing.xs),
             ) {
-                // 歌手 / 专辑区块排在歌曲之前，随内容一起滚动；空区块直接不组合，不留空白。
-                if (artists.isNotEmpty()) {
-                    item(key = "search-artists", contentType = "artist-section") {
-                        ArtistSearchSection(artists = artists, onArtistClick = onArtistClick)
-                    }
-                }
-                if (albums.isNotEmpty()) {
-                    item(key = "search-albums", contentType = "album-section") {
-                        AlbumSearchSection(albums = albums, onAlbumClick = onAlbumClick)
-                    }
-                }
-                itemsIndexed(
-                    songs,
-                    // 与 dedupeSongs 的判重口径一致，所以这里的 key 必然唯一。
-                    key = { _, song -> songKeyOf(song) },
-                    contentType = { _, _ -> "song" },
-                ) { index, song ->
-                    val key = songKeyOf(song)
-                    val favorited = remember(key, favoriteRevision) { isFavorite(song) }
-                    SongListItem(
-                        song = song,
-                        active = false,
-                        favorited = favorited,
-                        downloaded = remember(key, downloadedRevision) { isDownloaded(song) },
-                        onToggleFavorite = onToggleFavorite
-                            ?.takeIf { song.remoteId?.let { it > 0L } == true || !song.mid.isNullOrBlank() }
-                            ?.let { toggle -> { toggle(song) } },
-                        onPlayNext = onPlayNext?.let { callback -> { callback(song) } },
-                        onAddToPlaylist = onAddToPlaylist
-                            ?.takeIf { song.remoteId?.let { it > 0L } == true || !song.mid.isNullOrBlank() }
-                            ?.let { callback -> { callback(song) } },
-                        modifier = Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null),
-                    ) { onSongClick(index, song) }
-                }
-                if (isLoadingMore) {
-                    item(key = "loading-more") {
-                        Row(
-                            Modifier.fillMaxWidth().padding(vertical = TaotaoSpacing.md),
-                            horizontalArrangement = Arrangement.Center,
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            CircularProgressIndicator(Modifier.size(TaotaoSizes.progressInline), color = TaotaoCoral)
-                            Text(
-                                "正在加载更多…",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                style = MaterialTheme.typography.bodySmall,
-                                modifier = Modifier.padding(start = TaotaoSpacing.xs),
-                            )
+                when (searchTab) {
+                    SearchTab.OVERVIEW -> {
+                        // 歌手 / 专辑区块排在歌曲之前，随内容一起滚动；空区块直接不组合，不留空白。
+                        if (artists.isNotEmpty()) {
+                            item(key = "search-artists", contentType = "artist-section") {
+                                ArtistSearchSection(artists = artists, onArtistClick = onArtistClick)
+                            }
                         }
-                    }
-                } else if (songs.isNotEmpty() && !hasMore) {
-                    item(key = "list-end") {
-                        Text(
-                            if (total > 0) "已显示全部 ${songs.size} 首（共搜到 $total 首）" else "没有更多了",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.fillMaxWidth().padding(vertical = TaotaoSpacing.md),
-                            textAlign = TextAlign.Center,
+                        if (albums.isNotEmpty()) {
+                            item(key = "search-albums", contentType = "album-section") {
+                                AlbumSearchSection(albums = albums, onAlbumClick = onAlbumClick)
+                            }
+                        }
+                        searchSongItems(
+                            songs = songs,
+                            favoriteRevision = favoriteRevision,
+                            downloadedRevision = downloadedRevision,
+                            isFavorite = isFavorite,
+                            isDownloaded = isDownloaded,
+                            onSongClick = onSongClick,
+                            onToggleFavorite = onToggleFavorite,
+                            onPlayNext = onPlayNext,
+                            onAddToPlaylist = onAddToPlaylist,
+                            onOpenArtist = onOpenArtist,
+                            onOpenAlbum = onOpenAlbum,
+                        )
+                        searchSongFooter(
+                            isLoadingMore = isLoadingMore,
+                            hasMore = hasMore,
+                            songs = songs,
+                            total = total,
                         )
                     }
+                    SearchTab.SONGS -> {
+                        // 与「综合」同一份 songs 数据，只是不再显示歌手 / 专辑区块。
+                        searchSongItems(
+                            songs = songs,
+                            favoriteRevision = favoriteRevision,
+                            downloadedRevision = downloadedRevision,
+                            isFavorite = isFavorite,
+                            isDownloaded = isDownloaded,
+                            onSongClick = onSongClick,
+                            onToggleFavorite = onToggleFavorite,
+                            onPlayNext = onPlayNext,
+                            onAddToPlaylist = onAddToPlaylist,
+                            onOpenArtist = onOpenArtist,
+                            onOpenAlbum = onOpenAlbum,
+                        )
+                        searchSongFooter(
+                            isLoadingMore = isLoadingMore,
+                            hasMore = hasMore,
+                            songs = songs,
+                            total = total,
+                        )
+                    }
+                    SearchTab.ARTISTS -> searchTabArtistSection(
+                        artists = tabArtists,
+                        loading = tabArtistsLoading,
+                        error = tabArtistsError,
+                        isLoadingMore = tabArtistsLoadingMore,
+                        hasMore = tabArtistsHasMore,
+                        total = tabArtistsTotal,
+                        onRetry = onEnsureTabArtists,
+                        onArtistClick = onArtistClick,
+                    )
+                    SearchTab.ALBUMS -> searchTabAlbumSection(
+                        albums = tabAlbums,
+                        loading = tabAlbumsLoading,
+                        error = tabAlbumsError,
+                        isLoadingMore = tabAlbumsLoadingMore,
+                        hasMore = tabAlbumsHasMore,
+                        total = tabAlbumsTotal,
+                        onRetry = onEnsureTabAlbums,
+                        onAlbumClick = onAlbumClick,
+                    )
                 }
             }
+        }
+    }
+}
+
+/** 四个结果标签：视觉沿用歌手页的内嵌胶囊标签 —— 选中主色胶囊，未选中浅色底。 */
+@Composable
+private fun SearchTabRow(
+    currentTab: SearchTab,
+    onSelect: (SearchTab) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(modifier, horizontalArrangement = Arrangement.spacedBy(TaotaoSpacing.xs)) {
+        SearchTab.entries.forEach { tab ->
+            val selected = tab == currentTab
+            Text(
+                tab.label,
+                color = if (selected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                modifier = Modifier
+                    .clip(TaotaoShapes.pill)
+                    .background(if (selected) TaotaoCoral else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+                    .clickable { onSelect(tab) }
+                    .padding(horizontal = TaotaoSpacing.md, vertical = TaotaoSpacing.xs),
+            )
+        }
+    }
+}
+
+/**
+ * 「综合 / 单曲」标签共用的歌曲条目。
+ *
+ * 必须在页面的 LazyColumn 里调用；「三个点」菜单的「查看歌手 / 查看专辑」在这里从
+ * 歌曲构造回调 —— 歌曲**没带对应 ID**（非酷我音源）时该项即便上层给了回调也按隐藏处理，
+ * 与组件侧「ID 非空 + 回调非空」的双门槛保持一致。
+ */
+@OptIn(ExperimentalFoundationApi::class)
+private fun LazyListScope.searchSongItems(
+    songs: List<Song>,
+    favoriteRevision: Int,
+    downloadedRevision: Int,
+    isFavorite: (Song) -> Boolean,
+    isDownloaded: (Song) -> Boolean,
+    onSongClick: (Int, Song) -> Unit,
+    onToggleFavorite: ((Song) -> Unit)?,
+    onPlayNext: ((Song) -> Unit)?,
+    onAddToPlaylist: ((Song) -> Unit)?,
+    onOpenArtist: ((Song) -> Unit)?,
+    onOpenAlbum: ((Song) -> Unit)?,
+) {
+    itemsIndexed(
+        songs,
+        // 与 dedupeSongs 的判重口径一致，所以这里的 key 必然唯一。
+        key = { _, song -> songKeyOf(song) },
+        contentType = { _, _ -> "song" },
+    ) { index, song ->
+        val key = songKeyOf(song)
+        val favorited = remember(key, favoriteRevision) { isFavorite(song) }
+        SongListItem(
+            song = song,
+            active = false,
+            favorited = favorited,
+            downloaded = remember(key, downloadedRevision) { isDownloaded(song) },
+            onToggleFavorite = onToggleFavorite
+                ?.takeIf { song.remoteId?.let { it > 0L } == true || !song.mid.isNullOrBlank() }
+                ?.let { toggle -> { toggle(song) } },
+            onPlayNext = onPlayNext?.let { callback -> { callback(song) } },
+            onAddToPlaylist = onAddToPlaylist
+                ?.takeIf { song.remoteId?.let { it > 0L } == true || !song.mid.isNullOrBlank() }
+                ?.let { callback -> { callback(song) } },
+            onOpenArtist = onOpenArtist
+                ?.takeIf { song.artistId != null }
+                ?.let { open -> { open(song) } },
+            onOpenAlbum = onOpenAlbum
+                ?.takeIf { song.albumId != null }
+                ?.let { open -> { open(song) } },
+            modifier = Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null),
+        ) { onSongClick(index, song) }
+    }
+}
+
+/** 「综合 / 单曲」标签共用的列表尾部：「加载更多」占位与「已显示全部」收口。 */
+private fun LazyListScope.searchSongFooter(
+    isLoadingMore: Boolean,
+    hasMore: Boolean,
+    songs: List<Song>,
+    total: Int,
+) {
+    if (isLoadingMore) {
+        item(key = "loading-more") {
+            Row(
+                Modifier.fillMaxWidth().padding(vertical = TaotaoSpacing.md),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                CircularProgressIndicator(Modifier.size(TaotaoSizes.progressInline), color = TaotaoCoral)
+                Text(
+                    "正在加载更多…",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(start = TaotaoSpacing.xs),
+                )
+            }
+        }
+    } else if (songs.isNotEmpty() && !hasMore) {
+        item(key = "list-end") {
+            Text(
+                if (total > 0) "已显示全部 ${songs.size} 首（共搜到 $total 首）" else "没有更多了",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.fillMaxWidth().padding(vertical = TaotaoSpacing.md),
+                textAlign = TextAlign.Center,
+            )
         }
     }
 }
@@ -572,9 +771,10 @@ private fun ArtistSearchSection(
 /**
  * 歌手头像：有图用图，无图回退为主题色圆形 + 名字首字符。
  * 兜底思路与公共组件 [AlbumArt] 一致（图片淡入、色块占位），只是占位内容换成了首字符。
+ * 「歌手」标签的列表行与「综合」区块共用，只是尺寸不同（区块 72dp、列表行用全局头像档）。
  */
 @Composable
-private fun ArtistSearchAvatar(name: String, pic: String?) {
+private fun ArtistSearchAvatar(name: String, pic: String?, size: Dp = ArtistAvatarSize) {
     if (!pic.isNullOrBlank()) {
         AsyncImage(
             model = ImageRequest.Builder(LocalContext.current)
@@ -582,12 +782,12 @@ private fun ArtistSearchAvatar(name: String, pic: String?) {
                 .crossfade(AnimationDurations.FADE)
                 .build(),
             contentDescription = "歌手头像",
-            modifier = Modifier.size(ArtistAvatarSize).clip(CircleShape),
+            modifier = Modifier.size(size).clip(CircleShape),
         )
     } else {
         Box(
             Modifier
-                .size(ArtistAvatarSize)
+                .size(size)
                 .clip(CircleShape)
                 .background(MaterialTheme.colorScheme.primaryContainer),
             contentAlignment = Alignment.Center,
@@ -619,41 +819,258 @@ private fun AlbumSearchSection(
             contentPadding = PaddingValues(horizontal = TaotaoSpacing.xxs, vertical = TaotaoSpacing.xxs),
         ) {
             items(albums) { album ->
-                Column(
-                    modifier = Modifier
-                        .width(TaotaoSizes.artworkGrid)
-                        .clip(TaotaoShapes.small)
-                        .clickable { onAlbumClick(album) }
-                        .padding(bottom = TaotaoSpacing.xxs),
+                // 横滑区块按封面档定宽；「专辑」标签的网格里由 weight(1f) 平分宽度，
+                // 所以固定宽度不能写进共享卡片内部。
+                AlbumResultCard(
+                    album = album,
+                    onAlbumClick = onAlbumClick,
+                    modifier = Modifier.width(TaotaoSizes.artworkGrid),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 专辑卡片：与歌手页目录网格同一套视觉（封面 + 专辑名 + 歌手名），点击进专辑页。
+ * 「综合」区块的横滑卡片与「专辑」标签的网格卡片共用这一份实现，避免视觉漂移；
+ * 宽度策略由调用方给 [modifier]（区块定宽 / 网格 weight），卡片自身不定宽。
+ */
+@Composable
+private fun AlbumResultCard(
+    album: AlbumSearchResult,
+    onAlbumClick: (AlbumSearchResult) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier
+            .clip(TaotaoShapes.small)
+            .clickable { onAlbumClick(album) }
+            .padding(bottom = TaotaoSpacing.xxs),
+    ) {
+        // 封面直接复用全局 [AlbumArt]：112dp 高于列表行封面档，组件会按尺寸
+        // 自动判成圆形，这里显式传圆角形状覆盖；无图时组件自带色块 + 音符兜底，
+        // 颜色沿用歌曲行封面的占位色，整页观感一致。
+        AlbumArt(
+            color = Color(0xFFFFB4A2),
+            size = TaotaoSizes.artworkGrid,
+            imageUri = album.pic,
+            shape = TaotaoShapes.artwork,
+        )
+        Text(
+            album.name,
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier
+                .padding(top = TaotaoSpacing.xxs)
+                .padding(horizontal = TaotaoSpacing.xxs),
+        )
+        Text(
+            album.artist,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(horizontal = TaotaoSpacing.xxs),
+        )
+    }
+}
+
+/**
+ * 「歌手」标签：分页的歌手列表（圆形头像 + 名字 + 统计行），点击进歌手主页。
+ *
+ * 必须在页面的 LazyColumn 里调用：按首屏加载 / 失败 / 空态 / 列表四种情形展开，
+ * 尾部自带「加载更多」与「已显示全部」。条目 key 用下标 —— 与歌手页相似列表同一理由，
+ * 上游可能返回同名同 ID 的重复行，状态层判重兜底之外再保险一层。
+ */
+private fun LazyListScope.searchTabArtistSection(
+    artists: List<ArtistSearchResult>,
+    loading: Boolean,
+    error: String?,
+    isLoadingMore: Boolean,
+    hasMore: Boolean,
+    total: Int,
+    onRetry: () -> Unit,
+    onArtistClick: (ArtistSearchResult) -> Unit,
+) {
+    when {
+        loading && artists.isEmpty() -> {
+            item(key = "tab-artists-loading") {
+                Box(
+                    Modifier.fillMaxWidth().padding(vertical = TaotaoSpacing.xl),
+                    contentAlignment = Alignment.Center,
                 ) {
-                    // 封面直接复用全局 [AlbumArt]：112dp 高于列表行封面档，组件会按尺寸
-                    // 自动判成圆形，这里显式传圆角形状覆盖；无图时组件自带色块 + 音符兜底，
-                    // 颜色沿用歌曲行封面的占位色，整页观感一致。
-                    AlbumArt(
-                        color = Color(0xFFFFB4A2),
-                        size = TaotaoSizes.artworkGrid,
-                        imageUri = album.pic,
-                        shape = TaotaoShapes.artwork,
-                    )
-                    Text(
-                        album.name,
-                        style = MaterialTheme.typography.bodySmall,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier
-                            .padding(top = TaotaoSpacing.xxs)
-                            .padding(horizontal = TaotaoSpacing.xxs),
-                    )
-                    Text(
-                        album.artist,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(horizontal = TaotaoSpacing.xxs),
-                    )
+                    CircularProgressIndicator(color = TaotaoCoral, modifier = Modifier.size(TaotaoSizes.progressInline))
                 }
             }
+        }
+        artists.isEmpty() && error != null -> {
+            item(key = "tab-artists-error") { CatalogInlineStatus(text = error, onRetry = onRetry) }
+        }
+        artists.isEmpty() -> {
+            item(key = "tab-artists-empty") {
+                EmptyStateView(
+                    title = "没有找到相关歌手",
+                    description = "换个关键词再试试",
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
+        else -> {
+            itemsIndexed(
+                artists,
+                key = { index, _ -> "tab-artist-$index" },
+                contentType = { _, _ -> "tab-artist" },
+            ) { _, artist ->
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(TaotaoShapes.small)
+                        .clickable { onArtistClick(artist) }
+                        .padding(vertical = TaotaoSpacing.xs),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    ArtistSearchAvatar(name = artist.name, pic = artist.pic, size = TaotaoSizes.avatar)
+                    Column(Modifier.weight(1f).padding(start = TaotaoSpacing.sm)) {
+                        Text(
+                            artist.name,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            "${formatCatalogCount(artist.songCount)} 首 · ${formatCatalogCount(artist.albumCount)} 张专辑",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+            }
+            searchTabFooter(
+                key = "tab-artists-footer-more",
+                endKey = "tab-artists-end",
+                isLoadingMore = isLoadingMore,
+                hasMore = hasMore,
+                shownCount = artists.size,
+                unit = "位",
+                total = total,
+            )
+        }
+    }
+}
+
+/**
+ * 「专辑」标签：分页的专辑双列网格，点击进专辑主页。
+ *
+ * LazyColumn 内按行展开实现网格（不嵌套滚动容器），奇数末行的空位补等宽 Spacer；
+ * 预取窗口按行数折半的口径由页面的 shouldLoadMore 负责。
+ */
+private fun LazyListScope.searchTabAlbumSection(
+    albums: List<AlbumSearchResult>,
+    loading: Boolean,
+    error: String?,
+    isLoadingMore: Boolean,
+    hasMore: Boolean,
+    total: Int,
+    onRetry: () -> Unit,
+    onAlbumClick: (AlbumSearchResult) -> Unit,
+) {
+    when {
+        loading && albums.isEmpty() -> {
+            item(key = "tab-albums-loading") {
+                Box(
+                    Modifier.fillMaxWidth().padding(vertical = TaotaoSpacing.xl),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    CircularProgressIndicator(color = TaotaoCoral, modifier = Modifier.size(TaotaoSizes.progressInline))
+                }
+            }
+        }
+        albums.isEmpty() && error != null -> {
+            item(key = "tab-albums-error") { CatalogInlineStatus(text = error, onRetry = onRetry) }
+        }
+        albums.isEmpty() -> {
+            item(key = "tab-albums-empty") {
+                EmptyStateView(
+                    title = "没有找到相关专辑",
+                    description = "换个关键词再试试",
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
+        else -> {
+            val rowCount = (albums.size + 1) / 2
+            items(
+                rowCount,
+                key = { rowIndex -> "tab-album-row-$rowIndex" },
+                contentType = { "tab-album-row" },
+            ) { rowIndex ->
+                val first = albums.getOrNull(rowIndex * 2)
+                val second = albums.getOrNull(rowIndex * 2 + 1)
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(TaotaoSpacing.sm),
+                ) {
+                    if (first != null) {
+                        AlbumResultCard(album = first, onAlbumClick = onAlbumClick, modifier = Modifier.weight(1f))
+                    }
+                    if (second != null) {
+                        AlbumResultCard(album = second, onAlbumClick = onAlbumClick, modifier = Modifier.weight(1f))
+                    } else {
+                        Spacer(Modifier.weight(1f))
+                    }
+                }
+            }
+            searchTabFooter(
+                key = "tab-albums-footer-more",
+                endKey = "tab-albums-end",
+                isLoadingMore = isLoadingMore,
+                hasMore = hasMore,
+                shownCount = albums.size,
+                unit = "张",
+                total = total,
+            )
+        }
+    }
+}
+
+/** 「歌手 / 专辑」标签共用的尾部：「加载更多」占位与「已显示全部」收口。 */
+private fun LazyListScope.searchTabFooter(
+    key: String,
+    endKey: String,
+    isLoadingMore: Boolean,
+    hasMore: Boolean,
+    shownCount: Int,
+    unit: String,
+    total: Int,
+) {
+    if (isLoadingMore) {
+        item(key = key) {
+            Row(
+                Modifier.fillMaxWidth().padding(vertical = TaotaoSpacing.md),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                CircularProgressIndicator(Modifier.size(TaotaoSizes.progressInline), color = TaotaoCoral)
+                Text(
+                    "正在加载更多…",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(start = TaotaoSpacing.xs),
+                )
+            }
+        }
+    } else if (!hasMore) {
+        item(key = endKey) {
+            Text(
+                if (total > 0) "已显示全部 $shownCount $unit（共 $total $unit）" else "没有更多了",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.fillMaxWidth().padding(vertical = TaotaoSpacing.md),
+                textAlign = TextAlign.Center,
+            )
         }
     }
 }

@@ -11,8 +11,8 @@ import "./search.css";
  * 通用歌曲列表：搜索页与收藏页共用。
  * 滚动容器（.list）在组件内部，因此无限滚动监听、骨架屏、错误/空态、
  * 加载更多页脚都由本组件处理；播放与收藏走 useApp()。
- * 每行行尾带「⋯」更多菜单（下一首播放 / 加入歌单），菜单打开状态用
- * 「当前打开的行 key」单值 state 管理，同一时刻只有一行展开。
+ * 每行行尾带「⋯」更多菜单（下一首播放 / 加入歌单 / 查看歌手 / 查看专辑），
+ * 菜单打开状态用「当前打开的行 key」单值 state 管理，同一时刻只有一行展开。
  */
 export function SongList({
   songs,
@@ -24,6 +24,8 @@ export function SongList({
   onLoadMore,
   loadingMore = false,
   onPlayIndex,
+  onOpenArtist,
+  onOpenAlbum,
 }: {
   songs: Song[];
   /** 首屏加载中：显示骨架屏 */
@@ -42,6 +44,10 @@ export function SongList({
   loadingMore?: boolean;
   /** 行点击播放回调；缺省时整列设为队列并从该曲播放 */
   onPlayIndex?: (i: number) => void;
+  /** 「⋯ → 查看歌手」回调：仅歌曲携带 artistId 时菜单项可见 */
+  onOpenArtist?: (song: Song) => void;
+  /** 「⋯ → 查看专辑」回调：仅歌曲携带 albumId 时菜单项可见 */
+  onOpenAlbum?: (song: Song) => void;
 }) {
   const { current, isFavorite, toggleFavorite, playList, toast } = useApp();
   const currentKey = current != null ? songKeyOf(current) : null;
@@ -124,6 +130,8 @@ export function SongList({
                   setMenuKey(null);
                   setAddToSong(song);
                 }}
+                onOpenArtist={onOpenArtist}
+                onOpenAlbum={onOpenAlbum}
               />
               <button
                 type="button"

@@ -25,11 +25,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
 import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.AutoStories
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Share
@@ -154,14 +156,26 @@ fun SongRow(
     onShare: (() -> Unit)? = null,
     /** 打开这首歌的单曲倒带日记；为空时不显示该菜单项。 */
     onOpenDiary: (() -> Unit)? = null,
+    /**
+     * 跳转这首歌的歌手主页；为空时不显示菜单项。
+     * 是否真正可见还要看 [Song.artistId]：酷我之外的音源没有这个 ID，跳不了就藏起来。
+     */
+    onOpenArtist: (() -> Unit)? = null,
+    /** 跳转这首歌的专辑主页；可见条件同 [onOpenArtist]（要求 [Song.albumId] 非空）。 */
+    onOpenAlbum: (() -> Unit)? = null,
     onDelete: (() -> Unit)? = null,
     dragHandle: (@Composable (Modifier) -> Unit)? = null,
 ) {
     var showActions by remember { mutableStateOf(false) }
     // 拖把与更多菜单并存：此前传了拖把就隐藏整个菜单，播放队列里删除、收藏的回调
     // 传了却没有任何入口。两个都渲染；确实没有可用操作时才只显示拖把或什么都不显示。
+    // 跳转歌手 / 专辑是「回调非空 + 歌曲 ID 非空」双条件：只传回调而歌曲没带 ID 时，
+    // 对应条目隐藏，全部条目都藏干净的话连菜单按钮本身也不该出现。
+    val canOpenArtist = onOpenArtist != null && song.artistId != null
+    val canOpenAlbum = onOpenAlbum != null && song.albumId != null
     val hasRowActions = onDelete != null || onPlayNext != null || onToggleFavorite != null ||
-        onAddToPlaylist != null || onShare != null || onOpenDiary != null
+        onAddToPlaylist != null || onShare != null || onOpenDiary != null ||
+        canOpenArtist || canOpenAlbum
     SharedSongRow(
         song = song,
         active = active,
@@ -236,6 +250,22 @@ fun SongRow(
                                     leadingIcon = { Icon(Icons.Default.AutoStories, null) },
                                 )
                             }
+                            // 「查看歌手 / 查看专辑」是导航类条目，排在各功能条目之后；
+                            // 「删除」是破坏性条目（队列等页面里它排在菜单首位），二者刻意不相邻。
+                            if (canOpenArtist) {
+                                DropdownMenuItem(
+                                    text = { Text("查看歌手") },
+                                    onClick = { showActions = false; onOpenArtist?.invoke() },
+                                    leadingIcon = { Icon(Icons.Default.Person, null) },
+                                )
+                            }
+                            if (canOpenAlbum) {
+                                DropdownMenuItem(
+                                    text = { Text("查看专辑") },
+                                    onClick = { showActions = false; onOpenAlbum?.invoke() },
+                                    leadingIcon = { Icon(Icons.Default.Album, null) },
+                                )
+                            }
                         }
                     }
                 }
@@ -257,6 +287,8 @@ fun SongListItem(
     onAddToPlaylist: (() -> Unit)? = null,
     onShare: (() -> Unit)? = null,
     onOpenDiary: (() -> Unit)? = null,
+    onOpenArtist: (() -> Unit)? = null,
+    onOpenAlbum: (() -> Unit)? = null,
     onDelete: (() -> Unit)? = null,
     onClick: () -> Unit,
 ) {
@@ -272,6 +304,8 @@ fun SongListItem(
         onAddToPlaylist = onAddToPlaylist,
         onShare = onShare,
         onOpenDiary = onOpenDiary,
+        onOpenArtist = onOpenArtist,
+        onOpenAlbum = onOpenAlbum,
         onDelete = onDelete,
     )
 }

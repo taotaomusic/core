@@ -112,6 +112,78 @@ export class MusicController {
     );
   }
 
+  // ---------- 搜索页四标签：歌手 / 专辑分页搜索（2026-10 新增）----------
+  //
+  // `/search` 流里的 artist / album 区块是搜索落地页顶部的展示位（最多 3 / 6 条、
+  // 仅第 1 页）；搜索页「歌手 / 专辑」独立标签的完整列表走这两条分页路由。要登录
+  // （未标 @Public，走全局访问令牌守卫）；`source` 缺省 kuwo、`source=all` 与未知音源
+  // 4001、音源未实现该能力 4007 —— 全部照详情族 [detailSourceOf] 的既有写法。
+  // 行结构与 `/search` 流的实体行**完全同构**（含 source）；`total` 用上游 `data.total`
+  // 的整表总数（不拿本页条数凑数），`hasMore = page * num < total`，分页信封与详情族
+  // （`artists/:id/albums` 等）一致。
+
+  /**
+   * 歌手分页搜索。行结构与 `/search` 流的 artist 行完全同构，客户端原样复用行组件；
+   * `data.source` 是契约字段，适配器不含它，由这里按当前音源统一补上。
+   * `num` 缺省 30 是对外契约钉死的（与详情族歌曲列表共用同一个常量）。
+   */
+  @Get("search/artists")
+  async searchArtists(
+    @Query("keyword") keyword?: string,
+    @Query("page") page?: string,
+    @Query("num") num?: string,
+    @Query("source") source?: string,
+  ) {
+    const trimmed = (keyword ?? "").trim();
+    if (!trimmed) throw ApiErrors.badRequest(4001, "请输入搜索关键词");
+    const client = this.registry.of(this.detailSourceOf(source));
+    if (!client.searchArtists) {
+      throw ApiErrors.badRequest(4007, `${client.displayName}不支持歌手搜索`);
+    }
+    const resolvedPage = this.positiveIntOr(page, 1);
+    const resolvedNum = Math.min(MAX_PAGE_SIZE, this.positiveIntOr(num, DEFAULT_DETAIL_SONG_PAGE_SIZE));
+    const detail = await client.searchArtists(trimmed, resolvedPage, resolvedNum);
+    return {
+      artists: detail.artists.map((artist) => ({ ...artist, source: client.source })),
+      meta: {
+        page: resolvedPage,
+        num: resolvedNum,
+        total: detail.total,
+        hasMore: resolvedPage * resolvedNum < detail.total,
+      },
+    };
+  }
+
+  /**
+   * 专辑分页搜索。行结构与 `/search` 流的 album 行完全同构；其余约定同 [searchArtists]。
+   */
+  @Get("search/albums")
+  async searchAlbums(
+    @Query("keyword") keyword?: string,
+    @Query("page") page?: string,
+    @Query("num") num?: string,
+    @Query("source") source?: string,
+  ) {
+    const trimmed = (keyword ?? "").trim();
+    if (!trimmed) throw ApiErrors.badRequest(4001, "请输入搜索关键词");
+    const client = this.registry.of(this.detailSourceOf(source));
+    if (!client.searchAlbums) {
+      throw ApiErrors.badRequest(4007, `${client.displayName}不支持专辑搜索`);
+    }
+    const resolvedPage = this.positiveIntOr(page, 1);
+    const resolvedNum = Math.min(MAX_PAGE_SIZE, this.positiveIntOr(num, DEFAULT_DETAIL_SONG_PAGE_SIZE));
+    const detail = await client.searchAlbums(trimmed, resolvedPage, resolvedNum);
+    return {
+      albums: detail.albums.map((album) => ({ ...album, source: client.source })),
+      meta: {
+        page: resolvedPage,
+        num: resolvedNum,
+        total: detail.total,
+        hasMore: resolvedPage * resolvedNum < detail.total,
+      },
+    };
+  }
+
   // ---------- 歌手与专辑详情（2026-10 新增）----------
   //
   // 数据来源是 `/search` 流里的 artist / album 行：客户端拿到 `source` + `id` 后回这里

@@ -598,24 +598,26 @@ export class KuwoClient implements MusicSourceClient, MusicSourceCredentialManag
   }
 
   /**
-   * 波点歌手搜索，产出 `/search` 流的 artist 行。
+   * 波点歌手搜索，产出 `/search` 流的 artist 行与 `GET /search/artists` 分页路由的行列表。
    *
-   * 固定取上游第 1 页（`pn=0`），`limit` 直接当 `rn` 传下去：这类行只取首页、不翻页，
-   * 不存在歌曲搜索那套「`rn` 影响偏移与排序」的问题（见 [searchSongs] 的实测说明），
-   * 所以不必固定上游页大小。
+   * [page] 透传给协议层换算成上游 0 基的 `pn`（换算见 `BodianClient.upstreamPage()` 的
+   * 实测表格），`limit` 直接当 `rn` 传下去：这类行不存在歌曲搜索那套「`rn` 影响偏移
+   * 与排序」的问题（见 [searchSongs] 的实测说明），所以不必固定上游页大小。
+   * 上游的整表总数随响应的 `data.total` 一起带回，`/search` 流的区块行用不到它。
    */
-  async searchArtists(keyword: string, limit: number): Promise<UpstreamArtist[]> {
+  async searchArtists(keyword: string, page: number, limit: number): Promise<{ artists: UpstreamArtist[]; total: number }> {
     const client = await this.clientOf();
-    return client.searchArtists(keyword, 1, limit);
+    return client.searchArtists(keyword, page, limit);
   }
 
   /**
-   * 波点专辑搜索，产出 `/search` 流的 album 行。页取法同 [searchArtists]；
-   * 上游条目里超长的 `info` 简介已在协议层（[BodianClient.searchAlbums]）丢弃。
+   * 波点专辑搜索，产出 `/search` 流的 album 行与 `GET /search/albums` 分页路由的行列表。
+   * 页取法同 [searchArtists]；上游条目里超长的 `info` 简介已在协议层
+   * （[BodianClient.searchAlbums]）丢弃。
    */
-  async searchAlbums(keyword: string, limit: number): Promise<UpstreamAlbum[]> {
+  async searchAlbums(keyword: string, page: number, limit: number): Promise<{ albums: UpstreamAlbum[]; total: number }> {
     const client = await this.clientOf();
-    return client.searchAlbums(keyword, 1, limit);
+    return client.searchAlbums(keyword, page, limit);
   }
 
   // ---------- 歌手与专辑详情（2026-10 新增）----------
@@ -741,6 +743,10 @@ export class KuwoClient implements MusicSourceClient, MusicSourceCredentialManag
       refrainStartMs: song.refrainStartMs,
       refrainEndMs: song.refrainEndMs,
       cover: song.cover ?? "",
+      // 歌手 / 专辑 ID 是「查看歌手 / 查看专辑」的钥匙，必须穿过这一跳，
+      // 否则 SongMapper 拿不到、/search 的 song 行就整键缺席（2026-10-04 实测踩过）。
+      artistId: song.artistId,
+      albumId: song.albumId,
       pay: "",
       // `undefined` 按可播处理，只有明确为 false 才置灰 —— 判据见 [searchSongs]。
       playable: song.playable !== false,
