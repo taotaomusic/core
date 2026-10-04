@@ -2131,6 +2131,7 @@ async function main() {
       && typeof kuwoArtistDetail.data.artist.name === "string" && kuwoArtistDetail.data.artist.name.length > 0
       && typeof kuwoArtistDetail.data.artist.aliasName === "string"
       && typeof kuwoArtistDetail.data.artist.pic === "string"
+      && kuwoArtistDetail.data.artist.pic.startsWith("https://")
       && typeof kuwoArtistDetail.data.artist.desc === "string"
       && typeof kuwoArtistDetail.data.artist.fansCount === "number"
       && typeof kuwoArtistDetail.data.artist.musicCount === "number"
@@ -2206,6 +2207,7 @@ async function main() {
         && typeof album?.id === "number" && album.id > 0
         && typeof album?.name === "string" && album.name.length > 0
         && typeof album?.pic === "string"
+        && (!album.pic || album.pic.startsWith("https://"))
         && typeof album?.artist === "string"
         && typeof album?.artistId === "number"
         && typeof album?.songCount === "number"
@@ -2231,6 +2233,7 @@ async function main() {
         && typeof artist?.id === "number" && artist.id > 0
         && typeof artist?.name === "string" && artist.name.length > 0
         && typeof artist?.pic === "string"
+        && (!artist.pic || artist.pic.startsWith("https://"))
         && typeof artist?.songCount === "number"
         && typeof artist?.albumCount === "number"
         && !("aliasName" in artist) && !("desc" in artist)),
@@ -2247,6 +2250,7 @@ async function main() {
       && typeof kuwoAlbumDetail.data.album.id === "number" && kuwoAlbumDetail.data.album.id > 0
       && typeof kuwoAlbumDetail.data.album.name === "string" && kuwoAlbumDetail.data.album.name.length > 0
       && typeof kuwoAlbumDetail.data.album.pic === "string"
+      && kuwoAlbumDetail.data.album.pic.startsWith("https://")
       && typeof kuwoAlbumDetail.data.album.artist === "string"
       && typeof kuwoAlbumDetail.data.album.artistId === "number"
       && typeof kuwoAlbumDetail.data.album.songCount === "number" && kuwoAlbumDetail.data.album.songCount > 0

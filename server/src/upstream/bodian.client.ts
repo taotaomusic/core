@@ -861,6 +861,20 @@ export class BodianClient {
     return this.uid !== "";
   }
 
+  /**
+   * 把上游图片地址统一升级成 `https`。
+   *
+   * 波点的**详情族端点**（`service/album/:id`、`service/artist/album/:id`）下发的封面
+   * 是 `http://` 明文地址，搜索族端点给的是 `https://` —— 同一张图两个协议都能取到
+   * （实测同字节数）。Android 9+ 默认禁止明文 HTTP，WebView 也会按混合内容策略拦截，
+   * 明文地址在这些端上的表现就是「封面死活加载不出来」（2026-10-04 用户反馈：
+   * 只有搜索页封面正常，专辑页/歌手页全挂，根因即此）。升级在协议层做掉，
+   * 三端与开放接口都不用再各自兜底。
+   */
+  private httpsImage(url: unknown): string {
+    return String(url ?? "").replace(/^http:\/\//, "https://");
+  }
+
   // ---------- 搜索 ----------
 
   /**
@@ -911,7 +925,7 @@ export class BodianClient {
       name: s.songName || s.name || "",
       artist: s.artist || "",
       album: s.album || "",
-      cover: s.albumPic || "",
+      cover: this.httpsImage(s.albumPic),
       durationSeconds: Number(s.duration) || 0,
       subtitle: s.subtitle || "",
       refrainStartMs: Number.isFinite(Number(s.payInfo?.refrain_start)) ? Number(s.payInfo.refrain_start) : undefined,
@@ -931,7 +945,7 @@ export class BodianClient {
     return (d.data?.resultList || []).map((s: any) => ({
       id: Number(s.artistId),
       name: String(s.name ?? ""),
-      pic: String(s.pic ?? ""),
+      pic: this.httpsImage(s.pic),
       songCount: Number(s.songNum) || 0,
       albumCount: Number(s.albumNum) || 0,
     }));
@@ -946,7 +960,7 @@ export class BodianClient {
     return (d.data?.resultList || []).map((s: any) => ({
       id: Number(s.albumId || s.id),
       name: String(s.name ?? ""),
-      pic: String(s.pic ?? ""),
+      pic: this.httpsImage(s.pic),
       artist: String(s.artist ?? ""),
       artistId: Number(s.artistId) || 0,
       songCount: Number(s.musicCount) || 0,
@@ -1000,7 +1014,7 @@ export class BodianClient {
       .map((item: any) => ({
         keyword: String(item?.key ?? "").trim(),
         type: Number(item?.type) || 0,
-        icon: String(item?.icon ?? ""),
+        icon: this.httpsImage(item?.icon),
         sort: Number(item?.sort) || 0,
         searchType: Number(item?.searchType) || 0,
         jumpUrl: String(item?.jumpUrl ?? ""),
@@ -1048,7 +1062,7 @@ export class BodianClient {
       name: s.name || s.songName || "",
       artist: s.artist || "",
       album: s.album || "",
-      cover: s.albumPic || "",
+      cover: this.httpsImage(s.albumPic),
       durationSeconds: Number(s.duration) || 0,
       subtitle: s.subtitle || "",
       refrainStartMs: Number(s.payInfo?.refrain_start) > 0 ? Number(s.payInfo.refrain_start) : undefined,
@@ -1074,7 +1088,7 @@ export class BodianClient {
       id: Number(info.id),
       name: String(info.name ?? ""),
       aliasName: String(info.aliasName ?? ""),
-      pic: String(info.pic ?? ""),
+      pic: this.httpsImage(info.pic),
       desc: String(info.desc ?? ""),
       fansCount: Number(info.fansCnt) || 0,
       musicCount: Number(info.musicCnt) || 0,
@@ -1113,7 +1127,7 @@ export class BodianClient {
       albums: (d.data?.resultList || []).map((s: any) => ({
         id: Number(s.albumId || s.id),
         name: String(s.name ?? ""),
-        pic: String(s.pic ?? ""),
+        pic: this.httpsImage(s.pic),
         artist: String(s.artist ?? ""),
         artistId: Number(s.artistId) || 0,
         songCount: Number(s.musicCount) || 0,
@@ -1134,7 +1148,7 @@ export class BodianClient {
     return (d.data?.resultList || []).map((s: any) => ({
       id: Number(s.id),
       name: String(s.name ?? ""),
-      pic: String(s.pic ?? ""),
+      pic: this.httpsImage(s.pic),
       songCount: Number(s.musicCnt) || 0,
       albumCount: Number(s.albumCnt) || 0,
     }));
@@ -1155,7 +1169,7 @@ export class BodianClient {
     return {
       id: Number(info.albumId || info.id),
       name: String(info.name ?? ""),
-      pic: String(info.pic ?? ""),
+      pic: this.httpsImage(info.pic),
       artist: String(info.artist ?? ""),
       artistId: Number(info.artistId) || 0,
       songCount: Number(info.musicCount) || 0,
@@ -1185,7 +1199,7 @@ export class BodianClient {
       name: d.data?.songName || d.data?.name || "",
       artist: d.data?.artist || "",
       album: d.data?.album || "",
-      cover: d.data?.albumPic || "",
+      cover: this.httpsImage(d.data?.albumPic),
       duration: Number(d.data?.duration) || 0,
       lrcInfo: d.data?.lrc_info,
       audios: Array.isArray(d.data?.audios) ? d.data.audios : [],
