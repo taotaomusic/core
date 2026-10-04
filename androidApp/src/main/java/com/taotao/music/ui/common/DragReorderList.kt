@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material3.Icon
@@ -43,6 +44,9 @@ import kotlinx.coroutines.launch
  *
  * - 长按右侧拖把后整行跟随手指，跨过半行高度就与相邻行交换位置，列表首尾有阻尼；
  * - 松手后拖行回弹落位，让位的相邻行用 [Modifier.animateItem] 弹簧补间；
+ * - 换位时视口钉在原位：LazyColumn 默认会在数据变化时跟随首可见项滚动，拖动首行或
+ *   其邻行时视口会跟着换位滚走，把让位上来的新首行顶出屏幕外；每次换位前用
+ *   requestScrollToItem 固定当前视口槽位抵消它；
  * - 系统开启「减弱动态效果」时（[LocalReduceMotion]）取消回弹与补间，直接落位；
  * - 拖动期间列表完全由本地副本驱动，外部数据（播放器队列、云端歌单）只在空闲时同步，
  *   避免回调在手势中打断画面；
@@ -89,6 +93,7 @@ fun <T> DragReorderList(
     var settleOffset by remember { mutableStateOf(Animatable(0f)) }
     var rowHeightPx by remember { mutableFloatStateOf(0f) }
     val dragScope = rememberCoroutineScope()
+    val listState = rememberLazyListState()
     val reduceMotion = LocalReduceMotion.current
     val haptics = LocalHapticFeedback.current
 
@@ -111,6 +116,7 @@ fun <T> DragReorderList(
     }
 
     LazyColumn(
+        state = listState,
         modifier = modifier,
         contentPadding = contentPadding,
         verticalArrangement = verticalArrangement,
@@ -219,6 +225,16 @@ fun <T> DragReorderList(
                                     if (destination == draggedIndex) {
                                         break
                                     }
+                                    // LazyColumn 在数据变化时会按首可见项的 key 重新锚定滚动位置。
+                                    // 被拖行或被挤开的邻行正好是视口第一行时，视口会跟着换位滚动，
+                                    // 把让位上来的新首行顶出屏幕上方，看起来像列表自己滚走了一行。
+                                    // 换位前把当前视口槽位（下标 + 偏移）显式钉住：requestScrollToItem
+                                    // 只对下一次 remeasure 生效且会忘记 key 锚定，视口因此保持原位，
+                                    // 对不涉及视口顶行的换位则是无害的重复定位。
+                                    listState.requestScrollToItem(
+                                        index = listState.firstVisibleItemIndex,
+                                        scrollOffset = listState.firstVisibleItemScrollOffset,
+                                    )
                                     visualRows = visualRows.moved(draggedIndex, destination)
                                     visualActiveIndex = movedIndex(visualActiveIndex, draggedIndex, destination)
                                     draggedIndex = destination
