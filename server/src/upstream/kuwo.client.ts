@@ -7,6 +7,8 @@ import type {
   MusicSourceClient,
   MusicSourceCredentialManager,
   SongKey,
+  UpstreamAlbum,
+  UpstreamArtist,
 } from "./music-source.client";
 import type { MusicSourceCredential } from "./music-source-account.repository";
 import { MusicSourceAccountRepository } from "./music-source-account.repository";
@@ -591,6 +593,27 @@ export class KuwoClient implements MusicSourceClient, MusicSourceCredentialManag
   async searchHotKeywords(limit: number) {
     const client = await this.clientOf();
     return client.searchHotKeywords(limit);
+  }
+
+  /**
+   * 波点歌手搜索，产出 `/search` 流的 artist 行。
+   *
+   * 固定取上游第 1 页（`pn=0`），`limit` 直接当 `rn` 传下去：这类行只取首页、不翻页，
+   * 不存在歌曲搜索那套「`rn` 影响偏移与排序」的问题（见 [searchSongs] 的实测说明），
+   * 所以不必固定上游页大小。
+   */
+  async searchArtists(keyword: string, limit: number): Promise<UpstreamArtist[]> {
+    const client = await this.clientOf();
+    return client.searchArtists(keyword, 1, limit);
+  }
+
+  /**
+   * 波点专辑搜索，产出 `/search` 流的 album 行。页取法同 [searchArtists]；
+   * 上游条目里超长的 `info` 简介已在协议层（[BodianClient.searchAlbums]）丢弃。
+   */
+  async searchAlbums(keyword: string, limit: number): Promise<UpstreamAlbum[]> {
+    const client = await this.clientOf();
+    return client.searchAlbums(keyword, 1, limit);
   }
 
   /** 官方目录的 size 可能是字节数，也可能是 `9.94Mb` 这类显示字符串。 */

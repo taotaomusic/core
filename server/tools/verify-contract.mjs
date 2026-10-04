@@ -2057,11 +2057,13 @@ async function main() {
   const kuwoNdjson = await kuwoSearch.text();
   const kuwoLines = kuwoNdjson.split("\n").filter(Boolean).map((line) => JSON.parse(line));
   const kuwoSongs = kuwoLines.filter((line) => line.type === "song");
+  // 2026-10 起 song 行之前可能先有 artist / album 行（见下方专属检查段）：
+  // 上游歌手/专辑搜索失败或召回为空时这两段缺席，首行退回 song，两者都是契约内形状。
   check(
     "source=kuwo 的搜索被接受且返回裸 NDJSON",
     kuwoSearch.status === 200
       && (kuwoSearch.headers.get("content-type") ?? "").includes("x-ndjson")
-      && kuwoLines[0]?.type === "song",
+      && ["artist", "album", "song"].includes(kuwoLines[0]?.type),
     `${kuwoSearch.status} ${kuwoNdjson.slice(0, 160)}`,
   );
   check("酷我搜索返回了歌曲", kuwoSongs.length > 0, `${kuwoSongs.length} 首`);
@@ -2075,6 +2077,41 @@ async function main() {
     "酷我搜索结果的 source 字段回填为 kuwo",
     kuwoSongs.every((line) => line.data?.source === "kuwo"),
     kuwoSongs[0]?.data?.source,
+  );
+
+  // ---------- /search 流的歌手 / 专辑行（2026-10 新增）----------
+  //
+  // 单音源模式且适配器实现了歌手/专辑搜索时（当前只有 kuwo），song 行之前会多出
+  // artist / album 两类行。这里刻意写成**宽松断言**：上游偶发失败时服务端整段省略，
+  // 区块缺失不算失败 —— 只有「区块存在但形状不对」才挂。关键词选「周杰伦」，
+  // 歌手与专辑的命中率最高，缺区块基本可以断定是上游故障而非召回为空。
+  const kuwoEntitySearch = await fetch(`${base}/api/v1/search?keyword=${encodeURIComponent("周杰伦")}&num=5&source=kuwo`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  const kuwoEntityLines = (await kuwoEntitySearch.text()).split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  const kuwoArtists = kuwoEntityLines.filter((line) => line.type === "artist");
+  const kuwoAlbums = kuwoEntityLines.filter((line) => line.type === "album");
+  check(
+    "source=kuwo 的 artist 行（若存在）字段符合契约且不超过 3 条",
+    kuwoArtists.length <= 3
+      && kuwoArtists.every((line) => line.data?.source === "kuwo"
+        && typeof line.data?.name === "string"
+        && typeof line.data?.pic === "string"
+        && typeof line.data?.id === "number" && line.data.id > 0
+        && typeof line.data?.songCount === "number"
+        && typeof line.data?.albumCount === "number"),
+    JSON.stringify(kuwoArtists).slice(0, 220),
+  );
+  check(
+    "source=kuwo 的 album 行（若存在）字段符合契约且不超过 6 条",
+    kuwoAlbums.length <= 6
+      && kuwoAlbums.every((line) => line.data?.source === "kuwo"
+        && typeof line.data?.name === "string"
+        && typeof line.data?.pic === "string"
+        && typeof line.data?.artist === "string"
+        && typeof line.data?.id === "number" && line.data.id > 0
+        && typeof line.data?.songCount === "number"),
+    JSON.stringify(kuwoAlbums).slice(0, 220),
   );
 
   // ---------- 分享链路的高潮区间透传 ----------

@@ -10,6 +10,16 @@ import { SongMapper } from "./song.mapper";
 export type { MusicSource };
 export type SearchSource = MusicSource | "all";
 
+/**
+ * `/search` 流里歌手行（`type: "artist"`）的条数上限。
+ *
+ * 与客户端搜索页顶部的歌手展示位一致：再多就挤占歌曲行的空间，客户端也没有更多位置。
+ */
+const MAX_SEARCH_ARTISTS = 3;
+
+/** `/search` 流里专辑行（`type: "album"`）的条数上限。理由同 [MAX_SEARCH_ARTISTS]。 */
+const MAX_SEARCH_ALBUMS = 6;
+
 @Injectable()
 export class SearchService {
   constructor(
@@ -23,6 +33,15 @@ export class SearchService {
    *
    * 响应必须是**裸 NDJSON**，不能被统一信封包住：客户端逐行取 `type` 字段，
    * 包了外壳后会取不到 → 0 首歌 + 无任何错误，表现为「搜不到东西」。
+   *
+   * 行序固定为 **artist 行 → album 行 → song 行 → end 行**。artist / album 两类行
+   * （2026-10 新增）只在**单音源模式 + 第 1 页**且该音源的适配器实现了 `searchArtists` /
+   * `searchAlbums` 时输出（当前只有酷我/波点支持），条数上限见 [MAX_SEARCH_ARTISTS] /
+   * [MAX_SEARCH_ALBUMS]；翻页不再重复下发（区块是搜索落地页的顶部展示位，客户端
+   * 翻页时保留第 1 页的区块即可）；`source=all` 聚合模式**一律不输出** —— 聚合的腾讯/网易
+   * 没有这个能力，多源同名义歌手的去重是另一档复杂度，刻意不做。这两段与歌曲搜索**并行**
+   * 发起（Promise.allSettled），失败时**整段省略**，绝不能连累 song 行。客户端对未知
+   * type 静默跳过，旧版本拿到这两类行只会忽略，向后兼容。
    *
    * 这里**不再解析播放地址**。早先每首歌都要向上游多要一次播放链接、还要探测首字节，
    * 20 首约 1.8 秒、60 首最坏能打 240 次上游请求；而客户端拿到后又会把这个地址丢掉，
@@ -42,7 +61,22 @@ export class SearchService {
     playBase: string,
     source: SearchSource = "all",
   ): Promise<void> {
-    const clients = source === "all" ? this.registry.aggregated() : [this.registry.of(source)];
+    // 单音源模式下才尝试歌手/专辑行；聚合模式没有单一 client，自然没有这一段。
+    const singleClient = source === "all" ? undefined : this.registry.of(source);
+    const clients = singleClient ? [singleClient] : this.registry.aggregated();
+
+    // 歌手/专辑搜索与歌曲搜索**并行**发起（Promise.allSettled），不增加串行延迟：
+    // 任一段失败就整段省略，绝不能连累 song 行。适配器没实现可选方法时 `?.` 短路成
+    // undefined，allSettled 把它当 fulfilled 的 undefined，同样按缺失处理。
+    // 区块只在第 1 页下发 —— 翻页重复发同样内容纯属浪费上游与带宽。
+    const entitySearches =
+      singleClient && page === 1
+        ? Promise.allSettled([
+            singleClient.searchArtists?.(keyword, MAX_SEARCH_ARTISTS),
+            singleClient.searchAlbums?.(keyword, MAX_SEARCH_ALBUMS),
+          ])
+        : undefined;
+
     const attempts = await Promise.allSettled(
       clients.map(async (client) => ({
         client,
@@ -87,6 +121,32 @@ export class SearchService {
       // nginx 认这个头，且代理配置不在版本库里，只能由服务端主动声明。
       "x-accel-buffering": "no",
     });
+
+    // 此刻才等歌手/专辑结果 —— 两个请求在方法开头就已与歌曲搜索并行发出，
+    // 通常早已就绪，不增加额外延迟。
+    const entityResults = entitySearches ? await entitySearches : undefined;
+    const artistOutcome = entityResults?.[0];
+    const albumOutcome = entityResults?.[1];
+    // data.source 是契约字段，适配器不含它，由这里按当前音源补上。
+    const entitySource = singleClient?.source;
+
+    // 契约顺序：artist 行 → album 行 → song 行 → end 行。
+    // 上游失败（rejected）或没实现方法（fulfilled 且值不是数组）时**整段省略**：
+    // 不输出空区块、不占位，song 行照常下发。
+    if (artistOutcome?.status === "fulfilled" && Array.isArray(artistOutcome.value) && entitySource) {
+      for (const artist of artistOutcome.value) {
+        response.write(
+          `${JSON.stringify({ type: "artist", data: { ...artist, source: entitySource } })}\n`,
+        );
+      }
+    }
+    if (albumOutcome?.status === "fulfilled" && Array.isArray(albumOutcome.value) && entitySource) {
+      for (const album of albumOutcome.value) {
+        response.write(
+          `${JSON.stringify({ type: "album", data: { ...album, source: entitySource } })}\n`,
+        );
+      }
+    }
 
     let count = 0;
     for (const { client, source: itemSource, result } of results) {

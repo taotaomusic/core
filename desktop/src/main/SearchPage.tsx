@@ -1,13 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  absoluteUrl,
   fetchHotSearches,
   fetchSuggestions,
   readableError,
   searchSongs,
   SessionExpired,
   songKeyOf,
+  type SearchAlbum,
+  type SearchArtist,
   type Song,
 } from "../api";
+import { useApp } from "../state/AppState";
 import { SongList } from "./SongList";
 import {
   addHistory,
@@ -45,6 +49,7 @@ function SearchIcon() {
  * 搜索历史只存本机不上传；会话过期由 AppState 层统一处理。
  */
 export function SearchPage() {
+  const { toast } = useApp();
   const [keyword, setKeyword] = useState("");
   const [hasSearched, setHasSearched] = useState(false);
   const [history, setHistory] = useState<string[]>(() => loadHistory());
@@ -53,6 +58,8 @@ export function SearchPage() {
   const [hot, setHot] = useState<string[]>([]);
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [songs, setSongs] = useState<Song[]>([]);
+  const [artists, setArtists] = useState<SearchArtist[]>([]);
+  const [albums, setAlbums] = useState<SearchAlbum[]>([]);
   const [total, setTotal] = useState(0);
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -125,6 +132,11 @@ export function SearchPage() {
         ? r.songs
         : [...prev, ...r.songs.filter((s) => !seen.has(songKeyOf(s)))];
       setSongs(merged);
+      // 歌手/专辑区块只取第一页（服务端翻页不再下发，第 2 页响应里本来就是空数组）
+      if (isFirst) {
+        setArtists(r.artists);
+        setAlbums(r.albums);
+      }
       setTotal(r.total);
       setHasMore(r.hasMore);
       pageRef.current = page;
@@ -152,6 +164,8 @@ export function SearchPage() {
     setSuggestions([]);
     setConfirmingClear(false);
     setSongs([]);
+    setArtists([]);
+    setAlbums([]);
     setHasMore(false);
     setTotal(0);
     void runSearch(word, 1, []);
@@ -316,18 +330,127 @@ export function SearchPage() {
         )}
 
         {hasSearched && (
-          <SongList
-            songs={songs}
-            loading={loading}
-            error={error}
-            emptyHint="没有找到相关歌曲，换个关键词再试试"
-            hasMore={hasMore}
-            total={total}
-            onLoadMore={loadMore}
-            loadingMore={loadingMore}
-          />
+          <>
+            {/* 歌手/专辑横排：仅酷我源下发，无数据时整块不渲染、不占位 */}
+            {(artists.length > 0 || albums.length > 0) && (
+              <div className="sp-strips">
+                {artists.length > 0 && (
+                  <ArtistStrip
+                    artists={artists}
+                    onOpen={() => toast("歌手主页开发中，敬请期待")}
+                  />
+                )}
+                {albums.length > 0 && (
+                  <AlbumStrip
+                    albums={albums}
+                    onOpen={() => toast("专辑页开发中，敬请期待")}
+                  />
+                )}
+              </div>
+            )}
+            <SongList
+              songs={songs}
+              loading={loading}
+              error={error}
+              emptyHint="没有找到相关歌曲，换个关键词再试试"
+              hasMore={hasMore}
+              total={total}
+              onLoadMore={loadMore}
+              loadingMore={loadingMore}
+            />
+          </>
         )}
       </div>
+    </div>
+  );
+}
+
+/** 歌手横排区块：圆形头像 + 名字（单行省略）+「N 首」；点击行为由上层决定。 */
+function ArtistStrip({ artists, onOpen }: { artists: SearchArtist[]; onOpen: () => void }) {
+  return (
+    <section className="sp-section">
+      <div className="sp-section-head">
+        <span className="sp-section-title">歌手</span>
+      </div>
+      <div className="sp-hscroll">
+        {artists.map((a) => (
+          <div
+            key={`${a.source}:${a.id}`}
+            className="sp-artist-item"
+            title={`查看歌手「${a.name}」`}
+            onClick={onOpen}
+          >
+            <ArtistAvatar pic={a.pic} name={a.name} />
+            <div className="sp-artist-meta">
+              <span className="sp-artist-name">{a.name}</span>
+              {a.songCount != null && <span className="sp-artist-sub">{a.songCount} 首</span>}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+/** 专辑横排区块：圆角封面 + 专辑名（最多两行省略）+ 歌手名小字；点击行为由上层决定。 */
+function AlbumStrip({ albums, onOpen }: { albums: SearchAlbum[]; onOpen: () => void }) {
+  return (
+    <section className="sp-section">
+      <div className="sp-section-head">
+        <span className="sp-section-title">专辑</span>
+      </div>
+      <div className="sp-hscroll">
+        {albums.map((al) => (
+          <div
+            key={`${al.source}:${al.id}`}
+            className="sp-album-item"
+            title={`查看专辑「${al.name}」`}
+            onClick={onOpen}
+          >
+            <AlbumCover pic={al.pic} />
+            <span className="sp-album-name">{al.name}</span>
+            {al.artist && <span className="sp-album-artist">{al.artist}</span>}
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+/** 歌手头像：有图用图（加载失败就地回退），无图直接主题色圆 + 名字首字符。 */
+function ArtistAvatar({ pic, name }: { pic?: string; name: string }) {
+  const [failed, setFailed] = useState(false);
+  const showImg = !!pic && !failed;
+  return (
+    <div className="sp-artist-avatar">
+      {showImg ? (
+        <img
+          src={absoluteUrl(pic)}
+          alt=""
+          onError={() => setFailed(true)}
+        />
+      ) : (
+        <span className="sp-artist-initial">{name.charAt(0) || "♪"}</span>
+      )}
+    </div>
+  );
+}
+
+/** 专辑封面：有图用图，加载失败/无图回退主题色块，与歌曲行封面的音符占位同一设计语言。 */
+function AlbumCover({ pic }: { pic?: string }) {
+  const [failed, setFailed] = useState(false);
+  const showImg = !!pic && !failed;
+  return (
+    <div className="sp-album-cover">
+      {showImg ? (
+        <img
+          src={absoluteUrl(pic)}
+          alt=""
+          onError={() => setFailed(true)}
+        />
+      ) : (
+        <span className="note">♪</span>
+      )}
     </div>
   );
 }

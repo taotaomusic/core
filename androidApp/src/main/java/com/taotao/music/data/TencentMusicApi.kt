@@ -268,6 +268,12 @@ class TencentMusicApi(
      *
      * ⚠️ 聚合白名单由服务端的 `AGGREGATED_SOURCES` 决定，**不等于「所有已接入音源」** ——
      * 酷我刻意不在其中，只能显式指定。别假设选了「全部」就等于三端都查了。
+     *
+     * [onSections] 携带歌手 / 专辑两个搜索区块。服务端仅在 `source=kuwo` 的流里、
+     * **所有歌曲行之前**下发这两类行；回调保证整条流只发生一次 —— 首次遇到歌曲行、
+     * 区块解析完成时触发，整条流没有歌曲行时在 end 行兜底。旧服务端或其它音源不下发
+     * 区块时同样以空列表回调一次，调用方按空列表处理即可；401 重放时它与 [onProgress]
+     * 一样随 lambda 局部变量从零重建，不会累积旧值。
      */
     fun search(
         keyword: String,
@@ -276,6 +282,7 @@ class TencentMusicApi(
         quality: Int = AudioQuality.Default.value,
         source: String = SEARCH_SOURCE_KUWO,
         onProgress: (List<Song>) -> Unit = {},
+        onSections: (List<ArtistSearchResult>, List<AlbumSearchResult>) -> Unit = { _, _ -> },
     ): SearchResult {
         val query = "?keyword=${encode(keyword)}" +
             "&page=$page&num=${num.coerceIn(1, 60)}" +
@@ -283,6 +290,10 @@ class TencentMusicApi(
             "&source=${encode(source.ifBlank { SEARCH_SOURCE_KUWO })}"
         return authorized("/api/v1/search$query") { connection ->
             val songs = mutableListOf<Song>()
+            val artists = mutableListOf<ArtistSearchResult>()
+            val albums = mutableListOf<AlbumSearchResult>()
+            // 区块回调的一次性闸门：首次触发后置位，保证整条流只回调一次。
+            var sectionsDispatched = false
             var dropped = 0
             var hasMore = false
             var total = 0
@@ -290,17 +301,40 @@ class TencentMusicApi(
                 lines.filter { it.isNotBlank() }.forEach { line ->
                     val record = runCatching { JSONObject(line) }.getOrNull() ?: return@forEach
                     when (record.optString("type")) {
-                        "song" -> record.optJSONObject("data")?.let {
-                            songs += it.toSong(quality)
-                            onProgress(songs.toList())
+                        // 歌手 / 专辑区块行：服务端保证出现在所有歌曲行之前。旧服务端不下发
+                        // 这两类行，走 when 的未知分支被静默跳过，向后兼容不受影响。
+                        "artist" -> record.optJSONObject("data")?.let { data ->
+                            artists += data.toArtistSearchResult()
                         }
-                        "end" -> record.optJSONObject("meta")?.let { meta ->
-                            // 服务端因拿不到播放地址而丢掉的条数。**不再是恒为 0 的装饰字段**：
-                            // 酷我搜热门歌手时上游给 20 条、20 条全被预筛掉，这里就会读到 20，
-                            // 而 songs 是空的 —— 那才是「搜到了但都不可播」，不是「没搜到」。
-                            dropped = meta.optInt("dropped")
-                            hasMore = meta.optBoolean("hasMore")
-                            total = meta.optInt("total")
+                        "album" -> record.optJSONObject("data")?.let { data ->
+                            albums += data.toAlbumSearchResult()
+                        }
+                        "song" -> {
+                            // 首条歌曲行意味着区块已经解析完，此刻把完整区块一次性交给界面。
+                            if (!sectionsDispatched) {
+                                sectionsDispatched = true
+                                onSections(artists.toList(), albums.toList())
+                            }
+                            record.optJSONObject("data")?.let {
+                                songs += it.toSong(quality)
+                                onProgress(songs.toList())
+                            }
+                        }
+                        "end" -> {
+                            // 整条流没有歌曲行（只命中歌手 / 专辑，或歌曲全被预筛掉）时
+                            // 在 end 行兜底回调，调用方仍能拿到区块。
+                            if (!sectionsDispatched) {
+                                sectionsDispatched = true
+                                onSections(artists.toList(), albums.toList())
+                            }
+                            record.optJSONObject("meta")?.let { meta ->
+                                // 服务端因拿不到播放地址而丢掉的条数。**不再是恒为 0 的装饰字段**：
+                                // 酷我搜热门歌手时上游给 20 条、20 条全被预筛掉，这里就会读到 20，
+                                // 而 songs 是空的 —— 那才是「搜到了但都不可播」，不是「没搜到」。
+                                dropped = meta.optInt("dropped")
+                                hasMore = meta.optBoolean("hasMore")
+                                total = meta.optInt("total")
+                            }
                         }
                     }
                 }
@@ -1476,6 +1510,28 @@ class TencentMusicApi(
         )
     }
 
+    /** 解析歌手搜索区块行。pic 可能为空串，统一归一成 null 方便界面判空。 */
+    private fun JSONObject.toArtistSearchResult(): ArtistSearchResult = ArtistSearchResult(
+        source = optString("source").ifBlank { SEARCH_SOURCE_KUWO },
+        id = optLong("id"),
+        name = optString("name"),
+        pic = nullableString("pic"),
+        songCount = optLong("songCount"),
+        albumCount = optLong("albumCount"),
+    )
+
+    /** 解析专辑搜索区块行。showtime 可能缺失，缺失时保留空串由界面决定是否展示。 */
+    private fun JSONObject.toAlbumSearchResult(): AlbumSearchResult = AlbumSearchResult(
+        source = optString("source").ifBlank { SEARCH_SOURCE_KUWO },
+        id = optLong("id"),
+        name = optString("name"),
+        pic = nullableString("pic"),
+        artist = optString("artist"),
+        artistId = optLong("artistId"),
+        songCount = optLong("songCount"),
+        showtime = optString("showtime"),
+    )
+
     private fun JSONObject.toProfile() = UserProfile(
         username = optString("username"),
         // org.json 会把 JSON null 读成字面字符串 "null"，必须先用 isNull 分支。
@@ -1697,6 +1753,49 @@ data class SearchResult(
     val hasMore: Boolean = false,
     val total: Int = 0,
     val page: Int = 1,
+)
+
+/**
+ * 搜索命中的歌手区块条目（NDJSON 的 `type:"artist"` 行）。
+ *
+ * 服务端仅在 `source=kuwo` 的搜索流里、所有歌曲行之前下发；整个区块缺失时界面
+ * 不渲染。与将来歌手详情页的模型刻意分开命名，避免两种生命周期的数据混用。
+ */
+data class ArtistSearchResult(
+    /** 所属音源；搜索区块目前只由酷我下发。 */
+    val source: String,
+    /** 音源内的歌手 ID，供将来的歌手主页使用。 */
+    val id: Long,
+    val name: String,
+    /** 头像地址；服务端可能下发空串，解析时已归一成 null。 */
+    val pic: String?,
+    /** 该歌手名下的歌曲总数。 */
+    val songCount: Long,
+    /** 该歌手名下的专辑总数。 */
+    val albumCount: Long,
+)
+
+/**
+ * 搜索命中的专辑区块条目（NDJSON 的 `type:"album"` 行）。
+ *
+ * 下发位置与 [ArtistSearchResult] 相同；专辑详情页尚未实现，当前只用于搜索页的横滑区块。
+ */
+data class AlbumSearchResult(
+    /** 所属音源；搜索区块目前只由酷我下发。 */
+    val source: String,
+    /** 音源内的专辑 ID，供将来的专辑页使用。 */
+    val id: Long,
+    val name: String,
+    /** 封面地址；服务端可能下发空串，解析时已归一成 null。 */
+    val pic: String?,
+    /** 主歌手名（服务端直接下发展示串）。 */
+    val artist: String,
+    /** 主歌手的音源 ID。 */
+    val artistId: Long,
+    /** 专辑收录的歌曲数。 */
+    val songCount: Long,
+    /** 发行日期，形如 `2026-03-25`；服务端可能缺失，缺失时为空串。 */
+    val showtime: String,
 )
 
 /**

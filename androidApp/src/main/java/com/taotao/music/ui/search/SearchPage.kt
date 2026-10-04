@@ -1,25 +1,30 @@
 package com.taotao.music.ui.search
 
+import com.taotao.music.ui.common.AlbumArt
 import com.taotao.music.ui.common.EmptyStateView
 import com.taotao.music.ui.common.MusicSearchBar
 import com.taotao.music.ui.common.SearchSkeletonList
 import com.taotao.music.ui.common.SongListItem
 import com.taotao.music.ui.common.dedupeSongs
 import com.taotao.music.ui.common.songKeyOf
+import com.taotao.music.ui.theme.AnimationDurations
 import com.taotao.music.ui.theme.TaotaoCoral
 import com.taotao.music.ui.theme.contentFadeIn
 import com.taotao.music.ui.theme.contentFadeOut
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.slideInVertically
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -27,6 +32,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
@@ -75,6 +82,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.toSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
+import com.taotao.music.data.AlbumSearchResult
+import com.taotao.music.data.ArtistSearchResult
 import com.taotao.music.data.TencentMusicApi
 import com.taotao.music.model.Song
 import com.taotao.music.playerui.SharedBackButton
@@ -95,6 +106,14 @@ import com.taotao.music.playerui.theme.TaotaoTypeScale
  * 流式布局也就失去了意义。
  */
 private val HistoryChipMaxWidth = 160.dp
+
+/**
+ * 「歌手」区块头像的边长。
+ *
+ * 刻意不进 [TaotaoSizes]：这是搜索区块的一次性视觉规格，现有头像档（64dp）与
+ * 网格封面档（112dp）都不合适；与 [HistoryChipMaxWidth] 一样按页面私有常量处理。
+ */
+private val ArtistAvatarSize = 72.dp
 
 /** 搜索页面：负责关键词输入、结果展示和异步状态过渡。 */
 @OptIn(ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
@@ -140,6 +159,14 @@ fun SearchPage(
     isLoadingMore: Boolean = false,
     hasMore: Boolean = false,
     total: Int = 0,
+    /** 搜索命中的歌手区块；空列表时不渲染对应区块，也不留占位。 */
+    artists: List<ArtistSearchResult> = emptyList(),
+    /** 搜索命中的专辑区块；空列表时不渲染对应区块，也不留占位。 */
+    albums: List<AlbumSearchResult> = emptyList(),
+    /** 点击歌手项；歌手主页尚未实现，由调用方决定反馈方式。 */
+    onArtistClick: (ArtistSearchResult) -> Unit = {},
+    /** 点击专辑项；专辑页尚未实现，由调用方决定反馈方式。 */
+    onAlbumClick: (AlbumSearchResult) -> Unit = {},
     /** 保留兼容当前调用链；搜索结果不再需要逐条入场状态。 */
     searchSession: Int = 0,
 ) {
@@ -257,7 +284,8 @@ fun SearchPage(
         // 骨架屏 / 错误 / 空态之间用淡入淡出切换，硬切会让内容"跳"一下。
         // 结果已经到了就不再显示骨架屏，否则骨架和结果会同时出现。
         AnimatedVisibility(
-            visible = isSearching && songs.isEmpty(),
+            // 歌手 / 专辑区块先于歌曲到达时也算「有内容」，骨架屏要让位，避免和区块叠在一起。
+            visible = isSearching && songs.isEmpty() && artists.isEmpty() && albums.isEmpty(),
             enter = contentFadeIn(),
             exit = contentFadeOut(),
             modifier = Modifier.semantics(mergeDescendants = true) {
@@ -280,7 +308,9 @@ fun SearchPage(
             )
         }
         AnimatedVisibility(
-            visible = hasSearched && !isSearching && songs.isEmpty() && errorMessage.isNullOrBlank(),
+            // 命中了区块但歌曲全被预筛掉时不弹空态：那仍是「搜到了」，继续显示区块。
+            visible = hasSearched && !isSearching && songs.isEmpty() && errorMessage.isNullOrBlank() &&
+                artists.isEmpty() && albums.isEmpty(),
             enter = contentFadeIn(),
             exit = contentFadeOut(),
         ) {
@@ -292,11 +322,14 @@ fun SearchPage(
         }
         if (hasSearched) {
             val listState = rememberLazyListState()
-            // 滚到距底部 6 项以内就预取下一页，等真滚到底再拉会有明显的空档。
-            val shouldLoadMore by remember(listState, songs.size) {
+            // 歌手 / 专辑区块各占列表顶部一个 item，预取阈值要把它们计入，
+            // 否则触发点会随区块出现而后移，「加载更多」就拉晚了。
+            val leadingItemCount = (if (artists.isNotEmpty()) 1 else 0) + (if (albums.isNotEmpty()) 1 else 0)
+            // 滚到距歌曲列表底部 6 项以内就预取下一页，等真滚到底再拉会有明显的空档。
+            val shouldLoadMore by remember(listState, songs.size, leadingItemCount) {
                 derivedStateOf {
                     val last = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: return@derivedStateOf false
-                    songs.isNotEmpty() && last >= songs.size - 6
+                    songs.isNotEmpty() && last >= songs.size - 6 + leadingItemCount
                 }
             }
             LaunchedEffect(shouldLoadMore) { if (shouldLoadMore) onLoadMore() }
@@ -306,6 +339,17 @@ fun SearchPage(
                 state = listState,
                 verticalArrangement = Arrangement.spacedBy(TaotaoSpacing.xs),
             ) {
+                // 歌手 / 专辑区块排在歌曲之前，随内容一起滚动；空区块直接不组合，不留空白。
+                if (artists.isNotEmpty()) {
+                    item(key = "search-artists", contentType = "artist-section") {
+                        ArtistSearchSection(artists = artists, onArtistClick = onArtistClick)
+                    }
+                }
+                if (albums.isNotEmpty()) {
+                    item(key = "search-albums", contentType = "album-section") {
+                        AlbumSearchSection(albums = albums, onAlbumClick = onAlbumClick)
+                    }
+                }
                 itemsIndexed(
                     songs,
                     // 与 dedupeSongs 的判重口径一致，所以这里的 key 必然唯一。
@@ -478,6 +522,137 @@ private fun SearchHistoryChips(
                         .padding(TaotaoSpacing.xxs)
                         .size(TaotaoSizes.iconXs),
                 )
+            }
+        }
+    }
+}
+
+/**
+ * 「歌手」搜索区块：标题 + 横向滚动的圆形头像列表。
+ *
+ * 只在列表非空时由结果列表组合；点击整项交给 [onArtistClick]，区块自身不感知
+ * 跳转目标，保持单向数据流。
+ */
+@Composable
+private fun ArtistSearchSection(
+    artists: List<ArtistSearchResult>,
+    onArtistClick: (ArtistSearchResult) -> Unit,
+) {
+    Column(Modifier.fillMaxWidth().padding(top = TaotaoSpacing.sm)) {
+        Text("歌手", style = TaotaoTypeScale.sectionTitle)
+        LazyRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(TaotaoSpacing.md),
+            contentPadding = PaddingValues(horizontal = TaotaoSpacing.xxs, vertical = TaotaoSpacing.xxs),
+        ) {
+            items(artists) { artist ->
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier
+                        .clip(TaotaoShapes.small)
+                        .clickable { onArtistClick(artist) }
+                        .padding(TaotaoSpacing.xs),
+                ) {
+                    ArtistSearchAvatar(name = artist.name, pic = artist.pic)
+                    Text(
+                        artist.name,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = TextAlign.Center,
+                        // 与头像同宽：名字过长时省略号收在头像宽度内，项与项之间不会互相挤压。
+                        modifier = Modifier.padding(top = TaotaoSpacing.xxs).width(ArtistAvatarSize),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 歌手头像：有图用图，无图回退为主题色圆形 + 名字首字符。
+ * 兜底思路与公共组件 [AlbumArt] 一致（图片淡入、色块占位），只是占位内容换成了首字符。
+ */
+@Composable
+private fun ArtistSearchAvatar(name: String, pic: String?) {
+    if (!pic.isNullOrBlank()) {
+        AsyncImage(
+            model = ImageRequest.Builder(LocalContext.current)
+                .data(pic)
+                .crossfade(AnimationDurations.FADE)
+                .build(),
+            contentDescription = "歌手头像",
+            modifier = Modifier.size(ArtistAvatarSize).clip(CircleShape),
+        )
+    } else {
+        Box(
+            Modifier
+                .size(ArtistAvatarSize)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.primaryContainer),
+            contentAlignment = Alignment.Center,
+        ) {
+            // 空名字几乎没有实际场景，但占位圆里也不能什么都不画。
+            Text(
+                name.firstOrNull()?.toString() ?: "?",
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                style = MaterialTheme.typography.titleLarge,
+            )
+        }
+    }
+}
+
+/**
+ * 「专辑」搜索区块：标题 + 横向滚动的圆角封面卡片。
+ * 只在列表非空时由结果列表组合；点击整项交给 [onAlbumClick]。
+ */
+@Composable
+private fun AlbumSearchSection(
+    albums: List<AlbumSearchResult>,
+    onAlbumClick: (AlbumSearchResult) -> Unit,
+) {
+    Column(Modifier.fillMaxWidth().padding(top = TaotaoSpacing.sm)) {
+        Text("专辑", style = TaotaoTypeScale.sectionTitle)
+        LazyRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(TaotaoSpacing.md),
+            contentPadding = PaddingValues(horizontal = TaotaoSpacing.xxs, vertical = TaotaoSpacing.xxs),
+        ) {
+            items(albums) { album ->
+                Column(
+                    modifier = Modifier
+                        .width(TaotaoSizes.artworkGrid)
+                        .clip(TaotaoShapes.small)
+                        .clickable { onAlbumClick(album) }
+                        .padding(bottom = TaotaoSpacing.xxs),
+                ) {
+                    // 封面直接复用全局 [AlbumArt]：112dp 高于列表行封面档，组件会按尺寸
+                    // 自动判成圆形，这里显式传圆角形状覆盖；无图时组件自带色块 + 音符兜底，
+                    // 颜色沿用歌曲行封面的占位色，整页观感一致。
+                    AlbumArt(
+                        color = Color(0xFFFFB4A2),
+                        size = TaotaoSizes.artworkGrid,
+                        imageUri = album.pic,
+                        shape = TaotaoShapes.artwork,
+                    )
+                    Text(
+                        album.name,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier
+                            .padding(top = TaotaoSpacing.xxs)
+                            .padding(horizontal = TaotaoSpacing.xxs),
+                    )
+                    Text(
+                        album.artist,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(horizontal = TaotaoSpacing.xxs),
+                    )
+                }
             }
         }
     }

@@ -174,15 +174,47 @@ export type Song = {
   refrainEndMs?: number;
 };
 
-export type SearchResult = { songs: Song[]; total: number; hasMore: boolean };
+/** 搜索结果里的歌手条目：仅酷我源下发，其他音源没有 artist 行；pic 可能为空。 */
+export type SearchArtist = {
+  source: string;
+  id: number;
+  name: string;
+  pic?: string;
+  songCount?: number;
+  albumCount?: number;
+};
 
-/** 搜索：/api/v1/search 返回裸 NDJSON（{type:"song",data} / {type:"end",meta}）。 */
+/** 搜索结果里的专辑条目：仅酷我源下发；pic/showtime 可能缺席或为空串。 */
+export type SearchAlbum = {
+  source: string;
+  id: number;
+  name: string;
+  artist?: string;
+  artistId?: number;
+  pic?: string;
+  songCount?: number;
+  showtime?: string;
+};
+
+export type SearchResult = {
+  songs: Song[];
+  /** 歌手/专辑区块：仅酷我源才有，其他情况为空数组（界面据此整块不渲染） */
+  artists: SearchArtist[];
+  albums: SearchAlbum[];
+  total: number;
+  hasMore: boolean;
+};
+
+/** 搜索：/api/v1/search 返回裸 NDJSON（{type:"song",data} / {type:"artist"|"album",data} /
+ *  {type:"end",meta}）；artist/album 行只由酷我源下发，且出现在所有 song 行之前。 */
 export async function searchSongs(keyword: string, page = 1): Promise<SearchResult> {
   const q = new URLSearchParams({ keyword, page: String(page), num: "60", quality: "4", source: "kuwo" });
   const resp = await authedGet(`/api/v1/search?${q}`, "application/x-ndjson, application/json");
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   const text = await resp.text();
   const songs: Song[] = [];
+  const artists: SearchArtist[] = [];
+  const albums: SearchAlbum[] = [];
   // 末行 end.meta 携带总数与是否还有下一页；解析不到时按"没有更多"处理
   let metaTotal: number | null = null;
   let metaHasMore = false;
@@ -214,6 +246,34 @@ export async function searchSongs(keyword: string, page = 1): Promise<SearchResu
           refrainEndMs: refrainEndMs > 0 ? refrainEndMs : undefined,
         });
       }
+    } else if (rec?.type === "artist" && rec.data) {
+      // 歌手行：仅酷我源下发；id 非正视为脏数据丢弃，pic 空串归一成 undefined
+      const d = rec.data;
+      if (Number(d.id) > 0) {
+        artists.push({
+          source: d.source || "kuwo",
+          id: Number(d.id),
+          name: d.name || "未知歌手",
+          pic: d.pic || undefined,
+          songCount: Number(d.songCount) || undefined,
+          albumCount: Number(d.albumCount) || undefined,
+        });
+      }
+    } else if (rec?.type === "album" && rec.data) {
+      // 专辑行：同歌手行，只认正 id；showtime/artist 缺席时键归 undefined
+      const d = rec.data;
+      if (Number(d.id) > 0) {
+        albums.push({
+          source: d.source || "kuwo",
+          id: Number(d.id),
+          name: d.name || "未知专辑",
+          artist: d.artist || undefined,
+          artistId: Number(d.artistId) || undefined,
+          pic: d.pic || undefined,
+          songCount: Number(d.songCount) || undefined,
+          showtime: d.showtime || undefined,
+        });
+      }
     } else if (rec?.type === "end" && rec.meta) {
       metaTotal = Number(rec.meta.total);
       metaHasMore = rec.meta.hasMore === true;
@@ -221,6 +281,8 @@ export async function searchSongs(keyword: string, page = 1): Promise<SearchResu
   }
   return {
     songs,
+    artists,
+    albums,
     total: metaTotal !== null && Number.isFinite(metaTotal) ? metaTotal : songs.length,
     hasMore: metaHasMore,
   };

@@ -4,6 +4,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.taotao.music.data.AlbumSearchResult
+import com.taotao.music.data.ArtistSearchResult
 import com.taotao.music.data.FavoritesStore
 import com.taotao.music.data.QualityStore
 import com.taotao.music.data.SearchHistoryStore
@@ -47,11 +49,19 @@ internal class SearchState(
     var historyEnabled by mutableStateOf(historyStore.isEnabled())
     var suggestions by mutableStateOf(emptyList<String>())
     var hotSearches by mutableStateOf(emptyList<TencentMusicApi.HotSearchItem>())
+    /**
+     * 搜索命中的歌手 / 专辑区块（仅酷我音源下发）。
+     * 每次新搜索整体替换而不是追加；第 2 页起服务端不再下发，翻页不会改写它们。
+     */
+    var searchArtists by mutableStateOf(emptyList<ArtistSearchResult>())
+    var searchAlbums by mutableStateOf(emptyList<AlbumSearchResult>())
 
     /** 打开搜索页时重置结果区；页面开关本身由全局状态管理。 */
     fun openPage() {
         generation += 1
         results = emptyList()
+        searchArtists = emptyList()
+        searchAlbums = emptyList()
         hasSearched = false
         isSearching = false
         error = null
@@ -66,6 +76,8 @@ internal class SearchState(
         keyword = value
         hasSearched = false
         results = emptyList()
+        searchArtists = emptyList()
+        searchAlbums = emptyList()
         error = null
     }
 
@@ -88,6 +100,8 @@ internal class SearchState(
             isSearching = true
             error = null
             results = emptyList()
+            searchArtists = emptyList()
+            searchAlbums = emptyList()
             page = 1
             hasMore = false
             val result = runCatching {
@@ -96,6 +110,16 @@ internal class SearchState(
                         query,
                         quality = qualityStore.playbackQuality().value,
                         source = TencentMusicApi.SEARCH_SOURCE_KUWO,
+                        // 歌手 / 专辑区块在所有歌曲行之前一次性回调。与歌曲一样整体替换，
+                        // 401 重放时旧内容会被同样的新内容覆盖，不会累积重复。
+                        onSections = { foundArtists, foundAlbums ->
+                            scope.launch {
+                                if (requestGeneration == generation) {
+                                    searchArtists = foundArtists
+                                    searchAlbums = foundAlbums
+                                }
+                            }
+                        },
                     ) { partial ->
                         // 服务端逐行下发，这里收到一首就渲染一首。切回主线程赋值，
                         // 并再次校验代次：期间用户可能已经发起了新搜索。
@@ -139,6 +163,8 @@ internal class SearchState(
                         page = nextPage,
                         quality = qualityStore.playbackQuality().value,
                         source = TencentMusicApi.SEARCH_SOURCE_KUWO,
+                        // 翻页刻意不接 onSections：区块只属于第 1 页，第 2 页起服务端不再
+                        // 下发，默认回调（空列表）反而会把第 1 页已经渲染的区块清掉。
                     ) { partial ->
                         scope.launch { if (requestGeneration == generation) results = dedupeSongs(base + partial) }
                     }

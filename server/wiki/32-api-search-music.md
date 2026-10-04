@@ -2,7 +2,7 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-10-02
+最后更新:2026-10-04
 
 本文覆盖搜索联想、热搜、NDJSON 搜索、播放地址、播放代理、歌词和 MV 信息。上游协议适配的内部结构见 [11-architecture-modules.md](11-architecture-modules.md) 的 `upstream/` 一节;音源账号对播放链路的影响见 [53-feature-music-sources.md](53-feature-music-sources.md)。排障见 [72-troubleshooting-music.md](72-troubleshooting-music.md)。
 
@@ -66,11 +66,23 @@ GET /api/v1/search?keyword=周杰伦&page=1&num=60&quality=10
 Authorization: Bearer <accessToken>
 ```
 
-响应是**裸 NDJSON**,不是信封。每首歌一行:
+响应是**裸 NDJSON**,不是信封。行序固定为 **artist 行 → album 行 → song 行 → end 行**。每首歌一行:
 
 ```json
 {"type":"song","data":{"id":97773,"mid":"...","favorited":false,"vip":false,"playable":true}}
 ```
+
+song 行之前可以出现两类先行行(单音源模式且该音源支持时):
+
+```json
+{"type":"artist","data":{"source":"kuwo","id":336,"name":"周杰伦","pic":"https://...","songCount":1750,"albumCount":49}}
+{"type":"album","data":{"source":"kuwo","id":87758985,"name":"太阳之子","pic":"https://...","artist":"周杰伦","artistId":336,"songCount":13,"showtime":"2026-03-25"}}
+```
+
+- 仅当 `source` 指定**单个音源**、且该音源的上游适配器实现了歌手/专辑搜索时输出,且**只在第 1 页**输出(翻页不重复下发,客户端翻页时保留第 1 页的区块即可);当前只有 `kuwo`(波点)支持。`source=all` 聚合模式一律没有这两类行(聚合的腾讯/网易没有该能力,多源同名义歌手去重也刻意不做)。
+- artist 行最多 3 条,album 行最多 6 条;`data.source` 是当前请求的音源名。
+- 上游歌手/专辑搜索失败或召回为空时**整段省略**(不输出空行、不占位),song 行照常下发;客户端对未知 `type` 静默跳过,旧版本不受影响。开放接口 `/open/search/stream` 与本接口同格式,同样适用。
+- `songCount` / `albumCount` 是归一化后的字段名(上游叫 `songNum` / `albumNum` / `musicCount`,出流前统一改名);`showtime`(发行日期)与 `pic` 上游可能缺失或为空串。
 
 末行(`meta` 为完整形状,旧客户端读不到多出的字段不受影响):
 

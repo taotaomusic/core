@@ -452,6 +452,11 @@ private fun SearchPageRoute(state: TaotaoAppState) {
         isLoadingMore = state.search.isLoadingMore,
         hasMore = state.search.hasMore,
         total = state.search.total,
+        artists = state.search.searchArtists,
+        albums = state.search.searchAlbums,
+        // 歌手 / 专辑详情页尚未实现：点击统一弹全局提示（TaotaoSnackbar），不做静默。
+        onArtistClick = { state.message = "歌手主页开发中，敬请期待" },
+        onAlbumClick = { state.message = "专辑页开发中，敬请期待" },
         searchSession = state.search.generation,
     )
 }

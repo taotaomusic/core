@@ -41,17 +41,38 @@ export interface Song {
   playable?: boolean;
 }
 
+/**
+ * 搜索结果里的一名歌手。字段来自 `search/artist/list` 的 resultList 条目。
+ *
+ * 字段名就是 `/search` NDJSON 的**下发契约名**：上游的 `songNum` / `albumNum`
+ * 在 [BodianClient.searchArtists] 里就地改名，调用方不必再做一层翻译。
+ */
 export interface Artist {
   id: number;
   name: string;
-  songs: number;
-  albums: number;
+  /** 封面绝对地址。上游可能给空串。 */
+  pic: string;
+  songCount: number;
+  albumCount: number;
 }
 
+/**
+ * 搜索结果里的一张专辑。字段来自 `search/album/list` 的 resultList 条目。
+ *
+ * 上游条目里还有一条**体积很大的 `info`**（专辑简介，单条可达几十 KB），映射时
+ * **刻意丢弃** —— 列表展示用不到它，透传只会白白撑大搜索响应。
+ */
 export interface Album {
   id: number;
   name: string;
+  /** 封面绝对地址。上游可能给空串。 */
+  pic: string;
   artist: string;
+  artistId: number;
+  /** 收录歌曲数。上游叫 `musicCount`，出流前统一改名为 `songCount`。 */
+  songCount: number;
+  /** 发行日期（例如 `2026-03-25`）。上游可能缺失或空串。 */
+  showtime: string;
 }
 
 export interface Playlist {
@@ -857,22 +878,35 @@ export class BodianClient {
     }));
   }
 
+  /**
+   * 歌手搜索。上游的 `songNum` / `albumNum` 在这里就地改成契约名
+   * `songCount` / `albumCount`；`pic` 原样透传（可能为空串）。
+   */
   async searchArtists(keyword: string, page: number = 1, size: number = 5): Promise<Artist[]> {
     const d = await this.signedGet(`${BASE_URL}search/artist/list`, { pn: this.upstreamPage(page), rn: size, keyword });
     return (d.data?.resultList || []).map((s: any) => ({
-      id: s.artistId,
-      name: s.name,
-      songs: s.songNum || 0,
-      albums: s.albumNum || 0,
+      id: Number(s.artistId),
+      name: String(s.name ?? ""),
+      pic: String(s.pic ?? ""),
+      songCount: Number(s.songNum) || 0,
+      albumCount: Number(s.albumNum) || 0,
     }));
   }
 
+  /**
+   * 专辑搜索。上游的 `musicCount` 改名为契约的 `songCount`，`pic` / `showtime`
+   * 原样透传（都可能缺失或为空串）；超长的 `info` 简介与 `artists` 数组**不映射**，直接丢弃。
+   */
   async searchAlbums(keyword: string, page: number = 1, size: number = 5): Promise<Album[]> {
     const d = await this.signedGet(`${BASE_URL}search/album/list`, { pn: this.upstreamPage(page), rn: size, keyword });
     return (d.data?.resultList || []).map((s: any) => ({
-      id: s.albumId || s.id,
-      name: s.name,
-      artist: s.artist,
+      id: Number(s.albumId || s.id),
+      name: String(s.name ?? ""),
+      pic: String(s.pic ?? ""),
+      artist: String(s.artist ?? ""),
+      artistId: Number(s.artistId) || 0,
+      songCount: Number(s.musicCount) || 0,
+      showtime: String(s.showtime ?? ""),
     }));
   }
 

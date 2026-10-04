@@ -81,6 +81,41 @@ export const AGGREGATED_SOURCES: readonly MusicSource[] = ["tencent", "netease"]
 export type SongKey = { id?: number; mid?: string; type?: number };
 
 /**
+ * `/search` 流里歌手行（`type: "artist"`）的 data。
+ *
+ * 字段名就是**下发契约名** —— 上游的 `songNum` / `albumNum` 必须在适配器里就地改成
+ * `songCount` / `albumCount`，出流后不再有第二层改名。唯独 `source` 不在这里：
+ * 它由 SearchService 按当前请求的音源统一补上。
+ */
+export interface UpstreamArtist {
+  id: number;
+  name: string;
+  /** 封面绝对地址。上游可能给空串。 */
+  pic: string;
+  songCount: number;
+  albumCount: number;
+}
+
+/**
+ * `/search` 流里专辑行（`type: "album"`）的 data。命名约定同 [UpstreamArtist]。
+ *
+ * 上游条目里还有一条**体积很大的 `info`**（专辑简介，单条可达几十 KB），对列表展示
+ * 毫无用处，适配器映射时**必须丢弃** —— 透传只会白白撑大搜索响应。
+ */
+export interface UpstreamAlbum {
+  id: number;
+  name: string;
+  /** 封面绝对地址。上游可能给空串。 */
+  pic: string;
+  artist: string;
+  artistId: number;
+  /** 收录歌曲数。上游叫 `musicCount`。 */
+  songCount: number;
+  /** 发行日期（例如 `2026-03-25`）。上游可能缺失或空串。 */
+  showtime: string;
+}
+
+/**
  * 一个音源适配器必须提供的能力。
  *
  * 抽这个接口的直接动机：在此之前「选哪个上游」是散在 6 个地方的
@@ -130,6 +165,18 @@ export interface MusicSourceClient {
     searchType: number;
     jumpUrl: string;
   }>>;
+
+  /**
+   * 歌手搜索，产出 `/search` 流的 artist 行。只有上游提供该能力时才实现；
+   * 调用方必须先判断方法存在。条数上限由调用方控制，返回值保持上游排序。
+   */
+  searchArtists?(keyword: string, limit: number): Promise<UpstreamArtist[]>;
+
+  /**
+   * 专辑搜索，产出 `/search` 流的 album 行。只有上游提供该能力时才实现；
+   * 调用方必须先判断方法存在。条数上限由调用方控制，返回值保持上游排序。
+   */
+  searchAlbums?(keyword: string, limit: number): Promise<UpstreamAlbum[]>;
 
   /** 单曲信息与**真实可用**的音质档位。 */
   requestSongInfo(key: SongKey): Promise<UpstreamSongInfo>;

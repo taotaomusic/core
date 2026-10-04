@@ -273,6 +273,120 @@
   text-overflow: ellipsis;
 }
 
+/* ---- 搜索结果的歌手/专辑横排（仅酷我源下发；无数据时整块不渲染、不占位） ---- */
+/* 区块容器：钉在歌曲列表上方，自身不滚动，横向滚动发生在 .sp-hscroll 内 */
+.sp-strips {
+  flex: none;
+  padding: 0 18px 4px;
+}
+/* 横向滚动行：单行不换行，右端留一点收尾空隙 */
+.sp-hscroll {
+  display: flex;
+  gap: 16px;
+  overflow-x: auto;
+  padding: 4px 2px 8px;
+}
+.sp-hscroll > * { flex: none; }
+
+/* 歌手项：64px 圆头像 + 名字（单行省略）+ 歌曲数，hover 抬升 + 名字显珊瑚色 */
+.sp-artist-item {
+  width: 84px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 4px 8px;
+  border-radius: 10px;
+  cursor: pointer;
+  user-select: none;
+  transition: background .15s, transform .1s;
+}
+.sp-artist-item:hover { background: var(--coral-tint-soft); transform: translateY(-1px); }
+.sp-artist-item:active { transform: translateY(0); }
+.sp-artist-avatar {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  overflow: hidden;
+  background: var(--coral-tint);
+  display: grid;
+  place-items: center;
+  box-shadow: var(--shadow-sm);
+}
+.sp-artist-avatar img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.sp-artist-initial { font-size: 22px; font-weight: 700; color: var(--coral); }
+.sp-artist-meta {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+.sp-artist-name {
+  max-width: 100%;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sp-artist-item:hover .sp-artist-name { color: var(--coral); }
+.sp-artist-sub { font-size: 11px; color: var(--muted); }
+
+/* 专辑项：112px 圆角封面 + 专辑名（两行省略）+ 歌手名小字 */
+.sp-album-item {
+  width: 124px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 6px 8px;
+  border-radius: 10px;
+  cursor: pointer;
+  user-select: none;
+  transition: background .15s, transform .1s;
+}
+.sp-album-item:hover { background: var(--coral-tint-soft); transform: translateY(-1px); }
+.sp-album-item:active { transform: translateY(0); }
+.sp-album-cover {
+  width: 112px;
+  height: 112px;
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--coral-tint);
+  display: grid;
+  place-items: center;
+  box-shadow: var(--shadow-sm);
+}
+.sp-album-cover img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.sp-album-cover .note { color: var(--coral); font-size: 26px; opacity: .85; }
+.sp-album-name {
+  font-size: 13px;
+  line-height: 1.35;
+  /* 两行省略：line-clamp 在 Chromium 系 webview（WebView2）下可用 */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+.sp-album-item:hover .sp-album-name { color: var(--coral); }
+.sp-album-artist {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* ---- 加载骨架屏：6 行占位 + 渐变动画 ---- */
 .sp-skel-row {
   display: flex;
