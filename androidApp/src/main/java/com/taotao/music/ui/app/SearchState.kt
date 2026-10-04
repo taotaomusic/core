@@ -120,11 +120,14 @@ internal class SearchState(
                                 }
                             }
                         },
-                    ) { partial ->
-                        // 服务端逐行下发，这里收到一首就渲染一首。切回主线程赋值，
-                        // 并再次校验代次：期间用户可能已经发起了新搜索。
-                        scope.launch { if (requestGeneration == generation) results = dedupeSongs(partial) }
-                    }
+                        // 进度回调必须点名传递：search 的**最后一个**参数是 onSections，
+                        // 尾随 lambda 会绑定到它而不是 onProgress。
+                        onProgress = { partial ->
+                            // 服务端逐行下发，这里收到一首就渲染一首。切回主线程赋值，
+                            // 并再次校验代次：期间用户可能已经发起了新搜索。
+                            scope.launch { if (requestGeneration == generation) results = dedupeSongs(partial) }
+                        },
+                    )
                 }
             }
             // 请求返回后再次校验代次：期间用户可能已经发起新搜索或退出搜索页，旧结果不应覆盖新状态。
@@ -165,9 +168,11 @@ internal class SearchState(
                         source = TencentMusicApi.SEARCH_SOURCE_KUWO,
                         // 翻页刻意不接 onSections：区块只属于第 1 页，第 2 页起服务端不再
                         // 下发，默认回调（空列表）反而会把第 1 页已经渲染的区块清掉。
-                    ) { partial ->
-                        scope.launch { if (requestGeneration == generation) results = dedupeSongs(base + partial) }
-                    }
+                        // 进度回调同样点名传递，理由见 [start]。
+                        onProgress = { partial ->
+                            scope.launch { if (requestGeneration == generation) results = dedupeSongs(base + partial) }
+                        },
+                    )
                 }
             }
             if (requestGeneration != generation) return@launch
