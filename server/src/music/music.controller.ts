@@ -5,9 +5,11 @@ import { CurrentUser } from "../common/decorators/current-user.decorator";
 import { RawResponse } from "../common/decorators/raw-response.decorator";
 import type { SessionUser } from "../common/request.types";
 import { AppConfigService } from "../config/app-config.service";
+import { FavoritesRepository } from "../favorites/favorites.repository";
 import { MUSIC_SOURCES } from "../upstream/music-source.client";
 import type { MusicSource, SongKey } from "../upstream/music-source.client";
 import { MusicSourceRegistry } from "../upstream/music-source.registry";
+import type { UpstreamSong } from "../upstream/tencent.client";
 import type { SearchSource } from "./search.service";
 import { SearchService } from "./search.service";
 import { SongMapper } from "./song.mapper";
@@ -19,6 +21,10 @@ const MAX_PAGE_SIZE = 60;
 const MAX_INFO_BATCH_SIZE = 60;
 const DEFAULT_SUGGESTION_SIZE = 10;
 const MAX_SUGGESTION_SIZE = 20;
+/** 歌手/专辑详情的歌曲列表默认条数，与对外契约示例（`?num=30`）一致。 */
+const DEFAULT_DETAIL_SONG_PAGE_SIZE = 30;
+/** 歌手专辑列表默认条数，与对外契约示例（`?num=20`）一致。 */
+const DEFAULT_DETAIL_ALBUM_PAGE_SIZE = 20;
 
 /**
  * 搜索、播放与歌词。
@@ -38,6 +44,7 @@ export class MusicController {
     private readonly stream: StreamService,
     private readonly registry: MusicSourceRegistry,
     private readonly mapper: SongMapper,
+    private readonly favorites: FavoritesRepository,
   ) {}
 
   /**
@@ -103,6 +110,185 @@ export class MusicController {
       this.playBaseOf(request),
       this.searchSourceOf(source),
     );
+  }
+
+  // ---------- 歌手与专辑详情（2026-10 新增）----------
+  //
+  // 数据来源是 `/search` 流里的 artist / album 行：客户端拿到 `source` + `id` 后回这里
+  // 取详情与列表。六条路由全部要登录（未标 @Public，走全局访问令牌守卫），`source`
+  // 缺省 kuwo —— 这两族详情当前只有酷我（波点）提供；`source=all` 一律 4001 拒绝
+  // （详情必须有确定的音源，聚合模式没有单一 client 可分派，见 [detailSourceOf]）。
+  //
+  // 列表统一 `{page, num, total, hasMore}` 分页信封：`total` 用上游给的**整表总数**，
+  // 不拿本页条数凑数（整倍数页会把「有下一页」误判成「没有」），
+  // `hasMore = page * num < total`。歌曲列表的每一项与 `/search` 的 song data
+  // **完全同构**（走 [SongMapper.toSong] 同一条链路），客户端原样复用歌曲行组件。
+
+  /**
+   * 歌手详情。`data.artist` 的字段就是下发契约名 —— 协议层已把上游的
+   * `fansCnt` / `musicCnt` / `albumCnt` 改成 `fansCount` / `musicCount` / `albumCount`；
+   * `guardDesc`（守护标语）与 `isshowtype`（上游展示开关）是波点运营内容，不透传。
+   */
+  @Get("artists/:id")
+  async artistInfo(
+    @Param("id") id?: string,
+    @Query("source") source?: string,
+  ) {
+    const client = this.registry.of(this.detailSourceOf(source));
+    if (!client.getArtistInfo) {
+      throw ApiErrors.badRequest(4007, `${client.displayName}不支持歌手详情`);
+    }
+    const artist = await client.getArtistInfo(this.detailIdOf(id, "歌手"));
+    if (!artist) throw ApiErrors.upstream("歌手详情不可用");
+    // data.source 是契约字段，适配器不含它，与 /search 的实体行同一套补法。
+    return { artist: { ...artist, source: client.source } };
+  }
+
+  /**
+   * 歌手的歌曲列表。每项与 `/search` 的 song data 完全同构：playBase 拼自家播放地址、
+   * quality 归一、mid/type 下发、favorited 批量查询，全部照抄 search 的现有做法
+   * （见 [toClientSongs]）。上游的整表总数放在 `meta.total`，翻页判断客户端自己做。
+   */
+  @Get("artists/:id/songs")
+  async artistSongs(
+    @Req() request: Request,
+    @CurrentUser() user: SessionUser,
+    @Param("id") id?: string,
+    @Query("page") page?: string,
+    @Query("num") num?: string,
+    @Query("quality") quality?: string,
+    @Query("source") source?: string,
+  ) {
+    const selectedSource = this.detailSourceOf(source);
+    const client = this.registry.of(selectedSource);
+    if (!client.getArtistSongs) {
+      throw ApiErrors.badRequest(4007, `${client.displayName}不支持歌手歌曲列表`);
+    }
+    const resolvedPage = this.positiveIntOr(page, 1);
+    const resolvedNum = Math.min(MAX_PAGE_SIZE, this.positiveIntOr(num, DEFAULT_DETAIL_SONG_PAGE_SIZE));
+    const detail = await client.getArtistSongs(this.detailIdOf(id, "歌手"), resolvedPage, resolvedNum);
+    return {
+      songs: await this.toClientSongs(
+        request,
+        user,
+        selectedSource,
+        detail.songs,
+        this.mapper.qualityOf(quality),
+      ),
+      meta: {
+        page: resolvedPage,
+        num: resolvedNum,
+        total: detail.total,
+        hasMore: resolvedPage * resolvedNum < detail.total,
+      },
+    };
+  }
+
+  /**
+   * 歌手的专辑列表。行形状与 `/search` 的 album 行同构（上游的 `musicCount` 已在
+   * 协议层改成 `songCount`，超长 `info` 简介与 `lastPlayTime` / `isshow` 照旧丢弃）。
+   */
+  @Get("artists/:id/albums")
+  async artistAlbums(
+    @Param("id") id?: string,
+    @Query("page") page?: string,
+    @Query("num") num?: string,
+    @Query("source") source?: string,
+  ) {
+    const selectedSource = this.detailSourceOf(source);
+    const client = this.registry.of(selectedSource);
+    if (!client.getArtistAlbums) {
+      throw ApiErrors.badRequest(4007, `${client.displayName}不支持歌手专辑列表`);
+    }
+    const resolvedPage = this.positiveIntOr(page, 1);
+    const resolvedNum = Math.min(MAX_PAGE_SIZE, this.positiveIntOr(num, DEFAULT_DETAIL_ALBUM_PAGE_SIZE));
+    const detail = await client.getArtistAlbums(this.detailIdOf(id, "歌手"), resolvedPage, resolvedNum);
+    return {
+      // data.source 是契约字段，适配器不含它，由这里按当前音源统一补上。
+      albums: detail.albums.map((album) => ({ ...album, source: selectedSource })),
+      meta: {
+        page: resolvedPage,
+        num: resolvedNum,
+        total: detail.total,
+        hasMore: resolvedPage * resolvedNum < detail.total,
+      },
+    };
+  }
+
+  /**
+   * 相似歌手。不分页 —— 详情页只展示一排，翻页没有界面承载。行形状与
+   * `/search` 的 artist 行同构，顺序保持上游返回。
+   */
+  @Get("artists/:id/similar")
+  async similarArtists(
+    @Param("id") id?: string,
+    @Query("source") source?: string,
+  ) {
+    const client = this.registry.of(this.detailSourceOf(source));
+    if (!client.getSimilarArtists) {
+      throw ApiErrors.badRequest(4007, `${client.displayName}不支持相似歌手`);
+    }
+    const artists = await client.getSimilarArtists(this.detailIdOf(id, "歌手"));
+    // data.source 是契约字段，适配器不含它，由这里按当前音源统一补上。
+    return { artists: artists.map((artist) => ({ ...artist, source: client.source })) };
+  }
+
+  /**
+   * 专辑详情。这是唯一保留上游长简介的对外契约：`data.album.desc` 就是上游的
+   * `info`（列表行照旧丢弃它），专辑详情页要整段展示。
+   */
+  @Get("albums/:id")
+  async albumInfo(
+    @Param("id") id?: string,
+    @Query("source") source?: string,
+  ) {
+    const client = this.registry.of(this.detailSourceOf(source));
+    if (!client.getAlbumInfo) {
+      throw ApiErrors.badRequest(4007, `${client.displayName}不支持专辑详情`);
+    }
+    const album = await client.getAlbumInfo(this.detailIdOf(id, "专辑"));
+    if (!album) throw ApiErrors.upstream("专辑详情不可用");
+    // data.source 是契约字段，适配器不含它，与 /search 的实体行同一套补法。
+    return { album: { ...album, source: client.source } };
+  }
+
+  /**
+   * 专辑的歌曲列表。条目映射、收藏批量查询与分页信封同 [artistSongs]，
+   * 只是数据源端点与路径参数不同。
+   */
+  @Get("albums/:id/songs")
+  async albumSongs(
+    @Req() request: Request,
+    @CurrentUser() user: SessionUser,
+    @Param("id") id?: string,
+    @Query("page") page?: string,
+    @Query("num") num?: string,
+    @Query("quality") quality?: string,
+    @Query("source") source?: string,
+  ) {
+    const selectedSource = this.detailSourceOf(source);
+    const client = this.registry.of(selectedSource);
+    if (!client.getAlbumSongs) {
+      throw ApiErrors.badRequest(4007, `${client.displayName}不支持专辑歌曲列表`);
+    }
+    const resolvedPage = this.positiveIntOr(page, 1);
+    const resolvedNum = Math.min(MAX_PAGE_SIZE, this.positiveIntOr(num, DEFAULT_DETAIL_SONG_PAGE_SIZE));
+    const detail = await client.getAlbumSongs(this.detailIdOf(id, "专辑"), resolvedPage, resolvedNum);
+    return {
+      songs: await this.toClientSongs(
+        request,
+        user,
+        selectedSource,
+        detail.songs,
+        this.mapper.qualityOf(quality),
+      ),
+      meta: {
+        page: resolvedPage,
+        num: resolvedNum,
+        total: detail.total,
+        hasMore: resolvedPage * resolvedNum < detail.total,
+      },
+    };
   }
 
   /**
@@ -369,5 +555,79 @@ export class MusicController {
   private searchSourceOf(value: string | undefined): SearchSource {
     if (value === undefined || value === "" || value === "all") return "all";
     return this.sourceOf(value);
+  }
+
+  /**
+   * 歌手/专辑详情族的音源解析。缺省 kuwo —— 这两族详情当前只有酷我（波点）提供，
+   * 而且客户端是从 `/search` 的 artist / album 行（必带 source）跳过来的，
+   * 缺省值只服务于手工调试。`source=all` 由 [sourceOf] 4001 拒绝：详情必须有
+   * 确定的音源，聚合模式没有单一 client 可分派。
+   */
+  private detailSourceOf(value: string | undefined): MusicSource {
+    const trimmed = value?.trim();
+    return this.sourceOf(trimmed ? trimmed : "kuwo");
+  }
+
+  /**
+   * 详情族的路径 ID 校验：必须是正整数，否则 4001。
+   *
+   * **不能像单曲接口那样套 `ParseIntPipe`**：它抛的是框架异常，统一异常过滤按状态码
+   * 推导成 4005，而这族接口的契约钉死 4001（与未知音源同一个码，客户端按同一套
+   * 「参数不合法」提示处理）。空串、负数、小数、非数字一律拦在这里。
+   */
+  private detailIdOf(value: string | undefined, label: string): number {
+    const parsed = Number(value);
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+      throw ApiErrors.badRequest(4001, `${label}必须提供正整数 ID`);
+    }
+    return parsed;
+  }
+
+  /**
+   * 把上游歌曲列表映射成与 `/search` 的 song data 完全同构的客户端模型。
+   *
+   * 收藏批量查询、playBase、quality 与身份选择**逐行照抄 search**（[SearchService.stream]）：
+   * - favorited 走 [FavoritesRepository.favoritedIds] 一次查完本页全部 ID，
+   *   绝不逐首查库；
+   * - 无用户身份时整段跳过查询，favorited 全 false（绝不能把 undefined 传进 SQL）；
+   * - 身份优先正数字 ID、缺了退回 mid，与收藏/队列共用同一稳定身份。
+   */
+  private async toClientSongs(
+    request: Request,
+    user: SessionUser | undefined,
+    source: MusicSource,
+    items: UpstreamSong[],
+    quality: number,
+  ): Promise<Array<ReturnType<SongMapper["toSong"]>>> {
+    const client = this.registry.of(source);
+    const favorited = user === undefined
+      ? new Set<string>()
+      : await this.favorites.favoritedIds(
+          user.id,
+          source,
+          items.flatMap((item) => {
+            const identity = this.songIdentityOf(item);
+            return identity ? [identity] : [];
+          }),
+        );
+    return items.map((item) => {
+      const identity = this.songIdentityOf(item);
+      return this.mapper.toSong(
+        item,
+        this.playBaseOf(request),
+        quality,
+        identity !== undefined && favorited.has(identity),
+        source,
+        !client.numericIdOnly,
+      );
+    });
+  }
+
+  /** 收藏与队列使用同一稳定身份：优先正数字 ID，否则退回上游 mid。与 search 的 identityOf 同一套。 */
+  private songIdentityOf(item: UpstreamSong): string | undefined {
+    const id = Number(item.songID);
+    if (Number.isInteger(id) && id > 0) return String(id);
+    const mid = String(item.songMID ?? "").trim();
+    return mid || undefined;
   }
 }

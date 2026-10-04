@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import brandIcon from "../../src-tauri/icons/icon.png";
+import { AlbumPage, type AlbumTarget } from "./AlbumPage";
+import { ArtistPage, type ArtistTarget } from "./ArtistPage";
 import { FavoritesPage } from "./FavoritesPage";
 import { PlayerBar } from "./PlayerBar";
 import { PlayerDetail } from "./PlayerDetail";
@@ -7,7 +9,7 @@ import { PlaylistsPage } from "./PlaylistsPage";
 import { RecentPage } from "./RecentPage";
 import { SearchPage } from "./SearchPage";
 
-type Page = "search" | "playlists" | "recent" | "favorites";
+type Page = "search" | "playlists" | "recent" | "favorites" | "artist" | "album";
 
 /** 页面退场动画时长（毫秒），与 App.css 里 .page-exit 的 0.15s 对齐。 */
 const PAGE_EXIT_MS = 150;
@@ -72,9 +74,14 @@ function NavIcon({ kind }: { kind: "search" | "playlists" | "recent" | "heart" |
 /**
  * 登录后的主界面：左侧导航（搜索 / 歌单 / 最近播放 / 我的收藏）+ 内容区 + 底部播放条 + 全屏播放详情。
  * 各页面常驻挂载、用 CSS 隐藏切换，保留各自的搜索结果与滚动位置。
+ * 歌手主页 / 专辑页是从搜索页进入的二级页面（同属「搜索」导航项）：不设侧边栏按钮，
+ * 由搜索横排点击打开并携带目标身份，页内「返回」键回到搜索页；歌手页 ↔ 专辑页可互相跳转。
  */
 export function MainScreen({ onLogout }: { onLogout: () => void }) {
   const [page, setPage] = useState<Page>("search");
+  // 歌手主页 / 专辑页当前展示的目标：null 表示尚未打开过（页面隐藏为空壳）
+  const [artistTarget, setArtistTarget] = useState<ArtistTarget | null>(null);
+  const [albumTarget, setAlbumTarget] = useState<AlbumTarget | null>(null);
   // 正在退场的页面：切换时旧页短暂保留播退场动画，到点后归位隐藏（页面始终常驻挂载）
   const [exiting, setExiting] = useState<Page | null>(null);
   // 退场计时器句柄：快速连点时先清旧的再设新的，exiting 直接被新值覆盖，不排队
@@ -99,6 +106,26 @@ export function MainScreen({ onLogout }: { onLogout: () => void }) {
     }, PAGE_EXIT_MS);
   }
 
+  /** 打开歌手主页：携带搜索横排/专辑页传入的目标身份；已在歌手页时仅换目标不重播动画。 */
+  function openArtist(target: ArtistTarget) {
+    setArtistTarget(target);
+    switchPage("artist");
+  }
+
+  /** 打开专辑页：同上。 */
+  function openAlbum(target: AlbumTarget) {
+    setAlbumTarget(target);
+    switchPage("album");
+  }
+
+  /** 从歌手/专辑页返回搜索页。 */
+  function backToSearch() {
+    switchPage("search");
+  }
+
+  // 侧边栏高亮：歌手/专辑页是搜索页的二级页面，归入「搜索」项
+  const navActive: Page = page === "artist" || page === "album" ? "search" : page;
+
   return (
     <div className="app">
       <aside className="sidenav">
@@ -107,28 +134,28 @@ export function MainScreen({ onLogout }: { onLogout: () => void }) {
           <span className="word">桃桃音乐</span>
         </div>
         <button
-          className={`nav-btn${page === "search" ? " on" : ""}`}
+          className={`nav-btn${navActive === "search" ? " on" : ""}`}
           onClick={() => switchPage("search")}
         >
           <NavIcon kind="search" />
           搜索
         </button>
         <button
-          className={`nav-btn${page === "playlists" ? " on" : ""}`}
+          className={`nav-btn${navActive === "playlists" ? " on" : ""}`}
           onClick={() => switchPage("playlists")}
         >
           <NavIcon kind="playlists" />
           歌单
         </button>
         <button
-          className={`nav-btn${page === "recent" ? " on" : ""}`}
+          className={`nav-btn${navActive === "recent" ? " on" : ""}`}
           onClick={() => switchPage("recent")}
         >
           <NavIcon kind="recent" />
           最近播放
         </button>
         <button
-          className={`nav-btn${page === "favorites" ? " on" : ""}`}
+          className={`nav-btn${navActive === "favorites" ? " on" : ""}`}
           onClick={() => switchPage("favorites")}
         >
           <NavIcon kind="heart" />
@@ -146,7 +173,7 @@ export function MainScreen({ onLogout }: { onLogout: () => void }) {
           className={`page${page === "search" ? " page-enter" : ""}${exiting === "search" ? " page-exit" : ""}`}
           style={{ display: page === "search" || exiting === "search" ? "flex" : "none" }}
         >
-          <SearchPage />
+          <SearchPage onOpenArtist={openArtist} onOpenAlbum={openAlbum} />
         </div>
         <div
           className={`page${page === "playlists" ? " page-enter" : ""}${exiting === "playlists" ? " page-exit" : ""}`}
@@ -165,6 +192,24 @@ export function MainScreen({ onLogout }: { onLogout: () => void }) {
           style={{ display: page === "favorites" || exiting === "favorites" ? "flex" : "none" }}
         >
           <FavoritesPage />
+        </div>
+        {/* 歌手主页 / 专辑页：从搜索页（或互相）进入的二级页面，同样常驻挂载保留状态 */}
+        <div
+          className={`page${page === "artist" ? " page-enter" : ""}${exiting === "artist" ? " page-exit" : ""}`}
+          style={{ display: page === "artist" || exiting === "artist" ? "flex" : "none" }}
+        >
+          <ArtistPage
+            target={artistTarget}
+            onOpenArtist={openArtist}
+            onOpenAlbum={openAlbum}
+            onBack={backToSearch}
+          />
+        </div>
+        <div
+          className={`page${page === "album" ? " page-enter" : ""}${exiting === "album" ? " page-exit" : ""}`}
+          style={{ display: page === "album" || exiting === "album" ? "flex" : "none" }}
+        >
+          <AlbumPage target={albumTarget} onOpenArtist={openArtist} onBack={backToSearch} />
         </div>
       </main>
       <PlayerBar />

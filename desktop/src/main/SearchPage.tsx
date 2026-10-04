@@ -11,7 +11,8 @@ import {
   type SearchArtist,
   type Song,
 } from "../api";
-import { useApp } from "../state/AppState";
+import type { AlbumTarget } from "./AlbumPage";
+import type { ArtistTarget } from "./ArtistPage";
 import { SongList } from "./SongList";
 import {
   addHistory,
@@ -47,9 +48,15 @@ function SearchIcon() {
  * 三态视图：无词未搜索 → 搜索历史 + 热门搜索；有词未搜索 → 联想列表；
  * 已搜索 → 结果列表（骨架屏 / 错误 / 空态 / 无限滚动）。
  * 搜索历史只存本机不上传；会话过期由 AppState 层统一处理。
+ * 结果区的歌手/专辑横排点击后经 onOpenArtist / onOpenAlbum 跳转歌手主页与专辑页。
  */
-export function SearchPage() {
-  const { toast } = useApp();
+export function SearchPage({
+  onOpenArtist,
+  onOpenAlbum,
+}: {
+  onOpenArtist: (target: ArtistTarget) => void;
+  onOpenAlbum: (target: AlbumTarget) => void;
+}) {
   const [keyword, setKeyword] = useState("");
   const [hasSearched, setHasSearched] = useState(false);
   const [history, setHistory] = useState<string[]>(() => loadHistory());
@@ -335,16 +342,10 @@ export function SearchPage() {
             {(artists.length > 0 || albums.length > 0) && (
               <div className="sp-strips">
                 {artists.length > 0 && (
-                  <ArtistStrip
-                    artists={artists}
-                    onOpen={() => toast("歌手主页开发中，敬请期待")}
-                  />
+                  <ArtistStrip artists={artists} onOpenArtist={onOpenArtist} />
                 )}
                 {albums.length > 0 && (
-                  <AlbumStrip
-                    albums={albums}
-                    onOpen={() => toast("专辑页开发中，敬请期待")}
-                  />
+                  <AlbumStrip albums={albums} onOpenAlbum={onOpenAlbum} />
                 )}
               </div>
             )}
@@ -365,8 +366,14 @@ export function SearchPage() {
   );
 }
 
-/** 歌手横排区块：圆形头像 + 名字（单行省略）+「N 首」；点击行为由上层决定。 */
-function ArtistStrip({ artists, onOpen }: { artists: SearchArtist[]; onOpen: () => void }) {
+/** 歌手横排区块：圆形头像 + 名字（单行省略）+「N 首」；点击跳转歌手主页。 */
+function ArtistStrip({
+  artists,
+  onOpenArtist,
+}: {
+  artists: SearchArtist[];
+  onOpenArtist: (target: ArtistTarget) => void;
+}) {
   return (
     <section className="sp-section">
       <div className="sp-section-head">
@@ -378,7 +385,9 @@ function ArtistStrip({ artists, onOpen }: { artists: SearchArtist[]; onOpen: () 
             key={`${a.source}:${a.id}`}
             className="sp-artist-item"
             title={`查看歌手「${a.name}」`}
-            onClick={onOpen}
+            onClick={() =>
+              onOpenArtist({ source: a.source, id: a.id, name: a.name, pic: a.pic })
+            }
           >
             <ArtistAvatar pic={a.pic} name={a.name} />
             <div className="sp-artist-meta">
@@ -392,8 +401,14 @@ function ArtistStrip({ artists, onOpen }: { artists: SearchArtist[]; onOpen: () 
   );
 }
 
-/** 专辑横排区块：圆角封面 + 专辑名（最多两行省略）+ 歌手名小字；点击行为由上层决定。 */
-function AlbumStrip({ albums, onOpen }: { albums: SearchAlbum[]; onOpen: () => void }) {
+/** 专辑横排区块：圆角封面 + 专辑名（最多两行省略）+ 歌手名小字；点击跳转专辑页。 */
+function AlbumStrip({
+  albums,
+  onOpenAlbum,
+}: {
+  albums: SearchAlbum[];
+  onOpenAlbum: (target: AlbumTarget) => void;
+}) {
   return (
     <section className="sp-section">
       <div className="sp-section-head">
@@ -405,7 +420,16 @@ function AlbumStrip({ albums, onOpen }: { albums: SearchAlbum[]; onOpen: () => v
             key={`${al.source}:${al.id}`}
             className="sp-album-item"
             title={`查看专辑「${al.name}」`}
-            onClick={onOpen}
+            onClick={() =>
+              onOpenAlbum({
+                source: al.source,
+                id: al.id,
+                name: al.name,
+                pic: al.pic,
+                artist: al.artist,
+                artistId: al.artistId,
+              })
+            }
           >
             <AlbumCover pic={al.pic} />
             <span className="sp-album-name">{al.name}</span>
@@ -418,7 +442,7 @@ function AlbumStrip({ albums, onOpen }: { albums: SearchAlbum[]; onOpen: () => v
 }
 
 /** 歌手头像：有图用图（加载失败就地回退），无图直接主题色圆 + 名字首字符。 */
-function ArtistAvatar({ pic, name }: { pic?: string; name: string }) {
+export function ArtistAvatar({ pic, name }: { pic?: string; name: string }) {
   const [failed, setFailed] = useState(false);
   const showImg = !!pic && !failed;
   return (
@@ -437,7 +461,7 @@ function ArtistAvatar({ pic, name }: { pic?: string; name: string }) {
 }
 
 /** 专辑封面：有图用图，加载失败/无图回退主题色块，与歌曲行封面的音符占位同一设计语言。 */
-function AlbumCover({ pic }: { pic?: string }) {
+export function AlbumCover({ pic }: { pic?: string }) {
   const [failed, setFailed] = useState(false);
   const showImg = !!pic && !failed;
   return (

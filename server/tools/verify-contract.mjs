@@ -2114,6 +2114,198 @@ async function main() {
     JSON.stringify(kuwoAlbums).slice(0, 220),
   );
 
+  // ---------- 歌手与专辑详情路由（2026-10 新增）----------
+  //
+  // 六条详情路由的 200 + 形状断言。实体挑**实测稳定的固定 ID**：歌手 336、专辑
+  // 87758985。列表条数沿用上面「酷我搜索返回了歌曲」的先例直接断言 >0 —— 这里查的
+  // 是固定实体的**整表列表**，不存在搜索那种「召回为空」的合理空态，唯一失败模式是
+  // 上游故障，而上游故障本来就会让前面的搜索检查一起挂，不必为这里单独设计空页宽容。
+  const kuwoArtistDetail = await (await fetch(`${base}/api/v1/artists/336?source=kuwo`, {
+    headers: { authorization: `Bearer ${token}` },
+  })).json();
+  check(
+    "歌手详情返回契约字段（fansCount/musicCount/albumCount 归一，运营字段丢弃）",
+    kuwoArtistDetail.code === 0
+      && kuwoArtistDetail.data?.artist?.source === "kuwo"
+      && typeof kuwoArtistDetail.data.artist.id === "number" && kuwoArtistDetail.data.artist.id > 0
+      && typeof kuwoArtistDetail.data.artist.name === "string" && kuwoArtistDetail.data.artist.name.length > 0
+      && typeof kuwoArtistDetail.data.artist.aliasName === "string"
+      && typeof kuwoArtistDetail.data.artist.pic === "string"
+      && typeof kuwoArtistDetail.data.artist.desc === "string"
+      && typeof kuwoArtistDetail.data.artist.fansCount === "number"
+      && typeof kuwoArtistDetail.data.artist.musicCount === "number"
+      && typeof kuwoArtistDetail.data.artist.albumCount === "number"
+      && !("guardDesc" in kuwoArtistDetail.data.artist)
+      && !("isshowtype" in kuwoArtistDetail.data.artist),
+    JSON.stringify(kuwoArtistDetail).slice(0, 220),
+  );
+
+  // songs 与 /search 的 song data 同构：字段子集的类型断言（酷我没有 mid，必须缺省）。
+  const detailSongShape = (song) => typeof song?.id === "number" && song.id > 0
+    && typeof song?.title === "string" && song.title.length > 0
+    && typeof song?.artist === "string"
+    && song?.source === "kuwo"
+    && typeof song?.coverUrl === "string"
+    && typeof song?.vip === "boolean"
+    && typeof song?.playable === "boolean"
+    && typeof song?.favorited === "boolean"
+    && song?.mid === undefined
+    && (song?.audioUrl === undefined || /^https?:\/\//.test(song.audioUrl))
+    && (song?.lyricUrl === undefined || song.lyricUrl.startsWith("/api/v1/songs/"));
+  const detailMetaShape = (meta, page, num) => meta?.page === page
+    && meta?.num === num
+    && typeof meta?.total === "number"
+    && typeof meta?.hasMore === "boolean"
+    && meta.hasMore === (page * num < meta.total);
+
+  const kuwoArtistSongsRes = await fetch(`${base}/api/v1/artists/336/songs?page=1&num=30&source=kuwo`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  const kuwoArtistSongsBody = await kuwoArtistSongsRes.json();
+  const kuwoArtistSongs = kuwoArtistSongsBody.data?.songs ?? [];
+  check(
+    "歌手歌曲列表返回 200 且 songs 与 search 的歌曲行同构",
+    kuwoArtistSongsRes.status === 200
+      && kuwoArtistSongsBody.code === 0
+      && kuwoArtistSongs.length > 0 && kuwoArtistSongs.length <= 30
+      && kuwoArtistSongs.every(detailSongShape),
+    `${kuwoArtistSongsRes.status} ${JSON.stringify(kuwoArtistSongsBody).slice(0, 220)}`,
+  );
+  check(
+    "歌手歌曲列表的 meta 分页信封正确（total 数字、hasMore = page*num < total）",
+    detailMetaShape(kuwoArtistSongsBody.data?.meta, 1, 30)
+      && kuwoArtistSongsBody.data.meta.total > 0,
+    JSON.stringify(kuwoArtistSongsBody.data?.meta),
+  );
+
+  // 波点详情族端点的 `pn` 是 **1 基**的，与搜索接口（0 基）不同：绝不能过
+  // upstreamPage()（page-1）的换算，否则 page=1 与 page=2 都会落在同一页
+  // （实测 pn=0 与 pn=1 同页）。下面用「page=2 的首条不在 page=1 的 id 集合里」
+  // 守住这条分页语义 —— 固定歌手的整表列表秒级间隔内不会重排，出现交叠只能是偏移错了。
+  const kuwoArtistSongsPage2 = await (await fetch(`${base}/api/v1/artists/336/songs?page=2&num=30&source=kuwo`, {
+    headers: { authorization: `Bearer ${token}` },
+  })).json();
+  const kuwoArtistSongsPage1Ids = kuwoArtistSongs.map((song) => song.id);
+  check(
+    "歌手歌曲翻页前进（pn 1 基：page=2 不与 page=1 交叠）",
+    kuwoArtistSongsPage2.code === 0
+      && (kuwoArtistSongsPage2.data?.songs ?? []).length > 0
+      && !kuwoArtistSongsPage1Ids.includes(kuwoArtistSongsPage2.data.songs[0]?.id),
+    JSON.stringify({ "p1 首条": kuwoArtistSongs[0]?.id, "p2 首条": kuwoArtistSongsPage2.data?.songs?.[0]?.id }),
+  );
+
+  const kuwoArtistAlbums = await (await fetch(`${base}/api/v1/artists/336/albums?page=1&num=20&source=kuwo`, {
+    headers: { authorization: `Bearer ${token}` },
+  })).json();
+  const kuwoArtistAlbumRows = kuwoArtistAlbums.data?.albums ?? [];
+  check(
+    "歌手专辑列表行与 search 的 album 行同构（songCount 归一，长简介 info 丢弃）",
+    kuwoArtistAlbums.code === 0
+      && kuwoArtistAlbumRows.length > 0
+      && kuwoArtistAlbumRows.every((album) => album?.source === "kuwo"
+        && typeof album?.id === "number" && album.id > 0
+        && typeof album?.name === "string" && album.name.length > 0
+        && typeof album?.pic === "string"
+        && typeof album?.artist === "string"
+        && typeof album?.artistId === "number"
+        && typeof album?.songCount === "number"
+        && typeof album?.showtime === "string"
+        && !("info" in album)),
+    JSON.stringify(kuwoArtistAlbumRows[0] ?? kuwoArtistAlbums).slice(0, 220),
+  );
+  check(
+    "歌手专辑列表的 meta 分页信封正确",
+    detailMetaShape(kuwoArtistAlbums.data?.meta, 1, 20),
+    JSON.stringify(kuwoArtistAlbums.data?.meta),
+  );
+
+  const kuwoSimilarArtists = await (await fetch(`${base}/api/v1/artists/336/similar?source=kuwo`, {
+    headers: { authorization: `Bearer ${token}` },
+  })).json();
+  const kuwoSimilarRows = kuwoSimilarArtists.data?.artists ?? [];
+  check(
+    "相似歌手行与 search 的 artist 行同构（songCount/albumCount 归一，aliasName/desc 丢弃）",
+    kuwoSimilarArtists.code === 0
+      && kuwoSimilarRows.length > 0
+      && kuwoSimilarRows.every((artist) => artist?.source === "kuwo"
+        && typeof artist?.id === "number" && artist.id > 0
+        && typeof artist?.name === "string" && artist.name.length > 0
+        && typeof artist?.pic === "string"
+        && typeof artist?.songCount === "number"
+        && typeof artist?.albumCount === "number"
+        && !("aliasName" in artist) && !("desc" in artist)),
+    JSON.stringify(kuwoSimilarRows[0] ?? kuwoSimilarArtists).slice(0, 220),
+  );
+
+  const kuwoAlbumDetail = await (await fetch(`${base}/api/v1/albums/87758985?source=kuwo`, {
+    headers: { authorization: `Bearer ${token}` },
+  })).json();
+  check(
+    "专辑详情返回契约字段且保留长简介 desc",
+    kuwoAlbumDetail.code === 0
+      && kuwoAlbumDetail.data?.album?.source === "kuwo"
+      && typeof kuwoAlbumDetail.data.album.id === "number" && kuwoAlbumDetail.data.album.id > 0
+      && typeof kuwoAlbumDetail.data.album.name === "string" && kuwoAlbumDetail.data.album.name.length > 0
+      && typeof kuwoAlbumDetail.data.album.pic === "string"
+      && typeof kuwoAlbumDetail.data.album.artist === "string"
+      && typeof kuwoAlbumDetail.data.album.artistId === "number"
+      && typeof kuwoAlbumDetail.data.album.songCount === "number" && kuwoAlbumDetail.data.album.songCount > 0
+      && typeof kuwoAlbumDetail.data.album.showtime === "string"
+      && typeof kuwoAlbumDetail.data.album.desc === "string"
+      && !("isBdAlbum" in kuwoAlbumDetail.data.album),
+    JSON.stringify(kuwoAlbumDetail).slice(0, 220),
+  );
+
+  const kuwoAlbumSongsRes = await fetch(`${base}/api/v1/albums/87758985/songs?page=1&num=30&source=kuwo`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  const kuwoAlbumSongsBody = await kuwoAlbumSongsRes.json();
+  const kuwoAlbumSongs = kuwoAlbumSongsBody.data?.songs ?? [];
+  check(
+    "专辑歌曲列表返回 200 且 songs 与 search 的歌曲行同构",
+    kuwoAlbumSongsRes.status === 200
+      && kuwoAlbumSongsBody.code === 0
+      && kuwoAlbumSongs.length > 0
+      && kuwoAlbumSongs.every(detailSongShape),
+    `${kuwoAlbumSongsRes.status} ${JSON.stringify(kuwoAlbumSongsBody).slice(0, 220)}`,
+  );
+  check(
+    "专辑歌曲列表的 meta 分页信封正确",
+    detailMetaShape(kuwoAlbumSongsBody.data?.meta, 1, 30)
+      && kuwoAlbumSongsBody.data.meta.total > 0,
+    JSON.stringify(kuwoAlbumSongsBody.data?.meta),
+  );
+
+  // 详情族的通用拒绝契约：ID 非正整数 4001、source=all 4001（详情必须有确定的音源）、
+  // 未实现该能力的音源 4007。三条都不打上游 —— 形状错误在进入适配器之前就被拦下。
+  const kuwoArtistBadId = await fetch(`${base}/api/v1/artists/abc?source=kuwo`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  const kuwoArtistBadIdBody = await kuwoArtistBadId.json();
+  check(
+    "歌手详情路径 ID 非正整数被拒 400 且 code 4001",
+    kuwoArtistBadId.status === 400 && kuwoArtistBadIdBody.code === 4001,
+    `${kuwoArtistBadId.status} ${JSON.stringify(kuwoArtistBadIdBody).slice(0, 160)}`,
+  );
+  const kuwoArtistAllSource = await fetch(`${base}/api/v1/artists/336?source=all`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  const kuwoArtistAllSourceBody = await kuwoArtistAllSource.json();
+  check(
+    "歌手详情 source=all 被拒 400 且 code 4001",
+    kuwoArtistAllSource.status === 400 && kuwoArtistAllSourceBody.code === 4001,
+    `${kuwoArtistAllSource.status} ${JSON.stringify(kuwoArtistAllSourceBody).slice(0, 160)}`,
+  );
+  const tencentArtistDetail = await fetch(`${base}/api/v1/artists/336?source=tencent`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  const tencentArtistDetailBody = await tencentArtistDetail.json();
+  check(
+    "腾讯源没有歌手详情能力，被拒 400 且 code 4007",
+    tencentArtistDetail.status === 400 && tencentArtistDetailBody.code === 4007,
+    `${tencentArtistDetail.status} ${JSON.stringify(tencentArtistDetailBody).slice(0, 160)}`,
+  );
+
   // ---------- 分享链路的高潮区间透传 ----------
   //
   // 酷我上游在 payInfo 里带 refrain_start/end（毫秒），/search 与 /songs/:id/info

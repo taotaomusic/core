@@ -205,6 +205,58 @@ export type SearchResult = {
   hasMore: boolean;
 };
 
+/** 搜索 / 歌手歌曲 / 专辑歌曲共用的歌曲行归一：id 或 mid 至少其一有效才算有效行。 */
+function songOfRemoteData(d: any): Song | null {
+  if (!d || !(Number(d.id) > 0 || d.mid)) return null;
+  // 高潮区间只认正毫秒：0 与键缺失等价，统一归一成 undefined
+  const refrainStartMs = Number(d.refrainStartMs);
+  const refrainEndMs = Number(d.refrainEndMs);
+  return {
+    id: Number(d.id) || 0,
+    title: d.title || "未知歌曲",
+    artist: d.artist || "未知歌手",
+    source: d.source || "kuwo",
+    mid: d.mid || undefined,
+    type: d.type ?? undefined,
+    coverUrl: d.coverUrl || undefined,
+    album: d.album || undefined,
+    duration: d.duration || undefined,
+    vip: !!d.vip,
+    playable: !!d.playable,
+    favorited: !!d.favorited,
+    refrainStartMs: refrainStartMs > 0 ? refrainStartMs : undefined,
+    refrainEndMs: refrainEndMs > 0 ? refrainEndMs : undefined,
+  };
+}
+
+/** 歌手行归一（搜索歌手区块 / 相似歌手共用）：id 非正视为脏数据丢弃，pic 空串归一成 undefined。 */
+function artistOfRemoteData(d: any): SearchArtist | null {
+  if (!d || !(Number(d.id) > 0)) return null;
+  return {
+    source: d.source || "kuwo",
+    id: Number(d.id),
+    name: d.name || "未知歌手",
+    pic: d.pic || undefined,
+    songCount: Number(d.songCount) || undefined,
+    albumCount: Number(d.albumCount) || undefined,
+  };
+}
+
+/** 专辑行归一（搜索专辑区块 / 歌手专辑列表共用）：只认正 id；showtime/artist 缺席时键归 undefined。 */
+function albumOfRemoteData(d: any): SearchAlbum | null {
+  if (!d || !(Number(d.id) > 0)) return null;
+  return {
+    source: d.source || "kuwo",
+    id: Number(d.id),
+    name: d.name || "未知专辑",
+    artist: d.artist || undefined,
+    artistId: Number(d.artistId) || undefined,
+    pic: d.pic || undefined,
+    songCount: Number(d.songCount) || undefined,
+    showtime: d.showtime || undefined,
+  };
+}
+
 /** 搜索：/api/v1/search 返回裸 NDJSON（{type:"song",data} / {type:"artist"|"album",data} /
  *  {type:"end",meta}）；artist/album 行只由酷我源下发，且出现在所有 song 行之前。 */
 export async function searchSongs(keyword: string, page = 1): Promise<SearchResult> {
@@ -303,6 +355,130 @@ export async function fetchHotSearches(limit = 10): Promise<string[]> {
   const data = await unwrap(resp);
   if (!Array.isArray(data)) return [];
   return data.map((it: any) => String(it?.keyword ?? "")).filter((k) => k.length > 0);
+}
+
+// ---- 歌手与专辑详情 ----
+
+/** 歌手详情：/api/v1/artists/:id 信封 data.artist；aliasName/pic/desc 可能缺席或为空。 */
+export type ArtistDetail = {
+  source: string;
+  id: number;
+  name: string;
+  aliasName?: string;
+  pic?: string;
+  desc?: string;
+  fansCount?: number;
+  musicCount?: number;
+  albumCount?: number;
+};
+
+/** 专辑详情：/api/v1/albums/:id 信封 data.album；desc 为长简介，可缺席。 */
+export type AlbumDetail = {
+  source: string;
+  id: number;
+  name: string;
+  pic?: string;
+  artist?: string;
+  artistId?: number;
+  songCount?: number;
+  showtime?: string;
+  desc?: string;
+};
+
+/** 歌手/专辑歌曲分页结果：信封 data.songs + data.meta 归一后的形状。 */
+export type PagedSongs = { songs: Song[]; page: number; total: number; hasMore: boolean };
+
+/** 歌手专辑分页结果：信封 data.albums + data.meta 归一后的形状。 */
+export type PagedAlbums = { albums: SearchAlbum[]; page: number; total: number; hasMore: boolean };
+
+/** 分页信封 meta 归一：page 非正退回请求页码，total 非法按 0，hasMore 只认 true。 */
+function pagedMetaOf(meta: any, requestPage: number): { page: number; total: number; hasMore: boolean } {
+  const page = Number(meta?.page);
+  const total = Number(meta?.total);
+  return {
+    page: Number.isFinite(page) && page > 0 ? page : requestPage,
+    total: Number.isFinite(total) && total > 0 ? total : 0,
+    hasMore: meta?.hasMore === true,
+  };
+}
+
+/** 歌手详情（pic/desc/aliasName 可能空，空串归一成 undefined）。 */
+export async function fetchArtistDetail(id: number, source = "kuwo"): Promise<ArtistDetail> {
+  const q = new URLSearchParams({ source });
+  const resp = await authedGet(`/api/v1/artists/${id}?${q}`, "application/json");
+  const data = await unwrap(resp);
+  const d = data?.artist;
+  if (!d || !(Number(d.id) > 0)) throw new Error("歌手不存在或已下线");
+  return {
+    source: d.source || source,
+    id: Number(d.id),
+    name: d.name || "未知歌手",
+    aliasName: d.aliasName || undefined,
+    pic: d.pic || undefined,
+    desc: d.desc || undefined,
+    fansCount: Number(d.fansCount) || undefined,
+    musicCount: Number(d.musicCount) || undefined,
+    albumCount: Number(d.albumCount) || undefined,
+  };
+}
+
+/** 歌手歌曲分页（quality 语义与 /search 相同的数字档位；num 服务端缺省 30、上限 60）。 */
+export async function fetchArtistSongs(id: number, page: number, source = "kuwo"): Promise<PagedSongs> {
+  const q = new URLSearchParams({ page: String(page), num: "30", quality: "4", source });
+  const resp = await authedGet(`/api/v1/artists/${id}/songs?${q}`, "application/json");
+  const data = await unwrap(resp);
+  const list: any[] = Array.isArray(data?.songs) ? data.songs : [];
+  const songs = list.map(songOfRemoteData).filter((s): s is Song => s !== null);
+  return { ...pagedMetaOf(data?.meta, page), songs };
+}
+
+/** 歌手专辑分页（num 服务端缺省 20、上限 60），专辑行与搜索专辑区块同构。 */
+export async function fetchArtistAlbums(id: number, page: number, source = "kuwo"): Promise<PagedAlbums> {
+  const q = new URLSearchParams({ page: String(page), num: "20", source });
+  const resp = await authedGet(`/api/v1/artists/${id}/albums?${q}`, "application/json");
+  const data = await unwrap(resp);
+  const list: any[] = Array.isArray(data?.albums) ? data.albums : [];
+  const albums = list.map(albumOfRemoteData).filter((a): a is SearchAlbum => a !== null);
+  return { ...pagedMetaOf(data?.meta, page), albums };
+}
+
+/** 相似歌手列表（一次性返回，无分页），歌手行与搜索歌手区块同构。 */
+export async function fetchSimilarArtists(id: number, source = "kuwo"): Promise<SearchArtist[]> {
+  const q = new URLSearchParams({ source });
+  const resp = await authedGet(`/api/v1/artists/${id}/similar?${q}`, "application/json");
+  const data = await unwrap(resp);
+  const list: any[] = Array.isArray(data?.artists) ? data.artists : [];
+  return list.map(artistOfRemoteData).filter((a): a is SearchArtist => a !== null);
+}
+
+/** 专辑详情（desc 为长简介，可缺席）。 */
+export async function fetchAlbumDetail(id: number, source = "kuwo"): Promise<AlbumDetail> {
+  const q = new URLSearchParams({ source });
+  const resp = await authedGet(`/api/v1/albums/${id}?${q}`, "application/json");
+  const data = await unwrap(resp);
+  const d = data?.album;
+  if (!d || !(Number(d.id) > 0)) throw new Error("专辑不存在或已下线");
+  return {
+    source: d.source || source,
+    id: Number(d.id),
+    name: d.name || "未知专辑",
+    pic: d.pic || undefined,
+    artist: d.artist || undefined,
+    artistId: Number(d.artistId) || undefined,
+    songCount: Number(d.songCount) || undefined,
+    showtime: d.showtime || undefined,
+    desc: d.desc || undefined,
+  };
+}
+
+/** 专辑歌曲分页（quality/num 语义与歌手歌曲一致）。 */
+export async function fetchAlbumSongs(id: number, page: number, source = "kuwo"): Promise<PagedSongs> {
+  const q = new URLSearchParams({ page: String(page), num: "30", quality: "4", source });
+  const resp = await authedGet(`/api/v1/albums/${id}/songs?${q}`, "application/json");
+  const data = await unwrap(resp);
+  const list: any[] = Array.isArray(data?.songs) ? data.songs : [];
+  const songs = list.map(songOfRemoteData).filter((s): s is Song => s !== null);
+  return { ...pagedMetaOf(data?.meta, page), songs };
 }
 
 // ---- 收藏 ----

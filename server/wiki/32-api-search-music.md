@@ -167,3 +167,70 @@ Authorization: Bearer <accessToken>
 - 鉴权与搜索一致:路由未标 `@Public()`,走全局访问令牌守卫;该路由未配置限流桶。
 - **歌曲没有 MV**(上游业务码不是 200,或响应里没有 `mv` 对象):适配器统一归为「取不到」,服务端报 **502/5020「MV 信息不可用」**;上游的具体业务码**不透传**。
 - **音源不支持 MV**:400/4001,文案「{音源名}暂不支持 MV」。
+
+## 9. 歌手与专辑详情
+
+数据来源是第 3 节 `/search` 流里的 artist / album 行:客户端拿到 `source` + `id` 后回这里取详情与列表。六条路由全部要登录(未标 `@Public()`,走全局访问令牌守卫),`source` 缺省 `kuwo`(这两族详情当前只有酷我/波点提供);`source=all` 一律 400/4001 拒绝(详情必须有确定的音源,聚合没有单一上游可分派);路径 ID 非正整数 400/4001;音源未实现该能力 400/4007「{音源名}不支持…」;实体取不到(上游业务码非 200)502/5020「详情不可用」。
+
+### 歌手详情
+
+```http
+GET /api/v1/artists/336?source=kuwo
+Authorization: Bearer <accessToken>
+```
+
+普通 JSON 信封,`data.artist`:
+
+```json
+{"source":"kuwo","id":336,"name":"周杰伦","aliasName":"Jay Chou","pic":"https://...","desc":"……","fansCount":12000000,"musicCount":1750,"albumCount":49}
+```
+
+字段名是归一后的契约名:上游的 `fansCnt` / `musicCnt` / `albumCnt` 出流前统一改成 `fansCount` / `musicCount` / `albumCount`;`guardDesc`(守护标语)与 `isshowtype`(上游展示开关)是波点运营内容,不透传。`aliasName` / `desc` 上游可能给空串。
+
+### 歌手的歌曲 / 专辑列表
+
+```http
+GET /api/v1/artists/336/songs?page=1&num=30&quality=10&source=kuwo
+GET /api/v1/artists/336/albums?page=1&num=20&source=kuwo
+Authorization: Bearer <accessToken>
+```
+
+返回普通 JSON 信封,`data = {songs | albums, meta}`,`meta = {page, num, total, hasMore}`:
+
+- `songs` 每项与 `/search` 的 song data **完全同构**(同一条 SongMapper 链路:自拼的 `audioUrl` 代理地址、相对路径 `lyricUrl`、`mid` / `type` / `refrainStartMs` / `refrainEndMs` 下发、`favorited` 按当前用户批量查询),客户端原样复用歌曲行组件与点播逻辑;`quality` 归一规则与搜索一致。
+- `albums` 每项与 `/search` 的 album 行同构(上游 `musicCount` → `songCount`;长简介 `info`、`lastPlayTime`、`isshow` 丢弃)。
+- `total` 是上游给的**整表总数**,不是本页条数;`hasMore = page * num < total`,翻页判断客户端自己做。
+- `num` 默认 30(歌曲)/ 20(专辑),上限 60;`page` 默认 1。
+
+### 相似歌手
+
+```http
+GET /api/v1/artists/336/similar?source=kuwo
+Authorization: Bearer <accessToken>
+```
+
+`data.artists` 每项与 `/search` 的 artist 行同构(上游 `musicCnt` → `songCount`、`albumCnt` → `albumCount`;`aliasName` / `desc` 丢弃)。不分页(上游端点没有 pn/rn),顺序保持上游返回。
+
+### 专辑详情
+
+```http
+GET /api/v1/albums/87758985?source=kuwo
+Authorization: Bearer <accessToken>
+```
+
+`data.album`:
+
+```json
+{"source":"kuwo","id":87758985,"name":"太阳之子","pic":"https://...","artist":"周杰伦","artistId":336,"songCount":13,"showtime":"2026-03-25","desc":"……长简介……"}
+```
+
+`desc` 就是上游的 `info`,是**全链路唯一保留长简介的契约**:专辑详情页要整段展示它;搜索行与歌手专辑列表照旧丢弃(单条几十 KB,进列表只会撑大响应)。`GET /api/v1/albums/:id/songs` 的请求参数与响应形状和歌手歌曲列表完全一致,只是数据源端点不同。
+
+### 波点分页的坑:详情族 `pn` 是 1 基
+
+同一上游两族端点的分页语义**不一致**,这是实测结论,别「顺手统一」:
+
+- 搜索接口(`search/music/list` 等):`pn` **0 基**,偏移 `pn × rn`,服务端要过 `upstreamPage()`(page-1)换算,见第 3 节与 `bodian.client.ts` 的实测表格。
+- 详情族(`service/artist/music/:id`、`service/album/music/:id` 等):`pn` **1 基**。实测(歌手 336)`pn=0` 与 `pn=1` 返回同一页,`pn=2` 才翻到第 11–20 首。服务端**直接把 1 基的 `page` 当 `pn` 传**,绝不能过 `upstreamPage()` —— 否则第 1 页拿到第 2 页、且 0/1 两页重复。
+
+契约验证脚本(`tools/verify-contract.mjs`)用「page=2 的首条不在 page=1 的 id 集合里」守住这条语义。

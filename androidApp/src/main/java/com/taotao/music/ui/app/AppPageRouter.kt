@@ -22,11 +22,16 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import com.taotao.music.model.Song
+import com.taotao.music.data.AlbumSearchResult
+import com.taotao.music.data.ArtistSearchResult
+import com.taotao.music.data.TencentMusicApi
 import com.taotao.music.playerui.SharedSectionHeader
 import com.taotao.music.playerui.SharedSectionLevel
 import com.taotao.music.playerui.theme.TaotaoSpacing
 import com.taotao.music.ui.account.AccountProfilePage
 import com.taotao.music.ui.ai.AiStudioPage
+import com.taotao.music.ui.album.AlbumPage
+import com.taotao.music.ui.artist.ArtistPage
 import com.taotao.music.ui.common.MusicSearchBar
 import com.taotao.music.ui.home.AnnouncementPreview
 import com.taotao.music.ui.home.HomeHeader
@@ -62,8 +67,11 @@ import kotlinx.coroutines.withContext
  *
  * 详情页是最顶层页面：从日记页点迷你播放器要能盖在日记之上进入详情，
  * 所以它必须排在 song-diary 前面，否则 diarySong 非空时详情永远显示不出来。
- * MV 播放页不是页面分支，而是盖在详情之上的独立浮层（见 [MvPlayerOverlay]）：
- * 从详情进出 MV 只动浮层本身，详情页保持在组合中原位不动，返回时不重播升起动画。
+ * 歌手 / 专辑主页是从搜索页进入的下级页：必须排在 search 之前，否则搜索标志
+ * 仍然为真时永远显示搜索页（两页互跳时同一时刻只会保留一个目标，见
+ * [TaotaoAppState.openArtistPage]）。MV 播放页不是页面分支，而是盖在详情之上的
+ * 独立浮层（见 [MvPlayerOverlay]）：从详情进出 MV 只动浮层本身，详情页保持在
+ * 组合中原位不动，返回时不重播升起动画。
  */
 @Composable
 internal fun TaotaoAppPageRouter(
@@ -78,6 +86,9 @@ internal fun TaotaoAppPageRouter(
         state.diarySong != null -> "song-diary"
         state.showProfilePage -> "profile"
         state.showSettingsPage -> "settings"
+        // 歌手 / 专辑主页排在 search 之前：两者是从搜索页进入的下级页。
+        state.artistPage.selected != null -> "artist"
+        state.albumPage.selected != null -> "album"
         state.showSearchPage -> "search"
         state.mineLibrarySection == MineLibrarySection.FAVORITES -> "mine-favorites"
         state.mineLibrarySection == MineLibrarySection.HISTORY -> "mine-history"
@@ -113,10 +124,12 @@ internal fun TaotaoAppPageRouter(
         transitionSpec = { pageTransition(pageReduceMotion) },
         label = "页面切换",
     ) { page ->
-        // 日记两页要沉浸式绘制顶部珊瑚渐变（画到状态栏底下），顶部内边距由页面自己用
-        // statusBarsPadding 让开；其余页面维持 Scaffold 的统一顶部内边距。
-        // MV 播放页已拆成独立浮层，不再走页面内边距。
-        val pagePadding = if (page == "song-diary" || page == "diary-records") {
+        // 日记两页与歌手 / 专辑主页要沉浸式绘制顶部珊瑚渐变（画到状态栏底下），
+        // 顶部内边距由页面自己用 statusBarsPadding 让开；其余页面维持 Scaffold 的
+        // 统一顶部内边距。MV 播放页已拆成独立浮层，不再走页面内边距。
+        val pagePadding = if (page == "song-diary" || page == "diary-records" ||
+            page == "artist" || page == "album"
+        ) {
             PaddingValues(bottom = innerPadding.calculateBottomPadding())
         } else {
             innerPadding
@@ -134,6 +147,12 @@ internal fun TaotaoAppPageRouter(
                 )
                 "detail" -> if (state.playbackSongs.isNotEmpty()) PlayerDetailPageRoute(state)
                 "search" -> SearchPageRoute(state)
+                "artist" -> state.artistPage.selected?.let { target ->
+                    ArtistPageRoute(state, target)
+                }
+                "album" -> state.albumPage.selected?.let { target ->
+                    AlbumPageRoute(state, target)
+                }
                 "profile" -> state.userProfile?.let { profile ->
                     AccountProfilePage(
                         api = state.musicApi,
@@ -454,10 +473,96 @@ private fun SearchPageRoute(state: TaotaoAppState) {
         total = state.search.total,
         artists = state.search.searchArtists,
         albums = state.search.searchAlbums,
-        // 歌手 / 专辑详情页尚未实现：点击统一弹全局提示（TaotaoSnackbar），不做静默。
-        onArtistClick = { state.message = "歌手主页开发中，敬请期待" },
-        onAlbumClick = { state.message = "专辑页开发中，敬请期待" },
+        // 歌手 / 专辑区块点击进入对应主页（搜索域的下级页）；
+        // 页面开关与互跳时收起对方的逻辑集中在状态层（openArtistPage / openAlbumPage）。
+        onArtistClick = { state.openArtistPage(it) },
+        onAlbumClick = { state.openAlbumPage(it) },
         searchSession = state.search.generation,
+    )
+}
+
+/**
+ * 歌手主页装配：详情、三个标签的区块与分页全部来自歌手页状态；
+ * 点击歌曲以「歌手名下歌曲列表」为整条队列上下文播放（与搜索页点歌同一机制）。
+ */
+@Composable
+private fun ArtistPageRoute(state: TaotaoAppState, target: ArtistSearchResult) {
+    ArtistPage(
+        target = target,
+        detail = state.artistPage.artist,
+        detailLoading = state.artistPage.detailLoading,
+        detailError = state.artistPage.detailError,
+        songs = state.artistPage.songs,
+        songsLoading = state.artistPage.songsLoading,
+        songsLoadingMore = state.artistPage.songsLoadingMore,
+        songsHasMore = state.artistPage.songsHasMore,
+        songsError = state.artistPage.songsError,
+        albums = state.artistPage.albums,
+        albumsLoading = state.artistPage.albumsLoading,
+        albumsLoadingMore = state.artistPage.albumsLoadingMore,
+        albumsHasMore = state.artistPage.albumsHasMore,
+        similar = state.artistPage.similar,
+        similarLoading = state.artistPage.similarLoading,
+        // 读一下 revision 让收藏变化能触发重组：SharedPreferences 本身不可观察。
+        favoriteRevision = state.favoriteRevision,
+        downloadedRevision = state.downloadedSongs.size,
+        isFavorite = { song -> state.favoritesStore.contains(song) },
+        isDownloaded = { song -> song.remoteId != null && song.remoteId in state.downloadedIds },
+        onBack = { state.artistPage.close() },
+        onRetry = { state.artistPage.retry() },
+        onLoadMoreSongs = { state.artistPage.loadMoreSongs() },
+        onLoadMoreAlbums = { state.artistPage.loadMoreAlbums() },
+        onSongClick = { index -> state.playSong(state.artistPage.songs, index) },
+        onToggleFavorite = { song -> state.toggleFavorite(song) },
+        onPlayNext = { song -> state.playNext(song) },
+        onAddToPlaylist = { song -> state.playlist.requestAddSong(song) },
+        // 专辑卡片 → 专辑页；宿主会先收起歌手页，保持一次只有一层下级页。
+        onAlbumClick = { album -> state.openAlbumPage(album) },
+        // 相似歌手 → 原地替换当前歌手目标，页面内自行回到顶部。
+        onSimilarArtistClick = { artist -> state.openArtistPage(artist) },
+        onOpenAlbumsTab = { state.artistPage.ensureAlbums() },
+        onOpenSimilarTab = { state.artistPage.ensureSimilar() },
+    )
+}
+
+/** 专辑页装配：详情与歌曲分页来自专辑页状态；头部歌手名跳转歌手页，形成互跳。 */
+@Composable
+private fun AlbumPageRoute(state: TaotaoAppState, target: AlbumSearchResult) {
+    AlbumPage(
+        target = target,
+        detail = state.albumPage.album,
+        detailLoading = state.albumPage.detailLoading,
+        detailError = state.albumPage.detailError,
+        songs = state.albumPage.songs,
+        songsLoading = state.albumPage.songsLoading,
+        songsLoadingMore = state.albumPage.songsLoadingMore,
+        songsHasMore = state.albumPage.songsHasMore,
+        songsError = state.albumPage.songsError,
+        favoriteRevision = state.favoriteRevision,
+        downloadedRevision = state.downloadedSongs.size,
+        isFavorite = { song -> state.favoritesStore.contains(song) },
+        isDownloaded = { song -> song.remoteId != null && song.remoteId in state.downloadedIds },
+        onBack = { state.albumPage.close() },
+        onRetry = { state.albumPage.retry() },
+        onLoadMoreSongs = { state.albumPage.loadMoreSongs() },
+        onSongClick = { index -> state.playSong(state.albumPage.songs, index) },
+        onToggleFavorite = { song -> state.toggleFavorite(song) },
+        onPlayNext = { song -> state.playNext(song) },
+        onAddToPlaylist = { song -> state.playlist.requestAddSong(song) },
+        onArtistClick = { artistId, artistName ->
+            // 专辑详情 / 搜索区块只有歌手名与 ID，没有头像：歌手详情加载前用名字兜底，
+            // 资料到达后头像与统计自动补齐。
+            state.openArtistPage(
+                ArtistSearchResult(
+                    source = TencentMusicApi.SEARCH_SOURCE_KUWO,
+                    id = artistId,
+                    name = artistName,
+                    pic = null,
+                    songCount = 0,
+                    albumCount = 0,
+                ),
+            )
+        },
     )
 }
 

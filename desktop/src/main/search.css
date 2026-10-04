@@ -1,4 +1,4 @@
-/* 搜索页与歌曲行样式 */
+/* 搜索页、歌曲行与歌手主页/专辑页样式 */
 
 /* ---- 搜索页整体布局 ---- */
 .sp-root {
@@ -497,3 +497,282 @@
   margin: 0;
 }
 .sp-hint-err { color: var(--err); }
+
+/* ---- 歌手主页（ar-）/ 专辑页（al-）与两页共用（detail-）---- */
+
+/* 返回键（歌手页/专辑页共用）：与歌单详情返回同一设计语言 */
+.detail-back {
+  align-self: flex-start;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 4px 6px;
+  margin: 12px 0 0 14px;
+  transition: color .15s;
+}
+.detail-back:hover { color: var(--coral); }
+
+/* 长简介：默认两行省略，点击整块或「展开」切换收起 */
+.detail-desc-wrap { margin: 12px 22px 0; }
+.detail-desc {
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text);
+  cursor: pointer;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  user-select: none;
+}
+.detail-desc.open { display: block; overflow: visible; }
+.detail-desc-toggle {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 2px 0;
+  cursor: pointer;
+  transition: color .15s;
+}
+.detail-desc-toggle:hover { color: var(--coral); }
+
+/* 居中提示 / 重试按钮（标签体空态与错误共用；tight 用于头部下的详情错误行） */
+.detail-center-hint {
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
+  margin: 36px 0 0;
+}
+.detail-center-hint.err { color: var(--err); }
+.detail-center-block {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 36px 0 0;
+}
+.detail-center-block .detail-center-hint { margin: 0; }
+.detail-center-block.tight { padding: 10px 0 0; }
+.detail-retry {
+  height: 30px;
+  padding: 0 18px;
+  border: 1px solid var(--coral);
+  border-radius: 15px;
+  background: transparent;
+  color: var(--coral);
+  font-size: 12px;
+  transition: background .15s, color .15s;
+}
+.detail-retry:hover { background: var(--coral); color: #fff; }
+
+/* ---- 歌手主页 ---- */
+.ar-root {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+.ar-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 8px 22px 0;
+}
+/* 头部大头像：96px 圆形，无图回退主题色圆 + 名字首字符 */
+.ar-avatar {
+  flex: none;
+  width: 96px;
+  height: 96px;
+  border-radius: 50%;
+  overflow: hidden;
+  background: var(--coral-tint);
+  display: grid;
+  place-items: center;
+  box-shadow: var(--shadow-sm);
+}
+.ar-avatar img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.ar-initial { font-size: 34px; font-weight: 700; color: var(--coral); }
+.ar-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ar-name {
+  font-size: 24px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ar-alias {
+  font-size: 13px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ar-stats { font-size: 13px; color: var(--muted); }
+
+/* 内嵌标签：轻量分段控件（药丸容器 + 选中珊瑚底） */
+.ar-tabs {
+  flex: none;
+  align-self: flex-start;
+  display: inline-flex;
+  gap: 4px;
+  margin: 16px 22px 8px;
+  padding: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+.ar-tab {
+  border: 0;
+  background: transparent;
+  border-radius: 999px;
+  padding: 6px 18px;
+  font-size: 13px;
+  color: var(--muted);
+  transition: background .15s, color .15s;
+}
+.ar-tab:hover { color: var(--coral); }
+.ar-tab.on { background: var(--coral-tint); color: var(--coral); font-weight: 600; }
+
+/* 标签体：三个面板常驻挂载、显隐切换，各自内部滚动 */
+.ar-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.ar-pane {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+/* 专辑/相似标签的纵向滚动容器（歌曲标签的滚动在 SongList 内部） */
+.ar-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 18px 96px;
+}
+/* 专辑卡片流：横排卡片自动换行，卡片本体复用 .sp-album-item 视觉 */
+.ar-albums {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  padding: 4px 2px;
+}
+
+/* ---- 专辑页 ---- */
+.al-root {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+.al-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 8px 22px 0;
+}
+/* 封面 160px 圆角：无图回退浅珊瑚渐变 + 音符，图片绝对定位盖在占位上（加载失败隐藏即露出） */
+.al-cover {
+  position: relative;
+  flex: none;
+  width: 160px;
+  height: 160px;
+  border-radius: 14px;
+  overflow: hidden;
+  background: linear-gradient(135deg, #fdeceb, #fbd3d0);
+  display: grid;
+  place-items: center;
+  box-shadow: var(--shadow-sm);
+}
+.al-cover .note { font-size: 46px; color: var(--coral); opacity: .7; }
+.al-cover img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.al-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.al-name {
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+.al-artist {
+  font-size: 14px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* 歌手名按钮：可点击跳转歌手主页，hover 显珊瑚色 */
+.al-artist-btn {
+  max-width: 100%;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font-size: 14px;
+  color: var(--text);
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: color .15s;
+}
+.al-artist-btn:hover { color: var(--coral); }
+.al-sub { font-size: 12px; color: var(--muted); }
+/* 歌曲列表容器：滚动在 SongList 内部 */
+.al-songs {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  margin-top: 4px;
+}
+
+/* 窄窗口：头部允许换行，大图略缩（与歌单详情断点一致） */
+@media (max-width: 719px) {
+  .ar-head,
+  .al-head {
+    flex-wrap: wrap;
+  }
+  .ar-avatar {
+    width: 72px;
+    height: 72px;
+  }
+  .al-cover {
+    width: 120px;
+    height: 120px;
+  }
+}

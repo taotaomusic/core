@@ -75,6 +75,50 @@ export interface Album {
   showtime: string;
 }
 
+/**
+ * 歌手详情。字段来自 `service/artist/:id` 的 `data.artistInfo`。
+ *
+ * 字段名同样就是下发契约名：上游的 `fansCnt` / `musicCnt` / `albumCnt` 在
+ * [BodianClient.getArtistInfo] 里就地改名；`guardDesc`（守护标语）与 `isshowtype`
+ * （展示开关）是波点运营内容，**不映射**。
+ */
+export interface ArtistDetail {
+  id: number;
+  name: string;
+  /** 艺名/别名。上游可能给空串。 */
+  aliasName: string;
+  /** 封面绝对地址。上游可能给空串。 */
+  pic: string;
+  /** 歌手简介。上游可能给空串。 */
+  desc: string;
+  fansCount: number;
+  musicCount: number;
+  albumCount: number;
+}
+
+/**
+ * 专辑详情。字段来自 `service/album/:id` 的 `data.albumInfo`。
+ *
+ * 与列表行 [Album] 的关键差别：**这里保留上游的长简介 `info`**（改名为 `desc`）——
+ * 专辑详情页要整段展示它。这是全链路唯一透传 `info` 的接口，列表行仍然丢弃。
+ * 上游条目里成堆的售卖与运营字段（`collectedCnt` / `isBdAlbum` / `price` /
+ * `saleCount` / `isPay` / `isshow` / `type` / `artistPic` / `artists`）一律不映射。
+ */
+export interface AlbumDetail {
+  id: number;
+  name: string;
+  /** 封面绝对地址。上游可能给空串。 */
+  pic: string;
+  artist: string;
+  artistId: number;
+  /** 收录歌曲数。上游叫 `musicCount`，出流前统一改名为 `songCount`。 */
+  songCount: number;
+  /** 发行日期（例如 `2026-03-25`）。上游可能缺失或空串。 */
+  showtime: string;
+  /** 专辑长简介。上游字段叫 `info`，仅详情保留。 */
+  desc: string;
+}
+
 export interface Playlist {
   id: number;
   name: string;
@@ -977,6 +1021,159 @@ export class BodianClient {
     };
     if (type === "tip") return this.searchTips(keyword, size);
     return map[type]?.(keyword, page, size) || [];
+  }
+
+  // ---------- 歌手与专辑详情 ----------
+
+  /**
+   * 把「歌手/专辑详情」族端点的歌曲条目映射成 [Song]。
+   *
+   * 条目字段与搜索结果高度重合，但有**两处必须写对**：
+   *
+   * 1. **歌名字段相反**：搜索条目的主字段是 `songName`（回退 `name`），这两类列表
+   *    条目的主字段是 `name`（回退 `songName`）。写反了不报错，只表现为一批歌名
+   *    莫名为空串。
+   * 2. **高潮区间只在大于 0 时保留**：实测条目的 `payInfo.refrain_start` /
+   *    `refrain_end` 可为字符串 `"0"`（无高潮标记）。`"0"` 按 `Number.isFinite`
+   *    守卫会原样下发 0，客户端按「区间起点在 0ms」理解；虽然多数客户端会把
+   *    ≤0 当缺失处理，但那是在替客户端做决定 —— 这里直接丢弃，缺键才是「没有」。
+   *
+   * 其余坑与 [searchSongs] 一致照抄：封面用 `albumPic`、时长 `duration`（秒）、
+   * `payInfo` 缺失时按可播处理（`listen_fragment` 缺省 `"0"`）——它标记的是匿名
+   * 试听权限，不是「歌曲已下线」，会员账号应允许进入原生权益取址。
+   */
+  private toDetailSong(s: any): Song {
+    return {
+      id: Number(s.id),
+      name: s.name || s.songName || "",
+      artist: s.artist || "",
+      album: s.album || "",
+      cover: s.albumPic || "",
+      durationSeconds: Number(s.duration) || 0,
+      subtitle: s.subtitle || "",
+      refrainStartMs: Number(s.payInfo?.refrain_start) > 0 ? Number(s.payInfo.refrain_start) : undefined,
+      refrainEndMs: Number(s.payInfo?.refrain_end) > 0 ? Number(s.payInfo.refrain_end) : undefined,
+      // 判据与 [searchSongs] 逐字一致，见该方法内的说明。
+      playable: this.hasCredentials() || String(s.payInfo?.listen_fragment ?? "0") !== "1",
+    };
+  }
+
+  /**
+   * 歌手详情：`service/artist/:id`，取 `data.artistInfo`。
+   *
+   * 上游的 `fansCnt` / `musicCnt` / `albumCnt` 在这里就地改成契约名
+   * `fansCount` / `musicCount` / `albumCount`。业务码不是 200（查无此人或上游异常）
+   * 返回 `null`，不抛异常 —— 调用方（适配器/控制器）对「详情取不到」有统一的
+   * 502 出口，协议层不必替它们挑文案。
+   */
+  async getArtistInfo(artistId: number): Promise<ArtistDetail | null> {
+    const d = await this.signedGet(`${BASE_URL}service/artist/${artistId}`);
+    if (Number(d.code) !== 200 || !d.data?.artistInfo) return null;
+    const info = d.data.artistInfo;
+    return {
+      id: Number(info.id),
+      name: String(info.name ?? ""),
+      aliasName: String(info.aliasName ?? ""),
+      pic: String(info.pic ?? ""),
+      desc: String(info.desc ?? ""),
+      fansCount: Number(info.fansCnt) || 0,
+      musicCount: Number(info.musicCnt) || 0,
+      albumCount: Number(info.albumCnt) || 0,
+    };
+  }
+
+  /**
+   * 歌手的歌曲列表：`service/artist/music/:id`，取 `data.total` + `data.resultList`。
+   *
+   * ⚠️ **这一族端点的 `pn` 是 1 基的，与搜索接口（0 基）不同，绝不能过 [upstreamPage]**。
+   * 实测（歌手 336）：`pn=0` 与 `pn=1` 返回同一页，`pn=2` 才翻到第 11–20 首，
+   * 即偏移就是 `(pn-1) × rn` —— 直接把调用方的 1 基 page 当 `pn` 传即可。
+   * 套用搜索那条换算会让第 1 页拿到第 2 页、且 0/1 两页重复。同一上游两族端点
+   * 分页语义不一致是实测结论，别「顺手统一」。
+   */
+  async getArtistSongs(artistId: number, page: number = 1, size: number = 30): Promise<{ songs: Song[]; total: number }> {
+    const d = await this.signedGet(`${BASE_URL}service/artist/music/${artistId}`, { pn: page, rn: size });
+    return {
+      songs: (d.data?.resultList || []).map((s: any) => this.toDetailSong(s)),
+      total: Number(d.data?.total) || 0,
+    };
+  }
+
+  /**
+   * 歌手的专辑列表：`service/artist/album/:id`，取 `data.total` + `data.resultList`。
+   *
+   * 条目形状与专辑搜索一致（`id` 与 `albumId` 同时存在，取法同 [searchAlbums]：
+   * 优先 `albumId`），`musicCount` 改名 `songCount`；超长的 `info` 简介与
+   * `lastPlayTime` / `isshow` / `artists` 列表展示用不到，不映射。
+   * 分页同 [getArtistSongs]：`pn` 是 1 基的。
+   */
+  async getArtistAlbums(artistId: number, page: number = 1, size: number = 20): Promise<{ albums: Album[]; total: number }> {
+    const d = await this.signedGet(`${BASE_URL}service/artist/album/${artistId}`, { pn: page, rn: size });
+    return {
+      albums: (d.data?.resultList || []).map((s: any) => ({
+        id: Number(s.albumId || s.id),
+        name: String(s.name ?? ""),
+        pic: String(s.pic ?? ""),
+        artist: String(s.artist ?? ""),
+        artistId: Number(s.artistId) || 0,
+        songCount: Number(s.musicCount) || 0,
+        showtime: String(s.showtime ?? ""),
+      })),
+      total: Number(d.data?.total) || 0,
+    };
+  }
+
+  /**
+   * 相似歌手：`service/artist/similar/:id`，`data.resultList` 是与歌手详情同形状
+   * （ArtistInfo）的数组。映射回 `/search` 的歌手行：`musicCnt` → `songCount`、
+   * `albumCnt` → `albumCount`；`aliasName` / `desc` 列表展示用不到，不映射。
+   * 不分页（上游端点也没有 pn/rn），顺序保持上游返回。
+   */
+  async getSimilarArtists(artistId: number): Promise<Artist[]> {
+    const d = await this.signedGet(`${BASE_URL}service/artist/similar/${artistId}`);
+    return (d.data?.resultList || []).map((s: any) => ({
+      id: Number(s.id),
+      name: String(s.name ?? ""),
+      pic: String(s.pic ?? ""),
+      songCount: Number(s.musicCnt) || 0,
+      albumCount: Number(s.albumCnt) || 0,
+    }));
+  }
+
+  /**
+   * 专辑详情：`service/album/:id`，取 `data.albumInfo`。
+   *
+   * 与 [Album] 列表行的关键差别：**保留长简介 `info`**（改名为 `desc`）——详情页要
+   * 整段展示，这是全链路唯一透传它的地方（理由见 [AlbumDetail]）。取法与
+   * [searchAlbums] 一致：`id` / `albumId` 同时存在时优先 `albumId`。
+   * 业务码不是 200 返回 `null`，理由同 [getArtistInfo]。
+   */
+  async getAlbumInfo(albumId: number): Promise<AlbumDetail | null> {
+    const d = await this.signedGet(`${BASE_URL}service/album/${albumId}`);
+    if (Number(d.code) !== 200 || !d.data?.albumInfo) return null;
+    const info = d.data.albumInfo;
+    return {
+      id: Number(info.albumId || info.id),
+      name: String(info.name ?? ""),
+      pic: String(info.pic ?? ""),
+      artist: String(info.artist ?? ""),
+      artistId: Number(info.artistId) || 0,
+      songCount: Number(info.musicCount) || 0,
+      showtime: String(info.showtime ?? ""),
+      desc: String(info.info ?? ""),
+    };
+  }
+
+  /**
+   * 专辑的歌曲列表：`service/album/music/:id`。条目映射与分页语义同
+   * [getArtistSongs]（`pn` 1 基直传），只是端点与路径参数不同。
+   */
+  async getAlbumSongs(albumId: number, page: number = 1, size: number = 30): Promise<{ songs: Song[]; total: number }> {
+    const d = await this.signedGet(`${BASE_URL}service/album/music/${albumId}`, { pn: page, rn: size });
+    return {
+      songs: (d.data?.resultList || []).map((s: any) => this.toDetailSong(s)),
+      total: Number(d.data?.total) || 0,
+    };
   }
 
   // ---------- 音频与歌词 ----------

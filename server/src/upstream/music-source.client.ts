@@ -3,6 +3,7 @@ import type {
   RichLyric,
   SearchResult,
   UpstreamLink,
+  UpstreamSong,
   UpstreamSongInfo,
 } from "./tencent.client";
 
@@ -116,6 +117,51 @@ export interface UpstreamAlbum {
 }
 
 /**
+ * 专辑详情（`GET /api/v1/albums/:id` 的 `data.album`，去掉 `source`）。命名约定同
+ * [UpstreamArtistDetail]。
+ *
+ * 这是**唯一保留上游长简介 `info` 的契约**（就地改名为 `desc`）：专辑详情页要整段展示
+ * 它，单条几十 KB 也照收。搜索列表行（[UpstreamAlbum]）与歌手专辑列表仍照旧丢弃 ——
+ * 那里只是封面加歌名的网格，透传简介只会白白撑大响应。
+ */
+export interface UpstreamAlbumDetail {
+  id: number;
+  name: string;
+  /** 封面绝对地址。上游可能给空串。 */
+  pic: string;
+  artist: string;
+  artistId: number;
+  /** 收录歌曲数。上游叫 `musicCount`。 */
+  songCount: number;
+  /** 发行日期（例如 `2026-03-25`）。上游可能缺失或空串。 */
+  showtime: string;
+  /** 专辑长简介。上游字段叫 `info`，仅详情保留。 */
+  desc: string;
+}
+
+/**
+ * 歌手详情（`GET /api/v1/artists/:id` 的 `data.artist`，去掉 `source`）。
+ *
+ * 字段名就是**下发契约名** —— 上游的 `fansCnt` / `musicCnt` / `albumCnt` 必须在适配器里
+ * 就地改成 `fansCount` / `musicCount` / `albumCount`，出流后不再有第二层改名。与
+ * [UpstreamArtist] 的搜索行不同：详情保留 `aliasName`（艺名）与 `desc`（简介），但同样
+ * 丢弃 `guardDesc`（守护标语，波点运营内容）与 `isshowtype`（上游展示开关）。
+ */
+export interface UpstreamArtistDetail {
+  id: number;
+  name: string;
+  /** 艺名/别名。上游可能给空串。 */
+  aliasName: string;
+  /** 封面绝对地址。上游可能给空串。 */
+  pic: string;
+  /** 歌手简介。上游可能给空串。 */
+  desc: string;
+  fansCount: number;
+  musicCount: number;
+  albumCount: number;
+}
+
+/**
  * 一个音源适配器必须提供的能力。
  *
  * 抽这个接口的直接动机：在此之前「选哪个上游」是散在 6 个地方的
@@ -177,6 +223,58 @@ export interface MusicSourceClient {
    * 调用方必须先判断方法存在。条数上限由调用方控制，返回值保持上游排序。
    */
   searchAlbums?(keyword: string, limit: number): Promise<UpstreamAlbum[]>;
+
+  /**
+   * 歌手详情，产出 `GET /api/v1/artists/:id` 的 `data.artist`（`source` 由调用方补）。
+   * 只有上游提供该能力时才实现；调用方必须先判断方法是否存在。
+   * 取不到（上游业务码非 200，即查无此人或上游故障）时返回 `null`，由调用方统一归成
+   * 502 —— 与 MV 信息同一套做法，不在这里抛异常，让「取不到」有一个统一的出口。
+   */
+  getArtistInfo?(artistId: number): Promise<UpstreamArtistDetail | null>;
+
+  /**
+   * 歌手的歌曲列表（分页），形状与 [searchSongs] 的单页结果对齐。只有上游提供该能力时
+   * 才实现；调用方必须先判断方法存在。[total] 是上游给的整表总数，调用方据此算
+   * `hasMore`，不要拿本页条数凑数 —— 整倍数页会误判成「没有下一页」。
+   */
+  getArtistSongs?(
+    artistId: number,
+    page: number,
+    limit: number,
+  ): Promise<{ songs: UpstreamSong[]; total: number }>;
+
+  /**
+   * 歌手的专辑列表（分页），行形状与 [searchAlbums] 一致（超长 `info` 简介照旧丢弃）。
+   * 只有上游提供该能力时才实现；调用方必须先判断方法存在。
+   */
+  getArtistAlbums?(
+    artistId: number,
+    page: number,
+    limit: number,
+  ): Promise<{ albums: UpstreamAlbum[]; total: number }>;
+
+  /**
+   * 相似歌手，行形状与 [searchArtists] 一致，顺序由上游决定。只有上游提供该能力时才
+   * 实现；调用方必须先判断方法存在。不分页 —— 详情页只展示一排，翻页没有界面承载。
+   */
+  getSimilarArtists?(artistId: number): Promise<UpstreamArtist[]>;
+
+  /**
+   * 专辑详情，产出 `GET /api/v1/albums/:id` 的 `data.album`（`source` 由调用方补）。
+   * 这是**唯一保留上游长简介的契约**：详情页要整段展示它，列表行仍照旧丢弃。
+   * 取不到时返回 `null`，理由同 [getArtistInfo]。
+   */
+  getAlbumInfo?(albumId: number): Promise<UpstreamAlbumDetail | null>;
+
+  /**
+   * 专辑的歌曲列表（分页），形状与 [getArtistSongs] 一致。只有上游提供该能力时才实现；
+   * 调用方必须先判断方法存在。
+   */
+  getAlbumSongs?(
+    albumId: number,
+    page: number,
+    limit: number,
+  ): Promise<{ songs: UpstreamSong[]; total: number }>;
 
   /** 单曲信息与**真实可用**的音质档位。 */
   requestSongInfo(key: SongKey): Promise<UpstreamSongInfo>;
@@ -262,4 +360,4 @@ export interface MusicSourceCredentialManager {
   invalidateCredentialCache(): void;
 }
 
-export type { RichLyric, SearchResult, UpstreamLink, UpstreamSongInfo };
+export type { RichLyric, SearchResult, UpstreamLink, UpstreamSong, UpstreamSongInfo };

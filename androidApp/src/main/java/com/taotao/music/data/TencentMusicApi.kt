@@ -386,6 +386,156 @@ class TencentMusicApi(
         }
     }
 
+    // ---------------------------------------------------------------------
+    // 歌手 / 专辑主页
+    // ---------------------------------------------------------------------
+    //
+    // 六条路由都是普通 JSON 信封（{code, message, data}），与 /search 的 NDJSON 不同：
+    // 整个响应体一次读完，`authorized()` 的 401 重放天然只产出一份完整结果，
+    // 不存在逐行回调被重放两次的问题，所以这里不再提供 onProgress 之类的流式回调。
+
+    /**
+     * 歌手主页资料。
+     *
+     * [source] 是音源（当前固定酷我），与歌曲自身的来源语义一致地透传给服务端。
+     */
+    fun artistDetail(artistId: Long, source: String = SEARCH_SOURCE_KUWO): ArtistDetail {
+        val id = artistId.requireCatalogId("歌手")
+        return authorized("/api/v1/artists/$id?source=${encode(source.ifBlank { SEARCH_SOURCE_KUWO })}") { connection ->
+            val root = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+            check(root.optInt("code") == 0) { root.optString("message", "无法获取歌手资料") }
+            root.optJSONObject("data")?.optJSONObject("artist")?.toArtistDetail() ?: error("歌手资料缺失")
+        }
+    }
+
+    /**
+     * 歌手名下的歌曲，分页。
+     *
+     * [quality] 语义与 [search] 相同：透传给服务端，歌曲解析出的占位播放地址按该档位生成。
+     * 歌曲条目与 /search 的 song 行完全同构，直接复用 [toSong] 解析。
+     */
+    fun artistSongs(
+        artistId: Long,
+        page: Int = 1,
+        num: Int = DEFAULT_CATALOG_PAGE_NUM,
+        quality: Int = AudioQuality.Default.value,
+        source: String = SEARCH_SOURCE_KUWO,
+    ): PagedList<Song> {
+        val id = artistId.requireCatalogId("歌手")
+        val query = "?page=${page.coerceAtLeast(1)}&num=${num.coerceIn(1, MAX_CATALOG_PAGE_NUM)}" +
+            "&quality=${quality.coerceIn(0, MAX_QUALITY)}" +
+            "&source=${encode(source.ifBlank { SEARCH_SOURCE_KUWO })}"
+        return authorized("/api/v1/artists/$id/songs$query") { connection ->
+            val root = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+            check(root.optInt("code") == 0) { root.optString("message", "无法获取歌手歌曲") }
+            val data = root.optJSONObject("data") ?: JSONObject()
+            data.toPagedList(arrayName = "songs", parse = { row -> row.toSong(quality) })
+        }
+    }
+
+    /**
+     * 歌手名下的专辑，分页。专辑条目与搜索区块的 [AlbumSearchResult] 形状一致，直接复用解析。
+     */
+    fun artistAlbums(
+        artistId: Long,
+        page: Int = 1,
+        num: Int = DEFAULT_CATALOG_PAGE_NUM,
+        source: String = SEARCH_SOURCE_KUWO,
+    ): PagedList<AlbumSearchResult> {
+        val id = artistId.requireCatalogId("歌手")
+        val query = "?page=${page.coerceAtLeast(1)}&num=${num.coerceIn(1, MAX_CATALOG_PAGE_NUM)}" +
+            "&source=${encode(source.ifBlank { SEARCH_SOURCE_KUWO })}"
+        return authorized("/api/v1/artists/$id/albums$query") { connection ->
+            val root = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+            check(root.optInt("code") == 0) { root.optString("message", "无法获取歌手专辑") }
+            val data = root.optJSONObject("data") ?: JSONObject()
+            data.toPagedList(arrayName = "albums", parse = { row -> row.toAlbumSearchResult() })
+        }
+    }
+
+    /** 相似歌手。服务端一次返回全部，没有分页元数据。 */
+    fun similarArtists(artistId: Long, source: String = SEARCH_SOURCE_KUWO): List<ArtistSearchResult> {
+        val id = artistId.requireCatalogId("歌手")
+        return authorized("/api/v1/artists/$id/similar?source=${encode(source.ifBlank { SEARCH_SOURCE_KUWO })}") { connection ->
+            val root = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+            check(root.optInt("code") == 0) { root.optString("message", "无法获取相似歌手") }
+            val rows = root.optJSONObject("data")?.optJSONArray("artists") ?: JSONArray()
+            (0 until rows.length()).mapNotNull { index -> rows.optJSONObject(index)?.toArtistSearchResult() }
+        }
+    }
+
+    /** 专辑页资料（含长简介 [AlbumDetail.desc]，可能为空串）。 */
+    fun albumDetail(albumId: Long, source: String = SEARCH_SOURCE_KUWO): AlbumDetail {
+        val id = albumId.requireCatalogId("专辑")
+        return authorized("/api/v1/albums/$id?source=${encode(source.ifBlank { SEARCH_SOURCE_KUWO })}") { connection ->
+            val root = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+            check(root.optInt("code") == 0) { root.optString("message", "无法获取专辑资料") }
+            root.optJSONObject("data")?.optJSONObject("album")?.toAlbumDetail() ?: error("专辑资料缺失")
+        }
+    }
+
+    /** 专辑收录的歌曲，分页。条目与 [artistSongs] 同构。 */
+    fun albumSongs(
+        albumId: Long,
+        page: Int = 1,
+        num: Int = DEFAULT_CATALOG_PAGE_NUM,
+        quality: Int = AudioQuality.Default.value,
+        source: String = SEARCH_SOURCE_KUWO,
+    ): PagedList<Song> {
+        val id = albumId.requireCatalogId("专辑")
+        val query = "?page=${page.coerceAtLeast(1)}&num=${num.coerceIn(1, MAX_CATALOG_PAGE_NUM)}" +
+            "&quality=${quality.coerceIn(0, MAX_QUALITY)}" +
+            "&source=${encode(source.ifBlank { SEARCH_SOURCE_KUWO })}"
+        return authorized("/api/v1/albums/$id/songs$query") { connection ->
+            val root = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+            check(root.optInt("code") == 0) { root.optString("message", "无法获取专辑歌曲") }
+            val data = root.optJSONObject("data") ?: JSONObject()
+            data.toPagedList(arrayName = "songs", parse = { row -> row.toSong(quality) })
+        }
+    }
+
+    /** 解析歌手主页资料。pic 可能空，归一成 null；aliasName / desc 保留空串语义由界面判空。 */
+    private fun JSONObject.toArtistDetail(): ArtistDetail = ArtistDetail(
+        source = optString("source").ifBlank { SEARCH_SOURCE_KUWO },
+        id = optLong("id"),
+        name = optString("name"),
+        aliasName = optString("aliasName"),
+        pic = nullableString("pic"),
+        desc = optString("desc"),
+        fansCount = optLong("fansCount"),
+        musicCount = optLong("musicCount"),
+        albumCount = optLong("albumCount"),
+    )
+
+    /** 解析专辑页资料。pic 可能空，归一成 null；desc 为长简介，可能为空串。 */
+    private fun JSONObject.toAlbumDetail(): AlbumDetail = AlbumDetail(
+        source = optString("source").ifBlank { SEARCH_SOURCE_KUWO },
+        id = optLong("id"),
+        name = optString("name"),
+        pic = nullableString("pic"),
+        artist = optString("artist"),
+        artistId = optLong("artistId"),
+        songCount = optLong("songCount"),
+        showtime = optString("showtime"),
+        desc = optString("desc"),
+    )
+
+    /**
+     * 解析统一的分页信封：`data = { 条目数组, meta: { page, num, total, hasMore } }`。
+     * [arrayName] 是条目数组在 data 里的字段名（songs / albums），[parse] 把每行 JSON
+     * 转成具体模型；meta 缺失（旧服务端）时按「无更多」处理。
+     */
+    private fun <T> JSONObject.toPagedList(arrayName: String, parse: (JSONObject) -> T): PagedList<T> {
+        val rows = optJSONArray(arrayName) ?: JSONArray()
+        val meta = optJSONObject("meta") ?: JSONObject()
+        return PagedList(
+            items = (0 until rows.length()).mapNotNull { index -> rows.optJSONObject(index)?.let(parse) },
+            page = meta.optInt("page", 1),
+            hasMore = meta.optBoolean("hasMore"),
+            total = meta.optLong("total", 0L),
+        )
+    }
+
     fun requestMv(song: Song): MvInfo {
         val id = song.remoteId?.takeIf { it > 0L } ?: throw IllegalArgumentException("MV 需要歌曲 ID")
         val source = encode(song.source.ifBlank { DEFAULT_SOURCE })
@@ -1255,6 +1405,10 @@ class TencentMusicApi(
     private fun Long.requirePlaylistId(): Long = takeIf { it > 0L }
         ?: throw IllegalArgumentException("歌单 ID 不合法")
 
+    /** 歌手 / 专辑目录接口的 ID 校验。ID 来自上游音源，0 意味着解析失败而非真实条目。 */
+    private fun Long.requireCatalogId(kind: String): Long = takeIf { it > 0L }
+        ?: throw IllegalArgumentException("${kind} ID 不合法")
+
     /**
      * 发起需要访问令牌的请求：令牌被服务端拒绝时自动续期并重放一次。
      * 续期失败说明刷新令牌同样失效，抛出 [SessionExpiredException] 让界面回到登录页。
@@ -1555,6 +1709,10 @@ class TencentMusicApi(
         private const val BATCH_INFO_SIZE = 60
         private const val DEFAULT_SOURCE = "tencent"
 
+        /** 歌手 / 专辑目录歌曲接口的单页条数：默认值与上限（与 /search 的 num 上限一致）。 */
+        private const val DEFAULT_CATALOG_PAGE_NUM = 30
+        private const val MAX_CATALOG_PAGE_NUM = 60
+
         /**
          * 搜索范围：聚合查询（服务端按 `AGGREGATED_SOURCES` 并发查多个音源）。
          *
@@ -1796,6 +1954,71 @@ data class AlbumSearchResult(
     val songCount: Long,
     /** 发行日期，形如 `2026-03-25`；服务端可能缺失，缺失时为空串。 */
     val showtime: String,
+)
+
+/**
+ * 分页信封的解析结果（歌手 / 专辑目录的歌曲与专辑接口共用）。
+ *
+ * 条目泛型直接复用现有模型：歌曲与 /search 的 song 行完全同构（[Song]），
+ * 专辑与 [AlbumSearchResult] 形状一致 —— 不再造一套字段相同的模型。
+ */
+data class PagedList<T>(
+    val items: List<T>,
+    /** 服务端回显的页码；调用方翻页时信任自己发出的请求参数即可。 */
+    val page: Int,
+    val hasMore: Boolean,
+    /** 名下条目总数，仅用于展示；缺失时为 0。 */
+    val total: Long,
+)
+
+/**
+ * 歌手主页的完整资料（`GET /api/v1/artists/:id`）。
+ *
+ * 与搜索区块的 [ArtistSearchResult] 刻意分开命名：详情多了别名、简介与粉丝数，
+ * 且两者生命周期不同（区块随搜索刷新，详情随歌手页打开拉取）。
+ */
+data class ArtistDetail(
+    /** 所属音源；当前只有酷我下发。 */
+    val source: String,
+    /** 音源内的歌手 ID，与 [ArtistSearchResult.id] 同一取值域。 */
+    val id: Long,
+    val name: String,
+    /** 别名 / 外文名；服务端可能下发空串，空串表示没有，界面判空后不展示该行。 */
+    val aliasName: String,
+    /** 头像地址；服务端可能下发空串，解析时已归一成 null。 */
+    val pic: String?,
+    /** 歌手简介；可能为空串，空串不渲染简介区。 */
+    val desc: String,
+    val fansCount: Long,
+    /** 名下歌曲总数。 */
+    val musicCount: Long,
+    /** 名下专辑总数。 */
+    val albumCount: Long,
+)
+
+/**
+ * 专辑页的完整资料（`GET /api/v1/albums/:id`）。
+ *
+ * 基础字段与 [AlbumSearchResult] 形状相同（复用解析思路），只多出长简介 [desc]。
+ */
+data class AlbumDetail(
+    /** 所属音源；当前只有酷我下发。 */
+    val source: String,
+    /** 音源内的专辑 ID，与 [AlbumSearchResult.id] 同一取值域。 */
+    val id: Long,
+    val name: String,
+    /** 封面地址；服务端可能下发空串，解析时已归一成 null。 */
+    val pic: String?,
+    /** 主歌手名（服务端直接下发展示串）。 */
+    val artist: String,
+    /** 主歌手的音源 ID，供专辑页头部跳转歌手页。 */
+    val artistId: Long,
+    /** 专辑收录的歌曲数。 */
+    val songCount: Long,
+    /** 发行日期，形如 `2026-03-25`；服务端可能缺失，缺失时为空串。 */
+    val showtime: String,
+    /** 专辑长简介；服务端可能给很长的文本，也可能为空串，由界面折叠展示。 */
+    val desc: String,
 )
 
 /**

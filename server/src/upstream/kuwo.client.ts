@@ -8,7 +8,9 @@ import type {
   MusicSourceCredentialManager,
   SongKey,
   UpstreamAlbum,
+  UpstreamAlbumDetail,
   UpstreamArtist,
+  UpstreamArtistDetail,
 } from "./music-source.client";
 import type { MusicSourceCredential } from "./music-source-account.repository";
 import { MusicSourceAccountRepository } from "./music-source-account.repository";
@@ -614,6 +616,88 @@ export class KuwoClient implements MusicSourceClient, MusicSourceCredentialManag
   async searchAlbums(keyword: string, limit: number): Promise<UpstreamAlbum[]> {
     const client = await this.clientOf();
     return client.searchAlbums(keyword, 1, limit);
+  }
+
+  // ---------- 歌手与专辑详情（2026-10 新增）----------
+
+  /**
+   * 波点歌手详情，产出 `GET /api/v1/artists/:id` 的 `data.artist`（`source` 由控制器补）。
+   * `fansCnt` / `musicCnt` / `albumCnt` → `fansCount` / `musicCount` / `albumCount` 的改名
+   * 已在协议层完成，这里只负责带上当前生效凭据，不做第二层映射。
+   * 取不到（上游业务码非 200）时协议层返回 null，控制器统一归成 502。
+   */
+  async getArtistInfo(artistId: number): Promise<UpstreamArtistDetail | null> {
+    const client = await this.clientOf();
+    return client.getArtistInfo(artistId);
+  }
+
+  /**
+   * 波点歌手歌曲列表。条目经 [toUpstreamSong] 换成 v3 形状 —— 与 `/search` 的歌曲行
+   * **同一条映射链路**，详情页的歌曲行必须与搜索结果完全同构，客户端才能原样复用
+   * 歌曲行组件与点播逻辑（含 `playable` / 高潮区间的语义）。
+   *
+   * ⚠️ `page` **直传给上游当 `pn`**，绝不能过 `upstreamPage()` 的换算：详情族端点
+   * （`service/artist/music/:id`）的 `pn` 是 **1 基**的，与搜索接口（0 基、偏移
+   * `pn × rn`，见 `BodianClient.upstreamPage()` 的实测表格）是两套分页语义。
+   * 实测（歌手 336）`pn=0` 与 `pn=1` 返回同一页，`pn=2` 才翻到第 11–20 首。
+   * 套用搜索那条换算会让第 1 页拿到第 2 页、且 0/1 两页重复。同一上游两族端点
+   * 分页语义不一致是实测结论，别「顺手统一」。`limit` 直传当 `rn`。
+   */
+  async getArtistSongs(
+    artistId: number,
+    page: number,
+    limit: number,
+  ): Promise<{ songs: UpstreamSong[]; total: number }> {
+    const client = await this.clientOf();
+    const detail = await client.getArtistSongs(artistId, page, limit);
+    return { songs: detail.songs.map((song) => this.toUpstreamSong(song)), total: detail.total };
+  }
+
+  /**
+   * 波点歌手专辑列表，行形状与 [searchAlbums] 一致（超长 `info` 简介照旧在协议层丢弃）。
+   * 分页语义同 [getArtistSongs]：`pn` 1 基直传，不过 `upstreamPage()`。
+   */
+  async getArtistAlbums(
+    artistId: number,
+    page: number,
+    limit: number,
+  ): Promise<{ albums: UpstreamAlbum[]; total: number }> {
+    const client = await this.clientOf();
+    return client.getArtistAlbums(artistId, page, limit);
+  }
+
+  /**
+   * 波点相似歌手，行形状与 [searchArtists] 一致，顺序保持上游返回。
+   * 不分页 —— 上游端点本身没有 pn/rn，详情页也只展示一排。
+   */
+  async getSimilarArtists(artistId: number): Promise<UpstreamArtist[]> {
+    const client = await this.clientOf();
+    return client.getSimilarArtists(artistId);
+  }
+
+  /**
+   * 波点专辑详情，产出 `GET /api/v1/albums/:id` 的 `data.album`（`source` 由控制器补）。
+   * 与列表行的唯一差别是**保留长简介**：上游的 `info` 在协议层就地改成 `desc`，
+   * 专辑详情页要整段展示它 —— 这是全链路唯一透传简介的接口，搜索与歌手专辑列表
+   * 仍照旧丢弃（单条几十 KB，进列表只会白白撑大响应）。
+   */
+  async getAlbumInfo(albumId: number): Promise<UpstreamAlbumDetail | null> {
+    const client = await this.clientOf();
+    return client.getAlbumInfo(albumId);
+  }
+
+  /**
+   * 波点专辑歌曲列表。条目映射与分页语义同 [getArtistSongs]
+   * （`pn` 1 基直传），只是端点与路径参数不同。
+   */
+  async getAlbumSongs(
+    albumId: number,
+    page: number,
+    limit: number,
+  ): Promise<{ songs: UpstreamSong[]; total: number }> {
+    const client = await this.clientOf();
+    const detail = await client.getAlbumSongs(albumId, page, limit);
+    return { songs: detail.songs.map((song) => this.toUpstreamSong(song)), total: detail.total };
   }
 
   /** 官方目录的 size 可能是字节数，也可能是 `9.94Mb` 这类显示字符串。 */

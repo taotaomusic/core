@@ -14,6 +14,8 @@ import kotlinx.coroutines.CoroutineScope
 import com.taotao.music.TaotaoApplication
 import com.taotao.music.data.AppearanceMode
 import com.taotao.music.data.AppearanceStore
+import com.taotao.music.data.ArtistSearchResult
+import com.taotao.music.data.AlbumSearchResult
 import com.taotao.music.data.AuthSession
 import com.taotao.music.data.crypto.HardwareDeviceId
 import com.taotao.music.crypto.CryptoTransport
@@ -136,6 +138,18 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
         accountIdProvider = { authSession.accountId },
         signedInProvider = { signedIn },
         onOpenSection = { mineLibrarySection = it },
+        onMessage = { message = it },
+    )
+    val artistPage = ArtistPageState(
+        scope = scope,
+        musicApi = musicApi,
+        qualityStore = qualityStore,
+        onMessage = { message = it },
+    )
+    val albumPage = AlbumPageState(
+        scope = scope,
+        musicApi = musicApi,
+        qualityStore = qualityStore,
         onMessage = { message = it },
     )
 
@@ -885,11 +899,30 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
         playlist.closeAll()
         diarySong = null
         showDiaryRecords = false
+        // 歌手 / 专辑主页同属叠放下级页，换标签时一并收起，否则路由会被它们抢走。
+        artistPage.close()
+        albumPage.close()
     }
 
     fun openSearchPage() {
         search.openPage()
         showSearchPage = true
+    }
+
+    /**
+     * 打开歌手主页。歌手页与专辑页是平级下级页（都从搜索域进入），互跳时收起对方：
+     * 同一时刻只保留一层下级页，返回键永远「先清当前页、回到搜索页」，
+     * 不需要维护返回栈 —— 这是与 playlist.selected 同一套扁平导航约定。
+     */
+    fun openArtistPage(target: ArtistSearchResult) {
+        albumPage.close()
+        artistPage.open(target)
+    }
+
+    /** 打开专辑页；同 [openArtistPage]，先收起歌手页。 */
+    fun openAlbumPage(target: AlbumSearchResult) {
+        artistPage.close()
+        albumPage.open(target)
     }
 
     fun applyAppearance(mode: AppearanceMode) {
