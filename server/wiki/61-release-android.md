@@ -73,6 +73,24 @@ curl.exe -X POST "https://你的域名/api/v1/app/admin/releases?versionCode=版
 
 **2026-10-01 起云端发版可免手工登记**:CI 的 `client-publish` 发版时把 APK 与 `metadata.json`(versionCode/versionName/sha256/size)一起传上 Release `latest`;配好 `GITHUB_WEBHOOK_SECRET` 后,`POST /app/github-webhook` 收到 GitHub webhook 会自动拉取并登记版本。上面的手工登记仍然可用,也是 webhook 失联时的兜底(机制见 [62-ci-cloud-build.md](62-ci-cloud-build.md))。
 
+**创建外链版本(不上传包)**:`POST /app/admin/releases/link`(JSON 体,写角色),包留在外部
+(GitHub Release 资产、对象存储等),本机只登记地址 —— 与 webhook 登记的记录同形状
+(`apk_file` 空、`apk_url` 下发当下载地址):
+
+```json
+{
+  "versionCode": 1,
+  "versionName": "1.0.70",
+  "apkUrl": "https://github.com/taotaomusic/core/releases/download/latest/TaotaoMusic-1.0.70-release.apk",
+  "sha256": "64 位十六进制,选填,断更比对依据",
+  "apkSize": 24000000,
+  "releaseNote": "更新说明,选填",
+  "rollout": 0
+}
+```
+
+`sha256`/`apkSize` 选填;`apkUrl` 必须 http(s);同版本号重复登记走同一 `ON CONFLICT` 覆盖语义。管理后台「创建新版本」对话框的「填写下载地址」页签就是调这个接口。
+
 ## 4. 下载验证
 
 ```powershell

@@ -1277,6 +1277,53 @@ async function main() {
     JSON.stringify(rowAfterEdit).slice(0, 160),
   );
 
+  // ⑧ 创建「外链版本」：不上传包字节，直接登记外部下载地址（与 webhook 登记同形状）。
+  //    形状错误在进适配器前被拦：URL 非 http(s)、sha256 非 64 位十六进制都 400。
+  const badLinkUrl = await fetch(`${base}/api/v1/app/admin/releases/link`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${adminSession}` },
+    body: JSON.stringify({ versionCode: 999004, versionName: "9.9.4", apkUrl: "ftp://nope.example/a.apk" }),
+  });
+  check("创建外链版本 URL 非 http(s) 被拒 400", badLinkUrl.status === 400, `实际 ${badLinkUrl.status}`);
+  const badLinkSha = await fetch(`${base}/api/v1/app/admin/releases/link`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${adminSession}` },
+    body: JSON.stringify({ versionCode: 999004, versionName: "9.9.4", apkUrl: "https://ok.example/a.apk", sha256: "nothex" }),
+  });
+  check("创建外链版本 sha256 非 64 位十六进制被拒 400", badLinkSha.status === 400, `实际 ${badLinkSha.status}`);
+  const linkCreated = await fetch(`${base}/api/v1/app/admin/releases/link`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${adminSession}` },
+    body: JSON.stringify({
+      versionCode: 999004,
+      versionName: "9.9.4",
+      apkUrl: "https://example.com/verify-999004.apk",
+      sha256: "A".repeat(64),
+      apkSize: 24000000,
+      releaseNote: "契约外链登记",
+      rollout: 0,
+    }),
+  });
+  const linkCreatedBody = await linkCreated.json();
+  check(
+    "创建外链版本成功且 apk_file 为空、地址/sha256 落库",
+    linkCreated.status === 201
+      && linkCreatedBody.data?.apk_file === ""
+      && linkCreatedBody.data?.apk_url === "https://example.com/verify-999004.apk"
+      && linkCreatedBody.data?.apk_sha256 === "a".repeat(64)
+      && linkCreatedBody.data?.apk_size === 24000000
+      && linkCreatedBody.data?.rollout_percent === 0,
+    `${linkCreated.status} ${JSON.stringify(linkCreatedBody).slice(0, 200)}`,
+  );
+  const linkRow = await (
+    await fetch(`${base}/api/v1/app/admin/releases?page=1&pageSize=20`, { headers: { authorization: `Bearer ${adminSession}` } })
+  ).json();
+  check(
+    "外链版本出现在分页发布列表",
+    linkRow.data?.items?.some?.((item) => item.version_code === 999004 && item.apk_url === "https://example.com/verify-999004.apk"),
+    JSON.stringify(linkRow.data?.items?.[0]).slice(0, 160),
+  );
+
   await fetch(`${base}/api/v1/app/admin/rollout`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${adminSession}` },

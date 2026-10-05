@@ -96,7 +96,7 @@ const ACTION_GROUPS: Array<{ label: string; actions: Array<[string, string]> }> 
   {
     label: "客户端版本",
     actions: [
-      ["release.publish", "发布版本"], ["release.rollout", "调整放量"],
+      ["release.publish", "发布版本"], ["release.publish_link", "创建外链版本"], ["release.rollout", "调整放量"],
       ["release.edit", "编辑发布"], ["release.min_version", "调整最低版本"], ["release.patch_publish", "发布热更补丁"],
       ["release.patch_rollout", "调整补丁放量"], ["release.config_set", "设置远程配置"],
       ["release.config_remove", "删除远程配置"],

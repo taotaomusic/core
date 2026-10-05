@@ -82,6 +82,58 @@ export class ReleaseEditDto {
   apkUrl?: string;
 }
 
+/**
+ * 创建「外链版本」：不上传安装包字节，直接登记一个外部下载地址（GitHub Release
+ * 资产、对象存储等）。与 webhook 登记的记录同形状 —— `apk_file` 留空、`apk_url`
+ * 原样下发当下载地址。sha256 / 大小选填：sha256 是断更比对的依据，能给就给。
+ */
+export class ReleaseLinkDto {
+  @IsOptional()
+  @IsString()
+  channel?: string;
+
+  @IsInt()
+  @Min(1)
+  versionCode: number;
+
+  @IsString()
+  @Matches(/^\d+(\.\d+)*$/, { message: "versionName 必须是数字点分段（如 1.0.70）" })
+  versionName: string;
+
+  @IsString()
+  @Matches(/^https?:\/\//i, { message: "apkUrl 必须是 http(s) 地址" })
+  apkUrl: string;
+
+  /** 安装包字节数，选填，仅用于后台展示与下载提示。 */
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  apkSize?: number;
+
+  /** 安装包 sha256（64 位十六进制），选填；下发前统一转小写。 */
+  @IsOptional()
+  @Matches(/^[0-9a-fA-F]{64}$/, { message: "sha256 必须是 64 位十六进制" })
+  sha256?: string;
+
+  @IsOptional()
+  @IsString()
+  releaseNote?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(100)
+  rollout?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  minSdk?: number;
+
+  @IsOptional()
+  enabled?: boolean;
+}
+
 export class RemoteConfigDto {
   @IsOptional()
   @IsString()

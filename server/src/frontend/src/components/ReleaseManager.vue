@@ -3,7 +3,7 @@
     <div class="bar">
       <el-button type="primary" @click="openUpload">
         <el-icon><Upload /></el-icon>
-        <span>上传新版本</span>
+        <span>创建新版本</span>
       </el-button>
       <el-button @click="fetchReleases" :loading="loading">
         <el-icon><Refresh /></el-icon>
@@ -84,20 +84,40 @@
       @size-change="onSizeChange"
     />
 
-    <el-dialog v-model="uploadVisible" title="上传新版本" width="560px">
+    <el-dialog v-model="uploadVisible" title="创建新版本" width="560px">
       <el-alert type="info" :closable="false" show-icon style="margin-bottom: 16px">
         版本号必须取自构建产物的 <code>output-metadata.json</code>，不能读
         <code>version.properties</code>（递增发生在构建之后，那里的值已经比包大 1）。
         重号会静默覆盖已发布记录的 sha256。
       </el-alert>
       <el-form label-width="110px">
-        <el-form-item label="APK 文件" required>
+        <el-form-item label="登记方式">
+          <el-radio-group v-model="createMode">
+            <el-radio-button value="upload">上传安装包</el-radio-button>
+            <el-radio-button value="link">填写下载地址</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+        <!-- 上传模式：包字节直传本机，走 /app/apk 端点下发 -->
+        <el-form-item v-if="createMode === 'upload'" label="APK 文件" required>
           <input type="file" accept=".apk" @change="onFilePicked" />
           <div class="hint" v-if="file">
             {{ file.name }} · {{ formatSize(file.size) }}
             <span v-if="sha256">· sha256 已算出</span>
           </div>
         </el-form-item>
+        <!-- 外链模式：包留在外部（GitHub Release / 对象存储），本机只登记地址 -->
+        <template v-if="createMode === 'link'">
+          <el-form-item label="下载地址" required>
+            <el-input v-model="linkForm.apkUrl" placeholder="https://github.com/.../TaotaoMusic-1.0.70.apk" />
+          </el-form-item>
+          <el-form-item label="sha256">
+            <el-input v-model="linkForm.sha256" placeholder="64 位十六进制，选填；断更比对的依据" />
+          </el-form-item>
+          <el-form-item label="大小 (MB)">
+            <el-input-number v-model="linkForm.sizeMb" :min="0" :controls="false" style="width: 140px" />
+            <span class="hint" style="margin-left: 10px">选填，仅用于后台展示</span>
+          </el-form-item>
+        </template>
         <el-form-item label="版本号" required>
           <el-input-number v-model="form.versionCode" :min="1" :controls="false" style="width: 160px" />
         </el-form-item>
@@ -116,7 +136,9 @@
       </el-form>
       <template #footer>
         <el-button @click="uploadVisible = false">取消</el-button>
-        <el-button type="primary" :loading="uploading" @click="submitUpload">上传</el-button>
+        <el-button type="primary" :loading="uploading" @click="submitCreate">
+          {{ createMode === "upload" ? "上传" : "登记" }}
+        </el-button>
       </template>
     </el-dialog>
 
@@ -204,6 +226,9 @@ const pageSize = ref(20);
 const rolledOut = ref<Release | null>(null);
 const loading = ref(false);
 const uploadVisible = ref(false);
+// 登记方式：upload = 包字节直传本机；link = 只登记外部下载地址（GitHub Release / 对象存储）。
+const createMode = ref<"upload" | "link">("upload");
+const linkForm = ref({ apkUrl: "", sha256: "", sizeMb: 0 });
 const rolloutVisible = ref(false);
 const uploading = ref(false);
 const saving = ref(false);
@@ -251,6 +276,8 @@ function openUpload() {
   file.value = null;
   sha256.value = "";
   form.value = { versionCode: 1, versionName: "", note: "", rollout: 0 };
+  linkForm.value = { apkUrl: "", sha256: "", sizeMb: 0 };
+  createMode.value = "upload";
   uploadVisible.value = true;
 }
 
@@ -258,6 +285,11 @@ async function onFilePicked(event: Event) {
   const picked = (event.target as HTMLInputElement).files?.[0] ?? null;
   file.value = picked;
   sha256.value = picked ? await sha256Of(await picked.arrayBuffer()) : "";
+}
+
+async function submitCreate() {
+  if (createMode.value === "upload") return submitUpload();
+  return submitLink();
 }
 
 async function submitUpload() {
@@ -285,6 +317,37 @@ async function submitUpload() {
     await fetchReleases();
   } catch (error) {
     ElMessage.error(`上传失败：${(error as Error).message}`);
+  } finally {
+    uploading.value = false;
+  }
+}
+
+/** 外链登记：包留在外部，本机只存地址（与 webhook 登记的记录同形状）。 */
+async function submitLink() {
+  if (!form.value.versionName.trim()) return ElMessage.warning("请填写版本名");
+  const url = linkForm.value.apkUrl.trim();
+  if (!/^https?:\/\//i.test(url)) return ElMessage.warning("下载地址必须是 http(s) 链接");
+  const sha = linkForm.value.sha256.trim();
+  if (sha && !/^[0-9a-fA-F]{64}$/.test(sha)) return ElMessage.warning("sha256 必须是 64 位十六进制");
+
+  uploading.value = true;
+  try {
+    await apiPostJson("/app/admin/releases/link", props.adminToken, {
+      versionCode: form.value.versionCode,
+      versionName: form.value.versionName.trim(),
+      apkUrl: url,
+      sha256: sha || undefined,
+      // MB → 字节；0/空按未填处理。
+      apkSize: linkForm.value.sizeMb > 0 ? Math.round(linkForm.value.sizeMb * 1024 * 1024) : undefined,
+      releaseNote: form.value.note,
+      rollout: form.value.rollout,
+    });
+    ElMessage.success("登记成功");
+    uploadVisible.value = false;
+    page.value = 1;
+    await fetchReleases();
+  } catch (error) {
+    ElMessage.error(`登记失败：${(error as Error).message}`);
   } finally {
     uploading.value = false;
   }

@@ -9,7 +9,7 @@ import { READ_ROLES, WRITE_ROLES } from "../admin-auth/admin-roles";
 import { AdminAuditService } from "../admin-auth/admin-audit.service";
 import { AppConfigService } from "../config/app-config.service";
 import { ApkService } from "./apk.service";
-import { MinVersionDto, PatchRolloutDto, ReleaseEditDto, RemoteConfigDto, RolloutDto } from "./dto/admin.dto";
+import { MinVersionDto, PatchRolloutDto, ReleaseEditDto, ReleaseLinkDto, RemoteConfigDto, RolloutDto } from "./dto/admin.dto";
 import { ReleaseRepository } from "./release.repository";
 import { ReleaseService } from "./release.service";
 
@@ -131,6 +131,48 @@ export class ReleaseAdminController {
       apkSha256: stored.sha256,
     });
     return this.releases.findRelease(channel, versionCode);
+  }
+
+  /**
+   * 创建「外链版本」：不上传安装包，直接登记外部下载地址。
+   *
+   * 与 [publish]（上传字节）互补：GitHub Release 资产、对象存储等场景下包不用过本机，
+   * 登记后 bootstrap 与下载链接走 `apk_url` 外链（机制同 webhook 登记，见
+   * [GithubWebhookController.handleAndroid]）。sha256 选填 —— 它是断更比对的依据，
+   * 拿得到就传；大小选填，仅用于后台展示。
+   */
+  @AdminGuarded()
+  @Post("releases/link")
+  @RequireRole(...WRITE_ROLES)
+  @HttpCode(HttpStatus.CREATED)
+  async publishLink(@Req() request: AdminAuthenticatedRequest, @Body() body: ReleaseLinkDto) {
+    const channel = body.channel?.trim() || this.config.defaultChannel;
+    const rollout = body.rollout ?? 0;
+    await this.releases.upsertRelease({
+      channel,
+      version_code: body.versionCode,
+      version_name: body.versionName,
+      apk_file: "",
+      apk_url: body.apkUrl,
+      apk_size: body.apkSize ?? 0,
+      apk_sha256: (body.sha256 ?? "").toLowerCase(),
+      release_note: (body.releaseNote ?? "").trim(),
+      // 与 [publish] 同一口径：默认不放量，先登记自测再放量。
+      rollout_percent: this.clampPercent(rollout),
+      min_sdk: body.minSdk ?? 24,
+      enabled: body.enabled === false ? 0 : 1,
+    });
+    await this.audit.record(request, "release.publish_link", "release", `${channel}#${body.versionCode}`, {
+      channel,
+      versionCode: body.versionCode,
+      versionName: body.versionName,
+      apkUrl: body.apkUrl,
+      apkSha256: (body.sha256 ?? "").toLowerCase() || null,
+      rolloutPercent: this.clampPercent(rollout),
+      minSdk: body.minSdk ?? 24,
+      enabled: body.enabled !== false,
+    });
+    return this.releases.findRelease(channel, body.versionCode);
   }
 
   @AdminGuarded()
