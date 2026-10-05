@@ -77,7 +77,7 @@
   - `SKIP_WEB_PLAYER=1`:core 单仓里上级目录有 Gradle 工程,后端 CI 的 server job 用它明确跳过,避免后端构建误触发一次 wasm 构建;
   - 上级目录找不到 `settings.gradle.kts` / wrapper(独立仓库部署形态)时自动跳过,产物由部署侧另行提供。
 - 云端构建:core 的 `client-web` job 构建后把 `productionExecutable` 整目录打包 `share-player.zip`,发布到 core 的滚动 Release **`share-player-latest`**(prerelease,`--clobber` 覆盖)。
-- 云端拉取:server job 目前**仍从旧 music 仓库(`hdppppppp/music`)的同名 Release 拉真实产物**,拉不到退回三个占位文件(`taotao-share-player.js` / `TaotaoMusic-webApp-wasm-js.wasm` / `index.html`)。core 这边的同名 Release 已就绪(已核实存在),迁移切源完成前,后端 dist 里的分享页可能落后于本仓最新构建(见 [62-ci-cloud-build.md](62-ci-cloud-build.md) 第 6 节)。
+- 云端拉取:server job 从**本仓库**的 Release `share-player-latest` 拉真实产物(2026-10-05 完成切源;此前拉的是已冻结在 2026-09-27 的 `hdppppppp/music` 镜像仓),拉不到才退回三个占位文件(`taotao-share-player.js` / `TaotaoMusic-webApp-wasm-js.wasm` / `index.html`)并打 `::warning::`。⚠️ `client-web` 只在客户端路径改动时才跑,所以**只改服务端的那次运行拿到的是上一次 `client-web` 产出的播放器**;要让本次改动立刻进后端 dist,需同时触达客户端路径或跑 `[full]`(见 [62-ci-cloud-build.md](62-ci-cloud-build.md) 第 6 节)。
 - 版本历史:根 `VERSION` + 构建号(如 `1.0.59`)由 `tools/release-log.sh` 记入 Release 说明,仓库内没有独立版本号文件。
 - 产物自检清单(排查分享页问题先过一遍):`server/dist/share-player/` 里三个入口文件齐全;`index.html` 仍带 `<base href="/share/">`;两个固定名入口与版本指纹一致(改过指纹目录 `/share/v/<新指纹>/` 才说明真的更新了)。
 

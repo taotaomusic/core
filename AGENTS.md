@@ -25,7 +25,9 @@
 > 装全部代码，用**根目录 `.github/workflows/ci.yml`** 一份统一流水线,靠 `dorny/paths-filter`
 > 按路径**只构建改动的部分**（`crypto-src/**`→加密、`server/**`→后端、客户端目录→APK/桌面）。
 > 加密产物（`.so`/`.node`）在**同一次 run** 内经 `upload/download-artifact` 流转给下游，
-> 不再跨仓/Release 拉取。`gitee` 的 `origin` 继续做全量备份。
+> 不再跨仓/Release 拉取。**唯一例外是分享播放器**：`client-web` 只在客户端路径改动时才跑，
+> 所以后端 job 改为从**本仓库**的 `share-player-latest` Release 拉（此前拉的是已冻结的
+> `hdppppppp/music` 镜像仓）。`gitee` 的 `origin` 继续做全量备份。
 > `tools/sync-repos.ps1` 已**停用**（文件保留备查）；旧的 `music`/`music-server`/`tools`
 > 三仓及其 Release **暂时保留**、不再更新。PSK 已改**后端动态下发**，产物不含密钥，故 core 可公开。
 >

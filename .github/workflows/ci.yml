@@ -310,13 +310,20 @@ jobs:
           # 契约验证是独立 step，继续用 job 级的 test，互不影响。
           NODE_ENV: production
         run: npm run build
-      - name: 拉取分享播放器（暂用 music 仓库 share-player-latest）
+      - name: 拉取分享播放器（本仓库 share-player-latest）
         run: |
+          # 分享播放器由 client-web job 构建并发布到**本仓库**的 share-player-latest
+          # Release。旧的 hdppppppp/music 镜像仓已冻结（资产停在 2026-09-27），不要再回去拉。
+          # 用 ${{ github.repository }} 而不是写死仓库名：改名/迁移时这里不用跟着改。
           if curl -fsSL -o /tmp/share-player.zip \
-              https://github.com/hdppppppp/music/releases/download/share-player-latest/share-player.zip; then
+              "https://github.com/${{ github.repository }}/releases/download/share-player-latest/share-player.zip"; then
             rm -rf dist/share-player; mkdir -p dist/share-player
             unzip -q /tmp/share-player.zip -d dist/share-player
+            echo "已拉取分享播放器 $(du -sh dist/share-player | cut -f1)"
           else
+            # 落到占位文件时契约里的「分享页缓存头」断言等于什么都没验证，必须显式告警，
+            # 否则 CI 全绿但分享页其实是坏的。
+            echo "::warning::未取到 share-player-latest，退回占位文件 —— 分享页相关断言本次无效"
             mkdir -p dist/share-player
             printf '/* placeholder */\n' > dist/share-player/taotao-share-player.js
             printf 'wasm-placeholder' > dist/share-player/TaotaoMusic-webApp-wasm-js.wasm

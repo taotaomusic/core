@@ -54,7 +54,7 @@
 2. 下载同 run 的 `crypto-node-linux` artifact 放进 `server/crypto/dist/node/`。
 3. `npm ci` 后写版本号:**根 `VERSION`(当前 `1.0`)+ 构建号**拼成 `<MAJOR.MINOR>.<GITHUB_RUN_NUMBER>` 写进 `package.json`。
 4. `npm run build`(带 `SKIP_WEB_PLAYER=1` —— 单仓里上级有 Gradle 工程,后端不自建 wasm 播放器,分享播放器由 `client-web` job 发布、下一步拉取)。
-5. 从 `hdppppppp/music` 的 Release `share-player-latest` 拉真实分享播放器(旧仓库暂留的产物,拉不到退回占位文件)。
+5. 从**本仓库**的 Release `share-player-latest` 拉真实分享播放器(拉不到才退回占位文件,并打 `::warning::` —— 占位状态下分享页相关断言等于没验证)。
 6. 重置验证库 → 起 4720 验证实例 → **完整 `verify-contract.mjs`,全绿才算通过**。
 7. 发布滚动 Release **`server-dist-latest`**:`dist/` 内容扁平打包 + `crypto/` 目录并入,解压到部署目录即可 `node main.js`;版本历史经 `tools/release-log.sh` 追加进 Release 说明。
 8. 仅 push 到 main 时构建 Docker 镜像(**复用这份已验证 dist**)推到 ghcr。
@@ -96,7 +96,7 @@ ghcr.io/taotaomusic/music-server
 
 - **taotaomusic/core**(主仓):全部代码 + 统一 CI;滚动 Release 有 `crypto-latest`、`server-dist-latest`、`share-player-latest`、`latest`(安卓)、`desktop-latest`。本地取加密产物用 `tools/fetch-crypto.ps1`,默认也是从 core 的 `crypto-latest` 拉。
 - **gitee origin**:全量备份,不跑构建。
-- **hdppppppp/music / music-server / tools**(旧三仓):暂时保留、**不再更新**;`share-player.zip` 目前仍从 music 仓库的 `share-player-latest` 拉取(新仓库的 `client-web` job 也发同名 Release,迁移完成后应切过来)。
+- **hdppppppp/music / music-server / tools**(旧三仓):暂时保留、**不再更新**。分享播放器已于 2026-10-05 完成切源,server job 改从 core 自己的 `share-player-latest` 拉 —— 旧三仓至此不再有任何构建或取产物依赖。
 
 ## 8. 与本地发布的关系
 

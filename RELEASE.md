@@ -279,9 +279,10 @@ npm install --omit=dev
 node dist/main.js
 ```
 
-`build:web-player` 会从 GitHub 拉取 `share-player-latest`（拉不到退回占位文件），需要网络；
-独立 server 仓库没有 Gradle 工程时该步自动跳过。生产机另需 `crypto/dist/node/<平台>/taotao_crypto.node`
-加密产物（缺失只 WARN 降级明文，不阻断启动）。
+`build:web-player` 只做**本地** Gradle 构建（上级目录没有 Gradle 工程时自动跳过）；CI 里后端
+job 用 `SKIP_WEB_PLAYER=1` 显式跳过，改由单独一步从**本仓库**的 `share-player-latest` Release
+拉取（拉不到才退回占位文件，并打 `::warning::` —— 占位状态下分享页相关断言等于没验证）。
+生产机另需 `crypto/dist/node/<平台>/taotao_crypto.node` 加密产物（缺失只 WARN 降级明文，不阻断启动）。
 
 几条容易忘的:
 
@@ -343,30 +344,37 @@ Windows 桌面端现在是 Tauri 应用（`desktop/` 目录，Tauri 2 + React + 
 
 ---
 
-## 十、云端构建与三仓库同步
+## 十、云端构建（单仓 core）
 
-GitHub 侧三个正式仓库（music / music-server / tools）由助手手动执行
-`powershell -NoProfile -ExecutionPolicy Bypass -File tools\sync-repos.ps1`（加 `-DryRun` 只预览）维护：
-从本仓库 HEAD 生成**内容快照**推送——`server/` → music-server、`crypto-src/` → tools、其余全部 → music，
-快照分支分别为 `sync/server`、`sync/crypto`、`sync/client`。gitee 的 `origin` 保留完整 monorepo 作总备份。
-只同步**已提交**内容，推送前先在本仓库提交。
+> **2026-09 起架构已合一。** 曾经的「monorepo → 用 `tools/sync-repos.ps1` 同步到
+> music / music-server / tools 三个 GitHub 仓库、各自跑构建」已**废弃**（脚本停用，旧三仓
+> 及其 Release 保留但不再更新）。现在只有 **[taotaomusic/core](https://github.com/taotaomusic/core)**
+> 一个仓库，用根目录 `.github/workflows/ci.yml` 一份流水线，靠 `dorny/paths-filter` 按路径
+> 只构建改动的部分。结构与 paths-filter 的权威描述见 [AGENTS.md](AGENTS.md)，这里只列
+> 发布相关的事实。
 
-随同步推送自动触发的云端构建：
-
-| 仓库 | 工作流 | 内容 | 产物 |
+| job | 触发路径 | 内容 | 产物 |
 | --- | --- | --- | --- |
-| music | `.github/workflows/client.yml` | Windows runner：`:androidApp:assembleRelease` + `:webApp:wasmJsBrowserDistribution` | 滚动预发布 Release `latest`（APK，每次覆盖）；Web 播放器另发 `share-player-latest` |
-| core（`desktop` job） | `.github/workflows/ci.yml` | Tauri Windows 桌面端（`desktop/**` 路径过滤） | GitHub Release `desktop-latest`，应用内经 `tauri-plugin-updater` 签名更新 |
-| music-server | `server/.github/workflows/backend.yml` | Ubuntu + PostgreSQL 服务容器，完整 `verify-contract.mjs` **全绿才算通过** | Release `server-dist-latest`（完整 dist） |
+| `crypto` | `crypto-src/**`（server / client 改动时也跑） | Rust 四端交叉编译 + fmt / clippy / 单测 / 冒烟 | 同 run 经 artifact 给下游；另发 Release `crypto-latest` |
+| `server` | `server/**` | Ubuntu + PostgreSQL 容器，完整 `verify-contract.mjs` **全绿才算通过** | Release `server-dist-latest`（完整 dist）；镜像推 ghcr.io |
+| `client-android` → `client-publish` | 客户端目录 | `:androidApp:assembleRelease` | Release `latest`（APK，每次覆盖） |
+| `client-web` | 客户端目录 | `:webApp:wasmJsBrowserDistribution` | Release `share-player-latest`（**server job 拉的就是这个**） |
+| `desktop` | `desktop/**` | Tauri Windows 桌面端 | Release `desktop-latest`，应用内 `tauri-plugin-updater` 签名更新 |
 
 要点：
 
-- **版本号单调延续**：云端构建成功后自动回写递增的 `version.properties`（`[skip ci]` 提交）；
-  sync 时收编「本地与云端较大者」并回写本仓库（单独提交，origin 不自动推送）。本地构建出的号
-  同样被尊重，两侧互不回退、重号风险归零。每次同步会触发一次构建、版本号 +1。
-- **APK 签名**：music 仓库 Secrets 配 `ANDROID_KEYSTORE_BASE64`、`ANDROID_STORE_PASSWORD`、
+- **跨 job 的产物走同一次 run 的 `upload/download-artifact`**，不再跨仓库或经 Release 中转。
+  唯一例外是分享播放器：`client-web` 只在客户端路径改动时才跑，所以 `server` 改为从**本仓库**
+  的 `share-player-latest` Release 拉取（此前拉的是已冻结的 `hdppppppp/music` 镜像仓）。
+- **版本号**：仓库里的 `version.properties` 是**基线，不会被云端回写**；每次运行用
+  `VERSION_CODE + GITHUB_RUN_NUMBER` 派生唯一版本，避免每次干净 checkout 产出同一个号。
+  Android 版本号仍只能从 `output-metadata.json` 读，且**绝不回滚** `version.properties`（见第三节）。
+- **APK 签名**：core 仓库 Secrets 配 `ANDROID_KEYSTORE_BASE64`、`ANDROID_STORE_PASSWORD`、
   `ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD` 后出签名 Release 包；未配置时自动退回 Debug 包。
-- 不要在 GitHub 仓库里绕过快照机制直接改文件（`version.properties` 除外，云端 CI 会回写）。
+- ⚠️ **`.github/**` 不在任何 paths-filter 里**：只改工作流本身的提交会让全部 job 跳过，run 显示
+  success 但什么都没验证。验证工作流改动要在提交信息里写 `[full]`，或手动 dispatch 勾选 `full`。
+- ⚠️ 给已有工作流加 `pull_request` 触发前，必须先堵住所有发布步骤（本仓库有 8 处），否则
+  「随便开个 PR 就能把 Release 删了」。清单与自检思路见 [SECURITY-AUDIT-2026-10-05.md](SECURITY-AUDIT-2026-10-05.md)。
 
 ## 十一、加密层产物与协议 v2
 
@@ -374,9 +382,10 @@ GitHub 侧三个正式仓库（music / music-server / tools）由助手手动执
 
 ```
 改协议在 crypto-src/ 改
-  → tools/sync-repos.ps1 推到 GitHub tools 仓库
-  → 那边的 GitHub Actions 交叉编译四端产物并发 Release
-  → tools/fetch-crypto.ps1 拉回 crypto/dist/（带 SHA256SUMS 校验）
+  → 提交进 core 仓库，由 .github/workflows/ci.yml 的 crypto job 交叉编译四端产物
+  → 同 run 经 artifact 直接给 server / client / desktop；另发 Release crypto-latest
+  → 本地开发用 tools/fetch-crypto.ps1 从 core 的 crypto-latest 拉回 crypto/dist/
+    （带 SHA256SUMS 校验；不要从 Actions Artifacts 拿，要登录且 90 天过期）
 ```
 
 发布相关的影响：
