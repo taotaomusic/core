@@ -25,6 +25,7 @@ import com.taotao.music.model.Song
 import com.taotao.music.data.AlbumSearchResult
 import com.taotao.music.data.ArtistSearchResult
 import com.taotao.music.data.TencentMusicApi
+import com.taotao.music.data.toMvSong
 import com.taotao.music.playerui.SharedSectionHeader
 import com.taotao.music.playerui.SharedSectionLevel
 import com.taotao.music.playerui.theme.TaotaoSpacing
@@ -481,7 +482,7 @@ private fun SearchPageRoute(state: TaotaoAppState) {
         // 页面开关与互跳时收起对方的逻辑集中在状态层（openArtistPage / openAlbumPage）。
         onArtistClick = { state.openArtistPage(it) },
         onAlbumClick = { state.openAlbumPage(it) },
-        // ---- 四标签（综合 / 单曲 / 歌手 / 专辑）----
+        // ---- 七标签（综合 / 单曲 / 歌手 / 专辑 / 歌单 / 视频 / 歌词）----
         searchTab = state.search.searchTab,
         onTabSelected = { state.search.selectTab(it) },
         tabArtists = state.search.tabArtists,
@@ -496,10 +497,42 @@ private fun SearchPageRoute(state: TaotaoAppState) {
         tabAlbumsHasMore = state.search.tabAlbumsHasMore,
         tabAlbumsError = state.search.tabAlbumsError,
         tabAlbumsTotal = state.search.tabAlbumsTotal,
+        tabPlaylists = state.search.tabPlaylists,
+        tabPlaylistsLoading = state.search.tabPlaylistsLoading,
+        tabPlaylistsLoadingMore = state.search.tabPlaylistsLoadingMore,
+        tabPlaylistsHasMore = state.search.tabPlaylistsHasMore,
+        tabPlaylistsError = state.search.tabPlaylistsError,
+        tabPlaylistsTotal = state.search.tabPlaylistsTotal,
+        tabVideos = state.search.tabVideos,
+        tabVideosLoading = state.search.tabVideosLoading,
+        tabVideosLoadingMore = state.search.tabVideosLoadingMore,
+        tabVideosHasMore = state.search.tabVideosHasMore,
+        tabVideosError = state.search.tabVideosError,
+        tabVideosTotal = state.search.tabVideosTotal,
+        tabLyrics = state.search.tabLyrics,
+        tabLyricsLoading = state.search.tabLyricsLoading,
+        tabLyricsLoadingMore = state.search.tabLyricsLoadingMore,
+        tabLyricsHasMore = state.search.tabLyricsHasMore,
+        tabLyricsError = state.search.tabLyricsError,
+        tabLyricsTotal = state.search.tabLyricsTotal,
         onEnsureTabArtists = { state.search.ensureTabArtists() },
         onEnsureTabAlbums = { state.search.ensureTabAlbums() },
+        onEnsureTabPlaylists = { state.search.ensureTabPlaylists() },
+        onEnsureTabVideos = { state.search.ensureTabVideos() },
+        onEnsureTabLyrics = { state.search.ensureTabLyrics() },
         onLoadMoreTabArtists = { state.search.loadMoreTabArtists() },
         onLoadMoreTabAlbums = { state.search.loadMoreTabAlbums() },
+        onLoadMoreTabPlaylists = { state.search.loadMoreTabPlaylists() },
+        onLoadMoreTabVideos = { state.search.loadMoreTabVideos() },
+        onLoadMoreTabLyrics = { state.search.loadMoreTabLyrics() },
+        // 在线歌单详情链路未接入：PlaylistState 的详情路由只认当前账号自己的云端歌单
+        // （/api/v1/playlists/:id），拿不到酷我在线歌单的歌曲，点击只提示不跳转。
+        onPlaylistClick = { state.message = "歌单详情暂不支持在线歌单" },
+        // 点视频 = 播 MV：复用详情页 onOpenMv 的同一入口（mvSong 浮层），
+        // 由 toMvSong 把视频条目折算成 MV 链路需要的歌曲句柄。
+        onVideoClick = { video -> state.mvSong = video.toMvSong() },
+        // 点歌词条目 = 播放该歌：整条歌词列表作为队列上下文入队（与歌曲标签点歌同机制）。
+        onLyricClick = { index, _ -> state.playSong(state.search.tabLyrics, index) },
         // 歌曲行菜单「查看歌手 / 查看专辑」：从歌曲构造跳转目标，pic 等取值规则
         // 集中在状态层（openArtistPageFromSong / openAlbumPageFromSong），
         // 播放详情页头部的同名跳转共用这一套构造逻辑。

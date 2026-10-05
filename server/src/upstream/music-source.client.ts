@@ -162,6 +162,49 @@ export interface UpstreamArtistDetail {
 }
 
 /**
+ * 歌单搜索（`GET /search/playlists` 的 `data.playlists[]`，去掉 `source`）。
+ *
+ * 字段名就是**下发契约名** —— 上游的 `creator_name` / `musicnum` / `playnum` 必须
+ * 在适配器里就地改成 `creator` / `trackCount` / `playCount`，出流后不再有第二层改名。
+ * 上游条目里的 `creator_id` / `sltype` / `hitcontent` 与数字 `source` 标记是列表展示
+ * 用不到的内容，适配器映射时**必须丢弃**；`pic` 上游给 http 明文，适配器必须升级 https。
+ */
+export interface UpstreamSearchPlaylist {
+  id: number;
+  name: string;
+  /** 封面绝对地址。上游给 http 明文，适配器必须升级成 https。 */
+  pic: string;
+  /** 歌单创建者昵称。上游叫 `creator_name`。 */
+  creator: string;
+  /** 歌单内歌曲数。上游叫 `musicnum`。 */
+  trackCount: number;
+  /** 播放次数。上游叫 `playnum`。 */
+  playCount: number;
+}
+
+/**
+ * 视频搜索 / 歌词搜索条目：在 [UpstreamSong] 上交叉出两条搜索族端点才有的扩展字段。
+ *
+ * 刻意用**交叉类型扩展**而不是把 `vid` / `mv` / `lyricSnippet` 直接塞进
+ * [UpstreamSong]：这三个字段只有 `search/video/list` 与 `search/lyric/list` 两个
+ * 端点的条目才有，塞进共享类型会让腾讯 / 网易的歌曲行永远背着一组「恒缺席」的
+ * 字段，读代码的人分不清「可能存在」和「不可能存在」。上游条目本身就是完整歌曲
+ * 对象，所以主体复用 [UpstreamSong] —— SongMapper.toSong 的映射链路（playable、
+ * `artistId`/`albumId`、高潮区间）对它们原样生效。
+ *
+ * 扩展字段经适配器的 `toUpstreamSong` 一并透传；普通歌曲条目三键恒为 undefined，
+ * `JSON.stringify` 会丢掉 undefined 键，既有路由的下发形状不受影响。
+ */
+export type UpstreamSongWithExtras = UpstreamSong & {
+  /** MV 的播放 ID（上游 `vid`）。≤0 表示该条目不是 MV，路由层据此整行丢弃。 */
+  vid?: number;
+  /** MV 元数据，来自上游 `mv` 子对象（App 侧取 name/pic/duration）。 */
+  mv?: { name: string; pic: string; duration: number };
+  /** 歌词搜索条目的纯文本歌词摘要（上游 `lyric` 字段），可能为空串。 */
+  lyricSnippet?: string;
+};
+
+/**
  * 一个音源适配器必须提供的能力。
  *
  * 抽这个接口的直接动机：在此之前「选哪个上游」是散在 6 个地方的
@@ -228,6 +271,40 @@ export interface MusicSourceClient {
    * 行列表。页码与 `total` 的语义同 [searchArtists]。
    */
   searchAlbums?(keyword: string, page: number, limit: number): Promise<{ albums: UpstreamAlbum[]; total: number }>;
+
+  /**
+   * 歌单搜索（分页），产出 `GET /search/playlists` 分页路由的行列表。只有上游提供
+   * 该能力时才实现；调用方必须先判断方法存在。页码与 `total` 的语义同 [searchArtists]
+   * （`total` 是上游整表总数，实测「周杰伦」143）。
+   */
+  searchPlaylists?(
+    keyword: string,
+    page: number,
+    limit: number,
+  ): Promise<{ playlists: UpstreamSearchPlaylist[]; total: number }>;
+
+  /**
+   * 视频搜索（分页），产出 `GET /search/videos` 分页路由的行列表。上游条目是完整
+   * 歌曲对象（主体与 [searchSongs] 同构）外挂 `vid` / `mv`（见
+   * [UpstreamSongWithExtras]）；`vid≤0` 的非 MV 条目由路由层丢弃，适配器照常透传，
+   * `total` 才能保持整表总数语义。页码与 `total` 的语义同 [searchArtists]。
+   */
+  searchVideos?(
+    keyword: string,
+    page: number,
+    limit: number,
+  ): Promise<{ songs: UpstreamSongWithExtras[]; total: number }>;
+
+  /**
+   * 歌词搜索（分页），产出 `GET /search/lyrics` 分页路由的行列表。上游条目是完整
+   * 歌曲对象外挂纯文本摘要 `lyricSnippet`；点击行为与普通歌曲一致（播放），
+   * 客户端不需要新交互。页码与 `total` 的语义同 [searchArtists]。
+   */
+  searchLyrics?(
+    keyword: string,
+    page: number,
+    limit: number,
+  ): Promise<{ songs: UpstreamSongWithExtras[]; total: number }>;
 
   /**
    * 歌手详情，产出 `GET /api/v1/artists/:id` 的 `data.artist`（`source` 由调用方补）。

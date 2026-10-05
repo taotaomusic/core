@@ -175,6 +175,8 @@ export type Song = {
   /** 关联歌手/专辑的远端 id（/search 的酷我源才下发；其他音源或非搜索来源键缺席，非正数视为无效） */
   artistId?: number;
   albumId?: number;
+  /** 命中歌词摘要（/api/v1/search/lyrics 才下发）：一小段含命中词的歌词文本，搜索歌词标签展示用 */
+  lyricSnippet?: string;
 };
 
 /** 搜索结果里的歌手条目：仅酷我源下发，其他音源没有 artist 行；pic 可能为空。 */
@@ -229,6 +231,8 @@ function songOfRemoteData(d: any): Song | null {
     favorited: !!d.favorited,
     refrainStartMs: refrainStartMs > 0 ? refrainStartMs : undefined,
     refrainEndMs: refrainEndMs > 0 ? refrainEndMs : undefined,
+    // 歌词摘要：仅 /search/lyrics 下发，其余来源键缺席即 undefined
+    lyricSnippet: typeof d.lyricSnippet === "string" && d.lyricSnippet ? d.lyricSnippet : undefined,
   };
 }
 
@@ -303,6 +307,8 @@ export async function searchSongs(keyword: string, page = 1): Promise<SearchResu
           // 关联歌手/专辑 id：非正数与键缺席等价，统一归一成 undefined
           artistId: Number(d.artistId) > 0 ? Number(d.artistId) : undefined,
           albumId: Number(d.albumId) > 0 ? Number(d.albumId) : undefined,
+          // 歌词摘要透传：/search 本身不下发（键缺席归 undefined），/search/lyrics 复用同一行结构
+          lyricSnippet: typeof d.lyricSnippet === "string" && d.lyricSnippet ? d.lyricSnippet : undefined,
         });
       }
     } else if (rec?.type === "artist" && rec.data) {
@@ -388,6 +394,111 @@ export async function searchAlbumsPaged(keyword: string, page: number, num = 30)
   const list: any[] = Array.isArray(data?.albums) ? data.albums : [];
   const albums = list.map(albumOfRemoteData).filter((a): a is SearchAlbum => a !== null);
   return { ...pagedMetaOf(data?.meta, page), albums };
+}
+
+/** 搜索结果里的歌单条目：仅酷我源下发；pic/creator 可能缺席或为空串。 */
+export type SearchPlaylist = {
+  source: string;
+  id: number;
+  name: string;
+  pic?: string;
+  creator?: string;
+  trackCount?: number;
+  playCount?: number;
+};
+
+/** 搜索结果里的视频（MV）条目：仅酷我源下发；id 是关联歌曲的身份，点视频 = 播该歌的 MV。 */
+export type SearchVideo = {
+  source: string;
+  id: number;
+  name: string;
+  artist?: string;
+  artistId?: number;
+  album?: string;
+  albumId?: number;
+  cover?: string;
+  durationSeconds?: number;
+  vid?: string;
+  mvName?: string;
+  mvCover?: string;
+  mvDurationSeconds?: number;
+  playable?: boolean;
+};
+
+/** 歌单行归一：只认正 id；pic/creator 空串归一成 undefined，计数非正视为缺席。 */
+function playlistOfRemoteData(d: any): SearchPlaylist | null {
+  if (!d || !(Number(d.id) > 0)) return null;
+  return {
+    source: d.source || "kuwo",
+    id: Number(d.id),
+    name: d.name || "未知歌单",
+    pic: d.pic || undefined,
+    creator: d.creator || undefined,
+    trackCount: Number(d.trackCount) > 0 ? Number(d.trackCount) : undefined,
+    playCount: Number(d.playCount) > 0 ? Number(d.playCount) : undefined,
+  };
+}
+
+/** 视频行归一：只认正 id；封面优先 mvCover，其次 cover；计数/秒数非正视为缺席。 */
+function videoOfRemoteData(d: any): SearchVideo | null {
+  if (!d || !(Number(d.id) > 0)) return null;
+  const durationSeconds = Number(d.durationSeconds);
+  const mvDurationSeconds = Number(d.mvDurationSeconds);
+  return {
+    source: d.source || "kuwo",
+    id: Number(d.id),
+    name: d.name || "未知视频",
+    artist: d.artist || undefined,
+    artistId: Number(d.artistId) > 0 ? Number(d.artistId) : undefined,
+    album: d.album || undefined,
+    albumId: Number(d.albumId) > 0 ? Number(d.albumId) : undefined,
+    cover: d.mvCover || d.cover || undefined,
+    durationSeconds: durationSeconds > 0 ? durationSeconds : undefined,
+    vid: d.vid || undefined,
+    mvName: d.mvName || undefined,
+    mvCover: d.mvCover || undefined,
+    mvDurationSeconds: mvDurationSeconds > 0 ? mvDurationSeconds : undefined,
+    playable: !!d.playable,
+  };
+}
+
+/** 搜索歌单分页结果：信封 data.playlists + data.meta 归一后的形状。 */
+export type PagedSearchPlaylists = { playlists: SearchPlaylist[]; page: number; total: number; hasMore: boolean };
+
+/** 搜索视频分页结果：信封 data.videos + data.meta 归一后的形状。 */
+export type PagedSearchVideos = { videos: SearchVideo[]; page: number; total: number; hasMore: boolean };
+
+/** 搜索歌词分页结果：信封 data.songs + data.meta 归一后的形状（行结构与 /search 歌曲同构 + lyricSnippet）。 */
+export type PagedSearchLyricSongs = { songs: Song[]; page: number; total: number; hasMore: boolean };
+
+/** 搜索歌单分页（/api/v1/search/playlists，仅酷我源提供）。 */
+export async function searchPlaylistsPaged(keyword: string, page: number, num = 30): Promise<PagedSearchPlaylists> {
+  const q = new URLSearchParams({ keyword, page: String(page), num: String(num), source: "kuwo" });
+  const resp = await authedGet(`/api/v1/search/playlists?${q}`, "application/json");
+  const data = await unwrap(resp);
+  const list: any[] = Array.isArray(data?.playlists) ? data.playlists : [];
+  const playlists = list.map(playlistOfRemoteData).filter((p): p is SearchPlaylist => p !== null);
+  return { ...pagedMetaOf(data?.meta, page), playlists };
+}
+
+/** 搜索视频分页（/api/v1/search/videos，仅酷我源提供；quality 语义与 /search 相同的数字档位）。 */
+export async function searchVideosPaged(keyword: string, page: number, num = 30, quality = 4): Promise<PagedSearchVideos> {
+  const q = new URLSearchParams({ keyword, page: String(page), num: String(num), quality: String(quality), source: "kuwo" });
+  const resp = await authedGet(`/api/v1/search/videos?${q}`, "application/json");
+  const data = await unwrap(resp);
+  const list: any[] = Array.isArray(data?.videos) ? data.videos : [];
+  const videos = list.map(videoOfRemoteData).filter((v): v is SearchVideo => v !== null);
+  return { ...pagedMetaOf(data?.meta, page), videos };
+}
+
+/** 搜索歌词分页（/api/v1/search/lyrics，仅酷我源提供；行结构与 /search 歌曲同构，复用同一归一并透传 lyricSnippet）。 */
+export async function searchLyricsPaged(keyword: string, page: number, num = 30, quality = 4): Promise<PagedSearchLyricSongs> {
+  const q = new URLSearchParams({ keyword, page: String(page), num: String(num), quality: String(quality), source: "kuwo" });
+  const resp = await authedGet(`/api/v1/search/lyrics?${q}`, "application/json");
+  const data = await unwrap(resp);
+  const list: any[] = Array.isArray(data?.songs) ? data.songs : [];
+  const songs = list.map(songOfRemoteData).filter((s): s is Song => s !== null);
+  return { ...pagedMetaOf(data?.meta, page), songs };
 }
 
 // ---- 歌手与专辑详情 ----

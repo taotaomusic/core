@@ -2496,6 +2496,169 @@ async function main() {
     `${kuwoSearchAlbumsEmptyKeyword.status} ${JSON.stringify(kuwoSearchAlbumsEmptyBody).slice(0, 160)}`,
   );
 
+  // ---------- 搜索页新标签：歌单 / 视频 / 歌词分页搜索（2026-10 新增）----------
+  //
+  // 与上面歌手 / 专辑两条同一套守法：200 + code 0 + 行形状断言 + meta 信封 +
+  // 「page=2 与 page=1 的 id 无交叠」+ 空 keyword / source=all 都 4001。
+  // 关键词用实测有召回的：歌单 / 视频「周杰伦」（上游 total 143 / 603），
+  // 歌词「晴天」（上游 total 100）。视频行断言 vid>0（非 MV 条目服务端已丢弃），
+  // 歌词行复用 detailSongShape 断言「与 /search 的歌曲行同构」+ lyricSnippet 摘要。
+  const kuwoSearchPlaylistsRes = await fetch(
+    `${base}/api/v1/search/playlists?keyword=${encodeURIComponent("周杰伦")}&page=1&num=10&source=kuwo`,
+    { headers: { authorization: `Bearer ${token}` } },
+  );
+  const kuwoSearchPlaylistsBody = await kuwoSearchPlaylistsRes.json();
+  const kuwoSearchPlaylistRows = kuwoSearchPlaylistsBody.data?.playlists ?? [];
+  check(
+    "歌单分页搜索返回 200 且行形状符合契约（pic 已升级 https，运营字段丢弃）",
+    kuwoSearchPlaylistsRes.status === 200
+      && kuwoSearchPlaylistsBody.code === 0
+      && kuwoSearchPlaylistRows.length > 0 && kuwoSearchPlaylistRows.length <= 10
+      && kuwoSearchPlaylistRows.every((playlist) => playlist?.source === "kuwo"
+        && typeof playlist?.id === "number" && playlist.id > 0
+        && typeof playlist?.name === "string" && playlist.name.length > 0
+        // 上游 pic 是 http 明文，服务端必须升级成 https；空串放行是防个别条目无封面，
+        // 不变量是「绝不残留 http:// 明文」。
+        && typeof playlist?.pic === "string" && (playlist.pic === "" || playlist.pic.startsWith("https://"))
+        && typeof playlist?.creator === "string"
+        && typeof playlist?.trackCount === "number"
+        && typeof playlist?.playCount === "number"
+        && !("creator_id" in playlist) && !("hitcontent" in playlist)),
+    `${kuwoSearchPlaylistsRes.status} ${JSON.stringify(kuwoSearchPlaylistsBody).slice(0, 220)}`,
+  );
+  check(
+    "歌单分页搜索的 meta 信封正确（total 数字、hasMore = page*num < total）",
+    detailMetaShape(kuwoSearchPlaylistsBody.data?.meta, 1, 10)
+      && kuwoSearchPlaylistsBody.data.meta.total > 0,
+    JSON.stringify(kuwoSearchPlaylistsBody.data?.meta),
+  );
+  const kuwoSearchPlaylistsPage2 = await (await fetch(
+    `${base}/api/v1/search/playlists?keyword=${encodeURIComponent("周杰伦")}&page=2&num=10&source=kuwo`,
+    { headers: { authorization: `Bearer ${token}` } },
+  )).json();
+  const kuwoSearchPlaylistPage1Ids = new Set(kuwoSearchPlaylistRows.map((playlist) => playlist.id));
+  check(
+    "歌单分页搜索 page=2 前进（与 page=1 的 id 无交叠）",
+    kuwoSearchPlaylistsPage2.code === 0
+      && (kuwoSearchPlaylistsPage2.data?.playlists ?? []).length > 0
+      && kuwoSearchPlaylistsPage2.data.playlists.every((playlist) => !kuwoSearchPlaylistPage1Ids.has(playlist?.id)),
+    JSON.stringify({
+      "p1 首条": kuwoSearchPlaylistRows[0]?.id,
+      "p2 首条": kuwoSearchPlaylistsPage2.data?.playlists?.[0]?.id,
+    }),
+  );
+
+  const kuwoSearchVideosRes = await fetch(
+    `${base}/api/v1/search/videos?keyword=${encodeURIComponent("周杰伦")}&page=1&num=10&source=kuwo`,
+    { headers: { authorization: `Bearer ${token}` } },
+  );
+  const kuwoSearchVideosBody = await kuwoSearchVideosRes.json();
+  const kuwoSearchVideoRows = kuwoSearchVideosBody.data?.videos ?? [];
+  check(
+    "视频分页搜索返回 200 且行形状符合契约（vid>0、mv 元数据齐、playable 同歌曲行语义）",
+    kuwoSearchVideosRes.status === 200
+      && kuwoSearchVideosBody.code === 0
+      && kuwoSearchVideoRows.length > 0 && kuwoSearchVideoRows.length <= 10
+      && kuwoSearchVideoRows.every((video) => video?.source === "kuwo"
+        && typeof video?.id === "number" && video.id > 0
+        && typeof video?.name === "string" && video.name.length > 0
+        && typeof video?.artist === "string"
+        && typeof video?.album === "string"
+        && typeof video?.cover === "string"
+        && typeof video?.durationSeconds === "number"
+        // vid≤0 的条目不是 MV，服务端必须整行丢弃 —— 拿到 vid≤0 就是过滤漏了。
+        && typeof video?.vid === "number" && video.vid > 0
+        && typeof video?.mvName === "string"
+        && typeof video?.mvCover === "string" && (video.mvCover === "" || video.mvCover.startsWith("https://"))
+        && typeof video?.mvDurationSeconds === "number"
+        && typeof video?.playable === "boolean"),
+    `${kuwoSearchVideosRes.status} ${JSON.stringify(kuwoSearchVideosBody).slice(0, 220)}`,
+  );
+  check(
+    "视频分页搜索的 meta 信封正确（total 数字、hasMore = page*num < total）",
+    detailMetaShape(kuwoSearchVideosBody.data?.meta, 1, 10)
+      && kuwoSearchVideosBody.data.meta.total > 0,
+    JSON.stringify(kuwoSearchVideosBody.data?.meta),
+  );
+  const kuwoSearchVideosPage2 = await (await fetch(
+    `${base}/api/v1/search/videos?keyword=${encodeURIComponent("周杰伦")}&page=2&num=10&source=kuwo`,
+    { headers: { authorization: `Bearer ${token}` } },
+  )).json();
+  const kuwoSearchVideoPage1Ids = new Set(kuwoSearchVideoRows.map((video) => video.id));
+  check(
+    "视频分页搜索 page=2 前进（与 page=1 的 id 无交叠）",
+    kuwoSearchVideosPage2.code === 0
+      && (kuwoSearchVideosPage2.data?.videos ?? []).length > 0
+      && kuwoSearchVideosPage2.data.videos.every((video) => !kuwoSearchVideoPage1Ids.has(video?.id)),
+    JSON.stringify({
+      "p1 首条": kuwoSearchVideoRows[0]?.id,
+      "p2 首条": kuwoSearchVideosPage2.data?.videos?.[0]?.id,
+    }),
+  );
+
+  const kuwoSearchLyricsRes = await fetch(
+    `${base}/api/v1/search/lyrics?keyword=${encodeURIComponent("晴天")}&page=1&num=10&source=kuwo`,
+    { headers: { authorization: `Bearer ${token}` } },
+  );
+  const kuwoSearchLyricsBody = await kuwoSearchLyricsRes.json();
+  const kuwoSearchLyricRows = kuwoSearchLyricsBody.data?.songs ?? [];
+  check(
+    "歌词分页搜索返回 200 且行与 search 的歌曲行同构 + lyricSnippet 纯文本摘要",
+    kuwoSearchLyricsRes.status === 200
+      && kuwoSearchLyricsBody.code === 0
+      && kuwoSearchLyricRows.length > 0 && kuwoSearchLyricRows.length <= 10
+      && kuwoSearchLyricRows.every((song) => detailSongShape(song) && typeof song?.lyricSnippet === "string"),
+    `${kuwoSearchLyricsRes.status} ${JSON.stringify(kuwoSearchLyricsBody).slice(0, 220)}`,
+  );
+  check(
+    "歌词分页搜索的 meta 信封正确（total 数字、hasMore = page*num < total）",
+    detailMetaShape(kuwoSearchLyricsBody.data?.meta, 1, 10)
+      && kuwoSearchLyricsBody.data.meta.total > 0,
+    JSON.stringify(kuwoSearchLyricsBody.data?.meta),
+  );
+  const kuwoSearchLyricsPage2 = await (await fetch(
+    `${base}/api/v1/search/lyrics?keyword=${encodeURIComponent("晴天")}&page=2&num=10&source=kuwo`,
+    { headers: { authorization: `Bearer ${token}` } },
+  )).json();
+  const kuwoSearchLyricPage1Ids = new Set(kuwoSearchLyricRows.map((song) => song.id));
+  check(
+    "歌词分页搜索 page=2 前进（与 page=1 的 id 无交叠）",
+    kuwoSearchLyricsPage2.code === 0
+      && (kuwoSearchLyricsPage2.data?.songs ?? []).length > 0
+      && kuwoSearchLyricsPage2.data.songs.every((song) => !kuwoSearchLyricPage1Ids.has(song?.id)),
+    JSON.stringify({
+      "p1 首条": kuwoSearchLyricRows[0]?.id,
+      "p2 首条": kuwoSearchLyricsPage2.data?.songs?.[0]?.id,
+    }),
+  );
+
+  // 三条新路由的拒绝契约：空 keyword 与 source=all 都 4001（source=all 在进入
+  // 适配器之前就被 detailSourceOf 拦下，不打上游）。
+  for (const [label, path] of [
+    ["歌单", "search/playlists"],
+    ["视频", "search/videos"],
+    ["歌词", "search/lyrics"],
+  ]) {
+    const emptyKeywordRes = await fetch(`${base}/api/v1/${path}?keyword=`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const emptyKeywordBody = await emptyKeywordRes.json().catch(() => ({}));
+    check(
+      `${label}分页搜索空关键词 400 且 code 4001`,
+      emptyKeywordRes.status === 400 && emptyKeywordBody.code === 4001,
+      `${emptyKeywordRes.status} ${JSON.stringify(emptyKeywordBody).slice(0, 160)}`,
+    );
+    const allSourceRes = await fetch(`${base}/api/v1/${path}?keyword=${encodeURIComponent("x")}&source=all`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const allSourceBody = await allSourceRes.json().catch(() => ({}));
+    check(
+      `${label}分页搜索 source=all 400 且 code 4001`,
+      allSourceRes.status === 400 && allSourceBody.code === 4001,
+      `${allSourceRes.status} ${JSON.stringify(allSourceBody).slice(0, 160)}`,
+    );
+  }
+
   // ---------- 单曲信息回填歌手 / 专辑 ID（老队列播放期补全的钥匙）----------
   const kuwoInfoBackfill = await (await fetch(`${base}/api/v1/songs/228908/info?source=kuwo`, {
     headers: { authorization: `Bearer ${token}` },

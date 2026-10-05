@@ -383,6 +383,78 @@ class TencentMusicApi(
         }
     }
 
+    /** 「歌单」标签的分页搜索（`GET /api/v1/search/playlists`）。其余约定同 [searchArtistsPaged]。 */
+    fun searchPlaylistsPaged(
+        keyword: String,
+        page: Int = 1,
+        num: Int = DEFAULT_CATALOG_PAGE_NUM,
+    ): PagedList<PlaylistSearchResult> {
+        val query = "?keyword=${encode(keyword.trim())}" +
+            "&page=${page.coerceAtLeast(1)}&num=${num.coerceIn(1, MAX_CATALOG_PAGE_NUM)}" +
+            "&source=${encode(SEARCH_SOURCE_KUWO)}"
+        return authorized("/api/v1/search/playlists$query") { connection ->
+            val root = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+            check(root.optInt("code") == 0) { root.optString("message", "无法搜索歌单") }
+            val data = root.optJSONObject("data") ?: JSONObject()
+            data.toPagedList(arrayName = "playlists", parse = { row -> row.toPlaylistSearchResult() })
+        }
+    }
+
+    /**
+     * 「视频」标签的分页搜索（`GET /api/v1/search/videos`）。
+     *
+     * [quality] 语义与 [search] 相同：透传给服务端影响相关歌曲行的占位地址档位。
+     * 服务端只下发 vid > 0 的条目（没有 MV 的歌不进这个列表），客户端不再重复过滤。
+     */
+    fun searchVideosPaged(
+        keyword: String,
+        page: Int = 1,
+        num: Int = DEFAULT_CATALOG_PAGE_NUM,
+        quality: Int = AudioQuality.Default.value,
+    ): PagedList<VideoSearchResult> {
+        val query = "?keyword=${encode(keyword.trim())}" +
+            "&page=${page.coerceAtLeast(1)}&num=${num.coerceIn(1, MAX_CATALOG_PAGE_NUM)}" +
+            "&quality=${quality.coerceIn(0, MAX_QUALITY)}" +
+            "&source=${encode(SEARCH_SOURCE_KUWO)}"
+        return authorized("/api/v1/search/videos$query") { connection ->
+            val root = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+            check(root.optInt("code") == 0) { root.optString("message", "无法搜索视频") }
+            val data = root.optJSONObject("data") ?: JSONObject()
+            data.toPagedList(arrayName = "videos", parse = { row -> row.toVideoSearchResult() })
+        }
+    }
+
+    /**
+     * 「歌词」标签的分页搜索（`GET /api/v1/search/lyrics`）。
+     *
+     * 行结构与 [search] 的歌曲行**完全同构**（直接复用 [toSong] 解析，占位播放地址
+     * 按传入音质生成），只多出 [Song.lyricSnippet] 摘要 —— 点条目就等于播这首歌。
+     */
+    fun searchLyricsPaged(
+        keyword: String,
+        page: Int = 1,
+        num: Int = DEFAULT_CATALOG_PAGE_NUM,
+        quality: Int = AudioQuality.Default.value,
+    ): PagedList<Song> {
+        val query = "?keyword=${encode(keyword.trim())}" +
+            "&page=${page.coerceAtLeast(1)}&num=${num.coerceIn(1, MAX_CATALOG_PAGE_NUM)}" +
+            "&quality=${quality.coerceIn(0, MAX_QUALITY)}" +
+            "&source=${encode(SEARCH_SOURCE_KUWO)}"
+        return authorized("/api/v1/search/lyrics$query") { connection ->
+            val root = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+            check(root.optInt("code") == 0) { root.optString("message", "无法搜索歌词") }
+            val data = root.optJSONObject("data") ?: JSONObject()
+            data.toPagedList(
+                arrayName = "songs",
+                parse = { row ->
+                    // 摘要是歌词行相对歌曲行唯一的新增字段；nullableString 负责把
+                    // 缺键 / JSON null / 空串统一归一成 null，界面据此不渲染摘要行。
+                    row.toSong(quality).copy(lyricSnippet = row.nullableString("lyricSnippet"))
+                },
+            )
+        }
+    }
+
     /** 搜索框联想词，服务端已按波点官方顺序裁剪。 */
     fun searchSuggestions(keyword: String, limit: Int = 10): List<String> {
         if (keyword.isBlank()) return emptyList()
@@ -562,8 +634,8 @@ class TencentMusicApi(
 
     /**
      * 解析统一的分页信封：`data = { 条目数组, meta: { page, num, total, hasMore } }`。
-     * [arrayName] 是条目数组在 data 里的字段名（songs / albums），[parse] 把每行 JSON
-     * 转成具体模型；meta 缺失（旧服务端）时按「无更多」处理。
+     * [arrayName] 是条目数组在 data 里的字段名（songs / albums / playlists / videos），
+     * [parse] 把每行 JSON 转成具体模型；meta 缺失（旧服务端）时按「无更多」处理。
      */
     private fun <T> JSONObject.toPagedList(arrayName: String, parse: (JSONObject) -> T): PagedList<T> {
         val rows = optJSONArray(arrayName) ?: JSONArray()
@@ -1735,6 +1807,36 @@ class TencentMusicApi(
         showtime = optString("showtime"),
     )
 
+    /** 解析歌单搜索行。pic 服务端已保证是 https；空串归一成 null 方便界面判空。 */
+    private fun JSONObject.toPlaylistSearchResult(): PlaylistSearchResult = PlaylistSearchResult(
+        source = optString("source").ifBlank { SEARCH_SOURCE_KUWO },
+        id = optLong("id"),
+        name = optString("name"),
+        pic = nullableString("pic"),
+        creator = optString("creator"),
+        trackCount = optLong("trackCount"),
+        playCount = optLong("playCount"),
+    )
+
+    /** 解析视频搜索行。歌手 / 专辑 ID 非正归一成 null（与歌曲行的 artistId/albumId 同口径）。 */
+    private fun JSONObject.toVideoSearchResult(): VideoSearchResult = VideoSearchResult(
+        source = optString("source").ifBlank { SEARCH_SOURCE_KUWO },
+        id = optLong("id"),
+        name = optString("name"),
+        artist = optString("artist"),
+        artistId = optLong("artistId").takeIf { it > 0L },
+        album = optString("album"),
+        albumId = optLong("albumId").takeIf { it > 0L },
+        cover = nullableString("cover"),
+        durationSeconds = optInt("durationSeconds").coerceAtLeast(0),
+        vid = optLong("vid"),
+        mvName = optString("mvName"),
+        mvCover = nullableString("mvCover"),
+        mvDurationSeconds = optInt("mvDurationSeconds").coerceAtLeast(0),
+        // 与歌曲行同口径：只有服务端明确下发 false 才算不可播，缺字段按可播处理。
+        playable = optBoolean("playable", true),
+    )
+
     private fun JSONObject.toProfile() = UserProfile(
         username = optString("username"),
         // org.json 会把 JSON null 读成字面字符串 "null"，必须先用 isNull 分支。
@@ -2004,6 +2106,91 @@ data class AlbumSearchResult(
     /** 发行日期，形如 `2026-03-25`；服务端可能缺失，缺失时为空串。 */
     val showtime: String,
 )
+
+/**
+ * 搜索命中的歌单条目（`GET /api/v1/search/playlists`，仅酷我源下发）。
+ *
+ * 与账号的云端歌单 [TencentMusicApi.Playlist] 刻意分开：这是**音源侧**的公开歌单，只有元数据；
+ * `/api/v1/playlists` 那套详情路由只认当前账号自己的歌单，拿不到酷我在线歌单的歌曲，
+ * 所以目前点击条目不能进歌单详情页（界面侧给出提示，见搜索页）。
+ */
+data class PlaylistSearchResult(
+    /** 所属音源；当前只有酷我下发。 */
+    val source: String,
+    /** 音源内的歌单 ID，将来接入在线歌单详情时是寻址钥匙。 */
+    val id: Long,
+    val name: String,
+    /** 封面地址；服务端已保证 https，可能为空，解析时归一成 null。 */
+    val pic: String?,
+    /** 创建者昵称（服务端直接下发展示串）。 */
+    val creator: String,
+    /** 歌单内的歌曲总数。 */
+    val trackCount: Long,
+    /** 歌单累计播放次数；数字过万由界面用 formatCatalogCount 缩写。 */
+    val playCount: Long,
+)
+
+/**
+ * 搜索命中的视频条目（`GET /api/v1/search/videos`，仅酷我源下发）：
+ * 一首**带 MV 的歌**的基础资料 + 它的 MV 展示信息。
+ *
+ * 服务端只下发 [vid] > 0 的条目（没有 MV 的歌不进这个列表），所以点条目 = 播它的 MV；
+ * [id] 仍是歌曲身份，MV 播放链路（[TencentMusicApi.requestMv]）按它寻址，见 [toMvSong]。
+ */
+data class VideoSearchResult(
+    /** 所属音源；当前只有酷我下发。 */
+    val source: String,
+    /** 歌曲在音源内的 ID；MV 信息路由按它寻址。 */
+    val id: Long,
+    /** 歌曲名（MV 名可能不同，展示优先 [mvName]）。 */
+    val name: String,
+    /** 主歌手名（服务端直接下发展示串）。 */
+    val artist: String,
+    /** 主歌手的音源 ID；非正数归一成 null。 */
+    val artistId: Long?,
+    /** 专辑名，可能为空串。 */
+    val album: String,
+    /** 专辑的音源 ID；非正数归一成 null。 */
+    val albumId: Long?,
+    /** 歌曲封面地址；可能为空，解析时归一成 null。 */
+    val cover: String?,
+    /** 歌曲时长（秒）。 */
+    val durationSeconds: Int,
+    /** MV 在音源内的独立 ID；条目判重与界面 key 都用它（服务端保证正数）。 */
+    val vid: Long,
+    /** MV 标题，可能为空串。 */
+    val mvName: String,
+    /** MV 封面地址；可能为空，解析时归一成 null。 */
+    val mvCover: String?,
+    /** MV 时长（秒）。 */
+    val mvDurationSeconds: Int,
+    /** 服务端是否判定可播；缺字段按可播处理（与歌曲行同口径）。 */
+    val playable: Boolean,
+) {
+    /** 界面展示封面：优先 MV 自己的封面，缺失时回退歌曲封面（与桌面端同口径）。 */
+    val displayCover: String? get() = mvCover ?: cover
+}
+
+/**
+ * 把视频条目折算成 MV 播放链路认识的 [Song] 句柄（详情页 `onOpenMv` 同款入口）。
+ *
+ * MV 信息路由按**歌曲 ID** 寻址（`/api/v1/songs/:id/mv`），所以身份必须带 [VideoSearchResult.id]；
+ * [VideoSearchResult.vid] 是上游 MV 自己的 ID，只用于条目判重，**不**参与请求 ——
+ * 拿它当 remoteId 会把 MV 的 ID 当成歌曲 ID 查询，只能得到「暂无 MV」。
+ * 展示资料优先用 MV 自己的名字、封面与时长（缺失回退歌曲的），播放页视频下方显示的就是它们。
+ */
+fun VideoSearchResult.toMvSong(): Song {
+    val seconds = mvDurationSeconds.takeIf { it > 0 } ?: durationSeconds
+    return Song(
+        title = mvName.ifBlank { name },
+        artist = artist.ifBlank { "未知歌手" },
+        duration = if (seconds > 0) "%02d:%02d".format(seconds / 60, seconds % 60) else "MV",
+        color = 0xFFFFB4A2,
+        remoteId = id.takeIf { it > 0L },
+        coverUri = displayCover,
+        source = source,
+    )
+}
 
 /**
  * 分页信封的解析结果（歌手 / 专辑目录的歌曲与专辑接口共用）。

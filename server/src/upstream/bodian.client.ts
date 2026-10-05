@@ -47,6 +47,23 @@ export interface Song {
    * 原生 KPK 接口可取得完整 128K、320K 与 FLAC。
    */
   playable?: boolean;
+  /**
+   * 视频搜索条目（`search/video/list`）的 MV 播放 ID，来自上游顶层 `vid` 字段。
+   * **≤0 表示该条目不是 MV**（上游对纯音频条目给 0 或缺失），由服务端路由层
+   * 据此整行丢弃。仅视频搜索条目携带；普通歌曲 / 详情族条目恒缺席。
+   */
+  vid?: number;
+  /**
+   * 视频搜索条目的 MV 元数据，来自上游 `mv` 子对象（App 侧取 name/pic/duration）。
+   * 时长优先读 `mv.duration`，缺失时回退条目顶层的 `mvduration`（实测该端点把
+   * MV 时长放在顶层）。仅视频搜索条目携带。
+   */
+  mv?: { name: string; pic: string; duration: number };
+  /**
+   * 歌词搜索条目（`search/lyric/list`）的纯文本歌词摘要，来自上游 `lyric` 字段。
+   * 上游可能缺失，映射处统一收敛成空串。仅歌词搜索条目携带。
+   */
+  lyricSnippet?: string;
 }
 
 /**
@@ -127,27 +144,32 @@ export interface AlbumDetail {
   desc: string;
 }
 
-export interface Playlist {
+/**
+ * 搜索结果里的一张歌单。字段来自 `search/playlist/list` 的 resultList 条目。
+ *
+ * 字段名就是 `GET /search/playlists` 的**下发契约名**：上游的 `creator_name` /
+ * `musicnum` / `playnum` 在 [BodianClient.searchPlaylists] 里就地改名，调用方
+ * 不必再做一层翻译。上游条目里的 `creator_id` / `sltype` / `hitcontent` 与数字
+ * `source` 标记（实测为 4）是列表展示用不到的内容，`description` 实测缺失
+ * （App 侧解析类有它但线上条目没给）—— 一律**不映射**。App 侧点击行为是
+ * C_LIST 进歌单详情页，详情接口另行接入。
+ */
+export interface SearchPlaylistItem {
   id: number;
   name: string;
+  /** 封面绝对地址。上游给 http 明文，映射处统一升级 https。 */
+  pic: string;
+  /** 歌单创建者昵称。上游叫 `creator_name`。 */
+  creator: string;
+  /** 歌单内歌曲数。上游叫 `musicnum`。 */
+  trackCount: number;
+  /** 播放次数。上游叫 `playnum`。 */
+  playCount: number;
 }
 
 export interface User {
   id: number;
   name: string;
-}
-
-export interface Video {
-  id: number;
-  name: string;
-  artist: string;
-  album: string;
-}
-
-export interface LyricResult {
-  id: number;
-  name: string;
-  artist: string;
 }
 
 /** 官方搜索首页 `hotWord` 中的一条热搜。 */
@@ -994,9 +1016,26 @@ export class BodianClient {
     };
   }
 
-  async searchPlaylists(keyword: string, page: number = 1, size: number = 5): Promise<Playlist[]> {
+  /**
+   * 歌单搜索。上游的 `creator_name` / `musicnum` / `playnum` 在这里就地改成契约名
+   * `creator` / `trackCount` / `playCount`；`pic` 上游给 **http 明文**（与详情族端点
+   * 同一个坑），经 [httpsImage] 统一升级，调用方不必再兜底。
+   *
+   * 返回值带 `total`，取法与语义同 [searchArtists]（「周杰伦」实测 143）。
+   */
+  async searchPlaylists(keyword: string, page: number = 1, size: number = 5): Promise<{ playlists: SearchPlaylistItem[]; total: number }> {
     const d = await this.signedGet(`${BASE_URL}search/playlist/list`, { pn: this.upstreamPage(page), rn: size, keyword });
-    return (d.data?.resultList || []).map((s: any) => ({ id: s.id, name: s.name }));
+    return {
+      playlists: (d.data?.resultList || []).map((s: any) => ({
+        id: Number(s.id),
+        name: String(s.name ?? ""),
+        pic: this.httpsImage(s.pic),
+        creator: String(s.creator_name ?? ""),
+        trackCount: Number(s.musicnum) || 0,
+        playCount: Number(s.playnum) || 0,
+      })),
+      total: Number(d.data?.total) || 0,
+    };
   }
 
   async searchUsers(keyword: string, page: number = 1, size: number = 5): Promise<User[]> {
@@ -1004,23 +1043,54 @@ export class BodianClient {
     return (d.data?.resultList || []).map((s: any) => ({ id: s.id, name: s.name }));
   }
 
-  async searchVideos(keyword: string, page: number = 1, size: number = 5): Promise<Video[]> {
+  /**
+   * 视频搜索。上游条目就是**完整歌曲对象**（与 `search/music/list` 的条目同构：
+   * `songName`/`album`/`albumPic`/`artist`/`payInfo`…），所以映射复用 [toDetailSong]
+   * 的口径（name 优先、albumPic、payInfo 高潮区间与试听判定），再额外挂 `vid`
+   * 与 `mv` 子对象（取 name/pic/duration；时长优先 `mv.duration`，实测缺失时
+   * 回退顶层 `mvduration`）。
+   *
+   * **这里不按 `vid` 过滤**：非 MV 条目（`vid≤0`）由服务端路由层统一丢弃，
+   * 协议层保持与上游 1:1 —— 提前丢行会让 `total`（「周杰伦」实测 603）与
+   * 实际条目数对不上，路由层的 `hasMore` 就没法用整表总数算了。
+   *
+   * 返回值带 `total`，取法与语义同 [searchArtists]。
+   */
+  async searchVideos(keyword: string, page: number = 1, size: number = 5): Promise<{ songs: Song[]; total: number }> {
     const d = await this.signedGet(`${BASE_URL}search/video/list`, { pn: this.upstreamPage(page), rn: size, keyword });
-    return (d.data?.resultList || []).map((s: any) => ({
-      id: s.id,
-      name: s.songName || s.name || "",
-      artist: s.artist || "",
-      album: s.album || "",
-    }));
+    return {
+      songs: (d.data?.resultList || []).map((s: any) => ({
+        ...this.toDetailSong(s),
+        vid: Number(s.vid) || 0,
+        mv: s.mv
+          ? {
+              name: String(s.mv.name ?? ""),
+              pic: this.httpsImage(s.mv.pic),
+              duration: Number(s.mv.duration ?? s.mvduration) || 0,
+            }
+          : undefined,
+      })),
+      total: Number(d.data?.total) || 0,
+    };
   }
 
-  async searchLyrics(keyword: string, page: number = 1, size: number = 5): Promise<LyricResult[]> {
+  /**
+   * 歌词搜索。上游条目同样是**完整歌曲对象**（多一个 `lyric` 纯文本歌词摘要字段），
+   * 映射复用 [toDetailSong]，摘要挂到 `lyricSnippet`；上游缺失时收敛成空串。
+   * App 侧歌词搜索结果的点击行为与普通歌曲一致（PLAYSONG 播该歌），客户端
+   * 不需要为它做新交互。
+   *
+   * 返回值带 `total`，取法与语义同 [searchArtists]（「晴天」实测 100）。
+   */
+  async searchLyrics(keyword: string, page: number = 1, size: number = 5): Promise<{ songs: Song[]; total: number }> {
     const d = await this.signedGet(`${BASE_URL}search/lyric/list`, { pn: this.upstreamPage(page), rn: size, keyword });
-    return (d.data?.resultList || []).map((s: any) => ({
-      id: s.rid || s.id,
-      name: s.songName || "",
-      artist: s.artist || "",
-    }));
+    return {
+      songs: (d.data?.resultList || []).map((s: any) => ({
+        ...this.toDetailSong(s),
+        lyricSnippet: String(s.lyric ?? ""),
+      })),
+      total: Number(d.data?.total) || 0,
+    };
   }
 
   async searchTips(keyword: string, size: number = 10): Promise<string[]> {
@@ -1053,8 +1123,9 @@ export class BodianClient {
    * 按 type 分发的便捷搜索入口。
    *
    * ⚠️ **本方法当前全项目零引用**，属于复刻版遗留的通用分发器；别按它的形状推断
-   * 各 search 方法的真实返回 —— 歌手 / 专辑两族自 2026-10 起返回 `{items, total}`
-   * 信封（见 [searchArtists] / [searchAlbums]），其余仍是纯数组，所以只能放宽成 `any`。
+   * 各 search 方法的真实返回 —— 除 `music` / `user` 两族仍是纯数组外，歌手 / 专辑 /
+   * 歌单 / 视频 / 歌词自 2026-10 起都返回 `{items, total}` 信封（见 [searchArtists] /
+   * [searchAlbums] / [searchPlaylists] / [searchVideos] / [searchLyrics]），所以只能放宽成 `any`。
    */
   async search(type: string, keyword: string, page: number = 1, size: number = 5): Promise<any> {
     const map: Record<string, (kw: string, p: number, s: number) => Promise<any>> = {

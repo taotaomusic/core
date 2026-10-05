@@ -56,4 +56,11 @@ data class Song(
      * 下发规则与 [artistId] 相同（酷我独有）；为 null 时菜单项不显示。
      */
     val albumId: Long? = null,
+    /**
+     * 命中歌词摘要：**仅歌词搜索**（`/api/v1/search/lyrics`）的结果行下发，
+     * 是一小段包含命中词的歌词文本，搜索页歌词标签展示在歌曲行下方。
+     * 其他来源（普通搜索、歌单、收藏、队列恢复等）一律为 null；
+     * 它是纯展示的瞬态字段，离线持久化（SongCodec）不保存也不读取。
+     */
+    val lyricSnippet: String? = null,
 )

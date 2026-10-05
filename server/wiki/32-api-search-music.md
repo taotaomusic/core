@@ -2,9 +2,9 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-10-04
+最后更新:2026-10-05
 
-本文覆盖搜索联想、热搜、NDJSON 搜索、歌手 / 专辑分页搜索、播放地址、播放代理、歌词和 MV 信息。上游协议适配的内部结构见 [11-architecture-modules.md](11-architecture-modules.md) 的 `upstream/` 一节;音源账号对播放链路的影响见 [53-feature-music-sources.md](53-feature-music-sources.md)。排障见 [72-troubleshooting-music.md](72-troubleshooting-music.md)。
+本文覆盖搜索联想、热搜、NDJSON 搜索、歌手 / 专辑 / 歌单 / 视频 / 歌词分页搜索、播放地址、播放代理、歌词和 MV 信息。上游协议适配的内部结构见 [11-architecture-modules.md](11-architecture-modules.md) 的 `upstream/` 一节;音源账号对播放链路的影响见 [53-feature-music-sources.md](53-feature-music-sources.md)。排障见 [72-troubleshooting-music.md](72-troubleshooting-music.md)。
 
 ## 1. 搜索联想
 
@@ -130,7 +130,7 @@ song data 带两个**可选**字段:上游歌曲条目自带的歌手 / 专辑 I
 - 响应头包含 `X-Accel-Buffering: no`。
 - 搜索只返回元信息,不逐首解析播放地址。
 
-### 歌手 / 专辑分页搜索(搜索页四标签)
+### 歌手 / 专辑分页搜索(搜索页分页标签)
 
 第 3 节流里的 artist / album 区块是搜索落地页顶部的展示位(最多 3 / 6 条、仅第 1 页);搜索页「歌手」「专辑」独立标签的完整列表走下面两条分页路由,区块行为不受影响:
 
@@ -152,6 +152,47 @@ Authorization: Bearer <accessToken>
 - `source` 缺省 `kuwo`(当前只有波点提供);`source=all` 与未知音源 400/4001(照详情族 `detailSourceOf` 的写法),音源未实现该能力 400/4007。
 - 鉴权与 `/search` 一致:未标 `@Public()`,走全局访问令牌守卫。
 - 分页语义与搜索族一致:上游 `pn` 0 基,服务端过 `upstreamPage()`(page-1)换算;契约验证用「page=2 与 page=1 的 id 集合无交叠」守住。
+
+### 歌单 / 视频 / 歌词分页搜索(搜索页分页标签)
+
+搜索页「歌单」「视频」「歌词」独立标签的完整列表走下面三条分页路由。通用约定与歌手 / 专辑两条**完全一致**(要登录;`keyword` 空 400/4001;`source` 缺省 `kuwo`、`source=all` 与未知音源 400/4001、音源未实现该能力 400/4007;`page` 默认 1、`num` 默认 30 上限 60;`meta = {page, num, total, hasMore}`,`total` 用上游 `data.total` 整表总数、`hasMore = page * num < total`;上游 `pn` 0 基过 `upstreamPage()` 换算,契约验证用「page=2 与 page=1 的 id 集合无交叠」守住):
+
+```http
+GET /api/v1/search/playlists?keyword=周杰伦&page=1&num=30&source=kuwo
+GET /api/v1/search/videos?keyword=周杰伦&page=1&num=30&quality=10&source=kuwo
+GET /api/v1/search/lyrics?keyword=晴天&page=1&num=30&quality=10&source=kuwo
+Authorization: Bearer <accessToken>
+```
+
+**歌单** `data = {playlists, meta}`,每项:
+
+```json
+{"source":"kuwo","id":123456,"name":"周杰伦经典合集","pic":"https://...","creator":"波点用户","trackCount":88,"playCount":1234567}
+```
+
+- 上游端点 `search/playlist/list`,条目的 `creator_name` / `musicnum` / `playnum` 出流前统一改名 `creator` / `trackCount` / `playCount`;`creator_id` / `sltype` / `hitcontent` 与上游的数字 `source` 标记是运营内容,不透传。
+- `pic` 上游给 **http 明文**(与详情族端点同坑),服务端统一升级 https。
+- 点击行为是进歌单详情页,歌单详情接口另行接入,客户端先按 `source` + `id` 保留跳转钥匙。实测「周杰伦」`total=143`。
+
+**视频** `data = {videos, meta}`,每项:
+
+```json
+{"source":"kuwo","id":97773,"name":"晴天","artist":"周杰伦","artistId":336,"album":"叶惠美","albumId":87758985,"cover":"https://...","durationSeconds":269,"vid":123456,"mvName":"晴天","mvCover":"https://...","mvDurationSeconds":285,"playable":true}
+```
+
+- 上游端点 `search/video/list`,条目本身就是**完整歌曲对象**(与 `search/music/list` 同构),服务端先过与歌曲行同一条 SongMapper 映射链路再从中挑选字段:`title→name`、`coverUrl→cover`,`durationSeconds` 是上游秒数(不是歌曲行的 mm:ss 字符串);`mv*` 三键取上游 `mv` 子对象(name/pic/duration)。
+- **`vid≤0` 的条目不是 MV,服务端整行丢弃**;`meta.total` 仍是上游整表总数(实测「周杰伦」603),不受过滤影响 —— 被滤后本页条数可能少于 `num`,客户端按 `hasMore` 翻页即可。
+- `playable` 语义与歌曲行一致(`false` 置灰);点击行为是播 MV(用 `vid` 与 `mv*` 元数据)。
+
+**歌词** `data = {songs, meta}`,每项与第 3 节 `/search` 的 song data **完全同构**(同一条 SongMapper 链路:`audioUrl` 自拼代理地址、`lyricUrl` 相对路径、`favorited` 按当前用户批量查询),只外挂一个纯文本摘要:
+
+```json
+{"id":97773,"title":"晴天","artist":"周杰伦","album":"叶惠美","coverUrl":"https://...","duration":"04:29","audioUrl":"https://...","lyricUrl":"/api/v1/songs/97773/lyrics?source=kuwo","playable":true,"favorited":false,"vip":false,"source":"kuwo","lyricSnippet":"故事的小黄花 从出生那年就飘着…"}
+```
+
+- 上游端点 `search/lyric/list`,条目同样是完整歌曲对象,多一个 `lyric` 纯文本摘要字段,出流前改名 `lyricSnippet`;上游缺失时为**空串**。
+- 点击行为就是播放该歌,与普通歌曲行共用同一套点播逻辑,客户端无需新交互。实测「晴天」`total=100`。
+- `quality` 上游三个端点都不需要:它只进歌曲行的 `audioUrl` 占位地址生成(视频行的契约不透传 `audioUrl`,歌词行透传)。
 
 ## 4. 播放地址
 

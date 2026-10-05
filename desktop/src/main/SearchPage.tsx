@@ -7,15 +7,21 @@ import {
   readableError,
   searchAlbumsPaged,
   searchArtistsPaged,
+  searchLyricsPaged,
+  searchPlaylistsPaged,
   searchSongs,
+  searchVideosPaged,
   SessionExpired,
   songKeyOf,
   type SearchAlbum,
   type SearchArtist,
+  type SearchPlaylist,
+  type SearchVideo,
   type Song,
 } from "../api";
 import type { AlbumTarget } from "./AlbumPage";
 import type { ArtistTarget } from "./ArtistPage";
+import { useApp } from "../state/AppState";
 import { SongList } from "./SongList";
 import {
   addHistory,
@@ -27,8 +33,20 @@ import {
 } from "./searchHistory";
 import "./search.css";
 
-/** 搜索结果四标签：all=综合（横排区块 + 歌曲列表）、songs=单曲、artists=歌手、albums=专辑。 */
-type SearchTab = "all" | "songs" | "artists" | "albums";
+/**
+ * 搜索结果七标签：all=综合（横排区块 + 歌曲列表）、songs=单曲、artists=歌手、
+ * albums=专辑、playlists=歌单、videos=视频、lyrics=歌词。
+ */
+type SearchTab = "all" | "songs" | "artists" | "albums" | "playlists" | "videos" | "lyrics";
+
+/** 数字缩写：过万「x.x万」、过亿「x.x亿」，末位 .0 抹掉；不足一万原样返回。 */
+function shortCount(n: number | undefined): string {
+  if (n == null || !Number.isFinite(n) || n <= 0) return "";
+  const trim = (v: number) => v.toFixed(1).replace(/\.0$/, "");
+  if (n >= 100_000_000) return `${trim(n / 100_000_000)}亿`;
+  if (n >= 10_000) return `${trim(n / 10_000)}万`;
+  return String(n);
+}
 
 /** 搜索小图标（放大镜），用于联想列表行首。 */
 function SearchIcon() {
@@ -52,11 +70,13 @@ function SearchIcon() {
 /**
  * 独立搜索页，占满主内容区，对标安卓端 SearchPage。
  * 三态视图：无词未搜索 → 搜索历史 + 热门搜索；有词未搜索 → 联想列表；
- * 已搜索 → 四标签结果页（综合 / 单曲 / 歌手 / 专辑）。四个标签体常驻挂载、
- * 显隐切换：综合 = 歌手/专辑横排 + 歌曲列表，单曲 = 仅歌曲列表（同一份数据），
- * 歌手/专辑 = 分页卡片流（首次切入才拉第一页，滚动近底自动翻页）。
+ * 已搜索 → 七标签结果页（综合 / 单曲 / 歌手 / 专辑 / 歌单 / 视频 / 歌词）。
+ * 七个标签体常驻挂载、显隐切换：综合 = 歌手/专辑横排 + 歌曲列表，单曲 = 仅歌曲列表
+ * （同一份数据），歌手/专辑/歌单/视频 = 分页卡片流，歌词 = 分页歌词行列表
+ * （均为首次切入才拉第一页，滚动近底自动翻页）。
  * 搜索历史只存本机不上传；会话过期由 AppState 层统一处理。
  * 结果区与歌曲行「⋯」菜单点击后经 onOpenArtist / onOpenAlbum 跳转歌手主页与专辑页。
+ * 歌单/视频条目点击只提示不跳转：桌面端尚未接入在线歌单详情与 MV 播放能力。
  */
 export function SearchPage({
   onOpenArtist,
@@ -65,6 +85,7 @@ export function SearchPage({
   onOpenArtist: (target: ArtistTarget) => void;
   onOpenAlbum: (target: AlbumTarget) => void;
 }) {
+  const { toast } = useApp();
   const [keyword, setKeyword] = useState("");
   const [hasSearched, setHasSearched] = useState(false);
   const [history, setHistory] = useState<string[]>(() => loadHistory());
@@ -80,9 +101,9 @@ export function SearchPage({
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState("");
-  // 结果四标签当前项
+  // 结果七标签当前项
   const [tab, setTab] = useState<SearchTab>("all");
-  // 搜索代次：每次提交搜索 +1，作为歌手/专辑卡片流的 remount key（新搜索即清空重置）
+  // 搜索代次：每次提交搜索 +1，作为歌手/专辑/歌单/视频/歌词分页流的 remount key（新搜索即清空重置）
   const [searchEpoch, setSearchEpoch] = useState(0);
 
   const inputRef = useRef<HTMLInputElement>(null);
@@ -386,7 +407,7 @@ export function SearchPage({
 
         {hasSearched && (
           <>
-            {/* 四标签切换：分段控件视觉与歌手页内嵌标签一致 */}
+            {/* 七标签切换：分段控件视觉与歌手页内嵌标签一致；标签多时容器横向滚动 */}
             <div className="sp-tabs" role="tablist">
               <button
                 type="button"
@@ -423,6 +444,33 @@ export function SearchPage({
                 onClick={() => setTab("albums")}
               >
                 专辑
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={tab === "playlists"}
+                className={`sp-tab${tab === "playlists" ? " on" : ""}`}
+                onClick={() => setTab("playlists")}
+              >
+                歌单
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={tab === "videos"}
+                className={`sp-tab${tab === "videos" ? " on" : ""}`}
+                onClick={() => setTab("videos")}
+              >
+                视频
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={tab === "lyrics"}
+                className={`sp-tab${tab === "lyrics" ? " on" : ""}`}
+                onClick={() => setTab("lyrics")}
+              >
+                歌词
               </button>
             </div>
 
@@ -479,6 +527,80 @@ export function SearchPage({
                 loadingHint="正在加载专辑…"
                 emptyHint="没有找到相关专辑，换个关键词再试试"
                 renderCard={(al) => <AlbumCard album={al} onOpenAlbum={onOpenAlbum} />}
+              />
+            </div>
+
+            {/* 歌单：分页横版卡片纵向列表；桌面端未接入在线歌单详情，点击仅提示 */}
+            <div className="sp-pane" style={{ display: tab === "playlists" ? "flex" : "none" }}>
+              <PagedCardFlow<SearchPlaylist>
+                key={`playlists-${searchEpoch}`}
+                active={tab === "playlists"}
+                fetchPage={(page) =>
+                  searchPlaylistsPaged(keyword, page).then((r) => ({
+                    items: r.playlists,
+                    total: r.total,
+                    hasMore: r.hasMore,
+                  }))
+                }
+                keyOf={(p) => `${p.source}:${p.id}`}
+                noun="个歌单"
+                loadingHint="正在加载歌单…"
+                emptyHint="没有找到相关歌单，换个关键词再试试"
+                cardsClassName="sp-pl-list"
+                renderCard={(p) => (
+                  <PlaylistCard
+                    playlist={p}
+                    onOpen={() => {
+                      // PlaylistsPage 只有用户自己的服务端歌单（fetchPlaylistDetail 不认酷我在线歌单 id），
+                      // 在线歌单详情链路未接入前点击只提示不跳转。
+                      toast("桌面端暂不支持打开在线歌单");
+                    }}
+                  />
+                )}
+              />
+            </div>
+
+            {/* 视频：双列 16:9 封面网格；桌面端没有 MV 播放链路，点击仅提示 */}
+            <div className="sp-pane" style={{ display: tab === "videos" ? "flex" : "none" }}>
+              <PagedCardFlow<SearchVideo>
+                key={`videos-${searchEpoch}`}
+                active={tab === "videos"}
+                fetchPage={(page) =>
+                  searchVideosPaged(keyword, page).then((r) => ({
+                    items: r.videos,
+                    total: r.total,
+                    hasMore: r.hasMore,
+                  }))
+                }
+                keyOf={(v) => `${v.source}:${v.id}:${v.vid ?? ""}`}
+                noun="个视频"
+                loadingHint="正在加载视频…"
+                emptyHint="没有找到相关视频，换个关键词再试试"
+                cardsClassName="sp-vd-grid"
+                renderCard={(v) => (
+                  <VideoCard
+                    video={v}
+                    onOpen={() => {
+                      // 点视频 = 播该歌的 MV，但桌面端无 mvSong/playMv 播放能力，先以提示兜底。
+                      toast("桌面端暂不支持播放 MV");
+                    }}
+                  />
+                )}
+              />
+            </div>
+
+            {/* 歌词：分页歌词行列表（SongList 无摘要插槽，按约定不改它，行点击走同一 playList 链路） */}
+            <div className="sp-pane" style={{ display: tab === "lyrics" ? "flex" : "none" }}>
+              <LyricResultList
+                key={`lyrics-${searchEpoch}`}
+                active={tab === "lyrics"}
+                fetchPage={(page) =>
+                  searchLyricsPaged(keyword, page).then((r) => ({
+                    items: r.songs,
+                    total: r.total,
+                    hasMore: r.hasMore,
+                  }))
+                }
               />
             </div>
           </>
@@ -645,6 +767,7 @@ function PagedCardFlow<T>({
   loadingHint,
   emptyHint,
   renderCard,
+  cardsClassName = "sp-cards",
 }: {
   /** 按页码拉取一页卡片数据（调用方绑定关键词与接口）。 */
   fetchPage: (page: number) => Promise<{ items: T[]; total: number; hasMore: boolean }>;
@@ -660,6 +783,8 @@ function PagedCardFlow<T>({
   emptyHint: string;
   /** 渲染单张卡片（视觉复用横排区块的 sp-artist-item / sp-album-item）。 */
   renderCard: (item: T) => ReactNode;
+  /** 卡片容器类名：缺省 sp-cards（换行卡片流）；歌单/视频标签传各自的列表/网格容器。 */
+  cardsClassName?: string;
 }) {
   const [items, setItems] = useState<T[]>([]);
   const [total, setTotal] = useState(0);
@@ -758,7 +883,7 @@ function PagedCardFlow<T>({
         <p className="detail-center-hint">{emptyHint}</p>
       )}
       {items.length > 0 && (
-        <div className="sp-cards">
+        <div className={cardsClassName}>
           {items.map((it) => (
             <Fragment key={keyOf(it)}>{renderCard(it)}</Fragment>
           ))}
@@ -773,6 +898,232 @@ function PagedCardFlow<T>({
           {total > items.length
             ? `已显示全部 ${items.length} ${noun}（共 ${total} ${noun}）`
             : `已显示全部 ${items.length} ${noun}`}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * 歌单卡片：横版行（圆角封面 64px + 名字两行省略 + 「creator · N 首 · 播放 M 次」次要行，
+ * 数字过万缩写）。在线歌单详情未接入，点击行为由 onOpen 决定（当前为 toast 提示）。
+ */
+function PlaylistCard({ playlist, onOpen }: { playlist: SearchPlaylist; onOpen: () => void }) {
+  const subs: string[] = [];
+  if (playlist.creator) subs.push(playlist.creator);
+  if (playlist.trackCount != null) subs.push(`${playlist.trackCount} 首`);
+  const plays = shortCount(playlist.playCount);
+  if (plays) subs.push(`播放 ${plays} 次`);
+  return (
+    <div className="sp-pl-item" title={`在线歌单「${playlist.name}」`} onClick={onOpen}>
+      <PlaylistCover pic={playlist.pic} />
+      <div className="sp-pl-meta">
+        <span className="sp-pl-name">{playlist.name}</span>
+        {subs.length > 0 && <span className="sp-pl-sub">{subs.join(" · ")}</span>}
+      </div>
+    </div>
+  );
+}
+
+/** 歌单封面：有图用图（失败就地回退），无图主题色块 + 音符，与专辑封面同一设计语言。 */
+function PlaylistCover({ pic }: { pic?: string }) {
+  const [failed, setFailed] = useState(false);
+  const showImg = !!pic && !failed;
+  return (
+    <div className="sp-pl-cover">
+      {showImg ? (
+        <img src={absoluteUrl(pic)} alt="" onError={() => setFailed(true)} />
+      ) : (
+        <span className="note">♪</span>
+      )}
+    </div>
+  );
+}
+
+/** 视频卡片中心的圆形播放角标。 */
+function PlayBadge() {
+  return (
+    <span className="sp-vd-badge" aria-hidden="true">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M8 5.5v13l11-6.5z" />
+      </svg>
+    </span>
+  );
+}
+
+/**
+ * 视频卡片：16:9 圆角封面 + 居中播放角标 + mvName（两行省略）+ artist 次要行。
+ * 封面优先 mvCover（视频封面），缺失回退歌曲封面 cover。点击行为由 onOpen 决定
+ * （桌面端暂无 MV 播放链路，当前为 toast 提示）。
+ */
+function VideoCard({ video, onOpen }: { video: SearchVideo; onOpen: () => void }) {
+  const title = video.mvName || video.name;
+  const [failed, setFailed] = useState(false);
+  const showImg = !!video.cover && !failed;
+  return (
+    <div className="sp-vd-item" title={`播放 MV「${title}」`} onClick={onOpen}>
+      <div className="sp-vd-cover">
+        {showImg ? (
+          <img src={absoluteUrl(video.cover)} alt="" onError={() => setFailed(true)} />
+        ) : (
+          <span className="note">♪</span>
+        )}
+        <PlayBadge />
+      </div>
+      <span className="sp-vd-name">{title}</span>
+      {video.artist && <span className="sp-vd-artist">{video.artist}</span>}
+    </div>
+  );
+}
+
+/**
+ * 歌词标签的分页列表：行结构是「标题 + 歌手·专辑 + 命中歌词摘要」。
+ * SongList 没有摘要插槽且其行内含「⋯」菜单/收藏按钮，按约定不改 SongList，
+ * 这里用轻量行复刻其播放口径：不可播放只提示，行点击 playList 整列入队。
+ * 分页口径与 PagedCardFlow 完全一致：首次激活拉第一页、滚动近底翻页、
+ * 按 songKeyOf 去重拼接、genRef 作废旧响应；新搜索由 key 重挂载整体重置。
+ */
+function LyricResultList({
+  fetchPage,
+  active,
+}: {
+  /** 按页码拉取一页歌词命中歌曲（调用方绑定关键词与接口）。 */
+  fetchPage: (page: number) => Promise<{ items: Song[]; total: number; hasMore: boolean }>;
+  /** 本标签是否处于激活态：首次激活才拉第一页。 */
+  active: boolean;
+}) {
+  const { playList, toast } = useApp();
+  const [items, setItems] = useState<Song[]>([]);
+  const [total, setTotal] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [error, setError] = useState("");
+  const [loaded, setLoaded] = useState(false); // 第一页已尝试过（成功或失败）：防止重复自动加载
+
+  const fetchRef = useRef(fetchPage); // 最新拉取函数：异步回调里经它调用，不闭包捕获旧值
+  fetchRef.current = fetchPage;
+  const itemsRef = useRef<Song[]>([]); // 最新数据快照：翻页合并去重用
+  const pageRef = useRef(0); // 已加载到的页码
+  const busyRef = useRef(false); // 翻页请求进行中，防滚动事件重复触发
+  const hasMoreRef = useRef(false); // hasMore 镜像：滚动闭包读最新值
+  const genRef = useRef(0); // 代数计数：翻页/重试后旧响应作废
+  const startedRef = useRef(false); // 首次激活已启动过拉取，避免 active 抖动引发重复自动加载
+
+  /** 拉取一页：首屏整体替换，翻页按 songKeyOf 去重拼接。 */
+  function loadPage(page: number) {
+    const gen = ++genRef.current;
+    const isFirst = page === 1;
+    busyRef.current = true;
+    if (isFirst) {
+      itemsRef.current = [];
+      setItems([]);
+      setError("");
+      setLoading(true);
+    } else {
+      setLoadingMore(true);
+    }
+    void (async () => {
+      try {
+        const r = await fetchRef.current(page);
+        if (genRef.current !== gen) return; // 已有更新的加载，丢弃旧响应
+        const seen = new Set(itemsRef.current.map(songKeyOf));
+        const merged = isFirst
+          ? r.items
+          : [...itemsRef.current, ...r.items.filter((s) => !seen.has(songKeyOf(s)))];
+        itemsRef.current = merged;
+        setItems(merged);
+        setTotal(r.total);
+        hasMoreRef.current = r.hasMore;
+        setHasMore(r.hasMore);
+        pageRef.current = page;
+        setLoaded(true);
+      } catch (e) {
+        if (genRef.current !== gen) return;
+        if (e instanceof SessionExpired) return; // 会话过期由 AppState 层统一处理
+        setError(readableError(e));
+        setLoaded(true); // 失败也算已尝试：自动加载不再重入，改由重试按钮触发
+      } finally {
+        if (genRef.current === gen) {
+          busyRef.current = false;
+          if (isFirst) setLoading(false);
+          else setLoadingMore(false);
+        }
+      }
+    })();
+  }
+
+  // 首次切到本标签时拉第一页
+  useEffect(() => {
+    if (!active || startedRef.current) return;
+    startedRef.current = true;
+    loadPage(1);
+  }, [active]);
+
+  // 卸载时作废在途响应
+  useEffect(() => {
+    return () => {
+      genRef.current++;
+    };
+  }, []);
+
+  /** 无限滚动：距底不足 300px 且允许加载时翻下一页；并发去抖由 busy 标记保证。 */
+  function handleScroll(e: UIEvent<HTMLDivElement>) {
+    if (busyRef.current || !hasMoreRef.current || loading || loadingMore) return;
+    const el = e.currentTarget;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 300) loadPage(pageRef.current + 1);
+  }
+
+  /** 行点击：与 SongList 同一口径——不可播放只提示，否则整列入队从该行播放。 */
+  function handleRowClick(i: number, s: Song) {
+    if (s.playable === false) {
+      toast("该歌曲暂不可播放");
+      return;
+    }
+    playList(items, i);
+  }
+
+  return (
+    <div className="sp-pane-scroll" onScroll={handleScroll}>
+      {loading && <p className="detail-center-hint">正在加载歌词…</p>}
+      {!loading && error !== "" && items.length === 0 && (
+        <div className="detail-center-block">
+          <p className="detail-center-hint err">{error}</p>
+          <button type="button" className="detail-retry" onClick={() => loadPage(1)}>
+            重试
+          </button>
+        </div>
+      )}
+      {!loading && error === "" && loaded && items.length === 0 && (
+        <p className="detail-center-hint">没有找到相关歌词，换个关键词再试试</p>
+      )}
+      {items.length > 0 && (
+        <div className="sp-ly-list">
+          {items.map((s, i) => (
+            <div
+              key={songKeyOf(s)}
+              className={`sp-ly-row${s.playable === false ? " off" : ""}`}
+              onClick={() => handleRowClick(i, s)}
+            >
+              <div className="sp-ly-title-line">
+                <span className="sp-ly-title">{s.title}</span>
+                {s.vip ? <span className="vip-badge">VIP</span> : null}
+              </div>
+              <span className="sp-ly-artist">{s.album ? `${s.artist} · ${s.album}` : s.artist}</span>
+              {s.lyricSnippet && <p className="sp-ly-snippet">{s.lyricSnippet}</p>}
+            </div>
+          ))}
+        </div>
+      )}
+      {!loading && error !== "" && items.length > 0 && (
+        <p className="songrow-more-err">{error}（可继续下滑重试）</p>
+      )}
+      {loadingMore && <p className="songrow-foot">正在加载更多…</p>}
+      {!loadingMore && items.length > 0 && !hasMore && (
+        <p className="songrow-foot">
+          {total > items.length
+            ? `已显示全部 ${items.length} 首（共 ${total} 首）`
+            : `已显示全部 ${items.length} 首`}
         </p>
       )}
     </div>

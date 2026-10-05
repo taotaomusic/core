@@ -112,7 +112,7 @@ export class MusicController {
     );
   }
 
-  // ---------- 搜索页四标签：歌手 / 专辑分页搜索（2026-10 新增）----------
+  // ---------- 搜索页标签：歌手 / 专辑分页搜索（2026-10 新增）----------
   //
   // `/search` 流里的 artist / album 区块是搜索落地页顶部的展示位（最多 3 / 6 条、
   // 仅第 1 页）；搜索页「歌手 / 专辑」独立标签的完整列表走这两条分页路由。要登录
@@ -175,6 +175,170 @@ export class MusicController {
     const detail = await client.searchAlbums(trimmed, resolvedPage, resolvedNum);
     return {
       albums: detail.albums.map((album) => ({ ...album, source: client.source })),
+      meta: {
+        page: resolvedPage,
+        num: resolvedNum,
+        total: detail.total,
+        hasMore: resolvedPage * resolvedNum < detail.total,
+      },
+    };
+  }
+
+  // ---------- 搜索页新标签：歌单 / 视频 / 歌词分页搜索（2026-10 新增）----------
+  //
+  // 与上面歌手 / 专辑两条同一套约定：要登录（未标 @Public，走全局访问令牌守卫）；
+  // keyword 空 4001；source 缺省 kuwo、`source=all` 与未知音源 4001（走
+  // [detailSourceOf]，聚合模式没有单一 client 可分派）；音源未实现该能力 4007；
+  // num 缺省 30、上限 60；`meta = {page, num, total, hasMore}`，total 用上游
+  // `data.total` 的整表总数（实测「周杰伦」歌单 143 / 视频 603、「晴天」歌词 100），
+  // hasMore = page * num < total。上游 `search/playlist|video|lyric/list` 与
+  // search/artist/list 同族：pn 0 基、偏移 `pn × rn`，协议层过 `upstreamPage()` 换算。
+
+  /**
+   * 歌单分页搜索。行结构即对外契约：上游的 `creator_name` / `musicnum` / `playnum`
+   * 已在协议层改名 `creator` / `trackCount` / `playCount`，http 明文的 `pic` 已升级
+   * https；`creator_id` / `sltype` / `hitcontent` 与上游的数字 `source` 标记不透传。
+   * `data.source` 是契约字段，适配器不含它，由这里按当前音源统一补上。
+   * 点击行为是进歌单详情页，详情接口另行接入。
+   */
+  @Get("search/playlists")
+  async searchPlaylists(
+    @Query("keyword") keyword?: string,
+    @Query("page") page?: string,
+    @Query("num") num?: string,
+    @Query("source") source?: string,
+  ) {
+    const trimmed = (keyword ?? "").trim();
+    if (!trimmed) throw ApiErrors.badRequest(4001, "请输入搜索关键词");
+    const client = this.registry.of(this.detailSourceOf(source));
+    if (!client.searchPlaylists) {
+      throw ApiErrors.badRequest(4007, `${client.displayName}不支持歌单搜索`);
+    }
+    const resolvedPage = this.positiveIntOr(page, 1);
+    const resolvedNum = Math.min(MAX_PAGE_SIZE, this.positiveIntOr(num, DEFAULT_DETAIL_SONG_PAGE_SIZE));
+    const detail = await client.searchPlaylists(trimmed, resolvedPage, resolvedNum);
+    return {
+      playlists: detail.playlists.map((playlist) => ({ ...playlist, source: client.source })),
+      meta: {
+        page: resolvedPage,
+        num: resolvedNum,
+        total: detail.total,
+        hasMore: resolvedPage * resolvedNum < detail.total,
+      },
+    };
+  }
+
+  /**
+   * 视频分页搜索。上游条目是完整歌曲对象，先过与歌曲行**同一条映射链路**
+   * （[toClientSongs]，playable / 身份语义与搜索歌曲一致），再从中挑选契约字段并
+   * 就地改名（title→name、coverUrl→cover）；`durationSeconds` 取上游的秒数，
+   * 不走歌曲行的 mm:ss 字符串。`mv*` 三键取上游 `mv` 子对象（name/pic/duration）。
+   *
+   * **`vid≤0` 的条目在这里整行丢弃**（不是 MV）—— 过滤放在映射之前，收藏批量
+   * 查询就不会为丢掉的行白查一次库；`meta.total` 仍是上游整表总数，不受过滤影响
+   * （被滤后本页条数可能少于 num，客户端按 hasMore 翻页即可）。
+   *
+   * `quality` 上游不需要：它只进 SongMapper 的 `audioUrl` 占位地址生成，而本路由的
+   * 契约行不透传 `audioUrl`，带它只是为了与歌曲行保持同一条链路。点击行为是播 MV。
+   */
+  @Get("search/videos")
+  async searchVideos(
+    @Req() request: Request,
+    @CurrentUser() user: SessionUser,
+    @Query("keyword") keyword?: string,
+    @Query("page") page?: string,
+    @Query("num") num?: string,
+    @Query("quality") quality?: string,
+    @Query("source") source?: string,
+  ) {
+    const trimmed = (keyword ?? "").trim();
+    if (!trimmed) throw ApiErrors.badRequest(4001, "请输入搜索关键词");
+    const selectedSource = this.detailSourceOf(source);
+    const client = this.registry.of(selectedSource);
+    if (!client.searchVideos) {
+      throw ApiErrors.badRequest(4007, `${client.displayName}不支持视频搜索`);
+    }
+    const resolvedPage = this.positiveIntOr(page, 1);
+    const resolvedNum = Math.min(MAX_PAGE_SIZE, this.positiveIntOr(num, DEFAULT_DETAIL_SONG_PAGE_SIZE));
+    const detail = await client.searchVideos(trimmed, resolvedPage, resolvedNum);
+    // vid≤0 表示该条目不是 MV（上游对纯音频条目给 0 或缺失），整行丢弃。
+    const mvItems = detail.songs.filter((item) => Number(item.vid) > 0);
+    const mapped = await this.toClientSongs(
+      request,
+      user,
+      selectedSource,
+      mvItems,
+      this.mapper.qualityOf(quality),
+    );
+    return {
+      videos: mvItems.map((item, index) => {
+        const song = mapped[index];
+        return {
+          source: song.source,
+          id: song.id,
+          name: song.title,
+          artist: song.artist,
+          // 歌手 / 专辑 ID 上游没给时整个键缺席（JSON.stringify 丢 undefined），绝不发 0。
+          artistId: song.artistId,
+          album: song.album,
+          albumId: song.albumId,
+          cover: song.coverUrl,
+          durationSeconds: Number(item.interval) || 0,
+          vid: Number(item.vid),
+          mvName: item.mv?.name ?? "",
+          mvCover: item.mv?.pic ?? "",
+          mvDurationSeconds: item.mv?.duration ?? 0,
+          playable: song.playable,
+        };
+      }),
+      meta: {
+        page: resolvedPage,
+        num: resolvedNum,
+        total: detail.total,
+        hasMore: resolvedPage * resolvedNum < detail.total,
+      },
+    };
+  }
+
+  /**
+   * 歌词分页搜索。每项与 `/search` 的 song data **完全同构**（完整 [toClientSongs]
+   * 输出：自拼 `audioUrl`、相对路径 `lyricUrl`、`favorited` 批量查询，一样不少），
+   * 客户端可直接复用歌曲行组件与点播逻辑，只是外挂一个纯文本摘要 `lyricSnippet`
+   * （上游 `lyric` 字段，可能为空串）。点击行为就是播放该歌，客户端无需新交互。
+   */
+  @Get("search/lyrics")
+  async searchLyrics(
+    @Req() request: Request,
+    @CurrentUser() user: SessionUser,
+    @Query("keyword") keyword?: string,
+    @Query("page") page?: string,
+    @Query("num") num?: string,
+    @Query("quality") quality?: string,
+    @Query("source") source?: string,
+  ) {
+    const trimmed = (keyword ?? "").trim();
+    if (!trimmed) throw ApiErrors.badRequest(4001, "请输入搜索关键词");
+    const selectedSource = this.detailSourceOf(source);
+    const client = this.registry.of(selectedSource);
+    if (!client.searchLyrics) {
+      throw ApiErrors.badRequest(4007, `${client.displayName}不支持歌词搜索`);
+    }
+    const resolvedPage = this.positiveIntOr(page, 1);
+    const resolvedNum = Math.min(MAX_PAGE_SIZE, this.positiveIntOr(num, DEFAULT_DETAIL_SONG_PAGE_SIZE));
+    const detail = await client.searchLyrics(trimmed, resolvedPage, resolvedNum);
+    const mapped = await this.toClientSongs(
+      request,
+      user,
+      selectedSource,
+      detail.songs,
+      this.mapper.qualityOf(quality),
+    );
+    return {
+      // 行序与上游 resultList 一一对应，按下标回填摘要即可（toClientSongs 不改序）。
+      songs: mapped.map((song, index) => ({
+        ...song,
+        lyricSnippet: detail.songs[index]?.lyricSnippet ?? "",
+      })),
       meta: {
         page: resolvedPage,
         num: resolvedNum,

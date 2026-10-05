@@ -11,6 +11,8 @@ import type {
   UpstreamAlbumDetail,
   UpstreamArtist,
   UpstreamArtistDetail,
+  UpstreamSearchPlaylist,
+  UpstreamSongWithExtras,
 } from "./music-source.client";
 import type { MusicSourceCredential } from "./music-source-account.repository";
 import { MusicSourceAccountRepository } from "./music-source-account.repository";
@@ -622,6 +624,52 @@ export class KuwoClient implements MusicSourceClient, MusicSourceCredentialManag
     return client.searchAlbums(keyword, page, limit);
   }
 
+  /**
+   * 波点歌单搜索，产出 `GET /search/playlists` 分页路由的行列表。
+   * 页取法同 [searchArtists]（`page` 透传，协议层换算 0 基 `pn`；`limit` 直接当 `rn`）；
+   * `creator_name` / `musicnum` / `playnum` 的改名与 `pic` 的 https 升级已在协议层完成，
+   * 这里只负责带上当前生效凭据，不做第二层映射。
+   */
+  async searchPlaylists(
+    keyword: string,
+    page: number,
+    limit: number,
+  ): Promise<{ playlists: UpstreamSearchPlaylist[]; total: number }> {
+    const client = await this.clientOf();
+    return client.searchPlaylists(keyword, page, limit);
+  }
+
+  /**
+   * 波点视频搜索。上游条目是完整歌曲对象，经 [toUpstreamSong] 换成 v3 形状 ——
+   * 与歌曲行**同一条映射链路**，`vid` / `mv` 扩展字段一并透传，路由层才拿得到。
+   * **这里不按 `vid` 丢行**（非 MV 条目由路由层过滤）：提前过滤会让本页条数与
+   * `total`（上游整表总数，实测「周杰伦」603）失去换算关系，`hasMore` 就没法算了。
+   * 分页语义同 [searchArtists]（搜索族端点 `pn` 0 基，协议层过 `upstreamPage()`）。
+   */
+  async searchVideos(
+    keyword: string,
+    page: number,
+    limit: number,
+  ): Promise<{ songs: UpstreamSongWithExtras[]; total: number }> {
+    const client = await this.clientOf();
+    const detail = await client.searchVideos(keyword, page, limit);
+    return { songs: detail.songs.map((song) => this.toUpstreamSong(song)), total: detail.total };
+  }
+
+  /**
+   * 波点歌词搜索。条目映射与分页语义同 [searchVideos]，外挂的纯文本摘要
+   * `lyricSnippet` 一并透传；点击行为与普通歌曲一致（播放），不需要额外链路。
+   */
+  async searchLyrics(
+    keyword: string,
+    page: number,
+    limit: number,
+  ): Promise<{ songs: UpstreamSongWithExtras[]; total: number }> {
+    const client = await this.clientOf();
+    const detail = await client.searchLyrics(keyword, page, limit);
+    return { songs: detail.songs.map((song) => this.toUpstreamSong(song)), total: detail.total };
+  }
+
   // ---------- 歌手与专辑详情（2026-10 新增）----------
 
   /**
@@ -731,7 +779,15 @@ export class KuwoClient implements MusicSourceClient, MusicSourceCredentialManag
     return id;
   }
 
-  private toUpstreamSong(song: Song): UpstreamSong {
+  /**
+   * 把协议层 [Song] 换成 v3 形状（[UpstreamSongWithExtras]）。
+   *
+   * 返回类型刻意取**带扩展字段的宽类型**：视频 / 歌词搜索条目的 `vid` / `mv` /
+   * `lyricSnippet` 必须穿过这一跳路由层才拿得到。普通歌曲条目三键恒为 undefined，
+   * `JSON.stringify` 会丢掉 undefined 键，所以既有路由（搜索 / 歌手 / 专辑歌曲列表）
+   * 的下发形状不受影响。
+   */
+  private toUpstreamSong(song: Song): UpstreamSongWithExtras {
     return {
       songID: song.id,
       // 酷我没有 mid 概念，身份完全由数字 id 承载。
@@ -752,6 +808,10 @@ export class KuwoClient implements MusicSourceClient, MusicSourceCredentialManag
       pay: "",
       // `undefined` 按可播处理，只有明确为 false 才置灰 —— 判据见 [searchSongs]。
       playable: song.playable !== false,
+      // 以下三键仅视频 / 歌词搜索条目携带，语义见 [UpstreamSongWithExtras]。
+      vid: song.vid,
+      mv: song.mv,
+      lyricSnippet: song.lyricSnippet,
     };
   }
 
