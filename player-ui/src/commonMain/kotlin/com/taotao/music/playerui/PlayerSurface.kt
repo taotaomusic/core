@@ -1,9 +1,8 @@
 package com.taotao.music.playerui
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Pause
@@ -19,7 +18,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Shape
-import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -28,6 +26,7 @@ import com.taotao.music.model.Song
 import com.taotao.music.playerui.theme.ApplePlayButton
 import com.taotao.music.playerui.theme.AppleStyleSlider
 import com.taotao.music.playerui.theme.TaotaoElevation
+import com.taotao.music.playerui.theme.TaotaoShapes
 import com.taotao.music.playerui.theme.TaotaoSizes
 import com.taotao.music.playerui.theme.TaotaoSpacing
 import com.taotao.music.playerui.theme.taotaoShadowColors
@@ -241,13 +240,38 @@ fun PlayerPlaybackDetails(
             }
             val refrainStart = state.refrainStartMs
             val refrainEnd = state.refrainEndMs
-            if (state.durationMs > 0L && refrainStart != null && refrainEnd != null && refrainEnd > refrainStart) {
-                Text(
-                    text = "高潮 ${formatPlayerTime(refrainStart)}–${formatPlayerTime(refrainEnd)}",
-                    color = MaterialTheme.colorScheme.primary,
-                    style = MaterialTheme.typography.labelSmall,
-                    modifier = Modifier.padding(top = TaotaoSpacing.xxs),
-                )
+            // 标签与轨道标记同条件：区间完整且归一化起点落在轨道内。webApp 试听窗外的高潮
+            // 区间不可见也不显示标签——标签是跳转入口，点了跳不过去的就不该出现。
+            if (refrainStart != null && refrainEnd != null && refrainEnd > refrainStart && state.durationMs > 0L &&
+                refrainStart.toFloat() / state.durationMs in 0f..1f
+            ) {
+                // 可点的跳转标签：手动拖动很难精确停在高潮起点，点它直接跳过去。
+                // onSeek 与 onSeekFinished 连调：安卓端 onSeek 只暂存目标位置，onSeekFinished 才真正 seek。
+                Row(
+                    modifier = Modifier
+                        .padding(top = TaotaoSpacing.xxs)
+                        .clip(TaotaoShapes.badge)
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
+                        .clickable(onClickLabel = "跳到高潮起点") {
+                            actions.onSeek(refrainStart)
+                            actions.onSeekFinished()
+                        }
+                        .padding(horizontal = TaotaoSpacing.xxs, vertical = TaotaoSpacing.tightVertical),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(TaotaoSpacing.iconLabelGap),
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.PlayArrow,
+                        contentDescription = null,
+                        modifier = Modifier.size(TaotaoSizes.iconXs),
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                    Text(
+                        text = "高潮 ${formatPlayerTime(refrainStart)}–${formatPlayerTime(refrainEnd)}",
+                        color = MaterialTheme.colorScheme.primary,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
             }
         }
 
@@ -281,34 +305,20 @@ fun PlayerProgress(
     onSeekFinished: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    val progress = normalizedPlayerProgress(positionMs, durationMs)
-    Box(modifier) {
-        AppleStyleSlider(
-            progress = progress,
-            onProgressChange = { onSeek(playerPositionForProgress(it, durationMs)) },
-            onProgressChangeFinished = onSeekFinished,
-            enabled = durationMs > 0L,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        val start = (refrainStartMs ?: -1L).toFloat() / durationMs.coerceAtLeast(1L)
-        val end = (refrainEndMs ?: -1L).toFloat() / durationMs.coerceAtLeast(1L)
-        if (start in 0f..1f && end > start) {
-            // 高潮区间标记：用主题强调色在轨道上叠一段圆头胶囊，和 4dp 轨道同高、随明暗主题走。
-            // 此前写死 #FF6B6B 且比轨道还粗（5dp），既不随主题变、又像把轨道染了色；
-            // 现在改成与轨道同高、圆头收尾的强调色段，读起来是「标记」而不是「变色的轨道」。
-            val refrainColor = MaterialTheme.colorScheme.primary
-            Canvas(Modifier.matchParentSize()) {
-                val y = size.height / 2
-                drawLine(
-                    color = refrainColor,
-                    start = Offset(size.width * start, y),
-                    end = Offset(size.width * end.coerceAtMost(1f), y),
-                    strokeWidth = 4.dp.toPx(),
-                    cap = StrokeCap.Round,
-                )
-            }
-        }
-    }
+    // 高潮区间换算成轨道归一化坐标后交给滑块自绘：它是轨道的底层属性，
+    // 已播段从上面扫过，而不是盖在播放进度上的一块贴片（详见 AppleStyleSlider 的轨道绘制）。
+    val start = (refrainStartMs ?: -1L).toFloat() / durationMs.coerceAtLeast(1L)
+    val end = (refrainEndMs ?: -1L).toFloat() / durationMs.coerceAtLeast(1L)
+    val hasHighlight = start in 0f..1f && end > start
+    AppleStyleSlider(
+        progress = normalizedPlayerProgress(positionMs, durationMs),
+        onProgressChange = { onSeek(playerPositionForProgress(it, durationMs)) },
+        onProgressChangeFinished = onSeekFinished,
+        enabled = durationMs > 0L,
+        highlightStart = start.takeIf { hasHighlight },
+        highlightEnd = end.takeIf { hasHighlight },
+        modifier = modifier,
+    )
 }
 
 /** 三端共用的循环、上一首、播放、下一首控制区。 */
