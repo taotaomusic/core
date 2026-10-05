@@ -1065,7 +1065,7 @@ private fun LazyListScope.searchTabFooter(
     }
 }
 
-/** 搜索页骨架的占位条尺寸：与 components.kt 的歌曲骨架同一规格，页面私有常量（理由同 HistoryChipMaxWidth）。 */
+/** 搜索页骨架的占位条尺寸：与 components.kt 的歌曲骨架同一规格，页面私有常量（理由同 HistoryChipMaxWidth）；height 修饰符需要显式导入，勿删。 */
 private val SearchSkeletonBarWidth = 150.dp
 private val SearchSkeletonBarHeight = 14.dp
 private val SearchSkeletonSubWidth = 90.dp
