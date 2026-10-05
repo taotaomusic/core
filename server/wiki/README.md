@@ -106,7 +106,7 @@
 | [82-admin-routes-data.md](82-admin-routes-data.md) | 管理路由表、限流分桶、三张表模型、启动期硬约束 | 加管理路由、排查启动即失败时 |
 | [83-admin-frontend.md](83-admin-frontend.md) | Vue 管理后台组件、CSP 与安全响应头、契约断言 | 改管理后台前端、调安全头时 |
 
-### 客户端(90–95)
+### 客户端与上游专题(90–96)
 
 | 文档 | 核心内容 | 适用场景 |
 | --- | --- | --- |
@@ -116,6 +116,7 @@
 | [93-player-ui.md](93-player-ui.md) | player-ui 跨端播放组件库:主题 token、PlayerSurface 部件族、SharedSongRow、状态模型 | 改播放 UI 组件时 |
 | [94-shared-module.md](94-shared-module.md) | shared 共享模块:Song 模型、歌词解析、音质规则、与接口字段映射 | 改数据模型/歌词解析/音质规则时 |
 | [95-playback-refrain.md](95-playback-refrain.md) | 歌曲高潮区间(refrain)字段透传与进度条标记 | 改搜索/详情字段、进度条渲染时 |
+| [96-bodian-discovery.md](96-bodian-discovery.md) | 波点启动 Feed、发现页模块、音乐库、相似推荐与 MV 接口 | 复刻波点首页/发现页、接入官方推荐链路时 |
 
 ## 🔗 上位文档
 
@@ -166,7 +167,7 @@
 | 排查传输加密链路 | [37-api-crypto.md](37-api-crypto.md) |
 | 改官网 / 排查状态页 | [54-feature-website.md](54-feature-website.md) |
 | 生成 / 排查热修补丁 | [63-ci-autopatch.md](63-ci-autopatch.md) + [61-release-android.md](61-release-android.md) |
-| 查 MV 接口 / 高潮区间字段 | [32-api-search-music.md](32-api-search-music.md) + [95-playback-refrain.md](95-playback-refrain.md) |
+| 查 MV / 发现页 / 高潮区间接口 | [96-bodian-discovery.md](96-bodian-discovery.md) + [32-api-search-music.md](32-api-search-music.md) + [95-playback-refrain.md](95-playback-refrain.md) |
 
 ## 📖 推荐阅读路径
 
