@@ -1,4 +1,4 @@
-package com.taotao.music.ui.player
+package com.taotao.music.ui.player.skin
 
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
@@ -39,7 +39,7 @@ import com.taotao.music.ui.theme.AnimationDurations
 import com.taotao.music.ui.theme.LocalReduceMotion
 
 /**
- * 黑胶唱片机拟物控件。
+ * 黑胶唱片机皮肤（默认皮肤，2026-10 从 `ui/player/VinylDisc.kt` 迁入 skin 包成为皮肤模板首个实例）。
  *
  * 结构从下到上分四层：盘底投影、随 [rotationDegrees] 旋转的黑胶盘体（底色 + 声槽纹路）、
  * 圆形专辑封面（与盘体同角度旋转，相当于贴在唱片正中的封贴）、以及不旋转的固定层
@@ -48,9 +48,11 @@ import com.taotao.music.ui.theme.LocalReduceMotion
  *
  * 旋转角度由调用方持有（详情页里带暂停/前后台/翻页停止条件的 [androidx.compose.animation.core.Animatable]），
  * 本组件只负责按角度渲染；唱臂的起落由 [isPlaying] 驱动，播放时搭在盘面上、暂停时抬起。
+ *
+ * 新增皮肤请参照 [CoverSkin] 上的模板说明：参数签名与本组件保持一致即可。
  */
 @Composable
-internal fun VinylDisc(
+internal fun VinylSkin(
     coverUri: String?,
     fallbackColor: Color,
     isPlaying: Boolean,
@@ -67,7 +69,7 @@ internal fun VinylDisc(
     )
     Box(modifier.size(discSize), contentAlignment = Alignment.Center) {
         // 第一层：盘底软投影（固定，不随盘转）。
-        Canvas(Modifier.fillMaxSize()) { drawDiscShadow() }
+        Canvas(Modifier.fillMaxSize()) { drawSkinDiscShadow() }
         // 第二层：黑胶盘体，与封面共用同一个旋转角度。
         Canvas(Modifier.fillMaxSize().graphicsLayer { rotationZ = rotationDegrees }) {
             drawVinylPlate()
@@ -121,21 +123,6 @@ private const val DURATION_ARM_DROP = 600
  */
 private const val TONEARM_PLAYING_DEG = 155.4f
 private const val TONEARM_LIFTED_DEG = 197.4f
-
-/** 盘底投影：两层错位的半透明圆叠出软阴影，营造唱片悬浮在页面上的厚度感。 */
-private fun DrawScope.drawDiscShadow() {
-    val d = size.minDimension
-    drawCircle(
-        Color.Black.copy(alpha = 0.10f),
-        radius = d * 0.506f,
-        center = center + Offset(0f, d * 0.012f),
-    )
-    drawCircle(
-        Color.Black.copy(alpha = 0.08f),
-        radius = d * 0.512f,
-        center = center + Offset(0f, d * 0.026f),
-    )
-}
 
 /** 黑胶盘体：径向渐变底色 + 一圈圈声槽细纹，每 5 圈一道稍亮的「音轨分隔」环。 */
 private fun DrawScope.drawVinylPlate() {

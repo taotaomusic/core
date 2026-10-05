@@ -23,6 +23,7 @@ import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.VideoLibrary
@@ -42,6 +43,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.graphics.Color
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -65,6 +67,10 @@ import com.taotao.music.ui.common.VipBadge
 import com.taotao.music.ui.theme.AnimationDurations
 import com.taotao.music.ui.theme.LocalReduceMotion
 import com.taotao.music.ui.theme.TaotaoCoral
+import com.taotao.music.ui.player.skin.CoverSkin
+import com.taotao.music.ui.player.skin.CoverSkinId
+import com.taotao.music.ui.player.skin.CoverSkinSheet
+import com.taotao.music.ui.player.skin.CoverSkinStore
 import android.net.Uri
 import java.io.File
 import kotlinx.coroutines.Dispatchers
@@ -128,6 +134,14 @@ internal fun PlayerDetailPage(
     // 解析结果按原文缓存，避免每帧进度变化都重新解析整段歌词。
     val lyric = remember(lyricText, lyricWords) { LyricParser.parse(lyricText, lyricWords) }
     var showQueue by remember { mutableStateOf(false) }
+    // 封面皮肤：进入页面读一次本地偏好；切换即时生效并异步写回 SharedPreferences。
+    val context = LocalContext.current
+    val skinStore = remember { CoverSkinStore(context) }
+    var coverSkin by remember { mutableStateOf(CoverSkinId.DEFAULT) }
+    var showSkinSheet by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        coverSkin = withContext(Dispatchers.IO) { skinStore.skin() }
+    }
     // 时长和播放态直接读播放器暴露的状态，不再各自轮询。
     val durationMs = audioPlayer.durationMs
     val actualPlaying = audioPlayer.isPlaying
@@ -239,6 +253,9 @@ internal fun PlayerDetailPage(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             IconButton(onClick = onBack) { Icon(Icons.Default.KeyboardArrowDown, "收起") }
+            IconButton(onClick = { showSkinSheet = true }) {
+                Icon(Icons.Default.Palette, "封面皮肤")
+            }
             Text(
                 if (pagerState.currentPage == 1) "歌词" else "正在播放",
                 modifier = Modifier.weight(1f),
@@ -277,11 +294,12 @@ internal fun PlayerDetailPage(
                 )
             } else {
                 // 封面按可用空间取尺寸，固定 292dp 在小屏上会把下方控制区挤出屏幕。
-                // 黑胶唱片机的盘径沿用原封面的尺寸预算；封面本身缩为盘径的 0.68，
-                // 空出的环带由 VinylDisc 画成声槽与高光。
+                // 皮肤控件（默认黑胶唱片机）沿用原封面的尺寸预算；各皮肤的封面占比
+                // 由各自实现决定（如黑胶缩为盘径的 0.68，空出的环带画声槽与高光）。
                 BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     val coverSize = minOf(maxWidth, maxHeight) * 0.86f
-                    VinylDisc(
+                    CoverSkin(
+                        skin = coverSkin,
                         coverUri = song.coverUri,
                         fallbackColor = Color(song.color),
                         isPlaying = isPlaying,
@@ -385,6 +403,17 @@ internal fun PlayerDetailPage(
             },
         )
         Spacer(Modifier.height(TaotaoSpacing.md))
+    }
+    if (showSkinSheet) {
+        CoverSkinSheet(
+            current = coverSkin,
+            onDismiss = { showSkinSheet = false },
+            onSelect = { picked ->
+                showSkinSheet = false
+                coverSkin = picked
+                skinStore.setSkin(picked)
+            },
+        )
     }
     if (showQueue) {
         PlaybackQueueSheet(

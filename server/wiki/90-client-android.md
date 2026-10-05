@@ -100,7 +100,7 @@
 
 | 功能 | 位置 | 要点 |
 | --- | --- | --- |
-| 黑胶唱片机 | `ui/player/VinylDisc.kt` | 四层绘制:盘底投影、随角度旋转的黑胶盘体、圆形封面(与盘体同角度)、固定层(高光 + 唱臂——光源不随盘转是刻意的);唱臂起落约 42°,`COVER_FRACTION`、`DURATION_ARM_DROP` 等观感常量在文件顶部;**旋转角度由调用方持有**(详情页的 `coverRotation` `Animatable`,带暂停/前后台/翻页停止条件),组件只按角度渲染 |
+| 封面皮肤 | `ui/player/skin/`（`CoverSkin.kt` 模板 + 各皮肤控件） | 详情页封面区唯一入口 `CoverSkin(skin, …)`，按 `CoverSkinId`（黑胶/CD光碟/磁带机/光晕/圆角卡片）分派；新增皮肤三步：枚举加值（带中文 label）→ 新建同签名控件 → `when` 加分支，注册表测试 `CoverSkinIdTest` 守标签唯一/名称往返/默认值底线；偏好存 `CoverSkinStore`（SharedPreferences `cover_skin`），切换入口是详情页顶栏调色板按钮 → `CoverSkinSheet`（预览直接用真实皮肤控件，所见即所选）；黑胶皮肤 `VinylSkin`（原 `ui/player/VinylDisc.kt` 2026-10 迁入）四层绘制:盘底投影、随角度旋转的黑胶盘体、圆形封面(与盘体同角度)、固定层(高光 + 唱臂——光源不随盘转是刻意的);唱臂起落约 42°;**旋转角度由调用方持有**(详情页的 `coverRotation` `Animatable`,带暂停/前后台/翻页停止条件),组件只按角度渲染 |
 | 拖动排序 | `ui/common/DragReorderList.kt` | 播放队列(`PlaybackQueueSheet`)与歌单详情(`PlaylistPages`)共用;长按拖把整行跟随、跨半行换位;拖动期间由本地副本驱动,外部数据只在空闲时同步;行身份用内部自增 id,同一首歌在队列出现两次也不丢手势。刻意放在 androidApp 而非 player-ui:它依赖 Android 侧 `LocalReduceMotion` 动画设施 |
 | 歌曲行 | `ui/common/components.kt` 的 `SongRow` | 包装 player-ui 的 `SharedSongRow`;搜索、收藏、本地、历史、队列全部走它;拖把与更多菜单**并存**(详见 93 篇的坑) |
 | 定时关闭 | `ui/player/SleepTimerDialog.kt` + `player/SleepTimer.kt`/`SleepTimerPolicy.kt` | 底部弹层;「播完整首歌再停止播放」只切换到期行为、不重置正在进行的倒计时;到期后进入 `WAITING_SONG_END` 等待态,**只有自然播到下一首(含单曲循环转圈)才算兑现,手动切歌不算**——等新歌自然播完再停(见 `PlaybackService`) |

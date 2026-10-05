@@ -102,7 +102,7 @@ token 刻度速查(改组件时对号入座,不要自创新档):
 | androidApp | `ui/theme/Theme.kt` | `TaotaoPlayerTheme` 作为全局主题的底座 |
 | androidApp | `ui/app/AppContent.kt` | `SharedMainLayout`(底部导航四个标签 + 迷你播放器插槽)+ `SharedMiniPlayer` |
 | androidApp | `ui/common/components.kt` | `SongRow` 包装 `SharedSongRow`,平台侧补封面(`AlbumArt`)、拖把与更多菜单、`AlbumArt` 也复用 token 判尺寸 |
-| androidApp | `ui/player/PlayerDetailPage.kt` | `PlayerCompactLayout` + `PlayerArtworkSlot`(内容是自绘的黑胶唱片机 `VinylDisc`),快捷操作、顶栏、控制条走插槽 |
+| androidApp | `ui/player/PlayerDetailPage.kt` | `PlayerCompactLayout` + `PlayerArtworkSlot`(内容走 `ui/player/skin/` 的皮肤模板 `CoverSkin`，默认黑胶唱片机 `VinylSkin`，可切 CD/磁带/光晕/卡片)，快捷操作、顶栏、控制条走插槽 |
 | androidApp | 其余页面 | `SharedCard`、`SharedContentState`、`SharedBackButton`、`SharedSectionHeader` 与各 token 散用(搜索页、设置页、资料弹窗、库页都在用) |
 | webApp | `src/wasmJsMain/kotlin/com/taotao/music/web/Main.kt` | 分享播放器整页:`TaotaoPlayerTheme` + `PlayerArtworkSlot` + `PlayerCompactLayout` + `SharedContentState`;歌曲模型直接用 shared `Song`,并用 `TaotaoTypography.withFontFamily(...)` 换 Web 字体 |
 
