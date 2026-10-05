@@ -77,8 +77,10 @@ internal fun PlaybackQueueSheet(
     onToggleFavorite: (Song) -> Unit,
     // 「查看歌手 / 查看专辑」跳转：回调进 SongRow 后由「回调 + 歌曲 ID」双门槛控制显隐，
     // 历史与本地歌曲没有音源内 ID，菜单项自动隐藏。宿主回调里会先收起详情页再开目标页。
-    onOpenArtist: (Song) -> Unit = {},
-    onOpenAlbum: (Song) -> Unit = {},
+    // 参数名刻意避开 SongRow 的 onOpenArtist/onOpenAlbum：lambda 体内引用同名标识符
+    // 会被 K2 解析到 SongRow 自己的形参上（Unresolved reference，CI 编译踩过）。
+    onOpenArtistPage: (Song) -> Unit = {},
+    onOpenAlbumPage: (Song) -> Unit = {},
 ) {
     var selectedSource by remember { mutableIntStateOf(0) }
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = MaterialTheme.colorScheme.background) {
@@ -226,8 +228,8 @@ private fun CurrentPlaybackQueue(
                     modifier = rowModifier,
                     onToggleFavorite = onToggleFavorite.takeIf { song.remoteId?.let { it > 0L } == true || !song.mid.isNullOrBlank() }
                         ?.let { callback -> { callback(song) } },
-                    onOpenArtist = { onOpenArtist(song) },
-                    onOpenAlbum = { onOpenAlbum(song) },
+                    onOpenArtist = { onOpenArtistPage(song) },
+                    onOpenAlbum = { onOpenAlbumPage(song) },
                     dragHandle = dragHandle,
                 )
             }
@@ -266,8 +268,8 @@ private fun PlaybackSourceList(
                         favorited = isFavorite(item),
                         onToggleFavorite = onToggleFavorite.takeIf { item.remoteId?.let { it > 0L } == true || !item.mid.isNullOrBlank() }
                             ?.let { callback -> { callback(item) } },
-                        onOpenArtist = { onOpenArtist(item) },
-                        onOpenAlbum = { onOpenAlbum(item) },
+                        onOpenArtist = { onOpenArtistPage(item) },
+                        onOpenAlbum = { onOpenAlbumPage(item) },
                     )
                 }
             }

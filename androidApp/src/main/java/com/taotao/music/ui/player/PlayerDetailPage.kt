@@ -408,8 +408,8 @@ internal fun PlayerDetailPage(
             isFavorite = isFavorite,
             onToggleFavorite = onToggleSongFavorite,
             // 队列里的歌与头部一样可跳歌手 / 专辑主页（状态层会先收起详情页再开目标页）。
-            onOpenArtist = onOpenArtist,
-            onOpenAlbum = onOpenAlbum,
+            onOpenArtistPage = onOpenArtist,
+            onOpenAlbumPage = onOpenAlbum,
         )
     }
 }
