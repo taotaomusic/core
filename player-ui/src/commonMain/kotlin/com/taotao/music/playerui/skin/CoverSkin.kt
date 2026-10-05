@@ -12,6 +12,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalDensity
 
 /**
  * 封面皮肤模板：接入端唯一的绘制入口，按 [skin] 分派给具体皮肤控件。
@@ -83,7 +84,9 @@ public interface CoverImageLoader {
 @Composable
 public fun CoverFallbackArt(fallbackColor: Color, modifier: Modifier = Modifier) {
     BoxWithConstraints(modifier.background(fallbackColor), contentAlignment = Alignment.Center) {
-        Text("♫", color = Color.White, fontSize = (maxWidth / 2f).toSp())
+        // 显式取 Density 做 Dp→Sp 换算，不依赖容器作用域的隐式 Density 实现。
+        val glyph = with(LocalDensity.current) { (maxWidth / 2f).toSp() }
+        Text("♫", color = Color.White, fontSize = glyph)
     }
 }
 

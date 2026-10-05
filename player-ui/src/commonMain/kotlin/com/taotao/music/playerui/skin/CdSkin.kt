@@ -4,6 +4,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -20,6 +21,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.Dp
 
 /**
@@ -44,8 +46,8 @@ internal fun CdSkin(
     Box(modifier.size(discSize), contentAlignment = Alignment.Center) {
         // 第一层：盘底软投影（固定，不随盘转），与黑胶共用同一画法保持悬浮感一致。
         Canvas(Modifier.fillMaxSize()) { drawSkinDiscShadow() }
-        // 第二层：旋转的碟面 —— 封面全幅铺满 + 彩虹衍射高光一起转。
-        Box(Modifier.fillMaxSize().graphicsLayer { rotationZ = rotationDegrees }) {
+        // 第二层：旋转的碟面 —— 封面全幅铺满 + 彩虹衍射高光一起转，圆形裁切保持碟形。
+        Box(Modifier.fillMaxSize().graphicsLayer { rotationZ = rotationDegrees }.clip(CircleShape)) {
             CoverSkinImageSlot(
                 url = coverUri,
                 fallbackColor = fallbackColor,
