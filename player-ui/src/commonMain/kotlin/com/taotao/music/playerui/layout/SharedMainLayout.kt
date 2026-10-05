@@ -26,7 +26,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import com.taotao.music.playerui.theme.AnimationCurves
+import com.taotao.music.playerui.theme.AnimationDurations
 import com.taotao.music.playerui.theme.TaotaoElevation
+import com.taotao.music.playerui.theme.taotaoTween
 
 /** 平台导航项；共享布局不解释页面含义，只负责一致的视觉和选中反馈。 */
 @Immutable
