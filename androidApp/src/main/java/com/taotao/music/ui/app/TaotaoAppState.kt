@@ -932,6 +932,10 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
      * 头像由歌手页自己拉资料。
      */
     fun openArtistPageFromSong(song: Song) {
+        // 播放详情页在页面分发 when 链里排第一：不先收起它，歌手页即使开了也
+        // 永远显示不出来（表现为「点了没反应」，2026-10-05 实测踩过）。
+        // 详情页关闭后播放由迷你播放器继续，与桌面端行为一致。
+        showPlayerDetail = false
         song.artistId?.let { artistId ->
             openArtistPage(
                 ArtistSearchResult(
@@ -953,6 +957,8 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
      * 不会带出无效跳转。
      */
     fun openAlbumPageFromSong(song: Song) {
+        // 同 [openArtistPageFromSong]：详情页不分发出去就等于「点了没反应」。
+        showPlayerDetail = false
         song.albumId?.let { albumId ->
             openAlbumPage(
                 AlbumSearchResult(
