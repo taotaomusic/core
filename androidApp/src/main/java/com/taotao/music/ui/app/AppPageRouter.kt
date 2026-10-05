@@ -433,6 +433,10 @@ private fun PlayerDetailPageRoute(state: TaotaoAppState) {    PlayerDetailPage(
         onOpenSleepTimer = { state.showSleepTimerDialog = true },
         onRefrainResolved = { song, startMs, endMs -> state.applyResolvedRefrain(song, startMs, endMs) },
         onOpenMv = { state.mvSong = it },
+        // 播放页头部「歌手 · 专辑」点击跳转：与搜索歌曲行菜单共用同一套
+        // 「从歌曲构造跳转目标」逻辑（见状态层 openArtistPageFromSong / openAlbumPageFromSong）。
+        onOpenArtist = { song -> state.openArtistPageFromSong(song) },
+        onOpenAlbum = { song -> state.openAlbumPageFromSong(song) },
     )
 }
 
@@ -496,41 +500,11 @@ private fun SearchPageRoute(state: TaotaoAppState) {
         onEnsureTabAlbums = { state.search.ensureTabAlbums() },
         onLoadMoreTabArtists = { state.search.loadMoreTabArtists() },
         onLoadMoreTabAlbums = { state.search.loadMoreTabAlbums() },
-        // 歌曲行菜单「查看歌手」：从歌曲构造跳转目标。pic 传 null —— 歌手头像不等于
-        // 歌曲封面，详情到达前的头部先用歌手名兜底，头像由歌手页自己拉资料。
-        onOpenArtist = { song ->
-            song.artistId?.let { artistId ->
-                state.openArtistPage(
-                    ArtistSearchResult(
-                        source = song.source,
-                        id = artistId,
-                        name = song.artist,
-                        pic = null,
-                        songCount = 0,
-                        albumCount = 0,
-                    ),
-                )
-            }
-        },
-        // 「查看专辑」：专辑封面就是歌曲封面，详情到达前可直接显示；歌曲行没有的
-        // songCount / showtime 交给专辑页详情补全。artistId 为 null 时传 0，
-        // 专辑页对 0 会隐藏「歌手名」跳转入口，不会带出无效跳转。
-        onOpenAlbum = { song ->
-            song.albumId?.let { albumId ->
-                state.openAlbumPage(
-                    AlbumSearchResult(
-                        source = song.source,
-                        id = albumId,
-                        name = song.album,
-                        pic = song.coverUri,
-                        artist = song.artist,
-                        artistId = song.artistId ?: 0L,
-                        songCount = 0,
-                        showtime = "",
-                    ),
-                )
-            }
-        },
+        // 歌曲行菜单「查看歌手 / 查看专辑」：从歌曲构造跳转目标，pic 等取值规则
+        // 集中在状态层（openArtistPageFromSong / openAlbumPageFromSong），
+        // 播放详情页头部的同名跳转共用这一套构造逻辑。
+        onOpenArtist = { song -> state.openArtistPageFromSong(song) },
+        onOpenAlbum = { song -> state.openAlbumPageFromSong(song) },
         searchSession = state.search.generation,
     )
 }

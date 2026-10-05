@@ -75,7 +75,7 @@ function NavIcon({ kind }: { kind: "search" | "playlists" | "recent" | "heart" |
  * 登录后的主界面：左侧导航（搜索 / 歌单 / 最近播放 / 我的收藏）+ 内容区 + 底部播放条 + 全屏播放详情。
  * 各页面常驻挂载、用 CSS 隐藏切换，保留各自的搜索结果与滚动位置。
  * 歌手主页 / 专辑页是从搜索页进入的二级页面（同属「搜索」导航项）：不设侧边栏按钮，
- * 由搜索横排点击打开并携带目标身份，页内「返回」键回到搜索页；歌手页 ↔ 专辑页可互相跳转。
+ * 由搜索横排或播放详情页的可点歌手名打开并携带目标身份，页内「返回」键回到搜索页；歌手页 ↔ 专辑页可互相跳转。
  */
 export function MainScreen({ onLogout }: { onLogout: () => void }) {
   const [page, setPage] = useState<Page>("search");
@@ -106,7 +106,7 @@ export function MainScreen({ onLogout }: { onLogout: () => void }) {
     }, PAGE_EXIT_MS);
   }
 
-  /** 打开歌手主页：携带搜索横排/专辑页传入的目标身份；已在歌手页时仅换目标不重播动画。 */
+  /** 打开歌手主页：携带搜索横排/专辑页/播放详情页传入的目标身份；已在歌手页时仅换目标不重播动画。 */
   function openArtist(target: ArtistTarget) {
     setArtistTarget(target);
     switchPage("artist");
@@ -213,7 +213,7 @@ export function MainScreen({ onLogout }: { onLogout: () => void }) {
         </div>
       </main>
       <PlayerBar />
-      <PlayerDetail />
+      <PlayerDetail onOpenArtist={openArtist} />
     </div>
   );
 }

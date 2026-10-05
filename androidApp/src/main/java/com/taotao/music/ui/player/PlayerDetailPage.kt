@@ -110,6 +110,9 @@ internal fun PlayerDetailPage(
     onOpenSleepTimer: () -> Unit,
     onRefrainResolved: (Song, Long?, Long?) -> Unit,
     onOpenMv: (Song) -> Unit,
+    // 歌手 / 专辑名点击跳转的宿主回调（AppPageRouter 装配到 TaotaoAppState 的跳转方法上）。
+    onOpenArtist: (Song) -> Unit,
+    onOpenAlbum: (Song) -> Unit,
 ) {
     // 播放器维护唯一进度源；拖动期间才暂存本地位置，松手立即交回播放器同步。
     var draggedPositionMs by remember(song) { mutableIntStateOf(audioPlayer.positionMs) }
@@ -190,6 +193,10 @@ internal fun PlayerDetailPage(
         isLocalFile -> song.localQuality ?: playbackQuality
         else -> song.audioUri?.let { TencentMusicApi.parsePlaceholder(it)?.second } ?: playbackQuality
     }
+    // 歌手 / 专辑名点击跳转回调（外层门槛）：只有歌曲带音源内 ID（目前酷我搜索结果下发）
+    // 才把回调交给头部组件；组件内还会复查一次 ID（双门槛的第二道），ID 缺失时保持纯文本。
+    val onArtistClick: (() -> Unit)? = song.artistId?.let { { onOpenArtist(song) } }
+    val onAlbumClick: (() -> Unit)? = song.albumId?.let { { onOpenAlbum(song) } }
     // 详情页与歌词页做成左右两页，但只有中间区域参与滑动：
     // 顶栏、歌名、进度条和播放控制留在外层，切到歌词页时仍然可见可操作。
     val pagerState = rememberPagerState(pageCount = { 2 })
@@ -330,6 +337,10 @@ internal fun PlayerDetailPage(
                     )
                 }
             },
+            // 「歌手 · 专辑」信息行点击跳转：回调已按歌曲 ID 做过外层门槛（见上），
+            // 组件内对回调与 ID 的双门槛兜底保证其他音源的外观与现状一致。
+            onArtistClick = onArtistClick,
+            onAlbumClick = onAlbumClick,
             // 顶栏只保留收藏：分享、加入歌单、下载都挪到进度条上方的快捷操作行，
             // 否则三个按钮加上 VIP 角标和音质标签，长歌名会被压到只显示一两个字。
             headerActions = {

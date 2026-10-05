@@ -2,6 +2,7 @@ package com.taotao.music.playerui
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.clickable
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
@@ -68,13 +69,30 @@ fun PlayerArtworkSlot(
     }
 }
 
-/** 三端一致的歌曲标题与歌手、专辑信息区域。 */
+/**
+ * 三端一致的歌曲标题与歌手、专辑信息区域。
+ *
+ * 「歌手 · 专辑」信息行拆成歌手段与「 · 专辑」段两段 [Text]，各自支持点击跳转
+ * （Android 播放详情页由此进入歌手主页 / 专辑页）。可点必须同时满足**双门槛**：
+ * 1. 调用方传入了对应回调（[onArtistClick] / [onAlbumClick] 非 null）；
+ * 2. 歌曲带对应的音源内 ID（[Song.artistId] / [Song.albumId]，目前只有酷我搜索结果下发，
+ *    其他来源为 null）。
+ * 缺任何一个都渲染纯文本，外观与不可点时完全一致；可点时也只给文字本身加轻微按压反馈，
+ * 不加下划线等额外暗示。
+ *
+ * 视觉与旧版单 Text 等价：专辑名为空白时「 · 专辑」段整体不渲染（连分隔符一起消失）；
+ * 空间不足时从行尾开始省略 —— 整块文本先让位给行尾内容（weight），块内歌手段先测量、
+ * 专辑段吃剩余宽度，拼接超宽的截断点与旧单 Text 完全相同（若两段等权分配，
+ * 短歌手名旁的长专辑名会在明明还有空间时提前省略）。
+ */
 @Composable
 fun PlayerSongHeader(
     song: Song,
     modifier: Modifier = Modifier,
     titleTrailingContent: (@Composable RowScope.() -> Unit)? = null,
     metadataTrailingContent: (@Composable RowScope.() -> Unit)? = null,
+    onArtistClick: (() -> Unit)? = null,
+    onAlbumClick: (() -> Unit)? = null,
 ) {
     Column(modifier = modifier.fillMaxWidth()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -92,17 +110,51 @@ fun PlayerSongHeader(
             modifier = Modifier.padding(top = TaotaoSpacing.xxs),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(
-                text = buildString {
-                    append(song.artist)
-                    song.album.takeIf { it.isNotBlank() }?.let { append(" · ").append(it) }
-                },
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                style = MaterialTheme.typography.titleMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+            // 「歌手 · 专辑」两段文本放进一块可收缩区域：这块区域用 weight 排在行尾内容
+            // （音质标签等）之后测量，行尾内容先测量、永远不被挤压；块内歌手段先测量、
+            // 专辑段吃剩余宽度，整行超宽时的省略位置与旧版单 Text 完全相同。
+            Row(
                 modifier = Modifier.weight(1f, fill = false),
-            )
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                // 双门槛（回调 + 音源内歌手 ID，酷我搜索独有）：缺任何一个都保持纯文本。
+                val artistClickable = onArtistClick != null && song.artistId != null
+                Text(
+                    text = song.artist,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = if (artistClickable) {
+                        Modifier.clickable(
+                            onClickLabel = "查看歌手主页",
+                            onClick = { onArtistClick?.invoke() },
+                        )
+                    } else {
+                        Modifier
+                    },
+                )
+                // 「 · 专辑」段：专辑名为空白时整段不渲染（连分隔符一起消失，与旧版一致）；
+                // 可点同样过双门槛（回调 + song.albumId）。
+                if (song.album.isNotBlank()) {
+                    val albumClickable = onAlbumClick != null && song.albumId != null
+                    Text(
+                        text = " · ${song.album}",
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = if (albumClickable) {
+                            Modifier.clickable(
+                                onClickLabel = "查看专辑主页",
+                                onClick = { onAlbumClick?.invoke() },
+                            )
+                        } else {
+                            Modifier
+                        },
+                    )
+                }
+            }
             metadataTrailingContent?.invoke(this)
         }
     }
@@ -112,6 +164,8 @@ fun PlayerSongHeader(
  * 三端共用的播放详情主体。
  *
  * 平台只负责提供 [PlayerUiState]、[PlayerActions] 和可选插槽，组件不直接读取播放器对象。
+ * [onArtistClick] / [onAlbumClick] 原样透传给 [PlayerSongHeader]（歌手 / 专辑名点击跳转，
+ * 组件内还有「歌曲带对应音源 ID」的第二道门槛）。
  */
 @Composable
 fun PlayerPlaybackDetails(
@@ -123,6 +177,8 @@ fun PlayerPlaybackDetails(
     capabilities: PlayerCapabilities = PlayerCapabilities(),
     titleTrailingContent: (@Composable RowScope.() -> Unit)? = null,
     metadataTrailingContent: (@Composable RowScope.() -> Unit)? = null,
+    onArtistClick: (() -> Unit)? = null,
+    onAlbumClick: (() -> Unit)? = null,
     headerActions: (@Composable RowScope.() -> Unit)? = null,
     quickActions: (@Composable RowScope.() -> Unit)? = null,
     controlLeadingContent: (@Composable () -> Unit)? = null,
@@ -138,6 +194,8 @@ fun PlayerPlaybackDetails(
                 modifier = Modifier.weight(1f),
                 titleTrailingContent = titleTrailingContent,
                 metadataTrailingContent = metadataTrailingContent,
+                onArtistClick = onArtistClick,
+                onAlbumClick = onAlbumClick,
             )
             if (headerActions != null) {
                 Row(modifier = Modifier.padding(start = TaotaoSpacing.md)) {

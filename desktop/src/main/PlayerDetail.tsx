@@ -10,6 +10,7 @@ import {
   type QualityTier,
 } from "../api";
 import { useApp } from "../state/AppState";
+import type { ArtistTarget } from "./ArtistPage";
 import { hideOnError } from "./img";
 import {
   IconChevronDown,
@@ -99,9 +100,15 @@ async function copyText(text: string): Promise<boolean> {
 /**
  * 全屏播放详情页：大封面/歌词双视图 + 歌名/收藏 + 自绘进度条 + 传输控制
  * + 播放队列面板（拖动排序/删除）+ 分享/音质/定时关闭弹窗。
+ * 歌手名在「回调存在 + 当前曲带 artistId」双门槛满足时可点进歌手主页（同时收起详情页）。
  * 对标安卓 PlayerDetailPage；showDetail 为 false 时渲染 null。
  */
-export function PlayerDetail() {
+export function PlayerDetail({
+  onOpenArtist,
+}: {
+  /** 歌手名点击后的跳转回调（上层传 MainScreen 的 openArtist）；不传时歌手名保持纯文本。 */
+  onOpenArtist?: (target: ArtistTarget) => void;
+}) {
   const app = useApp();
   // 队列面板显隐：宽窗默认并排展示；窄窗（≤980px，浮层模式）默认收起，点「队列」按钮以浮层弹出
   const [showQueue, setShowQueue] = useState(
@@ -199,6 +206,8 @@ export function PlayerDetail() {
 
   const current = app.current;
   const duration = app.duration;
+  // 歌手名可点门槛（双门槛）：上层传了跳转回调，且当前曲带有效 artistId（仅酷我搜索来源下发）
+  const canOpenArtist = onOpenArtist != null && current?.artistId != null && current.artistId > 0;
   const fav = current ? app.isFavorite(current) : false;
   // 拖动中优先显示预览位置，否则用实时播放位置
   const shownSec = dragSec ?? app.position;
@@ -255,6 +264,16 @@ export function PlayerDetail() {
     setDragFrom(null);
     setDragOver(null);
     app.setShowDetail(false);
+  }
+
+  /** 点击歌手名：从当前曲构造歌手页目标并跳转，同时收起详情页（浮层全屏盖住页面，不收起会挡住歌手页）。
+   *  歌手头像与歌曲封面不是一回事，pic 不传、由歌手页自行兜底；无有效 artistId 时防御性 no-op。 */
+  function openCurrentArtist() {
+    if (!onOpenArtist || !current) return;
+    const id = current.artistId;
+    if (id == null || !(id > 0)) return;
+    onOpenArtist({ source: current.source, id, name: current.artist });
+    collapse();
   }
 
   /** 请求分享链接；会话过期静默（由顶层会话态处理），其余错误 toast。 */
@@ -404,7 +423,19 @@ export function PlayerDetail() {
                 <IconHeart size={22} filled={fav} />
               </button>
             </div>
-            <div className="pd-artist">{current.artist}</div>
+            {/* 歌手名：双门槛满足时渲染为可点按钮（hover 显珊瑚色），否则保持原纯文本外观 */}
+            {canOpenArtist ? (
+              <button
+                type="button"
+                className="pd-artist pd-artist-btn"
+                title={`查看歌手「${current.artist}」`}
+                onClick={openCurrentArtist}
+              >
+                {current.artist}
+              </button>
+            ) : (
+              <div className="pd-artist">{current.artist}</div>
+            )}
 
             {/* 下部控制区：进度条 + 快捷操作 + 传输控制 */}
             <div className="pd-controls">

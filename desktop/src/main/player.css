@@ -404,6 +404,19 @@
   font-size: 14px;
   width: 100%;
 }
+/* 歌手名可点态：与 .pd-artist 同布局，仅重置按钮默认样式并加 hover 反馈（与专辑页 .al-artist-btn 同一语言） */
+.pd-artist-btn {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: color .15s;
+}
+.pd-artist-btn:hover {
+  color: var(--coral);
+}
 
 /* 左列顶部视图切换：封面 / 歌词（小分段控件） */
 .pd-view-tabs {

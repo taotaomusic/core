@@ -925,6 +925,50 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
         albumPage.open(target)
     }
 
+    /**
+     * 从歌曲直接跳歌手主页：播放详情页头部的歌手名与搜索歌曲行菜单「查看歌手」共用。
+     * 歌曲没带音源内歌手 ID（目前只有酷我搜索结果下发）时忽略，不跳转。
+     * pic 传 null —— 歌手头像不等于歌曲封面，详情到达前的头部先用歌手名兜底，
+     * 头像由歌手页自己拉资料。
+     */
+    fun openArtistPageFromSong(song: Song) {
+        song.artistId?.let { artistId ->
+            openArtistPage(
+                ArtistSearchResult(
+                    source = song.source,
+                    id = artistId,
+                    name = song.artist,
+                    pic = null,
+                    songCount = 0,
+                    albumCount = 0,
+                ),
+            )
+        }
+    }
+
+    /**
+     * 从歌曲直接跳专辑主页：播放详情页头部的专辑名与搜索歌曲行菜单「查看专辑」共用。
+     * 专辑封面就是歌曲封面，详情到达前可直接显示；歌曲行没有的 songCount / showtime
+     * 交给专辑页详情补全。artistId 为 null 时传 0，专辑页对 0 会隐藏「歌手名」跳转入口，
+     * 不会带出无效跳转。
+     */
+    fun openAlbumPageFromSong(song: Song) {
+        song.albumId?.let { albumId ->
+            openAlbumPage(
+                AlbumSearchResult(
+                    source = song.source,
+                    id = albumId,
+                    name = song.album,
+                    pic = song.coverUri,
+                    artist = song.artist,
+                    artistId = song.artistId ?: 0L,
+                    songCount = 0,
+                    showtime = "",
+                ),
+            )
+        }
+    }
+
     fun applyAppearance(mode: AppearanceMode) {
         appearance = mode
         appearanceStore.setMode(mode)

@@ -17,6 +17,9 @@ fun PlayerCompactLayout(
     capabilities: PlayerCapabilities = PlayerCapabilities(),
     titleTrailingContent: (@Composable RowScope.() -> Unit)? = null,
     metadataTrailingContent: (@Composable RowScope.() -> Unit)? = null,
+    // 歌手 / 专辑名点击跳转，原样透传给 [PlayerPlaybackDetails]（最终由 PlayerSongHeader 消费）。
+    onArtistClick: (() -> Unit)? = null,
+    onAlbumClick: (() -> Unit)? = null,
     headerActions: (@Composable RowScope.() -> Unit)? = null,
     quickActions: (@Composable RowScope.() -> Unit)? = null,
     controlLeadingContent: (@Composable () -> Unit)? = null,
@@ -35,6 +38,8 @@ fun PlayerCompactLayout(
             capabilities = capabilities,
             titleTrailingContent = titleTrailingContent,
             metadataTrailingContent = metadataTrailingContent,
+            onArtistClick = onArtistClick,
+            onAlbumClick = onAlbumClick,
             headerActions = headerActions,
             quickActions = quickActions,
             controlLeadingContent = controlLeadingContent,
