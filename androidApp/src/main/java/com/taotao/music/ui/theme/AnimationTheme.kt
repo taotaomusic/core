@@ -4,6 +4,14 @@ import android.database.ContentObserver
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import androidx.compose.animation.AnimatedContentTransitionScope
+import androidx.compose.animation.ContentTransform
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.Easing
+import androidx.compose.animation.core.FiniteAnimationSpec
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.SpringSpec
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -46,3 +54,39 @@ fun rememberReduceMotion(): Boolean {
     }
     return reduced
 }
+
+/**
+ * 共享动效符号的转发（typealias / 包装函数）：十几个页面文件仍从
+ * `com.taotao.music.ui.theme` 导入这些名字，动效系统本体已下沉到
+ * player-ui 的 SharedMotion.kt（三端共享）。新代码请直接从
+ * `com.taotao.music.playerui.theme` 导入。
+ */
+typealias AnimationDurations = com.taotao.music.playerui.theme.AnimationDurations
+typealias AnimationCurves = com.taotao.music.playerui.theme.AnimationCurves
+
+fun <T> taotaoTween(
+    durationMillis: Int = com.taotao.music.playerui.theme.AnimationDurations.PAGE,
+    delayMillis: Int = 0,
+    easing: Easing = com.taotao.music.playerui.theme.AnimationCurves.standardIn,
+): FiniteAnimationSpec<T> = com.taotao.music.playerui.theme.taotaoTween(durationMillis, delayMillis, easing)
+
+fun <T> taotaoSpring(
+    dampingRatio: Float = 0.75f,
+    stiffness: Float = Spring.StiffnessMediumLow,
+): SpringSpec<T> = com.taotao.music.playerui.theme.taotaoSpring(dampingRatio, stiffness)
+
+fun <T> taotaoSettleSpring(): SpringSpec<T> = com.taotao.music.playerui.theme.taotaoSettleSpring()
+
+fun riseIn(reduceMotion: Boolean = false): EnterTransition = com.taotao.music.playerui.theme.riseIn(reduceMotion)
+
+fun sinkOut(reduceMotion: Boolean = false): ExitTransition = com.taotao.music.playerui.theme.sinkOut(reduceMotion)
+
+fun contentFadeIn(): EnterTransition = com.taotao.music.playerui.theme.contentFadeIn()
+
+fun contentFadeOut(): ExitTransition = com.taotao.music.playerui.theme.contentFadeOut()
+
+fun pageDepthOf(page: String): Int = com.taotao.music.playerui.theme.pageDepthOf(page)
+
+fun AnimatedContentTransitionScope<String>.pageTransition(
+    reduceMotion: Boolean = false,
+): ContentTransform = with(com.taotao.music.playerui.theme) { pageTransition(reduceMotion) }
