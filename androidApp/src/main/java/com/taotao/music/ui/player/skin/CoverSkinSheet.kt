@@ -6,7 +6,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -30,7 +31,7 @@ import com.taotao.music.ui.theme.TaotaoCoral
  * 预览缩略图直接用真实皮肤控件绘制（同一个模板入口 [CoverSkin]），保证「所见即所选」。
  * 点选即写入 [CoverSkinStore] 并收起面板；详情页的封面区读 Compose 状态即时换装。
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 internal fun CoverSkinSheet(
     current: CoverSkinId,
@@ -49,7 +50,12 @@ internal fun CoverSkinSheet(
                 modifier = Modifier.padding(bottom = TaotaoSpacing.md),
                 style = MaterialTheme.typography.titleMedium,
             )
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            // 皮肤数量已超过一行能容纳的上限：自动换行的 FlowRow，间距用主题 spacing token。
+            FlowRow(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(TaotaoSpacing.sm),
+                verticalArrangement = Arrangement.spacedBy(TaotaoSpacing.sm),
+            ) {
                 for (id in CoverSkinId.entries) {
                     CoverSkinOption(
                         id = id,

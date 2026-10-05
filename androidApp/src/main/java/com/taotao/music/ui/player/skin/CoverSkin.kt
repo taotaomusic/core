@@ -25,6 +25,10 @@ enum class CoverSkinId(val label: String) {
     CASSETTE("磁带机"),
     GLOW("光晕"),
     CARD("圆角卡片"),
+    WAVE("声波"),
+    TIDAL("潮汐"),
+    FAN("扇形卡叠"),
+    NEON_RING("霓虹环"),
     ;
 
     companion object {
@@ -94,6 +98,34 @@ internal fun CoverSkin(
                 discSize = discSize,
             )
             CoverSkinId.CARD -> CardSkin(
+                coverUri = coverUri,
+                fallbackColor = fallbackColor,
+                isPlaying = isPlaying,
+                rotationDegrees = rotationDegrees,
+                discSize = discSize,
+            )
+            CoverSkinId.WAVE -> WaveSkin(
+                coverUri = coverUri,
+                fallbackColor = fallbackColor,
+                isPlaying = isPlaying,
+                rotationDegrees = rotationDegrees,
+                discSize = discSize,
+            )
+            CoverSkinId.TIDAL -> TidalSkin(
+                coverUri = coverUri,
+                fallbackColor = fallbackColor,
+                isPlaying = isPlaying,
+                rotationDegrees = rotationDegrees,
+                discSize = discSize,
+            )
+            CoverSkinId.FAN -> FanSkin(
+                coverUri = coverUri,
+                fallbackColor = fallbackColor,
+                isPlaying = isPlaying,
+                rotationDegrees = rotationDegrees,
+                discSize = discSize,
+            )
+            CoverSkinId.NEON_RING -> NeonRingSkin(
                 coverUri = coverUri,
                 fallbackColor = fallbackColor,
                 isPlaying = isPlaying,
