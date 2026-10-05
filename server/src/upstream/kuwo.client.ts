@@ -272,6 +272,8 @@ export class KuwoClient implements MusicSourceClient, MusicSourceCredentialManag
       // 反而失去意义，所以不报。
       pay: "",
       interval: duration,
+      artistId: info.artistId,
+      albumId: info.albumId,
       refrainStartMs: info.refrainStartMs,
       refrainEndMs: info.refrainEndMs,
       tiers,

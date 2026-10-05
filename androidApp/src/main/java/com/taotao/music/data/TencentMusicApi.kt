@@ -1091,6 +1091,11 @@ class TencentMusicApi(
             vip = data.optBoolean("vip"),
             favorited = favorited,
             source = normalizedSource,
+            // 音源内的歌手 / 专辑 ID（仅酷我的信息接口下发）：老队列 / 收藏恢复的歌曲
+            // 没有这组 ID，靠这里的单曲信息在播放期回填，详情页「查看歌手 / 查看专辑」
+            // 才能对所有来源生效。
+            artistId = data.optLong("artistId").takeIf { it > 0L },
+            albumId = data.optLong("albumId").takeIf { it > 0L },
             refrainStartMs = data.optLong("refrainStartMs").takeIf { it > 0L },
             refrainEndMs = data.optLong("refrainEndMs").takeIf { it > 0L },
         )

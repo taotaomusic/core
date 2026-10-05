@@ -272,20 +272,27 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
             val requestedSong = queueWithLocalFiles[index]
             // 历史队列/旧版本缓存可能没有高潮区间；播放入队时补齐并回写队列，
             // 避免详情页临时拉到数据后，迷你播放器和下一次恢复又丢失标记。
+            // 老队列/收藏恢复的歌曲同样没有音源内歌手 / 专辑 ID，一并回填 ——
+            // 详情页「查看歌手 / 查看专辑」才能对非搜索来源生效（2026-10-05 用户反馈）。
             val queueWithMetadata = if (
                 !requestedSong.audioUri.orEmpty().startsWith("file:") &&
                 requestedSong.remoteId?.let { it > 0L } == true &&
-                (requestedSong.refrainStartMs == null || requestedSong.refrainEndMs == null)
+                (requestedSong.refrainStartMs == null || requestedSong.refrainEndMs == null ||
+                    (requestedSong.source == TencentMusicApi.SEARCH_SOURCE_KUWO && requestedSong.artistId == null))
             ) {
                 val refreshed = withContext(Dispatchers.IO) {
                     runCatching { musicApi.requestSongInfoForPlayback(requestedSong, qualityStore.playbackQuality().value) }
                         .getOrNull()
                 }
-                if (refreshed != null && (refreshed.refrainStartMs != null || refreshed.refrainEndMs != null)) {
+                if (refreshed != null && (refreshed.refrainStartMs != null || refreshed.refrainEndMs != null ||
+                            refreshed.artistId != null || refreshed.albumId != null)) {
                     queueWithLocalFiles.toMutableList().also { items ->
                         items[index] = requestedSong.copy(
-                            refrainStartMs = refreshed.refrainStartMs,
-                            refrainEndMs = refreshed.refrainEndMs,
+                            // elvis 保底合并：上游没给的字段保留原值，绝不把已有数据洗掉。
+                            refrainStartMs = refreshed.refrainStartMs ?: requestedSong.refrainStartMs,
+                            refrainEndMs = refreshed.refrainEndMs ?: requestedSong.refrainEndMs,
+                            artistId = refreshed.artistId ?: requestedSong.artistId,
+                            albumId = refreshed.albumId ?: requestedSong.albumId,
                         )
                     }
                 } else queueWithLocalFiles

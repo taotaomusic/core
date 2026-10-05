@@ -84,6 +84,12 @@ export type UpstreamSongInfo = {
   tiers: QualityTier[];
   refrainStartMs?: number;
   refrainEndMs?: number;
+  /**
+   * 音源内的歌手 / 专辑 ID（酷我的单曲信息接口有，腾讯 / 网易没有 → 缺席）。
+   * 播放期回填队列歌曲用，客户端「查看歌手 / 查看专辑」跳转的钥匙。
+   */
+  artistId?: number;
+  albumId?: number;
 };
 
 /**

@@ -2457,6 +2457,18 @@ async function main() {
     `${kuwoSearchAlbumsEmptyKeyword.status} ${JSON.stringify(kuwoSearchAlbumsEmptyBody).slice(0, 160)}`,
   );
 
+  // ---------- 单曲信息回填歌手 / 专辑 ID（老队列播放期补全的钥匙）----------
+  const kuwoInfoBackfill = await (await fetch(`${base}/api/v1/songs/228908/info?source=kuwo`, {
+    headers: { authorization: `Bearer ${token}` },
+  })).json();
+  check(
+    "酷我单曲信息带正数 artistId/albumId（播放期回填跳转 ID）",
+    kuwoInfoBackfill.code === 0
+      && typeof kuwoInfoBackfill.data?.artistId === "number" && kuwoInfoBackfill.data.artistId > 0
+      && typeof kuwoInfoBackfill.data?.albumId === "number" && kuwoInfoBackfill.data.albumId > 0,
+    JSON.stringify(kuwoInfoBackfill).slice(0, 200),
+  );
+
   // ---------- 分享链路的高潮区间透传 ----------
   //
   // 酷我上游在 payInfo 里带 refrain_start/end（毫秒），/search 与 /songs/:id/info

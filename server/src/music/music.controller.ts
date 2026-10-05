@@ -502,6 +502,10 @@ export class MusicController {
       coverUrl: info.cover,
       vip: info.pay.includes("付费"),
       durationSeconds: info.interval,
+      // 音源内的歌手 / 专辑 ID（仅酷我提供）：老队列 / 收藏恢复的歌曲没有这组 ID，
+      // 客户端在播放期用它回填，「查看歌手 / 查看专辑」才能对非搜索来源生效。
+      artistId: info.artistId,
+      albumId: info.albumId,
       refrainStartMs: info.refrainStartMs,
       refrainEndMs: info.refrainEndMs,
       // size 为 0 的档位这首歌没有，直接不下发，客户端不用自己过滤。

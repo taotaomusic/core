@@ -200,6 +200,9 @@ export interface MusicInfo {
   /** 封面绝对地址。 */
   cover?: string;
   duration?: number;
+  /** 音源内的歌手 / 专辑 ID。客户端靠它做「查看歌手 / 查看专辑」跳转，缺失即无法跳转。 */
+  artistId?: number;
+  albumId?: number;
   /** 歌词能力标记。`lrcx` 为 0 表示这首歌没有逐字歌词。 */
   lrcInfo?: { lrc?: number; lrcx?: number };
   /** 官方单曲信息接口声明的资源目录；是否有权限仍以取址接口的实际响应为准。 */
@@ -1234,6 +1237,8 @@ export class BodianClient {
       album: d.data?.album || "",
       cover: this.httpsImage(d.data?.albumPic),
       duration: Number(d.data?.duration) || 0,
+      artistId: Number(d.data?.artistId) || undefined,
+      albumId: Number(d.data?.albumId) || undefined,
       lrcInfo: d.data?.lrc_info,
       audios: Array.isArray(d.data?.audios) ? d.data.audios : [],
       refrainStartMs: Number.isFinite(Number(d.data?.payInfo?.refrain_start)) ? Number(d.data.payInfo.refrain_start) : undefined,
