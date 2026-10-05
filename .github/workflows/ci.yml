@@ -7,10 +7,25 @@ name: CI（统一按需构建）
 # 加密产物同一次 run 内经 upload/download-artifact 流转，不再跨仓/Release 拉取。
 # PSK 已由后端动态下发，产物不含密钥，故无需注入 TAOTAO_CRYPTO_PSK。
 
+# 触发：push 到 main（正式产出）+ pull_request 到 main（只验证、不发布）。
+# PR 上所有「发布 / 删 Release / 回写仓库」的步骤都被 github.event_name == 'push' 挡住。
+# fork PR 拿不到 Secrets 且 GITHUB_TOKEN 只读，是第二层兜底；同仓分支 PR 的作者本就
+# 有写权限，所以「PR 能跑工作流」不构成权限提升。
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
+    inputs:
+      full:
+        description: '强制全量构建（等同提交信息里的 [full]）'
+        type: boolean
+        default: false
+      purge:
+        description: '删除全部 Release 后由本次运行重建（危险，仅手动勾选）'
+        type: boolean
+        default: false
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -20,16 +35,38 @@ jobs:
   changes:
     runs-on: ubuntu-latest
     outputs:
-      crypto: ${{ steps.f.outputs.crypto == 'true' || contains(github.event.head_commit.message, '[full]') }}
-      server: ${{ steps.f.outputs.server == 'true' || contains(github.event.head_commit.message, '[full]') }}
-      client: ${{ steps.f.outputs.client == 'true' || contains(github.event.head_commit.message, '[full]') }}
-      desktop: ${{ steps.f.outputs.desktop == 'true' || contains(github.event.head_commit.message, '[full]') }}
-      autopatch: ${{ steps.f.outputs.autopatch == 'true' || contains(github.event.head_commit.message, '[full]') }}
+      full: ${{ steps.flag.outputs.full }}
+      crypto: ${{ steps.f.outputs.crypto == 'true' || steps.flag.outputs.full == 'true' }}
+      server: ${{ steps.f.outputs.server == 'true' || steps.flag.outputs.full == 'true' }}
+      client: ${{ steps.f.outputs.client == 'true' || steps.flag.outputs.full == 'true' }}
+      desktop: ${{ steps.f.outputs.desktop == 'true' || steps.flag.outputs.full == 'true' }}
+      autopatch: ${{ steps.f.outputs.autopatch == 'true' || steps.flag.outputs.full == 'true' }}
     steps:
+      # 只把表达式求值出的**布尔字面量**写进 shell，绝不内联提交信息原文 ——
+      # 提交信息是可控输入，直接插值进脚本就是注入面。contains() 的结果只会是
+      # true/false 之一，不含原文。
+      # 另：pull_request 事件没有 head_commit，所以 PR 上 [full] 天然不生效；
+      # 需要全量时用手动 dispatch 的 full 输入。
+      - name: 判定全量开关
+        id: flag
+        shell: bash
+        run: |
+          full=false
+          if [ "${{ github.event_name }}" = "push" ] \
+             && [ "${{ contains(github.event.head_commit.message, '[full]') }}" = "true" ]; then
+            full=true
+          fi
+          if [ "${{ inputs.full }}" = "true" ]; then full=true; fi
+          echo "full=$full" >> "$GITHUB_OUTPUT"
+          echo "全量构建开关：$full"
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
         id: f
         with:
+          # ⚠️ 这里没有也不该有 '.github/**'：改工作流本身不该触发任何产品构建。
+          # 代价是「只改 ci.yml 的提交」会让全部 job 跳过 —— run 显示 success 但
+          # 什么都没验证。要验证工作流改动，用 workflow_dispatch 勾选 full，
+          # 或在提交信息里写 [full]。
           filters: |
             crypto:
               - 'crypto-src/**'
@@ -76,14 +113,18 @@ jobs:
           path: autopatch/build/reports/tests/test/
           if-no-files-found: ignore
 
+  # 本 job 必须保持「一定会被执行到」（只有步骤被挡住）：needs: purge 的下游 job
+  # 在依赖被 skip 时会跟着 skip，所以不能把 if 提到 job 级。
   purge:
     needs: changes
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: 删除全部旧 Release（提交信息含 [purge] 时；随后各 job 重建干净的 5 个）
-        if: contains(github.event.head_commit.message, '[purge]')
+      # 原先由提交信息里的 [purge] 触发 —— 任何能推 main 的人（含被盗账号、被劫持的
+      # 自动化）只要在提交信息里写 [purge] 就能删光全部 Release。改成手动 dispatch 勾选。
+      - name: 删除全部旧 Release（仅手动 dispatch 勾选 purge；随后各 job 重建）
+        if: github.event_name == 'workflow_dispatch' && inputs.purge
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -115,9 +156,13 @@ jobs:
         with:
           path: crypto-src/out
           key: crypto-out-${{ hashFiles('crypto-src/**') }}
-      - uses: dtolnay/rust-toolchain@stable
+      # SHA 固定：@stable 是**分支**引用，上游任何一次推送都直接进入我们的构建。
+      # 固定后必须显式给 toolchain 输入，否则 action 无法从 ref 名推断工具链。
+      # SHA 必须取自 master 分支历史（dtolnay 明确要求：不在 master 历史里的提交会被 GC）。
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master @ 2026-10-01
         if: steps.crypto-cache.outputs.cache-hit != 'true'
         with:
+          toolchain: stable
           targets: aarch64-linux-android
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
@@ -290,6 +335,7 @@ jobs:
       - name: 契约验证
         run: node tools/verify-contract.mjs http://127.0.0.1:4720 2>&1 | tee verify.log
       - name: 发布 dist（滚动 + 版本化）
+        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -475,11 +521,17 @@ jobs:
           done
           if ! git diff --quiet --no-index kotlin-js-store/package-lock.json build/js/package-lock.json; then
             cp build/js/package-lock.json kotlin-js-store/package-lock.json
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add kotlin-js-store
-            git commit -m "build: CI 刷新 kotlin-js-store 锁文件（Linux 侧 npm 解析）[skip ci]"
-            git push || echo "::warning::锁文件回写推送失败，下次运行重试"
+            # PR 上只刷新不落库：往 PR 分支推提交既打扰作者，fork PR 又没有写权限。
+            # 漂移会在合并进 main 后的那次 push 运行里自动回写。
+            if [ "${{ github.event_name }}" != "push" ]; then
+              echo "::warning::锁文件有漂移，PR 上不回写仓库；合并进 main 后由 push 运行自动刷新"
+            else
+              git config user.name "github-actions[bot]"
+              git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+              git add kotlin-js-store
+              git commit -m "build: CI 刷新 kotlin-js-store 锁文件（Linux 侧 npm 解析）[skip ci]"
+              git push || echo "::warning::锁文件回写推送失败，下次运行重试"
+            fi
           else
             echo "锁文件无漂移"
           fi
@@ -492,6 +544,7 @@ jobs:
             sleep 5
           done
       - name: 打包并发布 share-player-latest
+        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -500,12 +553,15 @@ jobs:
             || gh release create share-player-latest --prerelease --title "Web 分享播放器" --notes "版本历史"
           gh release upload share-player-latest share-player.zip --clobber
       - name: 记录 Web 版本历史
+        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
         run: bash tools/release-log.sh share-player-latest "Web 分享播放器" "$(tr -d '[:space:]' < VERSION).${GITHUB_RUN_NUMBER}"
 
   client-publish:
     needs: [client-android]
+    # 纯发布 job：PR 上整个跳过（否则会创建 latest Release 并删掉已有 APK 资产）。
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -567,8 +623,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - uses: dtolnay/rust-toolchain@stable
+      # SHA 固定理由同 crypto job。
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master @ 2026-10-01
         with:
+          toolchain: stable
           targets: x86_64-pc-windows-msvc
       - uses: Swatinem/rust-cache@v2
         with:
@@ -582,15 +640,25 @@ jobs:
           base=$(tr -d '[:space:]' < ../VERSION)
           node -e "const fs=require('fs');const f='src-tauri/tauri.conf.json';const j=JSON.parse(fs.readFileSync(f));j.version='${base}.'+process.env.GITHUB_RUN_NUMBER;fs.writeFileSync(f,JSON.stringify(j,null,2));console.log('desktop version =>',j.version)"
       # 图标（src-tauri/icons/）已提交入库，不再动态生成。
-      - name: 未配签名密钥时关闭更新产物（避免 CI 因缺 Secret 变红）
-        if: env.HAS_UPDATER_KEY != 'true'
+      # PR 上恒关更新产物：下面的 PR 构建步骤不传签名密钥，若 createUpdaterArtifacts
+      # 仍为 true，tauri 会因缺密钥直接失败。push 且配了密钥时才保留（正式发布路径）。
+      - name: 关闭更新产物（PR 恒关；push 时仅未配密钥才关）
+        if: github.event_name != 'push' || env.HAS_UPDATER_KEY != 'true'
         shell: bash
         run: |
           node -e "const f='src-tauri/tauri.conf.json';const j=require('./'+f);j.bundle.createUpdaterArtifacts=false;require('fs').writeFileSync(f,JSON.stringify(j,null,2))"
-          echo "::warning::未配置 TAURI_SIGNING_PRIVATE_KEY，本次不产更新清单；配好该 Secret 后自动更新才生效。"
+          echo "::warning::本次不产更新清单（PR 验证运行，或未配置 TAURI_SIGNING_PRIVATE_KEY）。"
+      # PR：只构建验证，不发布。tauri-action 省略 tagName/releaseName/releaseId 即为「只构建」。
+      - name: 构建（PR：只验证不发布）
+        if: github.event_name != 'push'
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # action-v0.6.2
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          projectPath: desktop
       - name: 构建 + 签名 + 发布（含自动更新 latest.json）
-        if: env.HAS_UPDATER_KEY == 'true'
-        uses: tauri-apps/tauri-action@v0
+        if: github.event_name == 'push' && env.HAS_UPDATER_KEY == 'true'
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # action-v0.6.2
         env:
           GITHUB_TOKEN: ${{ github.token }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -604,8 +672,8 @@ jobs:
           prerelease: true
           includeUpdaterJson: true
       - name: 构建 + 发布（未配密钥：无签名、无更新清单）
-        if: env.HAS_UPDATER_KEY != 'true'
-        uses: tauri-apps/tauri-action@v0
+        if: github.event_name == 'push' && env.HAS_UPDATER_KEY != 'true'
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # action-v0.6.2
         env:
           GITHUB_TOKEN: ${{ github.token }}
         with:
@@ -616,7 +684,7 @@ jobs:
           releaseDraft: false
           prerelease: true
       - name: 清理 desktop-latest 旧版本资产（只留本次 + latest.json）
-        if: ${{ !cancelled() }}
+        if: github.event_name == 'push' && !cancelled()
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -631,7 +699,7 @@ jobs:
             esac
           done
       - name: 记录桌面版本历史
-        if: ${{ !cancelled() }}
+        if: github.event_name == 'push' && !cancelled()
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
