@@ -11,9 +11,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.Modifier
 import com.taotao.music.playerui.skin.CoverFallbackArt
 import com.taotao.music.playerui.skin.CoverImageLoader
-import kotlin.js.JsFun
 import kotlinx.browser.window
 import kotlinx.coroutines.await
 import org.khronos.webgl.ArrayBuffer

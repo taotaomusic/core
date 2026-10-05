@@ -65,7 +65,6 @@ import kotlinx.browser.document
 import kotlinx.browser.window
 import kotlinx.coroutines.await
 import org.w3c.fetch.Response
-import kotlin.js.JsFun
 import kotlin.js.JsString
 import org.jetbrains.compose.resources.Font
 import taotaomusic.webapp.generated.resources.Res
