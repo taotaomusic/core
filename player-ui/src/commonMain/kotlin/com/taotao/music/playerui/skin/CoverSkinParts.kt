@@ -1,4 +1,4 @@
-package com.taotao.music.ui.player.skin
+package com.taotao.music.playerui.skin
 
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color

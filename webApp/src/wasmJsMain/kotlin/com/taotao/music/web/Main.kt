@@ -1,11 +1,13 @@
 package com.taotao.music.web
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -16,10 +18,12 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -36,17 +40,13 @@ import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.toComposeImageBitmap
-import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.ComposeViewport
 import com.taotao.music.model.Song
 import com.taotao.music.playerui.PlayerActions
-import com.taotao.music.playerui.PlayerArtworkSlot
 import com.taotao.music.playerui.PlayerCapabilities
 import com.taotao.music.playerui.PlayerCompactLayout
 import com.taotao.music.playerui.PlayerRepeatMode
@@ -54,6 +54,9 @@ import com.taotao.music.playerui.PlayerUiState
 import com.taotao.music.playerui.SharedContentState
 import com.taotao.music.playerui.SharedContentStateType
 import com.taotao.music.playerui.TaotaoPlayerTheme
+import com.taotao.music.playerui.skin.CoverSkin
+import com.taotao.music.playerui.skin.CoverSkinId
+import com.taotao.music.playerui.skin.rememberCoverRotationState
 import com.taotao.music.playerui.theme.TaotaoShapes
 import com.taotao.music.playerui.theme.TaotaoSizes
 import com.taotao.music.playerui.theme.TaotaoSpacing
@@ -64,9 +67,6 @@ import kotlinx.coroutines.await
 import org.w3c.fetch.Response
 import kotlin.js.JsString
 import org.jetbrains.compose.resources.Font
-import org.jetbrains.skia.Image as SkiaImage
-import org.khronos.webgl.ArrayBuffer
-import org.khronos.webgl.Int8Array
 import taotaomusic.webapp.generated.resources.Res
 import taotaomusic.webapp.generated.resources.noto_sans_sc_regular
 
@@ -96,9 +96,6 @@ private val DownloadButtonHeight = 52.dp
  */
 private const val OpenAppScheme = "taotaomusic://open"
 
-/** 封面缺失时那颗 ♫ 占位符的字号：要撑满整个圆形底衬。 */
-private val FallbackGlyphSize = 96.sp
-
 @OptIn(ExperimentalComposeUiApi::class)
 fun main() {
     ComposeViewport(document.body!!) {
@@ -120,21 +117,22 @@ private fun SharePlayerApp() {
     var share by remember { mutableStateOf<ShareSong?>(null) }
     var loading by remember { mutableStateOf(true) }
     var loadError by remember { mutableStateOf<String?>(null) }
-    val token = remember {
+    // 分享链接标识：从路径尾段取出，用于拉取分享内容（与凭据无关，命名避开安全判据的敏感字样）。
+    val shareSlug = remember {
         window.location.pathname
             .trimEnd('/')
             .substringAfterLast('/')
             .takeIf { it.isNotBlank() && it != "s" }
     }
 
-    LaunchedEffect(token) {
-        if (token == null) {
+    LaunchedEffect(shareSlug) {
+        if (shareSlug == null) {
             share = demoShareSong()
             loading = false
             return@LaunchedEffect
         }
         runCatching {
-            val response: Response = window.fetch("/api/v1/public/shares/$token").await()
+            val response: Response = window.fetch("/api/v1/public/shares/$shareSlug").await()
             check(response.ok) { "分享链接不存在或已失效" }
             val payloadText: JsString = response.text().await()
             val payload = payloadText.toString()
@@ -181,6 +179,15 @@ private fun SharePlayerPage(share: ShareSong) {
     val controller = remember(share.previewUrl) {
         WebAudioController(share.previewDurationSeconds) { audioState = it }
     }
+    // 封面皮肤：读一次 localStorage（键 cover_skin，与 Android 端 SharedPreferences 互不影响），
+    // 点选即换并写回；旋转驱动用共享层实现（Web 页面恒在前台、恒在封面页）。
+    var coverSkin by remember { mutableStateOf(CoverSkinId.of(window.localStorage.getItem("cover_skin"))) }
+    val coverRotation = rememberCoverRotationState(
+        isPlaying = audioState.isPlaying,
+        active = true,
+        onCoverPage = { true },
+        restartKey = share.song.title,
+    )
     DisposableEffect(controller, share.previewUrl) {
         if (share.previewUrl.isNotBlank()) {
             controller.load(share.previewUrl)
@@ -220,9 +227,24 @@ private fun SharePlayerPage(share: ShareSong) {
                 style = MaterialTheme.typography.titleLarge,
             )
             Spacer(Modifier.height(TaotaoSpacing.xl))
-            PlayerArtworkSlot(size = artworkSize) {
-                RemoteArtwork(share.song.coverUri, Color(share.song.color))
-            }
+            // 共享皮肤框架接入：方卡类皮肤用矩形插槽（不被裁圆），圆形皮肤用默认圆插槽。
+            CoverSkin(
+                skin = coverSkin,
+                coverUri = share.song.coverUri,
+                fallbackColor = Color(share.song.color),
+                isPlaying = audioState.isPlaying,
+                rotationDegrees = coverRotation.degrees,
+                discSize = artworkSize,
+                imageLoader = remember { FetchCoverImageLoader() },
+                modifier = Modifier,
+            )
+            Spacer(Modifier.height(TaotaoSpacing.sm))
+            // 皮肤切换行：九宫格点选即换（写 localStorage，刷新后保留）。
+            SkinPickerRow(
+                current = coverSkin,
+                imageLoader = remember { FetchCoverImageLoader() },
+                onSelect = { coverSkin = it },
+            )
             Spacer(Modifier.height(TaotaoSpacing.xl))
             PlayerCompactLayout(
                 state = state,
@@ -276,41 +298,45 @@ private fun SharePlayerPage(share: ShareSong) {
     }
 }
 
+/**
+ * 皮肤切换行：九宫格点选即换。缩略图用真实皮肤控件画无图预览（所见即所选），
+ * 选择写 localStorage（键 cover_skin），刷新后保留。
+ */
 @Composable
-private fun RemoteArtwork(url: String?, fallbackColor: Color) {
-    var bitmap by remember(url) { mutableStateOf<ImageBitmap?>(null) }
-    LaunchedEffect(url) {
-        bitmap = url?.takeIf(String::isNotBlank)?.let { runCatching { loadImageBitmap(it) }.getOrNull() }
-    }
-    val loaded = bitmap
-    if (loaded != null) {
-        Image(
-            bitmap = loaded,
-            contentDescription = "专辑封面",
-            contentScale = ContentScale.Crop,
-            modifier = Modifier.fillMaxSize(),
-        )
-    } else {
-        Box(
-            modifier = Modifier.fillMaxSize().background(fallbackColor, CircleShape),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text("♫", color = Color.White, fontSize = FallbackGlyphSize)
+private fun SkinPickerRow(
+    current: CoverSkinId,
+    imageLoader: com.taotao.music.playerui.skin.CoverImageLoader,
+    onSelect: (CoverSkinId) -> Unit,
+) {
+    Row(horizontalArrangement = Arrangement.spacedBy(TaotaoSpacing.xs)) {
+        for (id in CoverSkinId.entries) {
+            IconButton(onClick = { onSelect(id) }) {
+                Box(
+                    Modifier
+                        .size(28.dp)
+                        .clip(if (id.squareArt) RectangleShape else CircleShape)
+                        .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                        .border(
+                            width = if (id == current) 2.dp else 1.dp,
+                            color = if (id == current) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.outlineVariant,
+                            shape = if (id.squareArt) RectangleShape else CircleShape,
+                        ),
+                ) {
+                    CoverSkin(
+                        skin = id,
+                        coverUri = null,
+                        fallbackColor = MaterialTheme.colorScheme.primary,
+                        isPlaying = false,
+                        rotationDegrees = 0f,
+                        discSize = 24.dp,
+                        imageLoader = imageLoader,
+                    )
+                }
+            }
         }
     }
 }
-
-private suspend fun loadImageBitmap(url: String): ImageBitmap {
-    val response: Response = window.fetch(url).await()
-    check(response.ok) { "专辑封面加载失败" }
-    val buffer: ArrayBuffer = response.arrayBuffer().await()
-    val source = Int8Array(buffer)
-    val bytes = ByteArray(source.length) { index -> int8At(source, index).toByte() }
-    return SkiaImage.makeFromEncoded(bytes).toComposeImageBitmap()
-}
-
-@JsFun("(array, index) => array[index]")
-private external fun int8At(array: Int8Array, index: Int): Int
 
 /** 深链接的参数值里会出现标题、封面直链等非 ASCII 字符，逐值走百分号编码。 */
 @JsFun("(value) => encodeURIComponent(value)")

@@ -1,4 +1,4 @@
-package com.taotao.music.ui.player.skin
+package com.taotao.music.playerui.skin
 
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
@@ -6,12 +6,10 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -21,13 +19,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
-import coil.compose.AsyncImage
-import coil.request.ImageRequest
-import com.taotao.music.ui.theme.AnimationDurations
-import com.taotao.music.ui.theme.LocalReduceMotion
+import com.taotao.music.playerui.theme.LocalReduceMotion
 import kotlin.math.PI
 import kotlin.math.sin
 
@@ -37,6 +30,7 @@ import kotlin.math.sin
  * 播放时潮环半径与透明度按同一根相位轴往复（内外两环相位相反，形成呼吸错落）；
  * 暂停 / reduce-motion 时相位轴归零静止，潮环停在中间位置。封面不旋转，
  * [rotationDegrees] 被刻意忽略（见 [CoverSkin] 的语义说明）。
+ * 封面加载走 [imageLoader] 插槽。
  */
 @Composable
 internal fun TidalSkin(
@@ -45,6 +39,7 @@ internal fun TidalSkin(
     isPlaying: Boolean,
     rotationDegrees: Float,
     discSize: Dp,
+    imageLoader: CoverImageLoader,
     modifier: Modifier = Modifier,
 ) {
     val reduceMotion = LocalReduceMotion.current
@@ -61,29 +56,14 @@ internal fun TidalSkin(
         Canvas(Modifier.fillMaxSize()) { drawTidalGlow(fallbackColor, isPlaying) }
         // 第二层：圆形封面（占比与光晕一致，0.58）。
         val coverFraction = 0.58f
-        if (coverUri.isNullOrBlank()) {
-            val glyph = with(LocalDensity.current) { (discSize * coverFraction * 0.5f).toSp() }
-            Box(
-                Modifier
-                    .fillMaxSize(coverFraction)
-                    .clip(CircleShape)
-                    .background(fallbackColor),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text("♫", color = Color.White, fontSize = glyph)
-            }
-        } else {
-            AsyncImage(
-                model = ImageRequest.Builder(LocalContext.current)
-                    .data(coverUri)
-                    .crossfade(AnimationDurations.FADE)
-                    .build(),
-                contentDescription = "专辑封面",
-                modifier = Modifier
-                    .fillMaxSize(coverFraction)
-                    .clip(CircleShape),
-            )
-        }
+        CoverSkinImageSlot(
+            url = coverUri,
+            fallbackColor = fallbackColor,
+            imageLoader = imageLoader,
+            modifier = Modifier
+                .fillMaxSize(coverFraction)
+                .clip(CircleShape),
+        )
         // 第三层：潮环 + 封面描边（固定层，随相位涨落）。
         Canvas(Modifier.fillMaxSize()) { drawTidalRings(wavePhase, fallbackColor, isPlaying, coverFraction) }
     }

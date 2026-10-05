@@ -1,16 +1,14 @@
-package com.taotao.music.ui.player.skin
+package com.taotao.music.playerui.skin
 
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -30,24 +28,21 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
-import coil.compose.AsyncImage
-import coil.request.ImageRequest
-import com.taotao.music.ui.theme.AnimationDurations
-import com.taotao.music.ui.theme.LocalReduceMotion
+import com.taotao.music.playerui.theme.LocalReduceMotion
 
 /**
- * 黑胶唱片机皮肤（默认皮肤，2026-10 从 `ui/player/VinylDisc.kt` 迁入 skin 包成为皮肤模板首个实例）。
+ * 黑胶唱片机皮肤（默认皮肤，2026-10 从 androidApp 的 `ui/player/VinylDisc.kt`
+ * 迁入共享的皮肤框架，供 Android 详情页与 Web 分享播放器共用）。
  *
  * 结构从下到上分四层：盘底投影、随 [rotationDegrees] 旋转的黑胶盘体（底色 + 声槽纹路）、
  * 圆形专辑封面（与盘体同角度旋转，相当于贴在唱片正中的封贴）、以及不旋转的固定层
  * （盘面高光 + 唱臂）。高光画在固定层是刻意的：光源不该跟着唱片转，否则反光会看起来
  * 像贴纸在打转。
  *
- * 旋转角度由调用方持有（详情页里带暂停/前后台/翻页停止条件的 [androidx.compose.animation.core.Animatable]），
- * 本组件只负责按角度渲染；唱臂的起落由 [isPlaying] 驱动，播放时搭在盘面上、暂停时抬起。
+ * 旋转角度由调用方持有（见 [rememberCoverRotationState]），本组件只负责按角度渲染；
+ * 唱臂的起落由 [isPlaying] 驱动，播放时搭在盘面上、暂停时抬起。
+ * 封面加载走 [imageLoader] 插槽，本组件不感知任何平台加载器。
  *
  * 新增皮肤请参照 [CoverSkin] 上的模板说明：参数签名与本组件保持一致即可。
  */
@@ -58,6 +53,7 @@ internal fun VinylSkin(
     isPlaying: Boolean,
     rotationDegrees: Float,
     discSize: Dp,
+    imageLoader: CoverImageLoader,
     modifier: Modifier = Modifier,
 ) {
     val reduceMotion = LocalReduceMotion.current
@@ -74,32 +70,16 @@ internal fun VinylSkin(
         Canvas(Modifier.fillMaxSize().graphicsLayer { rotationZ = rotationDegrees }) {
             drawVinylPlate()
         }
-        // 第三层：圆形封面（黑胶正中的封贴），无图时退回纯色音符占位。
-        if (coverUri.isNullOrBlank()) {
-            val glyph = with(LocalDensity.current) { (discSize * COVER_FRACTION / 2f).toSp() }
-            Box(
-                Modifier
-                    .fillMaxSize(COVER_FRACTION)
-                    .graphicsLayer { rotationZ = rotationDegrees }
-                    .clip(CircleShape)
-                    .background(fallbackColor),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text("♫", color = Color.White, fontSize = glyph)
-            }
-        } else {
-            AsyncImage(
-                model = ImageRequest.Builder(LocalContext.current)
-                    .data(coverUri)
-                    .crossfade(AnimationDurations.FADE)
-                    .build(),
-                contentDescription = "专辑封面",
-                modifier = Modifier
-                    .fillMaxSize(COVER_FRACTION)
-                    .graphicsLayer { rotationZ = rotationDegrees }
-                    .clip(CircleShape),
-            )
-        }
+        // 第三层：圆形封面（黑胶正中的封贴），无图时退回主题色音符占位。
+        CoverSkinImageSlot(
+            url = coverUri,
+            fallbackColor = fallbackColor,
+            imageLoader = imageLoader,
+            modifier = Modifier
+                .fillMaxSize(COVER_FRACTION)
+                .graphicsLayer { rotationZ = rotationDegrees }
+                .clip(CircleShape),
+        )
         // 第四层：盘面高光 + 唱臂（固定层，光源与唱臂不随盘旋转）。
         Canvas(Modifier.fillMaxSize()) {
             drawVinylSheen()

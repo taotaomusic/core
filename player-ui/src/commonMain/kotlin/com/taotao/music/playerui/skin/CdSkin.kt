@@ -1,16 +1,12 @@
-package com.taotao.music.ui.player.skin
+package com.taotao.music.playerui.skin
 
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
@@ -24,21 +20,16 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
-import coil.compose.AsyncImage
-import coil.request.ImageRequest
-import com.taotao.music.ui.theme.AnimationDurations
 
 /**
  * CD 光碟皮肤：整张封面就是碟面，中部留一个小巧的透明中孔 + 压环，
  * 靠盘面的扇形彩虹衍射高光表达「这张碟在转」。
  *
- * 与黑胶的区别：CD 的盘面即封面本体（[COVER_FRACTION] 为 1，碟面全幅使用封面），
+ * 与黑胶的区别：CD 的盘面即封面本体（碟面全幅使用封面），
  * 因此衍射高光用低透明度叠加，避免冲掉封面颜色；中孔采用「深色压环 + 内阴影」
  * 的画法，在任何亮色封面上都能读出孔的存在。旋转复用调用方的 [rotationDegrees]，
- * 播放 / 暂停没有专属拟物动作（碟面始终朝上，暂停时仅由详情页的播放键表意）。
+ * 播放 / 暂停没有专属拟物动作（碟面始终朝上，暂停时仅由接入端的播放键表意）。
  */
 @Composable
 internal fun CdSkin(
@@ -47,6 +38,7 @@ internal fun CdSkin(
     isPlaying: Boolean,
     rotationDegrees: Float,
     discSize: Dp,
+    imageLoader: CoverImageLoader,
     modifier: Modifier = Modifier,
 ) {
     Box(modifier.size(discSize), contentAlignment = Alignment.Center) {
@@ -54,34 +46,12 @@ internal fun CdSkin(
         Canvas(Modifier.fillMaxSize()) { drawSkinDiscShadow() }
         // 第二层：旋转的碟面 —— 封面全幅铺满 + 彩虹衍射高光一起转。
         Box(Modifier.fillMaxSize().graphicsLayer { rotationZ = rotationDegrees }) {
-            if (coverUri.isNullOrBlank()) {
-                // 无图兜底：主题色圆面 + 音符占位，层次用径向渐变微微压出边缘。
-                val glyph = with(LocalDensity.current) { (discSize * 0.16f).toSp() }
-                Box(
-                    Modifier
-                        .fillMaxSize()
-                        .clip(CircleShape)
-                        .background(
-                            Brush.radialGradient(
-                                0.00f to fallbackColor,
-                                0.86f to fallbackColor,
-                                1.00f to fallbackColor.copy(alpha = 0.72f),
-                            ),
-                        ),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text("♫", color = Color.White, fontSize = glyph)
-                }
-            } else {
-                AsyncImage(
-                    model = ImageRequest.Builder(LocalContext.current)
-                        .data(coverUri)
-                        .crossfade(AnimationDurations.FADE)
-                        .build(),
-                    contentDescription = "专辑封面",
-                    modifier = Modifier.fillMaxSize().clip(CircleShape),
-                )
-            }
+            CoverSkinImageSlot(
+                url = coverUri,
+                fallbackColor = fallbackColor,
+                imageLoader = imageLoader,
+                modifier = Modifier.fillMaxSize(),
+            )
             // 衍射高光跟碟面一起转：光盘的虹彩来自纹道，本来就该随盘转。
             Canvas(Modifier.fillMaxSize()) { drawCdIridescence() }
         }

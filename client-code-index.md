@@ -117,7 +117,7 @@ androidApp
 | Android 网络 | `TencentMusicApi` | `androidApp/src/main/java/com/taotao/music/data/TencentMusicApi.kt` | 音乐、账号、歌单、播放、IM 等后端调用和错误/续期处理 |
 | Android 播放 | `AudioPlayer` / `PlaybackService` | `androidApp/src/main/java/com/taotao/music/player/` | Media3 播放控制、媒体会话和后台生命周期 |
 | Android 定时关闭 | `SleepTimer` 系列 | `androidApp/.../player/SleepTimer.kt`、`SleepTimerPolicy.kt`、`ui/player/SleepTimerDialog.kt` | 播完整首再停的等待态、底部弹层与持久化 |
-| Android 封面皮肤 | `CoverSkin` / `CoverSkinId` | `androidApp/.../ui/player/skin/` | 详情页封面区皮肤模板与注册表（黑胶/CD/磁带/光晕/卡片/声波/潮汐/扇形卡叠/霓虹环），新增皮肤三步见 `CoverSkin.kt` 头注释；偏好存 `CoverSkinStore` |
+| Android 封面皮肤 | `CoverSkin` / `CoverSkinId` | `player-ui/.../playerui/skin/`（三端共享）；Android 平台件 `ui/player/skin/`（coil 加载器 + SharedPreferences 偏好） | 详情页封面区皮肤框架已下沉共享层（黑胶/CD/磁带/光晕/卡片/声波/潮汐/扇形卡叠/霓虹环），Web 分享播放器同样接入；新增皮肤三步见 `player-ui` 的 `CoverSkinId.kt` 头注释；封面加载走 `CoverImageLoader` 插槽（各端注入），偏好各端自持 |
 | Android 拖动排序 | `DragReorderList` / `TaotaoSnackbar` | `androidApp/.../ui/common/DragReorderList.kt`、`ui/common/components.kt` | 播放队列与歌单共用的统一拖动组件、全局 Snackbar |
 | Android 播放记录与日记 | `PlaybackHistoryPage` / `SongDiaryPage` / `DiaryRecordsPage` | `androidApp/.../ui/library/MineLibraryPages.kt` | 播放记录独立下级页与单曲倒带日记（路由 key `diary-records`） |
 | Android 设备号 | `HardwareDeviceId` | `androidApp/.../data/crypto/HardwareDeviceId.kt` | ANDROID_ID 设备号来源，供传输加密协议 v2 绑定 |

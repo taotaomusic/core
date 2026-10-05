@@ -1,4 +1,4 @@
-package com.taotao.music.ui.player.skin
+package com.taotao.music.playerui.skin
 
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -17,11 +17,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -29,13 +26,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
-import coil.compose.AsyncImage
-import coil.request.ImageRequest
-import com.taotao.music.ui.theme.AnimationDurations
-import com.taotao.music.ui.theme.LocalReduceMotion
+import com.taotao.music.playerui.theme.LocalReduceMotion
 
 /**
  * 圆角卡片皮肤：封面是一张带投影的圆角方形卡片，圆角与投影随 [discSize] 等比缩放，
@@ -43,7 +35,10 @@ import com.taotao.music.ui.theme.LocalReduceMotion
  *
  * 不旋转：[rotationDegrees] 被刻意忽略，播放态由调色点的呼吸表达（暂停时收敛为暗点）。
  * 现代流媒体的默认形态，适合不喜欢拟物感的场景；与光晕一样没有盘面，
- * 所以也没有「转」的意象。
+ * 所以也没有「转」的意象。封面加载走 [imageLoader] 插槽。
+ *
+ * 注：卡片底色与投影使用 MaterialTheme，接入端必须处在 TaotaoPlayerTheme 内
+ * （Android 详情页与 Web 分享播放器均满足）。
  */
 @Composable
 internal fun CardSkin(
@@ -52,12 +47,13 @@ internal fun CardSkin(
     isPlaying: Boolean,
     rotationDegrees: Float,
     discSize: Dp,
+    imageLoader: CoverImageLoader,
     modifier: Modifier = Modifier,
 ) {
     val reduceMotion = LocalReduceMotion.current
-    val transition = rememberInfiniteTransition(label = "cardDots")
     // 调色点呼吸透明度：降级（暂停 / reduce-motion）时不换 spec，
     // 目标值并回起点 0.45f，起止相同即静止为暗点。
+    val transition = rememberInfiniteTransition(label = "cardDots")
     val pulse by transition.animateFloat(
         initialValue = 0.45f,
         targetValue = if (reduceMotion || !isPlaying) 0.45f else 1f,
@@ -77,31 +73,17 @@ internal fun CardSkin(
             modifier = Modifier
                 .fillMaxWidth(COVER_CARD_FRACTION)
                 .aspectRatio(1f),
-            shape = RoundedCornerShape(discSize * 0.055f),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
+            shape = androidx.compose.foundation.shape.RoundedCornerShape(discSize * 0.055f),
+            colors = CardDefaults.cardColors(containerColor = androidx.compose.material3.MaterialTheme.colorScheme.surfaceContainerHigh),
             elevation = CardDefaults.cardElevation(defaultElevation = discSize * 0.03f),
         ) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                if (coverUri.isNullOrBlank()) {
-                    val glyph = with(LocalDensity.current) { (discSize * 0.14f).toSp() }
-                    Box(
-                        Modifier
-                            .fillMaxSize()
-                            .background(fallbackColor),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text("♫", color = Color.White, fontSize = glyph)
-                    }
-                } else {
-                    AsyncImage(
-                        model = ImageRequest.Builder(LocalContext.current)
-                            .data(coverUri)
-                            .crossfade(AnimationDurations.FADE)
-                            .build(),
-                        contentDescription = "专辑封面",
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                }
+                CoverSkinImageSlot(
+                    url = coverUri,
+                    fallbackColor = fallbackColor,
+                    imageLoader = imageLoader,
+                    modifier = Modifier.fillMaxSize(),
+                )
             }
         }
         Spacer(Modifier.height(discSize * 0.045f))

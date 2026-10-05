@@ -1,9 +1,6 @@
 package com.taotao.music.ui.player
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -33,6 +30,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -40,7 +38,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -49,7 +46,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.repeatOnLifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.taotao.music.data.PlaybackHistoryEntry
 import com.taotao.music.data.TencentMusicApi
 import com.taotao.music.model.LyricParser
@@ -64,18 +61,16 @@ import com.taotao.music.playerui.theme.TaotaoSpacing
 import com.taotao.music.ui.common.FavoriteButton
 import com.taotao.music.ui.common.PagerDots
 import com.taotao.music.ui.common.VipBadge
-import com.taotao.music.ui.theme.AnimationDurations
-import com.taotao.music.ui.theme.LocalReduceMotion
 import com.taotao.music.ui.theme.TaotaoCoral
-import com.taotao.music.ui.player.skin.CoverSkin
-import com.taotao.music.ui.player.skin.CoverSkinId
-import com.taotao.music.ui.player.skin.CoverSkinSheet
+import com.taotao.music.playerui.skin.CoverSkin
+import com.taotao.music.playerui.skin.CoverSkinId
+import com.taotao.music.playerui.skin.CoverSkinSheet
+import com.taotao.music.playerui.skin.rememberCoverRotationState
+import com.taotao.music.ui.player.skin.CoilCoverImageLoader
 import com.taotao.music.ui.player.skin.CoverSkinStore
 import android.net.Uri
 import java.io.File
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -137,6 +132,7 @@ internal fun PlayerDetailPage(
     // 封面皮肤：进入页面读一次本地偏好；切换即时生效并异步写回 SharedPreferences。
     val context = LocalContext.current
     val skinStore = remember { CoverSkinStore(context) }
+    val imageLoader = remember { CoilCoverImageLoader() }
     var coverSkin by remember { mutableStateOf(CoverSkinId.DEFAULT) }
     var showSkinSheet by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
@@ -147,10 +143,15 @@ internal fun PlayerDetailPage(
     val actualPlaying = audioPlayer.isPlaying
     val detailScope = rememberCoroutineScope()
     val lifecycleOwner = LocalLifecycleOwner.current
-    // key 必须是稳定的标识而不是整个 song：换音质或解析地址后队列里的 Song 会被换成新副本，
-    // 用 song 做 key 会重建 Animatable，封面转到一半突然弹回 0°。
-    val coverRotation = remember(song.remoteId, song.audioUri) { Animatable(0f) }
-    val reduceMotion = LocalReduceMotion.current
+    // 宿主前台判定：桥接生命周期给共享层的旋转驱动（RESUMED 才推进动画帧）。
+    var pageResumed by remember { mutableStateOf(true) }
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            pageResumed = event == Lifecycle.Event.ON_RESUME
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     LaunchedEffect(song.lyricUri, song.remoteId, song.mid, song.source) {
         // 离线歌曲的行级与逐字时间轴分别存成两个文件，两个都要读 ——
         // 早先这里只读一个文本文件，离线播放于是永远没有逐字高亮。
@@ -221,27 +222,14 @@ internal fun PlayerDetailPage(
      * 三个停止条件都必须有：暂停时停、页面不在前台时停、**滑到歌词页时也要停**。
      * 少了最后一个，用户看歌词的整段时间里这个动画仍在每 16 毫秒请求一帧，
      * 而封面那一页已经被 pager 销毁 —— 驱动的是一个没人读的值，纯耗电。
+     * 驱动逻辑已沉到共享层 [rememberCoverRotationState]，此处只接入。
      */
-    LaunchedEffect(song.remoteId, song.mid, song.audioUri, isPlaying, lifecycleOwner, reduceMotion) {
-        if (reduceMotion) {
-            coverRotation.snapTo(0f)
-            return@LaunchedEffect
-        }
-        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
-            if (!isPlaying) return@repeatOnLifecycle
-            snapshotFlow { pagerState.settledPage == 0 }.collectLatest { onCoverPage ->
-                if (!onCoverPage) return@collectLatest
-                while (isActive) {
-                    // 角度对 360 取模，避免长时间播放后累加成很大的数值。
-                    coverRotation.snapTo(coverRotation.value % 360f)
-                    coverRotation.animateTo(
-                        targetValue = coverRotation.value + 360f,
-                        animationSpec = tween(AnimationDurations.COVER_SPIN, easing = LinearEasing),
-                    )
-                }
-            }
-        }
-    }
+    val coverRotation = rememberCoverRotationState(
+        isPlaying = isPlaying,
+        active = pageResumed,
+        onCoverPage = { pagerState.settledPage == 0 },
+        restartKey = remember(song.remoteId, song.audioUri) { song.remoteId to song.audioUri },
+    )
     // 在歌词页按返回先回到封面页，而不是直接关掉整个详情页。
     // 这个 BackHandler 比主页面里那个更深，启用时优先生效。
     BackHandler(enabled = pagerState.currentPage > 0) {
@@ -303,8 +291,9 @@ internal fun PlayerDetailPage(
                         coverUri = song.coverUri,
                         fallbackColor = Color(song.color),
                         isPlaying = isPlaying,
-                        rotationDegrees = coverRotation.value,
+                        rotationDegrees = coverRotation.degrees,
                         discSize = coverSize,
+                        imageLoader = imageLoader,
                     )
                 }
             }
@@ -407,6 +396,7 @@ internal fun PlayerDetailPage(
     if (showSkinSheet) {
         CoverSkinSheet(
             current = coverSkin,
+            imageLoader = imageLoader,
             onDismiss = { showSkinSheet = false },
             onSelect = { picked ->
                 showSkinSheet = false

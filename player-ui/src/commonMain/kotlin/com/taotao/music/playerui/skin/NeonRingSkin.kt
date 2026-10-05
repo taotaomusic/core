@@ -1,12 +1,10 @@
-package com.taotao.music.ui.player.skin
+package com.taotao.music.playerui.skin
 
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -16,12 +14,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
-import coil.compose.AsyncImage
-import coil.request.ImageRequest
-import com.taotao.music.ui.theme.AnimationDurations
 
 /**
  * 霓虹环皮肤：深色底板 + 圆角方封面 + 歌曲主题色的发光环。
@@ -29,6 +22,7 @@ import com.taotao.music.ui.theme.AnimationDurations
  * 播放态由光环的亮度表达：播放时双环更亮更粗、底板透出极淡的主题色底光；
  * 暂停时收敛成暗环常亮（亮度按状态直读，不跑无限动画）。
  * 封面不旋转，[rotationDegrees] 被刻意忽略（见 [CoverSkin] 的语义说明）。
+ * 封面加载走 [imageLoader] 插槽。
  */
 @Composable
 internal fun NeonRingSkin(
@@ -37,6 +31,7 @@ internal fun NeonRingSkin(
     isPlaying: Boolean,
     rotationDegrees: Float,
     discSize: Dp,
+    imageLoader: CoverImageLoader,
     modifier: Modifier = Modifier,
 ) {
     Box(modifier.size(discSize), contentAlignment = Alignment.Center) {
@@ -44,33 +39,18 @@ internal fun NeonRingSkin(
         Canvas(Modifier.fillMaxSize()) { drawNeonBackdrop(fallbackColor, isPlaying) }
         // 第二层：圆角方封面（占比 0.60，圆角约 14% 边长），四角留出光环空间。
         val coverFraction = 0.60f
-        val coverSide = discSize * coverFraction
         Box(
             Modifier
-                .size(coverSide)
+                .size(discSize * coverFraction)
                 .clip(RoundedCornerShape(discSize * 0.085f)),
             contentAlignment = Alignment.Center,
         ) {
-            if (coverUri.isNullOrBlank()) {
-                val glyph = with(LocalDensity.current) { (discSize * 0.13f).toSp() }
-                Box(
-                    Modifier
-                        .fillMaxSize()
-                        .background(fallbackColor),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text("♫", color = Color.White, fontSize = glyph)
-                }
-            } else {
-                AsyncImage(
-                    model = ImageRequest.Builder(LocalContext.current)
-                        .data(coverUri)
-                        .crossfade(AnimationDurations.FADE)
-                        .build(),
-                    contentDescription = "专辑封面",
-                    modifier = Modifier.fillMaxSize(),
-                )
-            }
+            CoverSkinImageSlot(
+                url = coverUri,
+                fallbackColor = fallbackColor,
+                imageLoader = imageLoader,
+                modifier = Modifier.fillMaxSize(),
+            )
         }
         // 第三层：霓虹光环（固定层，画在封面之外的环带上）。
         Canvas(Modifier.fillMaxSize()) { drawNeonHalo(fallbackColor, isPlaying) }

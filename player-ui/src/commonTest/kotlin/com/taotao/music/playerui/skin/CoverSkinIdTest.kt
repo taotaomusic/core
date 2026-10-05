@@ -1,12 +1,12 @@
-package com.taotao.music.ui.player.skin
+package com.taotao.music.playerui.skin
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * 皮肤注册表回归测试：新增皮肤时枚举值会被顺手改动，
- * 这组用例守住「标签唯一且非空、名称可无损往返、默认值稳定」三条底线。
+ * 皮肤注册表回归测试（共享层，commonTest 三端同跑）：
+ * 守住「标签唯一且非空、名称可无损往返、默认值稳定」三条底线。
  */
 class CoverSkinIdTest {
 

@@ -1,12 +1,12 @@
-package com.taotao.music.ui.player.skin
+package com.taotao.music.playerui.skin
 
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -26,13 +25,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
-import coil.compose.AsyncImage
-import coil.request.ImageRequest
-import com.taotao.music.ui.theme.AnimationDurations
-import com.taotao.music.ui.theme.LocalReduceMotion
+import com.taotao.music.playerui.theme.LocalReduceMotion
 
 /**
  * 光晕皮肤：圆形封面悬停在以歌曲主题色晕开的柔光中央，配一圈发丝描边与底部的调色点。
@@ -41,6 +35,7 @@ import com.taotao.music.ui.theme.LocalReduceMotion
  * 两处表达 —— 播放时外层光晕整体提亮约一档，暂停时回落；底部三颗调色点在播放时
  * 呼吸闪烁。光晕从封面外缘向外发散并在控件边界内淡出（模板约束：不得画出
  * [discSize] 正方形之外），因此即使亮色封面也不会把页面背景染花。
+ * 封面加载走 [imageLoader] 插槽。
  */
 @Composable
 internal fun GlowSkin(
@@ -49,6 +44,7 @@ internal fun GlowSkin(
     isPlaying: Boolean,
     rotationDegrees: Float,
     discSize: Dp,
+    imageLoader: CoverImageLoader,
     modifier: Modifier = Modifier,
 ) {
     Box(modifier.size(discSize), contentAlignment = Alignment.Center) {
@@ -56,29 +52,14 @@ internal fun GlowSkin(
         Canvas(Modifier.fillMaxSize()) { drawGlow(fallbackColor, isPlaying) }
         // 第二层：圆形封面，占控件 0.58，外圈一圈发丝描边。
         val coverFraction = 0.58f
-        if (coverUri.isNullOrBlank()) {
-            val glyph = with(LocalDensity.current) { (discSize * coverFraction * 0.5f).toSp() }
-            Box(
-                Modifier
-                    .fillMaxSize(coverFraction)
-                    .clip(CircleShape)
-                    .background(fallbackColor),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text("♫", color = Color.White, fontSize = glyph)
-            }
-        } else {
-            AsyncImage(
-                model = ImageRequest.Builder(LocalContext.current)
-                    .data(coverUri)
-                    .crossfade(AnimationDurations.FADE)
-                    .build(),
-                contentDescription = "专辑封面",
-                modifier = Modifier
-                    .fillMaxSize(coverFraction)
-                    .clip(CircleShape),
-            )
-        }
+        CoverSkinImageSlot(
+            url = coverUri,
+            fallbackColor = fallbackColor,
+            imageLoader = imageLoader,
+            modifier = Modifier
+                .fillMaxSize(coverFraction)
+                .clip(CircleShape),
+        )
         // 第三层：封面描边 + 底部调色点（固定层）。
         Canvas(Modifier.fillMaxSize()) { drawCoverRing(coverFraction) }
         PaletteDots(
@@ -152,11 +133,10 @@ private fun PaletteDots(
     spacing: Dp,
     modifier: Modifier = Modifier,
 ) {
-    // 呼吸透明度：reduce-motion 或暂停时不闪（1f 常亮）。
-    val reduceMotion = LocalReduceMotion.current
-    val transition = rememberInfiniteTransition(label = "glowDots")
     // 呼吸透明度：降级（暂停 / reduce-motion）时不换 spec，
     // 目标值并回起点 0.45f，起止相同即静止为暗点。
+    val reduceMotion = LocalReduceMotion.current
+    val transition = rememberInfiniteTransition(label = "glowDots")
     val pulse by transition.animateFloat(
         initialValue = 0.45f,
         targetValue = if (reduceMotion || !isPlaying) 0.45f else 1f,

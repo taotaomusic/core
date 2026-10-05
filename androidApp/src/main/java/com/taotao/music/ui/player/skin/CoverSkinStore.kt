@@ -1,9 +1,10 @@
 package com.taotao.music.ui.player.skin
 
 import android.content.Context
+import com.taotao.music.playerui.skin.CoverSkinId
 
 /**
- * 封面皮肤偏好：SharedPreferences 单值持久化。
+ * Android 端皮肤偏好：SharedPreferences 单值持久化（平台宿主自持，共享层不管存储）。
  *
  * 惯例与 [com.taotao.music.data.AppearanceStore] 一致 —— 文件名即配置名、
  * key 常量放 companion、读是同步返回值（非 Flow）、写 `.apply()`。

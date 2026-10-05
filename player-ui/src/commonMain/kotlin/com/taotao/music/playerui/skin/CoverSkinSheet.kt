@@ -1,4 +1,4 @@
-package com.taotao.music.ui.player.skin
+package com.taotao.music.playerui.skin
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -24,17 +24,18 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import com.taotao.music.playerui.theme.TaotaoSpacing
-import com.taotao.music.ui.theme.TaotaoCoral
 
 /**
- * 封面皮肤选择面板：底部弹层里逐个预览 [CoverSkinId.entries]，
+ * 封面皮肤选择面板（三端共用）：底部弹层里逐个预览 [CoverSkinId.entries]，
  * 预览缩略图直接用真实皮肤控件绘制（同一个模板入口 [CoverSkin]），保证「所见即所选」。
- * 点选即写入 [CoverSkinStore] 并收起面板；详情页的封面区读 Compose 状态即时换装。
+ * 点选回调 [onSelect] 由接入端决定后续行为（Android 关闭面板并落盘；Web 立即生效并写 localStorage）。
+ * 皮肤数量已超过一行上限：FlowRow 自动换行，间距走主题 spacing token。
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-internal fun CoverSkinSheet(
+public fun CoverSkinSheet(
     current: CoverSkinId,
+    imageLoader: CoverImageLoader,
     onDismiss: () -> Unit,
     onSelect: (CoverSkinId) -> Unit,
 ) {
@@ -50,7 +51,6 @@ internal fun CoverSkinSheet(
                 modifier = Modifier.padding(bottom = TaotaoSpacing.md),
                 style = MaterialTheme.typography.titleMedium,
             )
-            // 皮肤数量已超过一行能容纳的上限：自动换行的 FlowRow，间距用主题 spacing token。
             FlowRow(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(TaotaoSpacing.sm),
@@ -60,6 +60,7 @@ internal fun CoverSkinSheet(
                     CoverSkinOption(
                         id = id,
                         selected = id == current,
+                        imageLoader = imageLoader,
                         onClick = { onSelect(id) },
                     )
                 }
@@ -68,11 +69,12 @@ internal fun CoverSkinSheet(
     }
 }
 
-/** 单个皮肤选项：静态缩略预览（暂停态、不转）+ 名称 + 选中描边。 */
+/** 单个皮肤选项：静态缩略预览（暂停态、不转、无图走主题色兜底）+ 名称 + 选中描边。 */
 @Composable
 private fun CoverSkinOption(
     id: CoverSkinId,
     selected: Boolean,
+    imageLoader: CoverImageLoader,
     onClick: () -> Unit,
 ) {
     Column(
@@ -88,7 +90,7 @@ private fun CoverSkinOption(
                 .background(MaterialTheme.colorScheme.surfaceContainerHigh)
                 .border(
                     width = if (selected) 2.dp else 1.dp,
-                    color = if (selected) TaotaoCoral else MaterialTheme.colorScheme.outlineVariant,
+                    color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
                     shape = MaterialTheme.shapes.small,
                 ),
             contentAlignment = Alignment.Center,
@@ -97,17 +99,18 @@ private fun CoverSkinOption(
             CoverSkin(
                 skin = id,
                 coverUri = null,
-                fallbackColor = TaotaoCoral,
+                fallbackColor = MaterialTheme.colorScheme.primary,
                 isPlaying = false,
                 rotationDegrees = 0f,
                 discSize = SKIN_THUMB_SIZE - THUMB_INNER_PADDING,
+                imageLoader = imageLoader,
             )
         }
         Spacer(Modifier.height(TaotaoSpacing.xxs))
         Text(
             id.label,
             style = MaterialTheme.typography.labelSmall,
-            color = if (selected) TaotaoCoral else MaterialTheme.colorScheme.onSurfaceVariant,
+            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }

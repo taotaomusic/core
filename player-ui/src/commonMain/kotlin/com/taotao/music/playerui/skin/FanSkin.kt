@@ -1,4 +1,4 @@
-package com.taotao.music.ui.player.skin
+package com.taotao.music.playerui.skin
 
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -18,13 +17,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
-import coil.compose.AsyncImage
-import coil.request.ImageRequest
-import com.taotao.music.ui.theme.AnimationDurations
-import com.taotao.music.ui.theme.LocalReduceMotion
+import com.taotao.music.playerui.theme.LocalReduceMotion
 
 /**
  * 扇形卡叠皮肤：主封面是一张圆角方卡，背后藏着两张同尺寸的主题色卡片，
@@ -32,6 +26,7 @@ import com.taotao.music.ui.theme.LocalReduceMotion
  *
  * 播放态即扇叶开合：展开角度由 [isPlaying] 经展开系数驱动（reduce-motion 时直接跳变）。
  * 不旋转封面本体，[rotationDegrees] 被刻意忽略（见 [CoverSkin] 的语义说明）。
+ * 封面加载走 [imageLoader] 插槽。
  */
 @Composable
 internal fun FanSkin(
@@ -40,6 +35,7 @@ internal fun FanSkin(
     isPlaying: Boolean,
     rotationDegrees: Float,
     discSize: Dp,
+    imageLoader: CoverImageLoader,
     modifier: Modifier = Modifier,
 ) {
     val reduceMotion = LocalReduceMotion.current
@@ -73,26 +69,12 @@ internal fun FanSkin(
                 .clip(RoundedCornerShape(discSize * 0.12f)),
             contentAlignment = Alignment.Center,
         ) {
-            if (coverUri.isNullOrBlank()) {
-                val glyph = with(LocalDensity.current) { (discSize * 0.14f).toSp() }
-                Box(
-                    Modifier
-                        .fillMaxSize()
-                        .background(fallbackColor),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text("♫", color = Color.White, fontSize = glyph)
-                }
-            } else {
-                AsyncImage(
-                    model = ImageRequest.Builder(LocalContext.current)
-                        .data(coverUri)
-                        .crossfade(AnimationDurations.FADE)
-                        .build(),
-                    contentDescription = "专辑封面",
-                    modifier = Modifier.fillMaxSize(),
-                )
-            }
+            CoverSkinImageSlot(
+                url = coverUri,
+                fallbackColor = fallbackColor,
+                imageLoader = imageLoader,
+                modifier = Modifier.fillMaxSize(),
+            )
         }
     }
 }

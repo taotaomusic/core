@@ -1,5 +1,10 @@
-package com.taotao.music.ui.player.skin
+package com.taotao.music.playerui.skin
 
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -9,7 +14,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -24,27 +28,21 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
-import com.taotao.music.ui.theme.AnimationDurations
-import com.taotao.music.ui.theme.LocalReduceMotion
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
+import com.taotao.music.playerui.theme.LocalReduceMotion
 
 /**
  * 磁带机皮肤：方形带壳 + 中央标签窗（封面画在窗内）+ 双卷轴 + 观察窗。
  *
- * 播放态的表意：两根卷轴随 [rotationDegrees] 之外额外做匀速转动 —— 用
- * [rememberInfiniteTransition] 单独驱动（时长随 [isPlaying] 切换快慢只是视觉修辞，
- * 暂停时卷轴立即停转），同时带壳底部压一条「正在播放」的珊瑚色指示灯带；
- * 暂停时灯带熄灭、卷轴静止，观察窗里还能看到静止的磁带余量斜线。
+ * 播放态的表意：两根卷轴做匀速转动（由 [rememberInfiniteTransition] 单独驱动，
+ * 暂停 / reduce-motion 时目标值并回 0、起止相同即静止），同时带壳底部压一条
+ * 「正在播放」的珊瑚色指示灯带；暂停时灯带熄灭、卷轴静止，
+ * 观察窗里还能看到静止的磁带余量斜线。
  *
  * 几何全部以 [discSize] 为基准的归一化系数计算：带壳占满控件，圆角由带壳倒角
  * 表达；封面窗占宽约 62%、高约 30%，双卷轴压在窗的左右两端。
+ * 封面加载走 [imageLoader] 插槽。
  */
 @Composable
 internal fun CassetteSkin(
@@ -53,6 +51,7 @@ internal fun CassetteSkin(
     isPlaying: Boolean,
     rotationDegrees: Float,
     discSize: Dp,
+    imageLoader: CoverImageLoader,
     modifier: Modifier = Modifier,
 ) {
     val reduceMotion = LocalReduceMotion.current
@@ -68,7 +67,7 @@ internal fun CassetteSkin(
     Box(modifier.size(discSize), contentAlignment = Alignment.Center) {
         // 带壳本体：暖灰塑料壳 + 倒角高光，由 Canvas 一次性画完背景层。
         Canvas(Modifier.fillMaxSize()) { drawCassetteShell() }
-        // 中央标签窗：封面缩略画进窗口，无图退回主题色 + 音符。
+        // 中央标签窗：深色窗底 + 内缩的封面缩略（无图由插槽退回主题色音符）。
         Column(
             Modifier
                 .align(Alignment.TopCenter)
@@ -84,31 +83,15 @@ internal fun CassetteSkin(
                     .background(Color(0xFF141418)),
                 contentAlignment = Alignment.Center,
             ) {
-                if (coverUri.isNullOrBlank()) {
-                    val glyph = with(LocalDensity.current) { (discSize * 0.11f).toSp() }
-                    Box(
-                        Modifier
-                            .fillMaxSize()
-                            .padding(discSize * 0.015f)
-                            .clip(RoundedCornerShape(discSize * 0.012f))
-                            .background(fallbackColor),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text("♫", color = Color.White, fontSize = glyph)
-                    }
-                } else {
-                    coil.compose.AsyncImage(
-                        model = coil.request.ImageRequest.Builder(LocalContext.current)
-                            .data(coverUri)
-                            .crossfade(AnimationDurations.FADE)
-                            .build(),
-                        contentDescription = "专辑封面",
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(discSize * 0.015f)
-                            .clip(RoundedCornerShape(discSize * 0.012f)),
-                    )
-                }
+                CoverSkinImageSlot(
+                    url = coverUri,
+                    fallbackColor = fallbackColor,
+                    imageLoader = imageLoader,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(discSize * 0.015f)
+                        .clip(RoundedCornerShape(discSize * 0.012f)),
+                )
             }
         }
         // 卷轴与观察窗层：卷轴压在标签窗下方左右两侧，角度由 reelAngle 驱动。
