@@ -40,6 +40,7 @@ val LocalReduceMotion = compositionLocalOf { false }
 
 /**
  * 全局动效规范（三端共享：Android / 桌面 / Web 共用同一套时长与曲线）。
+ * 新增或修改本文件的符号后，若 CI 出现同包 Unresolved 的增量编译误报，重跑一次即可。
  *
  * 所有动画都必须从这里取时长与曲线，页面里不要再写字面量 —— 那会让同类动作在不同页面
  * 快慢不一，观感上就是"这个应用的动画很乱"。
