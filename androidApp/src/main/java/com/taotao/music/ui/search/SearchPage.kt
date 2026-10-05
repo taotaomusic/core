@@ -239,9 +239,10 @@ fun SearchPage(
     onVideoClick: (VideoSearchResult) -> Unit = {},
     /**
      * 点击歌词条目 = 播放该歌，整条歌词列表作为队列上下文入队（与歌曲标签点歌同机制），
-     * 入参是条目在列表中的下标与歌曲本身。
+     * 入参是条目在列表中的下标与歌曲本身。默认值必须写全参数占位：空 lambda `{}` 会被
+     * 推断成 Function0，与 (Int, Song) -> Unit 不匹配（K2 直接编译失败，CI 踩过）。
      */
-    onLyricClick: (Int, Song) -> Unit = {},
+    onLyricClick: (Int, Song) -> Unit = { _, _ -> },
     /**
      * 歌曲行菜单「查看歌手」，入参是歌曲本身；为空或歌曲没带 artistId 时菜单项隐藏。
      * 跳转目标由调用方从歌曲构造（歌手头像不等于歌曲封面，pic 传 null 让歌手页自拉资料）。
