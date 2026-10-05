@@ -39,15 +39,26 @@
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column prop="release_note" label="更新说明" min-width="200" show-overflow-tooltip />
       <el-table-column label="体积" width="100">
         <template #default="{ row }">{{ formatSize(row.apk_size) }}</template>
       </el-table-column>
+      <el-table-column label="sha256" width="150">
+        <template #default="{ row }">
+          <!-- 完整哈希 64 位放不进表格：展示首尾各 6 位，悬停看全值，点击复制 -->
+          <el-tooltip :content="row.apk_sha256 || '（空）'" placement="top">
+            <span class="hash-cell" @click="copyText(row.apk_sha256)">
+              {{ shortHash(row.apk_sha256) }}
+            </span>
+          </el-tooltip>
+        </template>
+      </el-table-column>
+      <el-table-column prop="release_note" label="更新说明" min-width="200" show-overflow-tooltip />
       <el-table-column label="发布时间" width="170">
         <template #default="{ row }">{{ formatTime(row.published_at) }}</template>
       </el-table-column>
-      <el-table-column label="操作" width="190" fixed="right">
+      <el-table-column label="操作" width="252" fixed="right">
         <template #default="{ row }">
+          <el-button size="small" @click="openEdit(row)">编辑</el-button>
           <el-button size="small" @click="openRollout(row)">调放量</el-button>
           <el-button
             size="small"
@@ -124,6 +135,36 @@
         <el-button type="primary" :loading="saving" @click="submitRollout">保存</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="editVisible" title="编辑发布记录" width="560px">
+      <el-form label-width="110px">
+        <el-form-item label="版本">
+          {{ editing?.version_code }}（{{ editing?.version_name }}）
+        </el-form-item>
+        <el-form-item label="更新说明">
+          <el-input v-model="editForm.releaseNote" type="textarea" :rows="4" />
+        </el-form-item>
+        <el-form-item label="安装包地址">
+          <el-input
+            v-model="editForm.apkUrl"
+            placeholder="https://github.com/.../releases/download/....apk"
+          />
+          <div class="hint" style="margin-top: 4px">
+            下发更新和分享页「下载完整版」都用这个外链；清空则回落本机 /app/apk 端点
+          </div>
+        </el-form-item>
+        <el-form-item label="sha256">
+          <span class="hash">{{ editing?.apk_sha256 || "（空）" }}</span>
+          <el-button size="small" text type="primary" @click="copyText(editing?.apk_sha256 ?? '')">
+            复制
+          </el-button>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="editVisible = false">取消</el-button>
+        <el-button type="primary" :loading="savingEdit" @click="submitEdit">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -139,6 +180,8 @@ interface Release {
   version_code: number;
   version_name: string;
   apk_size: number;
+  apk_url: string;
+  apk_sha256: string;
   release_note: string;
   rollout_percent: number;
   enabled: number;
@@ -168,6 +211,10 @@ const current = ref<Release | null>(null);
 const percent = ref(0);
 const file = ref<File | null>(null);
 const sha256 = ref("");
+const editVisible = ref(false);
+const editing = ref<Release | null>(null);
+const savingEdit = ref(false);
+const editForm = ref({ releaseNote: "", apkUrl: "" });
 
 const form = ref({ versionCode: 1, versionName: "", note: "", rollout: 0 });
 
@@ -247,6 +294,46 @@ function openRollout(row: Release) {
   current.value = row;
   percent.value = row.rollout_percent;
   rolloutVisible.value = true;
+}
+
+function openEdit(row: Release) {
+  editing.value = row;
+  editForm.value = { releaseNote: row.release_note, apkUrl: row.apk_url ?? "" };
+  editVisible.value = true;
+}
+
+async function submitEdit() {
+  if (!editing.value) return;
+  savingEdit.value = true;
+  try {
+    await apiPostJson("/app/admin/release-edit", props.adminToken, {
+      versionCode: editing.value.version_code,
+      releaseNote: editForm.value.releaseNote,
+      apkUrl: editForm.value.apkUrl.trim(),
+    });
+    ElMessage.success("已保存");
+    editVisible.value = false;
+    await fetchReleases();
+  } catch (error) {
+    ElMessage.error(`保存失败：${(error as Error).message}`);
+  } finally {
+    savingEdit.value = false;
+  }
+}
+
+/** 64 位哈希在表格里放不下，只露首尾各 6 位；全值悬停可见、点击即复制。 */
+function shortHash(hash: string): string {
+  return hash ? `${hash.slice(0, 6)}…${hash.slice(-6)}` : "—";
+}
+
+async function copyText(text: string) {
+  if (!text) return ElMessage.warning("没有可复制的内容");
+  try {
+    await navigator.clipboard.writeText(text);
+    ElMessage.success("已复制");
+  } catch {
+    ElMessage.error("复制失败：浏览器未授权剪贴板");
+  }
 }
 
 async function submitRollout() {
@@ -366,6 +453,24 @@ async function toggleEnabled(row: Release) {
 .hint {
   font-size: 13px;
   color: var(--el-text-color-secondary);
+}
+
+/* 表格里的哈希：等宽字体、可点击复制，交互暗示靠下划线虚线 */
+.hash-cell {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  cursor: copy;
+  text-decoration: underline dashed var(--border-color);
+  text-underline-offset: 3px;
+}
+
+/* 编辑对话框里的完整哈希：太长会撑破布局，允许折行 */
+.hash {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  word-break: break-all;
+  line-height: 1.5;
+  margin-right: 8px;
 }
 
 .hint.warn {

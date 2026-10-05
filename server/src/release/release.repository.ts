@@ -190,6 +190,39 @@ export class ReleaseRepository {
     this.latestVersion.invalidate();
   }
 
+  /**
+   * 编辑发布记录的展示与下载信息：更新说明 / 安装包外链。
+   *
+   * 字段「传了才更新」，SET 子句只拼提供的列（列名是本方法的白名单，不是用户输入，
+   * 值全部走参数绑定）。`apk_url` 会进 [latestVersion] 的完整记录缓存（分享页
+   * 「下载完整版」直接用它拼地址），所以失效照例放在写入路径这里。
+   */
+  async updateReleaseInfo(
+    channel: string,
+    versionCode: number,
+    fields: { releaseNote?: string; apkUrl?: string },
+  ): Promise<ReleaseRecord | undefined> {
+    const sets: string[] = [];
+    const params: unknown[] = [];
+    if (fields.releaseNote !== undefined) {
+      params.push(fields.releaseNote);
+      sets.push(`release_note = $${params.length}`);
+    }
+    if (fields.apkUrl !== undefined) {
+      params.push(fields.apkUrl);
+      sets.push(`apk_url = $${params.length}`);
+    }
+    if (sets.length === 0) return this.findRelease(channel, versionCode);
+
+    params.push(channel, versionCode);
+    const affected = await this.database.run(
+      `UPDATE app_release SET ${sets.join(", ")} WHERE channel = $${params.length - 1} AND version_code = $${params.length}`,
+      params,
+    );
+    if (affected > 0) this.latestVersion.invalidate();
+    return this.findRelease(channel, versionCode);
+  }
+
   async minSupportedVersionCode(channel: string): Promise<number> {
     const row = await this.database.first<{ value: number }>(
       "SELECT min_supported_version_code AS value FROM app_channel WHERE channel = $1",

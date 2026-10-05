@@ -128,6 +128,7 @@ POST /api/v1/app/admin/patches
 - `GET /app/patch/:targetVersionCode/:patchVersion`:Android 补丁下载。
 - `GET /app/admin/releases`、`POST /app/admin/releases`:发布列表和原始 APK 登记。GET 不带分页参数返回全量数组(旧形状,宿主版本下拉依赖);带 `page`/`pageSize`(`pageSize` 上限 100)返回 `{ items, total, rolledOut }` 信封。
 - `POST /app/admin/rollout`:APK 灰度比例。
+- `POST /app/admin/release-edit`:编辑发布记录的更新说明与安装包外链(传了才更新,外链必须 http(s),空串回落本机端点)。
 - `POST /app/admin/min-version`:Android 最低支持版本。
 - `GET /app/admin/patches`、`POST /app/admin/patches`、`POST /app/admin/patch-rollout`:补丁登记和灰度。
 - `GET /app/admin/config`、`POST /app/admin/config`:远程配置读写。

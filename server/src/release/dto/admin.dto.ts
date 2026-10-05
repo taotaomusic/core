@@ -1,4 +1,4 @@
-import { IsInt, IsOptional, IsString, Max, Min } from "class-validator";
+import { IsInt, IsOptional, IsString, Matches, Max, Min } from "class-validator";
 
 export class RolloutDto {
   @IsOptional()
@@ -52,6 +52,34 @@ export class PatchRolloutDto {
   /** 传 false 可紧急下架某个补丁。 */
   @IsOptional()
   enabled?: boolean;
+}
+
+/**
+ * 编辑已登记的发布记录（更新说明 / 安装包外链）。
+ *
+ * 两个字段都是「传了才更新」：`undefined` / 未传保持原值。注意 `@IsOptional()`
+ * 会把 null 和 undefined 一起跳过，所以「清空」用空串表达，不用 null。
+ */
+export class ReleaseEditDto {
+  @IsOptional()
+  @IsString()
+  channel?: string;
+
+  @IsInt()
+  @Min(1)
+  versionCode: number;
+
+  @IsOptional()
+  @IsString()
+  releaseNote?: string;
+
+  /**
+   * 安装包外链（GitHub Release 资产地址等）。这个值会原样下发给客户端当下载地址，
+   * 必须是 http(s)；空串表示清除外链、回落本机 `/app/apk` 端点。
+   */
+  @IsOptional()
+  @Matches(/^$|^https?:\/\//i, { message: "apkUrl 必须是 http(s) 地址或空串" })
+  apkUrl?: string;
 }
 
 export class RemoteConfigDto {

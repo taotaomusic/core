@@ -9,7 +9,7 @@ import { READ_ROLES, WRITE_ROLES } from "../admin-auth/admin-roles";
 import { AdminAuditService } from "../admin-auth/admin-audit.service";
 import { AppConfigService } from "../config/app-config.service";
 import { ApkService } from "./apk.service";
-import { MinVersionDto, PatchRolloutDto, RemoteConfigDto, RolloutDto } from "./dto/admin.dto";
+import { MinVersionDto, PatchRolloutDto, ReleaseEditDto, RemoteConfigDto, RolloutDto } from "./dto/admin.dto";
 import { ReleaseRepository } from "./release.repository";
 import { ReleaseService } from "./release.service";
 
@@ -186,6 +186,35 @@ export class ReleaseAdminController {
       minSupportedVersionCode: body.versionCode,
       rescueVersionCode: rescue?.version_code ?? null,
     };
+  }
+
+  /**
+   * 编辑已登记的发布记录：更新说明与安装包外链。
+   *
+   * 外链主要来自 webhook 自动登记，偶尔要人工纠正（资产重传、换仓库）；更新说明
+   * 则是发版后才发现笔误的常态修正。两个字段都只在**传了**时更新，没传保持原值。
+   */
+  @AdminGuarded()
+  @Post("release-edit")
+  @RequireRole(...WRITE_ROLES)
+  @HttpCode(HttpStatus.OK)
+  async editRelease(@Req() request: AdminAuthenticatedRequest, @Body() body: ReleaseEditDto) {
+    const channel = body.channel?.trim() || this.config.defaultChannel;
+    if (!(await this.releases.findRelease(channel, body.versionCode))) {
+      throw ApiErrors.notFound(4041, "版本不存在");
+    }
+    const updated = await this.releases.updateReleaseInfo(channel, body.versionCode, {
+      releaseNote: body.releaseNote,
+      apkUrl: body.apkUrl,
+    });
+    // detail 里 undefined 的键会被 JSON 序列化丢弃，留下的就是「这次改了什么」。
+    await this.audit.record(request, "release.edit", "release", `${channel}#${body.versionCode}`, {
+      channel,
+      versionCode: body.versionCode,
+      releaseNote: body.releaseNote,
+      apkUrl: body.apkUrl,
+    });
+    return updated;
   }
 
   @AdminGuarded()

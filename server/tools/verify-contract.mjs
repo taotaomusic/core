@@ -1239,6 +1239,44 @@ async function main() {
   ).json();
   check("rollout=0 的版本不下发", notRolledOut.data?.update?.available === false, JSON.stringify(notRolledOut.data?.update));
 
+  // ⑦ 发布记录的更新说明与外链可编辑。外链会原样下发给客户端当下载地址，
+  //    非 http(s) 必须被拦；改完的管理端读回要与 999003 的行一致。
+  await fetch(`${base}/api/v1/app/admin/releases?versionCode=999003&versionName=9.9.3&rollout=0`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${adminSession}` },
+    body: placeholderApk,
+  });
+  const badEdit = await fetch(`${base}/api/v1/app/admin/release-edit`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${adminSession}` },
+    body: JSON.stringify({ versionCode: 999003, apkUrl: "ftp://not-http.example/file.apk" }),
+  });
+  check("外链非 http(s) 被拒 400", badEdit.status === 400, `实际 ${badEdit.status}`);
+  const edited = await fetch(`${base}/api/v1/app/admin/release-edit`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${adminSession}` },
+    body: JSON.stringify({
+      versionCode: 999003,
+      releaseNote: "契约编辑后的说明",
+      apkUrl: "https://example.com/verify-999003.apk",
+    }),
+  });
+  const editedBody = await edited.json();
+  check(
+    "编辑更新说明与外链成功",
+    edited.status === 200
+      && editedBody.data?.release_note === "契约编辑后的说明"
+      && editedBody.data?.apk_url === "https://example.com/verify-999003.apk",
+    `${edited.status} ${JSON.stringify(editedBody).slice(0, 160)}`,
+  );
+  const afterEdit = await (await fetch(`${base}/api/v1/app/admin/releases`, { headers: { authorization: `Bearer ${adminSession}` } })).json();
+  const rowAfterEdit = afterEdit.data?.find?.((item) => item.version_code === 999003);
+  check(
+    "编辑结果在发布列表读回一致",
+    rowAfterEdit?.release_note === "契约编辑后的说明" && rowAfterEdit?.apk_url === "https://example.com/verify-999003.apk",
+    JSON.stringify(rowAfterEdit).slice(0, 160),
+  );
+
   await fetch(`${base}/api/v1/app/admin/rollout`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${adminSession}` },
@@ -1594,6 +1632,7 @@ async function main() {
   // 先被 4030 挡下 —— 这让断言不依赖业务数据当前处于什么状态。
   const writeProbes = [
     { name: "发布放量", path: "/api/v1/app/admin/rollout", body: { versionCode: 1, percent: 100 } },
+    { name: "编辑发布", path: "/api/v1/app/admin/release-edit", body: { versionCode: 999003, releaseNote: "越权编辑" } },
     { name: "禁用用户", path: "/api/v1/app/admin/users/1/disabled", body: { disabled: true } },
     { name: "创建用户", path: "/api/v1/app/admin/users", body: { username: "viewer_blocked", password: "pass123456" } },
     { name: "发布公告", path: "/api/v1/app/admin/announcements", body: { title: "越权公告", content: "越权公告" } },
