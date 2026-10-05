@@ -126,7 +126,7 @@ POST /api/v1/app/admin/patches
 - `GET /app/bootstrap`:公开更新检查、补丁和远程配置(契约见 [61-release-android.md](61-release-android.md))。
 - `GET /app/apk/:versionCode`、`HEAD /app/apk/:versionCode`:APK Range 下载/探测。
 - `GET /app/patch/:targetVersionCode/:patchVersion`:Android 补丁下载。
-- `GET /app/admin/releases`、`POST /app/admin/releases`:发布列表和原始 APK 登记。
+- `GET /app/admin/releases`、`POST /app/admin/releases`:发布列表和原始 APK 登记。GET 不带分页参数返回全量数组(旧形状,宿主版本下拉依赖);带 `page`/`pageSize`(`pageSize` 上限 100)返回 `{ items, total, rolledOut }` 信封。
 - `POST /app/admin/rollout`:APK 灰度比例。
 - `POST /app/admin/min-version`:Android 最低支持版本。
 - `GET /app/admin/patches`、`POST /app/admin/patches`、`POST /app/admin/patch-rollout`:补丁登记和灰度。

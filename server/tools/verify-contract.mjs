@@ -1105,6 +1105,17 @@ async function main() {
   const releases = await (await fetch(`${base}/api/v1/app/admin/releases`, { headers: { authorization: `Bearer ${adminSession}` } })).json();
   check("正确管理令牌可列出发布", releases.code === 0 && Array.isArray(releases.data), JSON.stringify(releases).slice(0, 120));
 
+  // 不带分页参数必须是全量数组（旧形状）；带 page/pageSize 才切换到分页信封。
+  const releasesPaged = await (await fetch(`${base}/api/v1/app/admin/releases?page=2&pageSize=1`, { headers: { authorization: `Bearer ${adminSession}` } })).json();
+  check(
+    "发布列表分页返回信封且 pageSize 生效",
+    releasesPaged.code === 0
+      && Array.isArray(releasesPaged.data.items) && releasesPaged.data.items.length <= 1
+      && typeof releasesPaged.data.total === "number"
+      && "rolledOut" in releasesPaged.data,
+    JSON.stringify(releasesPaged).slice(0, 120),
+  );
+
   const guard = await fetch(`${base}/api/v1/app/admin/min-version`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${adminSession}` },
@@ -1377,6 +1388,14 @@ async function main() {
   });
   await fetch(`${base}/health`);
   check("放量 100% 后出现在响应头", (await headerOf("/health")) === "999910", String(await headerOf("/health")));
+
+  // 分页信封的 rolledOut 由服务端代查：前端翻到任何一页都得能看到当前全量版本。
+  const pagedAtFull = await (await fetch(`${base}/api/v1/app/admin/releases?page=1&pageSize=1`, { headers: { authorization: `Bearer ${adminSession}` } })).json();
+  check(
+    "分页信封带回当前全量版本",
+    pagedAtFull.code === 0 && pagedAtFull.data.rolledOut?.version_code === 999910,
+    JSON.stringify(pagedAtFull.data?.rolledOut).slice(0, 120),
+  );
 
   // setHeader 设的头不会被各端点自己的 writeHead 覆盖，流式响应也要带上。
   const streamed = await headerOf(`/api/v1/search?keyword=test&num=3&source=tencent`, {

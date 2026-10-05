@@ -21,7 +21,7 @@
     </div>
 
     <el-table :data="releases" v-loading="loading" empty-text="还没有任何发布记录">
-      <el-table-column prop="version_code" label="版本号" width="90" sortable />
+      <el-table-column prop="version_code" label="版本号" width="90" />
       <el-table-column prop="version_name" label="版本名" width="110" />
       <el-table-column label="放量" width="168">
         <template #default="{ row }">
@@ -60,6 +60,18 @@
         </template>
       </el-table-column>
     </el-table>
+
+    <el-pagination
+      v-model:current-page="page"
+      v-model:page-size="pageSize"
+      class="pager"
+      :total="total"
+      :page-sizes="[10, 20, 50, 100]"
+      layout="total, sizes, prev, pager, next, jumper"
+      background
+      @current-change="fetchReleases"
+      @size-change="onSizeChange"
+    />
 
     <el-dialog v-model="uploadVisible" title="上传新版本" width="560px">
       <el-alert type="info" :closable="false" show-icon style="margin-bottom: 16px">
@@ -116,7 +128,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from "vue";
+import { ref, onMounted } from "vue";
 import { Upload, Refresh } from "@element-plus/icons-vue";
 import { formatSize, formatTime, sha256Of, apiGet, apiPostJson, apiPostBytes } from "../api";
 
@@ -133,9 +145,20 @@ interface Release {
   published_at: number;
 }
 
+/** 带 page/pageSize 请求时的分页信封；rolledOut 是服务端代查的当前全量版本。 */
+interface PagedReleases {
+  items: Release[];
+  total: number;
+  rolledOut: Release | null;
+}
+
 const props = defineProps<{ adminToken: string }>();
 
 const releases = ref<Release[]>([]);
+const total = ref(0);
+const page = ref(1);
+const pageSize = ref(20);
+const rolledOut = ref<Release | null>(null);
 const loading = ref(false);
 const uploadVisible = ref(false);
 const rolloutVisible = ref(false);
@@ -148,23 +171,33 @@ const sha256 = ref("");
 
 const form = ref({ versionCode: 1, versionName: "", note: "", rollout: 0 });
 
-const rolledOut = computed(() =>
-  releases.value
-    .filter((item) => item.rollout_percent === 100 && item.enabled === 1)
-    .sort((a, b) => b.version_code - a.version_code)[0],
-);
-
 onMounted(fetchReleases);
 
+let fetchSeq = 0;
 async function fetchReleases() {
+  const seq = ++fetchSeq;
   loading.value = true;
   try {
-    releases.value = await apiGet<Release[]>("/app/admin/releases", props.adminToken);
+    const data = await apiGet<PagedReleases>(
+      `/app/admin/releases?page=${page.value}&pageSize=${pageSize.value}`,
+      props.adminToken,
+    );
+    // 翻页快翻或改每页条数会并发两个请求，过期响应直接丢弃，避免旧页盖掉新页。
+    if (seq !== fetchSeq) return;
+    releases.value = data.items;
+    total.value = data.total;
+    rolledOut.value = data.rolledOut;
   } catch (error) {
+    if (seq !== fetchSeq) return;
     ElMessage.error(`加载失败：${(error as Error).message}`);
   } finally {
-    loading.value = false;
+    if (seq === fetchSeq) loading.value = false;
   }
+}
+
+function onSizeChange() {
+  page.value = 1;
+  fetchReleases();
 }
 
 function openUpload() {
@@ -200,6 +233,8 @@ async function submitUpload() {
     );
     ElMessage.success("上传成功");
     uploadVisible.value = false;
+    // 新登记的版本号是当前最大的，必然落在第一页，翻回去让上传者立刻看到它。
+    page.value = 1;
     await fetchReleases();
   } catch (error) {
     ElMessage.error(`上传失败：${(error as Error).message}`);
@@ -320,6 +355,12 @@ async function toggleEnabled(row: Release) {
 .pill-dot.warn {
   background: var(--el-color-warning);
   box-shadow: 0 0 0 3px rgba(230, 162, 60, 0.18);
+}
+
+/* 分页条：与表格留出一行呼吸空间，整体靠右更像工具条的延续 */
+.pager {
+  margin-top: 14px;
+  justify-content: flex-end;
 }
 
 .hint {

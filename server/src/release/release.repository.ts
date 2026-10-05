@@ -136,6 +136,32 @@ export class ReleaseRepository {
     );
   }
 
+  /**
+   * 管理端分页列表：按版本号降序的一页记录，带总数与「当前全量版本」。
+   *
+   * `rolledOut` 由服务端单独带回：前端分页后任何一页都未必包含全量版本，
+   * 不能再像全量列表那样在客户端自己筛。复用 [latestFullyRolledOutRelease]，
+   * 顺路吃到它的内存缓存，不额外打库。
+   */
+  async listReleasesPaged(
+    channel: string,
+    page: number,
+    pageSize: number,
+  ): Promise<{ items: ReleaseRecord[]; total: number; rolledOut: ReleaseRecord | null }> {
+    const [items, totalRow, rolledOut] = await Promise.all([
+      this.database.all<ReleaseRecord>(
+        "SELECT * FROM app_release WHERE channel = $1 ORDER BY version_code DESC LIMIT $2 OFFSET $3",
+        [channel, pageSize, (page - 1) * pageSize],
+      ),
+      this.database.first<{ total: number }>(
+        "SELECT COUNT(*)::int AS total FROM app_release WHERE channel = $1",
+        [channel],
+      ),
+      this.latestFullyRolledOutRelease(channel),
+    ]);
+    return { items, total: totalRow?.total ?? 0, rolledOut: rolledOut ?? null };
+  }
+
   /** 候选发布：同渠道、已启用、SDK 兼容且版本号高于客户端，按版本号降序。 */
   listUpgradeCandidates(channel: string, versionCode: number, sdk: number): Promise<ReleaseRecord[]> {
     return this.database.all<ReleaseRecord>(

@@ -48,11 +48,30 @@ export class ReleaseAdminController {
     private readonly audit: AdminAuditService,
   ) {}
 
+  /**
+   * 发布列表。
+   *
+   * 不带分页参数时保持旧形状返回全量数组：宿主版本下拉（PatchManager）、
+   * 设置页计数（SystemSettings）和契约脚本都依赖它，一个版本都不能少。
+   * 带 `page`/`pageSize` 时返回分页信封 `{ items, total, rolledOut }` ——
+   * 发布记录随构建单调增长，全量拉回来前端表格吃不消。
+   * `pageSize` 上限 100，非法取值回落到默认值而不是报错（管理端自家参数）。
+   */
   @AdminGuarded()
   @Get("releases")
   @RequireRole(...READ_ROLES)
-  list(@Query("channel") channel?: string) {
-    return this.releases.listReleases(channel ?? this.config.defaultChannel);
+  async list(
+    @Query("channel") channel?: string,
+    @Query("page") pageParam?: string,
+    @Query("pageSize") pageSizeParam?: string,
+  ) {
+    const channelOrDefault = channel ?? this.config.defaultChannel;
+    if (pageParam === undefined && pageSizeParam === undefined) {
+      return this.releases.listReleases(channelOrDefault);
+    }
+    const page = this.positiveIntOr(pageParam, 1);
+    const pageSize = Math.min(100, this.positiveIntOr(pageSizeParam, 20));
+    return this.releases.listReleasesPaged(channelOrDefault, page, pageSize);
   }
 
   /**
