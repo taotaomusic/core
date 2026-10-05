@@ -1,5 +1,11 @@
 package com.taotao.music.ui.player.skin
 
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -27,6 +33,7 @@ import androidx.compose.ui.unit.Dp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.taotao.music.ui.theme.AnimationDurations
+import com.taotao.music.ui.theme.LocalReduceMotion
 
 /**
  * 光晕皮肤：圆形封面悬停在以歌曲主题色晕开的柔光中央，配一圈发丝描边与底部的调色点。
@@ -148,16 +155,16 @@ private fun PaletteDots(
 ) {
     // 呼吸透明度：reduce-motion 或暂停时不闪（1f 常亮）。
     val reduceMotion = LocalReduceMotion.current
-    val transition = androidx.compose.animation.core.rememberInfiniteTransition(label = "glowDots")
+    val transition = rememberInfiniteTransition(label = "glowDots")
     val pulse by transition.animateFloat(
         initialValue = 0.45f,
         targetValue = 1f,
         animationSpec = if (reduceMotion || !isPlaying) {
-            androidx.compose.animation.core.snap()
+            snap()
         } else {
-            androidx.compose.animation.core.infiniteRepeatable(
-                animation = androidx.compose.animation.core.tween(900),
-                repeatMode = androidx.compose.animation.core.RepeatMode.Reverse,
+            infiniteRepeatable(
+                animation = tween(900),
+                repeatMode = RepeatMode.Reverse,
             )
         },
         label = "glowDotPulse",

@@ -1,5 +1,11 @@
 package com.taotao.music.ui.player.skin
 
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -50,16 +56,16 @@ internal fun CardSkin(
 ) {
     val reduceMotion = LocalReduceMotion.current
     // 调色点呼吸透明度：暂停或 reduce-motion 时常亮不闪。
-    val transition = androidx.compose.animation.core.rememberInfiniteTransition(label = "cardDots")
+    val transition = rememberInfiniteTransition(label = "cardDots")
     val pulse by transition.animateFloat(
         initialValue = 0.45f,
         targetValue = 1f,
         animationSpec = if (reduceMotion || !isPlaying) {
-            androidx.compose.animation.core.snap()
+            snap()
         } else {
-            androidx.compose.animation.core.infiniteRepeatable(
-                animation = androidx.compose.animation.core.tween(900),
-                repeatMode = androidx.compose.animation.core.RepeatMode.Reverse,
+            infiniteRepeatable(
+                animation = tween(900),
+                repeatMode = RepeatMode.Reverse,
             )
         },
         label = "cardDotPulse",
