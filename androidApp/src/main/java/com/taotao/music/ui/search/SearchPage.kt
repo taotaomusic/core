@@ -321,20 +321,9 @@ fun SearchPage(
                 }
             }
         }
-        // 骨架屏 / 错误 / 空态之间用淡入淡出切换，硬切会让内容"跳"一下。
-        // 结果已经到了就不再显示骨架屏，否则骨架和结果会同时出现。
-        AnimatedVisibility(
-            // 歌手 / 专辑区块先于歌曲到达时也算「有内容」，骨架屏要让位，避免和区块叠在一起。
-            visible = isSearching && songs.isEmpty() && artists.isEmpty() && albums.isEmpty(),
-            enter = contentFadeIn(),
-            exit = contentFadeOut(),
-            modifier = Modifier.semantics(mergeDescendants = true) {
-                liveRegion = LiveRegionMode.Polite
-                contentDescription = "正在搜索音乐"
-            },
-        ) {
-            SearchSkeletonList()
-        }
+        // 骨架屏已下沉到各标签的内容区（见 LazyColumn 的 when 分支）：搜索期间标签行
+        // 保持原位不动，内容区按当前标签显示同布局骨架，重新搜索时不再出现
+        // 「骨架悬在标签行上方、内容区空白」的跳变。错误 / 空态仍是搜索结束后的全局状态。
         AnimatedVisibility(
             visible = hasSearched && !isSearching && !errorMessage.isNullOrBlank(),
             enter = contentFadeIn(),
@@ -412,58 +401,70 @@ fun SearchPage(
             ) {
                 when (searchTab) {
                     SearchTab.OVERVIEW -> {
-                        // 歌手 / 专辑区块排在歌曲之前，随内容一起滚动；空区块直接不组合，不留空白。
-                        if (artists.isNotEmpty()) {
-                            item(key = "search-artists", contentType = "artist-section") {
-                                ArtistSearchSection(artists = artists, onArtistClick = onArtistClick)
+                        // 搜索进行中且内容区还没有任何东西：显示与歌曲行同布局的骨架，
+                        // 让骨架与标签行同屏（旧实现骨架悬在标签行上方，重新搜索会跳变）。
+                        if (isSearching && songs.isEmpty() && artists.isEmpty() && albums.isEmpty()) {
+                            item(key = "search-skeleton") { SearchSkeletonList() }
+                        } else {
+                            // 歌手 / 专辑区块排在歌曲之前，随内容一起滚动；空区块直接不组合，不留空白。
+                            if (artists.isNotEmpty()) {
+                                item(key = "search-artists", contentType = "artist-section") {
+                                    ArtistSearchSection(artists = artists, onArtistClick = onArtistClick)
+                                }
                             }
-                        }
-                        if (albums.isNotEmpty()) {
-                            item(key = "search-albums", contentType = "album-section") {
-                                AlbumSearchSection(albums = albums, onAlbumClick = onAlbumClick)
+                            if (albums.isNotEmpty()) {
+                                item(key = "search-albums", contentType = "album-section") {
+                                    AlbumSearchSection(albums = albums, onAlbumClick = onAlbumClick)
+                                }
                             }
+                            searchSongItems(
+                                songs = songs,
+                                favoriteRevision = favoriteRevision,
+                                downloadedRevision = downloadedRevision,
+                                isFavorite = isFavorite,
+                                isDownloaded = isDownloaded,
+                                onSongClick = onSongClick,
+                                onToggleFavorite = onToggleFavorite,
+                                onPlayNext = onPlayNext,
+                                onAddToPlaylist = onAddToPlaylist,
+                                onOpenArtist = onOpenArtist,
+                                onOpenAlbum = onOpenAlbum,
+                            )
+                            searchSongFooter(
+                                isLoadingMore = isLoadingMore,
+                                hasMore = hasMore,
+                                songs = songs,
+                                total = total,
+                            )
                         }
-                        searchSongItems(
-                            songs = songs,
-                            favoriteRevision = favoriteRevision,
-                            downloadedRevision = downloadedRevision,
-                            isFavorite = isFavorite,
-                            isDownloaded = isDownloaded,
-                            onSongClick = onSongClick,
-                            onToggleFavorite = onToggleFavorite,
-                            onPlayNext = onPlayNext,
-                            onAddToPlaylist = onAddToPlaylist,
-                            onOpenArtist = onOpenArtist,
-                            onOpenAlbum = onOpenAlbum,
-                        )
-                        searchSongFooter(
-                            isLoadingMore = isLoadingMore,
-                            hasMore = hasMore,
-                            songs = songs,
-                            total = total,
-                        )
                     }
                     SearchTab.SONGS -> {
-                        // 与「综合」同一份 songs 数据，只是不再显示歌手 / 专辑区块。
-                        searchSongItems(
-                            songs = songs,
-                            favoriteRevision = favoriteRevision,
-                            downloadedRevision = downloadedRevision,
-                            isFavorite = isFavorite,
-                            isDownloaded = isDownloaded,
-                            onSongClick = onSongClick,
-                            onToggleFavorite = onToggleFavorite,
-                            onPlayNext = onPlayNext,
-                            onAddToPlaylist = onAddToPlaylist,
-                            onOpenArtist = onOpenArtist,
-                            onOpenAlbum = onOpenAlbum,
-                        )
-                        searchSongFooter(
-                            isLoadingMore = isLoadingMore,
-                            hasMore = hasMore,
-                            songs = songs,
-                            total = total,
-                        )
+                        if (isSearching && songs.isEmpty()) {
+                            // 首次搜索 / 重新搜索进行中：骨架与「综合」同款，保证四个标签的
+                            // 加载观感一致（旧实现切到单曲标签会看到空白）。
+                            item(key = "search-skeleton") { SearchSkeletonList() }
+                        } else {
+                            // 与「综合」同一份 songs 数据，只是不再显示歌手 / 专辑区块。
+                            searchSongItems(
+                                songs = songs,
+                                favoriteRevision = favoriteRevision,
+                                downloadedRevision = downloadedRevision,
+                                isFavorite = isFavorite,
+                                isDownloaded = isDownloaded,
+                                onSongClick = onSongClick,
+                                onToggleFavorite = onToggleFavorite,
+                                onPlayNext = onPlayNext,
+                                onAddToPlaylist = onAddToPlaylist,
+                                onOpenArtist = onOpenArtist,
+                                onOpenAlbum = onOpenAlbum,
+                            )
+                            searchSongFooter(
+                                isLoadingMore = isLoadingMore,
+                                hasMore = hasMore,
+                                songs = songs,
+                                total = total,
+                            )
+                        }
                     }
                     SearchTab.ARTISTS -> searchTabArtistSection(
                         artists = tabArtists,
@@ -896,14 +897,9 @@ private fun LazyListScope.searchTabArtistSection(
 ) {
     when {
         loading && artists.isEmpty() -> {
-            item(key = "tab-artists-loading") {
-                Box(
-                    Modifier.fillMaxWidth().padding(vertical = TaotaoSpacing.xl),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    CircularProgressIndicator(color = TaotaoCoral, modifier = Modifier.size(TaotaoSizes.progressInline))
-                }
-            }
+            // 骨架与真实行同布局（圆头像 + 名称/统计条），替代孤零零的转圈，
+            // 与歌曲标签的骨架观感一致。
+            item(key = "tab-artists-skeleton") { SearchArtistSkeletonList() }
         }
         artists.isEmpty() && error != null -> {
             item(key = "tab-artists-error") { CatalogInlineStatus(text = error, onRetry = onRetry) }
@@ -979,14 +975,7 @@ private fun LazyListScope.searchTabAlbumSection(
 ) {
     when {
         loading && albums.isEmpty() -> {
-            item(key = "tab-albums-loading") {
-                Box(
-                    Modifier.fillMaxWidth().padding(vertical = TaotaoSpacing.xl),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    CircularProgressIndicator(color = TaotaoCoral, modifier = Modifier.size(TaotaoSizes.progressInline))
-                }
-            }
+            item(key = "tab-albums-skeleton") { SearchAlbumSkeletonList() }
         }
         albums.isEmpty() && error != null -> {
             item(key = "tab-albums-error") { CatalogInlineStatus(text = error, onRetry = onRetry) }
@@ -1071,6 +1060,76 @@ private fun LazyListScope.searchTabFooter(
                 modifier = Modifier.fillMaxWidth().padding(vertical = TaotaoSpacing.md),
                 textAlign = TextAlign.Center,
             )
+        }
+    }
+}
+
+/** 搜索页骨架的占位条尺寸：与 components.kt 的歌曲骨架同一规格，页面私有常量（理由同 HistoryChipMaxWidth）。 */
+private val SearchSkeletonBarWidth = 150.dp
+private val SearchSkeletonBarHeight = 14.dp
+private val SearchSkeletonSubWidth = 90.dp
+private val SearchSkeletonSubHeight = 12.dp
+
+/**
+ * 「歌手」标签的加载骨架：圆头像 + 名称/统计两条占位，与真实行同布局，
+ * 替代原先孤零零的转圈——四个标签的加载观感自此一致。
+ */
+@Composable
+private fun SearchArtistSkeletonList() {
+    Column(
+        verticalArrangement = Arrangement.spacedBy(TaotaoSpacing.sm),
+        modifier = Modifier.padding(top = TaotaoSpacing.md),
+    ) {
+        repeat(6) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    Modifier.size(TaotaoSizes.avatar).clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                )
+                Column(Modifier.padding(start = TaotaoSpacing.sm)) {
+                    Box(
+                        Modifier.width(SearchSkeletonBarWidth).height(SearchSkeletonBarHeight)
+                            .clip(TaotaoShapes.small).background(MaterialTheme.colorScheme.surfaceVariant),
+                    )
+                    Spacer(Modifier.height(TaotaoSpacing.xs))
+                    Box(
+                        Modifier.width(SearchSkeletonSubWidth).height(SearchSkeletonSubHeight)
+                            .clip(TaotaoShapes.extraSmall).background(MaterialTheme.colorScheme.surfaceVariant),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** 「专辑」标签的加载骨架：双列网格的封面块 + 文本条，与真实卡片同布局。 */
+@Composable
+private fun SearchAlbumSkeletonList() {
+    Column(
+        verticalArrangement = Arrangement.spacedBy(TaotaoSpacing.sm),
+        modifier = Modifier.padding(top = TaotaoSpacing.md),
+    ) {
+        repeat(2) {
+            Row(horizontalArrangement = Arrangement.spacedBy(TaotaoSpacing.sm)) {
+                repeat(2) {
+                    Column(Modifier.weight(1f)) {
+                        Box(
+                            Modifier.fillMaxWidth().height(TaotaoSizes.artworkGrid).clip(TaotaoShapes.artwork)
+                                .background(MaterialTheme.colorScheme.surfaceVariant),
+                        )
+                        Spacer(Modifier.height(TaotaoSpacing.xs))
+                        Box(
+                            Modifier.fillMaxWidth().height(SearchSkeletonBarHeight)
+                                .clip(TaotaoShapes.small).background(MaterialTheme.colorScheme.surfaceVariant),
+                        )
+                        Spacer(Modifier.height(TaotaoSpacing.xxs))
+                        Box(
+                            Modifier.width(SearchSkeletonSubWidth).height(SearchSkeletonSubHeight)
+                                .clip(TaotaoShapes.extraSmall).background(MaterialTheme.colorScheme.surfaceVariant),
+                        )
+                    }
+                }
+            }
         }
     }
 }
