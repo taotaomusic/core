@@ -24,8 +24,12 @@ import kotlinx.coroutines.withContext
  * 「综合」是原有布局（歌手 / 专辑区块 + 歌曲列表）；其余三个标签各看一类数据。
  * 标签本身是纯界面状态，但「歌手 / 专辑」标签的分页数据必须在状态层持有 ——
  * 它们有独立于歌曲的翻页、去重与代次校验。
+ *
+ * 刻意不标 internal：[SearchPage] 是 public Composable，`searchTab` /
+ * `onTabSelected` 参数把这个类型暴露在公开签名里，Kotlin 禁止 public 成员
+ * 暴露 internal 参数类型（CI 编译踩过）。
  */
-internal enum class SearchTab(val label: String) {
+enum class SearchTab(val label: String) {
     OVERVIEW("综合"),
     SONGS("单曲"),
     ARTISTS("歌手"),
