@@ -6,6 +6,7 @@ import com.taotao.music.ui.theme.TaotaoCoral
 import com.taotao.music.ui.theme.taotaoSpring
 import com.taotao.music.ui.theme.taotaoTween
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.foundation.background
@@ -507,14 +508,28 @@ fun PagerDots(current: Int, total: Int, modifier: Modifier = Modifier) {
 @Composable
 fun TaotaoSnackbar(snackbarData: SnackbarData, modifier: Modifier = Modifier) {
     val shadow = taotaoShadowColors()
+    // 入场做轻微的「弹出」缩放：SnackbarHost 默认只有平移，胶囊形状配一点弹性更贴气质。
+    // reduce-motion 时退化为纯淡入，与全局降级动效一致。
+    val reduceMotion = LocalReduceMotion.current
+    val appearScale by animateFloatAsState(
+        targetValue = 1f,
+        animationSpec = if (reduceMotion) snap() else taotaoSpring(dampingRatio = 0.8f, stiffness = Spring.StiffnessMedium),
+        initialValue = 0.92f,
+        label = "提示条弹出",
+    )
     Snackbar(
         snackbarData = snackbarData,
-        modifier = modifier.shadow(
-            elevation = TaotaoElevation.raised,
-            shape = TaotaoShapes.pill,
-            ambientColor = shadow.ambient,
-            spotColor = shadow.spot,
-        ),
+        modifier = modifier
+            .graphicsLayer {
+                scaleX = appearScale
+                scaleY = appearScale
+            }
+            .shadow(
+                elevation = TaotaoElevation.raised,
+                shape = TaotaoShapes.pill,
+                ambientColor = shadow.ambient,
+                spotColor = shadow.spot,
+            ),
         shape = TaotaoShapes.pill,
         containerColor = MaterialTheme.colorScheme.inverseSurface,
         contentColor = MaterialTheme.colorScheme.inverseOnSurface,

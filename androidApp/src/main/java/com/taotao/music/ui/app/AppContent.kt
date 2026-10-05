@@ -51,6 +51,9 @@ internal fun TaotaoAppContent(state: TaotaoAppState, darkTheme: Boolean) {
 
     // 配色统一走 TaotaoTheme，避免和登录页各写一份 colorScheme 导致进入首页时突然换色。
     TaotaoTheme(darkTheme = darkTheme) {
+        // 底栏收起/展开动画需要感知系统「关闭动画」开关（SharedMainLayout 在 commonMain，
+        // 拿不到平台设置源，由这里读出来传下去）。
+        val stateReduceMotion = LocalReduceMotion.current
         // 可选更新提示：强制更新已在主入口拦截返回，这里只处理用户可以忽略的情况。
         if (updateStatus.stage != UpdateStage.IDLE && updateStatus.stage != UpdateStage.CHECKING &&
             updateStatus.stage != UpdateStage.UP_TO_DATE && !updateStatus.forced
@@ -77,6 +80,7 @@ internal fun TaotaoAppContent(state: TaotaoAppState, darkTheme: Boolean) {
                 onNavigationSelected = { target -> state.switchTab(target) },
                 // MV 播放页是全屏沉浸页，迷你播放器和底部导航一起让位。
                 hideBottomBar = state.mvSong != null,
+                reduceMotion = stateReduceMotion,
                 miniPlayerContent = {
                     val reduceMotion = LocalReduceMotion.current
                     AnimatedVisibility(

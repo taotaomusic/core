@@ -129,6 +129,15 @@ button:disabled { cursor: not-allowed; }
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* ---- 无障碍：系统「减少动态效果」开启时，关掉大动作动画（换页、旋转、弹出）。
+   微交互的 hover transition 保留——那是即时的状态反馈，不产生持续运动。 ---- */
+@media (prefers-reduced-motion: reduce) {
+  .page-enter, .page-exit, .playerbar-error, .spinner,
+  .pd-overlay, .pd-overlay-exit, .pd-modal-mask, .pd-modal {
+    animation: none;
+  }
+}
+
 /* ---- 主界面：侧边导航 + 内容区 + 底部播放条 ---- */
 .app { display: flex; height: 100vh; }
 .sidenav {

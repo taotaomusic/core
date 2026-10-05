@@ -51,6 +51,11 @@ fun SharedMainLayout(
     modifier: Modifier = Modifier,
     /** 沉浸式页面（如 MV 播放页）盖住底部时置 true：Scaffold 收起迷你播放器与导航栏，正文铺满全屏。 */
     hideBottomBar: Boolean = false,
+    /**
+     * 系统「关闭动画」开关。commonMain 拿不到 Android 的设置读取，由平台层传：
+     * 为 true 时底栏收起/展开退化为纯淡入淡出，与全局 reduce-motion 行为一致。
+     */
+    reduceMotion: Boolean = false,
     content: @Composable (PaddingValues) -> Unit,
 ) {
     Scaffold(
@@ -59,10 +64,23 @@ fun SharedMainLayout(
         bottomBar = {
             // 收起/展开带方向动画，与沉浸浮层（如 MV 播放页）的升起落下保持同一节奏，
             // 硬切会让底栏在浮层还在过渡时就突然出现或消失。
+            // 展开/收起的时长对齐全局 FADE：底栏要跟浮层同步让位，太快会闪、太慢会拖。
             AnimatedVisibility(
                 visible = !hideBottomBar,
-                enter = expandVertically() + fadeIn(),
-                exit = shrinkVertically() + fadeOut(),
+                enter = if (reduceMotion) {
+                    fadeIn(animationSpec = taotaoTween(AnimationDurations.FADE))
+                } else {
+                    expandVertically(
+                        animationSpec = taotaoTween(AnimationDurations.FADE),
+                    ) + fadeIn(animationSpec = taotaoTween(AnimationDurations.FADE))
+                },
+                exit = if (reduceMotion) {
+                    fadeOut(animationSpec = taotaoTween(AnimationDurations.MICRO))
+                } else {
+                    shrinkVertically(
+                        animationSpec = taotaoTween(AnimationDurations.FADE, easing = AnimationCurves.standardOut),
+                    ) + fadeOut(animationSpec = taotaoTween(AnimationDurations.MICRO))
+                },
             ) {
                 Column(
                     modifier = Modifier

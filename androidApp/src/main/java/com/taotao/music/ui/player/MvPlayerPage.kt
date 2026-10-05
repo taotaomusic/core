@@ -4,7 +4,6 @@ import android.app.Activity
 import android.content.pm.ActivityInfo
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
@@ -80,7 +79,11 @@ import com.taotao.music.data.TencentMusicApi
 import com.taotao.music.model.Song
 import com.taotao.music.playerui.theme.TaotaoSizes
 import com.taotao.music.playerui.theme.TaotaoSpacing
+import com.taotao.music.ui.theme.AnimationDurations
+import com.taotao.music.ui.theme.LocalReduceMotion
 import com.taotao.music.ui.theme.TaotaoCoral
+import com.taotao.music.ui.theme.contentFadeIn
+import com.taotao.music.ui.theme.contentFadeOut
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -181,7 +184,7 @@ internal fun MvPlayerPage(
                 .statusBarsPadding()
                 .navigationBarsPadding(),
         ) {
-            AnimatedVisibility(visible = !isFullscreen, enter = fadeIn(tween(150)), exit = fadeOut(tween(150))) {
+            AnimatedVisibility(visible = !isFullscreen, enter = contentFadeIn(), exit = contentFadeOut()) {
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = TaotaoSpacing.xs),
                     verticalAlignment = Alignment.CenterVertically,
@@ -214,7 +217,7 @@ internal fun MvPlayerPage(
                         onToggleFullscreen = { isFullscreen = !isFullscreen },
                     )
                     // 视频下方是 MV 对应的歌曲信息；信息不依赖拉取结果，加载中也能先显示。
-                    AnimatedVisibility(visible = !isFullscreen, enter = fadeIn(tween(150)), exit = fadeOut(tween(150))) {
+                    AnimatedVisibility(visible = !isFullscreen, enter = contentFadeIn(), exit = contentFadeOut()) {
                         Column(
                             Modifier.padding(horizontal = TaotaoSpacing.lg, vertical = TaotaoSpacing.md),
                             horizontalAlignment = Alignment.CenterHorizontally,
@@ -436,8 +439,8 @@ private fun MvPlayerSurface(
 
         AnimatedVisibility(
             visible = controlsVisible,
-            enter = fadeIn(tween(150)),
-            exit = fadeOut(tween(150)),
+            enter = contentFadeIn(),
+            exit = contentFadeOut(),
         ) {
             Box(Modifier.fillMaxSize()) {
                 // 中央播放/暂停/重播按钮；整块点击面板已存在，这里只接管按钮自己的点击。
