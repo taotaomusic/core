@@ -5,6 +5,7 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import androidx.compose.animation.AnimatedContentTransitionScope
+import com.taotao.music.playerui.theme.pageTransition as sharedPageTransition
 import androidx.compose.animation.ContentTransform
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
@@ -87,6 +88,7 @@ fun contentFadeOut(): ExitTransition = com.taotao.music.playerui.theme.contentFa
 
 fun pageDepthOf(page: String): Int = com.taotao.music.playerui.theme.pageDepthOf(page)
 
+/** 换页过渡转发：接收者原样透传给共享实现（import 别名解决两包同名函数的调用）。 */
 fun AnimatedContentTransitionScope<String>.pageTransition(
     reduceMotion: Boolean = false,
-): ContentTransform = with(com.taotao.music.playerui.theme) { pageTransition(reduceMotion) }
+): ContentTransform = sharedPageTransition(reduceMotion)

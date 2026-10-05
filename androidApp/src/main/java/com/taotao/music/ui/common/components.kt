@@ -49,6 +49,7 @@ import androidx.compose.material3.SnackbarData
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -509,12 +510,14 @@ fun PagerDots(current: Int, total: Int, modifier: Modifier = Modifier) {
 fun TaotaoSnackbar(snackbarData: SnackbarData, modifier: Modifier = Modifier) {
     val shadow = taotaoShadowColors()
     // 入场做轻微的「弹出」缩放：SnackbarHost 默认只有平移，胶囊形状配一点弹性更贴气质。
-    // reduce-motion 时退化为纯淡入，与全局降级动效一致。
+    // 首帧从 0.92 起跳：animateFloatAsState 没有 initialValue 参数，用 remember 记录
+    // 「是否已过首帧」，首帧 snap 到 0.92、之后弹簧到 1f；reduce-motion 时恒为 1f。
     val reduceMotion = LocalReduceMotion.current
+    var appearScaleTarget by remember { mutableStateOf(0.92f) }
+    LaunchedEffect(Unit) { appearScaleTarget = 1f }
     val appearScale by animateFloatAsState(
-        targetValue = 1f,
+        targetValue = if (reduceMotion) 1f else appearScaleTarget,
         animationSpec = if (reduceMotion) snap() else taotaoSpring(dampingRatio = 0.8f, stiffness = Spring.StiffnessMedium),
-        initialValue = 0.92f,
         label = "提示条弹出",
     )
     Snackbar(
