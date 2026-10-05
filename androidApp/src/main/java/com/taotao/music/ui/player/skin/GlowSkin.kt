@@ -4,7 +4,6 @@ import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -145,7 +144,7 @@ private fun DrawScope.drawCoverRing(coverFraction: Float) {
     )
 }
 
-/** 底部三颗调色点：皮肤包的通用点缀行；播放时呼吸闪烁，暂停时常亮。 */
+/** 底部三颗调色点：皮肤包的通用点缀行；播放时呼吸闪烁，暂停时收敛为暗点。 */
 @Composable
 private fun PaletteDots(
     isPlaying: Boolean,
@@ -156,17 +155,15 @@ private fun PaletteDots(
     // 呼吸透明度：reduce-motion 或暂停时不闪（1f 常亮）。
     val reduceMotion = LocalReduceMotion.current
     val transition = rememberInfiniteTransition(label = "glowDots")
+    // 呼吸透明度：降级（暂停 / reduce-motion）时不换 spec，
+    // 目标值并回起点 0.45f，起止相同即静止为暗点。
     val pulse by transition.animateFloat(
         initialValue = 0.45f,
-        targetValue = 1f,
-        animationSpec = if (reduceMotion || !isPlaying) {
-            snap()
-        } else {
-            infiniteRepeatable(
-                animation = tween(900),
-                repeatMode = RepeatMode.Reverse,
-            )
-        },
+        targetValue = if (reduceMotion || !isPlaying) 0.45f else 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(900),
+            repeatMode = RepeatMode.Reverse,
+        ),
         label = "glowDotPulse",
     )
     val colors = listOf(

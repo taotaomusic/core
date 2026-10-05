@@ -4,8 +4,8 @@ import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -41,7 +41,7 @@ import com.taotao.music.ui.theme.LocalReduceMotion
  * 圆角卡片皮肤：封面是一张带投影的圆角方形卡片，圆角与投影随 [discSize] 等比缩放，
  * 底部一排调色点做点缀，播放时呼吸闪烁。
  *
- * 不旋转：[rotationDegrees] 被刻意忽略，播放态由调色点的呼吸表达（暂停时常亮）。
+ * 不旋转：[rotationDegrees] 被刻意忽略，播放态由调色点的呼吸表达（暂停时收敛为暗点）。
  * 现代流媒体的默认形态，适合不喜欢拟物感的场景；与光晕一样没有盘面，
  * 所以也没有「转」的意象。
  */
@@ -55,19 +55,16 @@ internal fun CardSkin(
     modifier: Modifier = Modifier,
 ) {
     val reduceMotion = LocalReduceMotion.current
-    // 调色点呼吸透明度：暂停或 reduce-motion 时常亮不闪。
     val transition = rememberInfiniteTransition(label = "cardDots")
+    // 调色点呼吸透明度：降级（暂停 / reduce-motion）时不换 spec，
+    // 目标值并回起点 0.45f，起止相同即静止为暗点。
     val pulse by transition.animateFloat(
         initialValue = 0.45f,
-        targetValue = 1f,
-        animationSpec = if (reduceMotion || !isPlaying) {
-            snap()
-        } else {
-            infiniteRepeatable(
-                animation = tween(900),
-                repeatMode = RepeatMode.Reverse,
-            )
-        },
+        targetValue = if (reduceMotion || !isPlaying) 0.45f else 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(900),
+            repeatMode = RepeatMode.Reverse,
+        ),
         label = "cardDotPulse",
     )
     Column(

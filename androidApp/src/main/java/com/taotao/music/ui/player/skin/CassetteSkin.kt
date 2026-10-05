@@ -33,7 +33,6 @@ import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 
 /**
@@ -57,16 +56,13 @@ internal fun CassetteSkin(
     modifier: Modifier = Modifier,
 ) {
     val reduceMotion = LocalReduceMotion.current
-    // 卷轴匀速自转：暂停立即归零静止；reduce-motion 时直接固定不动画。
+    // 卷轴匀速自转。降级（暂停 / reduce-motion）时不换 spec：
+    // 目标值并回起点 0f，起止相同即静止归零。
     val reelTransition = rememberInfiniteTransition(label = "cassetteReels")
     val reelAngle by reelTransition.animateFloat(
         initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = if (reduceMotion || !isPlaying) {
-            snap()
-        } else {
-            infiniteRepeatable(tween(DURATION_REEL_TURN, easing = LinearEasing))
-        },
+        targetValue = if (reduceMotion || !isPlaying) 0f else 360f,
+        animationSpec = infiniteRepeatable(tween(DURATION_REEL_TURN, easing = LinearEasing)),
         label = "cassetteReelAngle",
     )
     Box(modifier.size(discSize), contentAlignment = Alignment.Center) {
@@ -214,7 +210,15 @@ private fun DrawScope.drawCassetteReels(reelAngleDegrees: Float) {
             drawCircle(Color.White, radius = d * 0.014f, center = pivot)
         }
     }
-    // 观察窗：两轴之间的横向浅窗，透出磁带走带与余量斜线（静态，不随转角变化）。
+}
+
+/**
+ * 观察窗：两轴之间的横向浅窗，透出磁带走带与余量斜线。
+ * 独立于卷轴层绘制（静态，不随 reelAngle 变化）：深色窗底 + 上缘受光高光 +
+ * 一条左低右高、略带斜度的磁带余量线。
+ */
+private fun DrawScope.drawCassetteWindow() {
+    val d = size.minDimension
     val windowTop = d * 0.60f
     drawRoundRect(
         Color(0xFF191920),
@@ -222,6 +226,15 @@ private fun DrawScope.drawCassetteReels(reelAngleDegrees: Float) {
         size = Size(d * 0.20f, d * 0.05f),
         cornerRadius = CornerRadius(d * 0.012f),
     )
+    // 上缘受光：一圈淡高光描边把窗面从壳面上托起来。
+    drawRoundRect(
+        Color.White.copy(alpha = 0.06f),
+        topLeft = Offset(center.x - d * 0.096f, windowTop + d * 0.004f),
+        size = Size(d * 0.192f, d * 0.042f),
+        cornerRadius = CornerRadius(d * 0.009f),
+        style = Stroke(width = d * 0.002f),
+    )
+    // 磁带余量线：透过窗口看到的走带。
     drawLine(
         Color(0xFF5A463C).copy(alpha = 0.8f),
         start = Offset(center.x - d * 0.085f, windowTop + d * 0.038f),
