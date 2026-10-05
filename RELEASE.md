@@ -44,7 +44,7 @@ $env:ADMIN_SESSION_TOKEN = $login.data.token
 
 ## 二、版本号的三条铁律
 
-版本号存在根目录 `version.properties`,由 `tools/Update-Version.ps1` 递增,而 `androidApp/build.gradle.kts` 把 `incrementVersion` 挂成了 `assembleDebug` / `assembleRelease` 的 `finalizedBy`。
+版本号存在根目录 `version.properties`,由 `androidApp/build.gradle.kts` 的 `incrementVersion` 任务(纯 JVM 实现,原 powershell 脚本已删)递增,它挂成了 `assembleDebug` / `assembleRelease` 的 `finalizedBy`。
 
 ### ① 版本号只能从 `output-metadata.json` 读,不能读 `version.properties`
 

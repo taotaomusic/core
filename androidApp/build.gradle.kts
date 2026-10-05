@@ -57,7 +57,24 @@ tasks.register("incrementVersion") {
     group = "版本管理"
     description = "编译完成后自动递增版本号"
     doLast {
-        exec { commandLine("powershell", "-ExecutionPolicy", "Bypass", "-File", rootProject.file("tools/Update-Version.ps1").absolutePath) }
+        // 纯 JVM 实现，不再调 tools/Update-Version.ps1——旧实现依赖 powershell 命令，
+        // CI 构建机迁到 ubuntu 后进程直接起不来（2026-10-05 实测）。语义与原脚本一致：
+        // VERSION_CODE 与 VERSION_NAME 第三段各 +1，只回写这两行。
+        val file = rootProject.file("version.properties")
+        val props = mutableMapOf<String, String>()
+        // 去掉可能存在的 UTF-8 BOM，否则第一个键名会带上不可见字符。
+        file.readText(Charsets.UTF_8).replace("\uFEFF", "").lineSequence().forEach { line ->
+            val idx = line.indexOf('=')
+            if (idx > 0) props[line.substring(0, idx).trim()] = line.substring(idx + 1)
+        }
+        val code = (props["VERSION_CODE"]?.toIntOrNull() ?: 0) + 1
+        val nameParts = (props["VERSION_NAME"] ?: "").split('.')
+        val patch = (nameParts.getOrNull(2)?.toIntOrNull() ?: 0) + 1
+        val newName = nameParts.take(2).joinToString(".") + "." + patch
+        // writeText 默认 UTF-8 无 BOM：Java Properties.load 会把 BOM 当作键名的一部分，
+        // 导致下一次构建读不到 VERSION_CODE（Windows PowerShell 5.1 的老坑，注释留警示）。
+        file.writeText("VERSION_CODE=$code\nVERSION_NAME=$newName\n", Charsets.UTF_8)
+        println("版本已更新为 $newName ($code)")
     }
 }
 
