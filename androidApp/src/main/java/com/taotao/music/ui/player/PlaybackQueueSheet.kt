@@ -142,6 +142,8 @@ internal fun PlaybackQueueSheet(
                             onPlayNext = onPlayNext,
                             isFavorite = isFavorite,
                             onToggleFavorite = onToggleFavorite,
+                            onOpenArtistPage = onOpenArtistPage,
+                            onOpenAlbumPage = onOpenAlbumPage,
                         )
                         2 -> PlaybackSourceList(
                             songs = localSongs,
@@ -153,6 +155,8 @@ internal fun PlaybackQueueSheet(
                             onPlayNext = onPlayNext,
                             isFavorite = isFavorite,
                             onToggleFavorite = onToggleFavorite,
+                            onOpenArtistPage = onOpenArtistPage,
+                            onOpenAlbumPage = onOpenAlbumPage,
                         )
                         else -> CurrentPlaybackQueue(
                             queue = queue,
@@ -164,6 +168,8 @@ internal fun PlaybackQueueSheet(
                             onMoveItem = onMoveItem,
                             isFavorite = isFavorite,
                             onToggleFavorite = onToggleFavorite,
+                            onOpenArtistPage = onOpenArtistPage,
+                            onOpenAlbumPage = onOpenAlbumPage,
                         )
                     }
                 }
@@ -184,6 +190,8 @@ private fun CurrentPlaybackQueue(
     onMoveItem: (Int, Int) -> Unit,
     isFavorite: (Song) -> Boolean,
     onToggleFavorite: (Song) -> Unit,
+    onOpenArtistPage: (Song) -> Unit,
+    onOpenAlbumPage: (Song) -> Unit,
 ) {
     Column(Modifier.fillMaxSize()) {
         Row(
@@ -246,6 +254,8 @@ private fun PlaybackSourceList(
     onPlayNext: (Song) -> Unit,
     isFavorite: (Song) -> Boolean,
     onToggleFavorite: (Song) -> Unit,
+    onOpenArtistPage: (Song) -> Unit,
+    onOpenAlbumPage: (Song) -> Unit,
 ) {
     Column(Modifier.fillMaxSize()) {
         // 说明区域无论有没有歌曲都保留，避免空态切到有内容时正文又向下移动一次。
