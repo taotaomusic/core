@@ -322,7 +322,13 @@ jobs:
   client-android:
     needs: [changes, crypto]
     if: needs.changes.outputs.client == 'true' || needs.changes.outputs.crypto == 'true'
-    runs-on: windows-latest
+    # 用 Linux：Android 构建平台无关，而 Windows runner 有两个实打实的坑 ——
+    # ① setup-java 的 gradle 缓存在 Windows 上保存必然失败（tar 打包 ~/.gradle 时
+    #    撞上 modules-2.lock 文件锁，Device or resource busy），缓存从未真正落盘，
+    #    每天都是冷构建；② Windows runner 的 IO/CPU 本身更慢。
+    # 旧 music 仓 client.yml 必须 Windows 的唯一理由（incrementVersion 走 powershell）
+    # 在 core 里已不存在，签名还原与版本号生成均已用 bash/node 重写，跨平台。
+    runs-on: ubuntu-latest
     permissions:
       contents: write
     outputs:
@@ -335,7 +341,11 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
-          cache: gradle
+      # 缓存不用 setup-java 的 cache: gradle（它在 Windows 上保存必败、也从未生效过）。
+      # 改用官方 Gradle action：缓存 ~/.gradle（依赖仓库 + --build-cache 的任务输出），
+      # 主键带 gradle 脚本哈希，restore-keys 兜底 —— 依赖微变也能吃到大头，
+      # 命中后只有改动模块真正重编，安卓 job 的大头从冷构建变成增量。
+      - uses: gradle/actions/setup-gradle@v4
       - name: 取加密 .so（同 run crypto 产物）
         uses: actions/download-artifact@v4
         with:
@@ -343,64 +353,72 @@ jobs:
           path: crypto/dist/android
       - name: 还原发布签名（未配 Secrets 时退回 Debug 包）
         id: signing
-        shell: pwsh
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_STORE_PASSWORD: ${{ secrets.TAOTAO_STORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.TAOTAO_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.TAOTAO_KEY_PASSWORD }}
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:ANDROID_KEYSTORE_BASE64)) {
-            Write-Host "未配 ANDROID_KEYSTORE_BASE64：退回 Debug 包，仅验证工具链"
-            Add-Content -Path $env:GITHUB_OUTPUT -Value "signed=false"
-          } else {
-            # 诊断：只打印每个 Secret 的长度，绝不打印值。某项为 0 即说明该 Secret 为空或名字写错。
-            Write-Host ("Secret 长度 — base64={0} store={1} alias={2} key={3}" -f `
-              $env:ANDROID_KEYSTORE_BASE64.Length, $env:ANDROID_STORE_PASSWORD.Length, `
-              $env:ANDROID_KEY_ALIAS.Length, $env:ANDROID_KEY_PASSWORD.Length)
-            # 守卫：base64 有值就必须四项齐全，否则硬失败——绝不把空密码写进 local.properties
-            # 伪装成 signed=true（那会在 packageRelease 报「password was incorrect」，误导排查）。
-            $missing = @()
-            if ([string]::IsNullOrWhiteSpace($env:ANDROID_STORE_PASSWORD)) { $missing += "ANDROID_STORE_PASSWORD" }
-            if ([string]::IsNullOrWhiteSpace($env:ANDROID_KEY_ALIAS))      { $missing += "ANDROID_KEY_ALIAS" }
-            if ([string]::IsNullOrWhiteSpace($env:ANDROID_KEY_PASSWORD))   { $missing += "ANDROID_KEY_PASSWORD" }
-            if ($missing.Count -gt 0) {
-              throw "已配 ANDROID_KEYSTORE_BASE64 但以下签名 Secret 为空：$($missing -join ', ')。请在仓库 Secrets 里补齐，名称须完全一致。"
-            }
-            [IO.File]::WriteAllBytes("taotao-release.jks", [Convert]::FromBase64String($env:ANDROID_KEYSTORE_BASE64))
-            # 用 .NET 无 BOM UTF-8 写：Set-Content 可能加 BOM，令首行 key 读不到 → 空密码。
-            $lines = "TAOTAO_STORE_PASSWORD=$env:ANDROID_STORE_PASSWORD`nTAOTAO_KEY_ALIAS=$env:ANDROID_KEY_ALIAS`nTAOTAO_KEY_PASSWORD=$env:ANDROID_KEY_PASSWORD`n"
-            [IO.File]::WriteAllText("local.properties", $lines, (New-Object System.Text.UTF8Encoding $false))
-            # 本机先验一遍 store 密码，CI 早失败好过拖到 packageRelease。
-            $kt = "$env:JAVA_HOME\bin\keytool.exe"
-            if (Test-Path $kt) {
-              & $kt -list -keystore taotao-release.jks -storepass $env:ANDROID_STORE_PASSWORD -alias $env:ANDROID_KEY_ALIAS *> $null
-              if ($LASTEXITCODE -ne 0) { throw "keytool 自检失败：store 密码或别名与 keystore 不符（exit $LASTEXITCODE）。" }
-              Write-Host "keytool 自检通过：keystore / 密码 / 别名 一致。"
-            }
-            Add-Content -Path $env:GITHUB_OUTPUT -Value "signed=true"
-          }
+          if [ -z "${ANDROID_KEYSTORE_BASE64// /}" ]; then
+            echo "未配 ANDROID_KEYSTORE_BASE64：退回 Debug 包，仅验证工具链"
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # 诊断：只打印每个 Secret 的长度，绝不打印值。某项为 0 即说明该 Secret 为空或名字写错。
+          echo "Secret 长度 — base64=${#ANDROID_KEYSTORE_BASE64} store=${#ANDROID_STORE_PASSWORD} alias=${#ANDROID_KEY_ALIAS} key=${#ANDROID_KEY_PASSWORD}"
+          # 守卫：base64 有值就必须四项齐全，否则硬失败——绝不把空密码写进 local.properties
+          # 伪装成 signed=true（那会在 packageRelease 报「password was incorrect」，误导排查）。
+          missing=""
+          [ -z "${ANDROID_STORE_PASSWORD// /}" ] && missing="ANDROID_STORE_PASSWORD"
+          [ -z "${ANDROID_KEY_ALIAS// /}" ] && missing="${missing:+$missing,}ANDROID_KEY_ALIAS"
+          [ -z "${ANDROID_KEY_PASSWORD// /}" ] && missing="${missing:+$missing,}ANDROID_KEY_PASSWORD"
+          if [ -n "$missing" ]; then
+            echo "已配 ANDROID_KEYSTORE_BASE64 但以下签名 Secret 为空：$missing。请在仓库 Secrets 里补齐，名称须完全一致。" >&2
+            exit 1
+          fi
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > taotao-release.jks
+          # printf 输出无 BOM：BOM 会让首行 key 读不到 → 空密码（Windows Set-Content 的坑，留着警示）。
+          printf 'TAOTAO_STORE_PASSWORD=%s\nTAOTAO_KEY_ALIAS=%s\nTAOTAO_KEY_PASSWORD=%s\n' \
+            "$ANDROID_STORE_PASSWORD" "$ANDROID_KEY_ALIAS" "$ANDROID_KEY_PASSWORD" > local.properties
+          # 本机先验一遍 store 密码，CI 早失败好过拖到 packageRelease。
+          if [ -x "$JAVA_HOME/bin/keytool" ]; then
+            if ! "$JAVA_HOME/bin/keytool" -list -keystore taotao-release.jks \
+                 -storepass "$ANDROID_STORE_PASSWORD" -alias "$ANDROID_KEY_ALIAS" >/dev/null 2>&1; then
+              echo "keytool 自检失败：store 密码或别名与 keystore 不符。" >&2
+              exit 1
+            fi
+            echo "keytool 自检通过：keystore / 密码 / 别名 一致。"
+          fi
+          echo "signed=true" >> "$GITHUB_OUTPUT"
       - name: 生成本次运行唯一 Android 版本号
-        shell: pwsh
         run: |
-          $file = "version.properties"
-          $props = @{}
-          Get-Content $file | ForEach-Object {
-            if ($_ -match '^([^=]+)=(.*)$') { $props[$matches[1]] = $matches[2] }
-          }
           # version.properties 保持基线；用 GitHub Actions 运行号生成单调版本，
-          # 避免每次干净 checkout 都重新产出同一个 1.0.243 / versionCode。
-          $run = [int]$env:GITHUB_RUN_NUMBER
-          $props['VERSION_CODE'] = ([int]$props['VERSION_CODE']) + $run
-          $parts = $props['VERSION_NAME'].Split('.')
-          $parts[2] = ([int]$parts[2]) + $run
-          [IO.File]::WriteAllLines($file, @("VERSION_CODE=$($props['VERSION_CODE'])", "VERSION_NAME=$($parts -join '.')"), (New-Object System.Text.UTF8Encoding($false)))
-          Write-Host "Android version => $($parts -join '.') ($($props['VERSION_CODE']))"
+          # 避免每次干净 checkout 都重新产出同一个版本号。node 改写跨平台。
+          node -e '
+            const fs = require("fs");
+            const run = parseInt(process.env.GITHUB_RUN_NUMBER, 10);
+            let code = 0, name = "";
+            for (const line of fs.readFileSync("version.properties", "utf8").split(/\r?\n/)) {
+              const m = line.match(/^([^=]+)=(.*)$/);
+              if (!m) continue;
+              if (m[1] === "VERSION_CODE") code = parseInt(m[2], 10);
+              if (m[1] === "VERSION_NAME") name = m[2];
+            }
+            code += run;
+            const parts = name.split(".");
+            parts[2] = String(parseInt(parts[2], 10) + run);
+            fs.writeFileSync("version.properties", `VERSION_CODE=${code}\nVERSION_NAME=${parts.join(".")}\n`);
+            console.log(`Android version => ${parts.join(".")} (${code})`);
+          '
       - name: 构建 APK
-        shell: pwsh
         env:
           SIGNED: ${{ steps.signing.outputs.signed }}
-        run: if ($env:SIGNED -eq "true") { .\gradlew.bat :androidApp:assembleRelease --build-cache } else { .\gradlew.bat :androidApp:assembleDebug --build-cache }
+        run: |
+          if [ "$SIGNED" = "true" ]; then
+            ./gradlew :androidApp:assembleRelease --build-cache --console=plain
+          else
+            ./gradlew :androidApp:assembleDebug --build-cache --console=plain
+          fi
       - name: 整理版本号
         id: prep
         shell: bash
@@ -435,7 +453,9 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
-          cache: gradle
+      # 缓存同 client-android：setup-java 的 cache: gradle 在本仓库从未生效过，
+      # 用官方 Gradle action 显式缓存 ~/.gradle（npm 包仓库 + wasm 工具链 + 任务输出）。
+      - uses: gradle/actions/setup-gradle@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
