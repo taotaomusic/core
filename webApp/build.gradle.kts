@@ -39,8 +39,9 @@ kotlin {
 }
 
 // Kotlin 2.2 起 BinaryenRootExtension 改名为 BinaryenEnvSpec，属性迁移到 Provider API。
+// binaryen 扩展在 kotlin { wasmJs { } } 块执行时才注册，用 withType 延迟绑定（含未来注册的实例）。
 // download = false：不走 GitHub Release 直连下载，改用 npm 包里的 wasm-opt 二进制。
-rootProject.extensions.configure<BinaryenEnvSpec> {
+rootProject.extensions.withType<BinaryenEnvSpec> {
     download.set(false)
     command.set(
         rootProject.layout.projectDirectory
