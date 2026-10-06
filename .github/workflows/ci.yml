@@ -527,8 +527,15 @@ jobs:
             if [ "$attempt" = 3 ]; then exit 1; fi
             sleep 5
           done
-          if ! git diff --quiet --no-index kotlin-js-store/package-lock.json build/js/package-lock.json; then
-            cp build/js/package-lock.json kotlin-js-store/package-lock.json
+          # Kotlin 2.2 起 wasmJs 的 npm 目录与 js 分离（build/wasm/js），自适应探测新旧行路径。
+          LOCK=""
+          for cand in build/wasm/js/package-lock.json build/js/package-lock.json; do
+            if [ -f "$cand" ]; then LOCK="$cand"; break; fi
+          done
+          if [ -z "$LOCK" ]; then
+            echo "::warning::未找到 npm 锁文件（build/wasm/js 与 build/js 均无），跳过锁回写"
+          elif ! git diff --quiet --no-index kotlin-js-store/package-lock.json "$LOCK"; then
+            cp "$LOCK" kotlin-js-store/package-lock.json
             # PR 上只刷新不落库：往 PR 分支推提交既打扰作者，fork PR 又没有写权限。
             # 漂移会在合并进 main 后的那次 push 运行里自动回写。
             if [ "${{ github.event_name }}" != "push" ]; then
