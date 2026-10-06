@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -415,7 +416,8 @@ private fun MvPlayingSection(
         Column(
             Modifier
                 .fillMaxWidth()
-                .padding(top = TaotaoSpacing.sm, horizontal = TaotaoSpacing.lg),
+                .padding(top = TaotaoSpacing.sm)
+                .padding(horizontal = TaotaoSpacing.lg),
         ) {
             MvControlRows(controller, isFullscreen, onToggleFullscreen)
         }
@@ -557,6 +559,7 @@ private fun MvCenterButton(controller: MvPlayerController, modifier: Modifier = 
  * 竖屏垫在视频下方的黑色空白区、全屏垫在画面内的渐变浮条上，由外层负责
  * 底衬与内边距，这里只管两行内容本身。
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun MvControlRows(
     controller: MvPlayerController,
