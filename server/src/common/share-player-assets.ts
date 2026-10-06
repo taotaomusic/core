@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 /**
@@ -7,8 +7,8 @@ import { join } from "node:path";
  *
  * ## 为什么需要它
  *
- * 分享页的入口是**两个不带内容哈希的固定名文件**：
- * `taotao-share-player.js`（JS 胶水）与 `TaotaoMusic-webApp-wasm-js.wasm`（应用 wasm）。
+ * 分享页的入口是**不带内容哈希的固定名 JS 胶水** `taotao-share-player.js`
+ * （KGP 2.2 起两个 wasm 的文件名都变成内容哈希，不再有固定名）。
  * JS 胶水必须提供 wasm 要 import 的那批 `js_code` 实现，**两者必须严格同批**。
  *
  * 固定名 + 任何形式的缓存 = 迟早混批。实测出现过两次，方向还是相反的：
@@ -35,18 +35,27 @@ import { join } from "node:path";
  * 纯函数抽出来是为了能在不启动服务的情况下断言，见 `tools/verify-static-cache.ts`。
  */
 
-/** 参与指纹计算的两个固定名入口文件。其余资源要么已带内容哈希，要么由 `<base>` 带版本。 */
-const ENTRY_FILES = ["taotao-share-player.js", "TaotaoMusic-webApp-wasm-js.wasm"] as const;
+/**
+ * 指纹输入：JS 胶水（固定名）+ 目录下全部 wasm。
+ * KGP 2.2 起 wasm 产物文件名带内容哈希、不再有固定名（skiko 与应用 wasm 都变），
+ * 所以 wasm 不能按文件名枚举；JS 胶水仍由 `<script src>` 相对引用、名字保持固定。
+ */
+const JS_ENTRY = "taotao-share-player.js";
 
 /**
  * 计算分享播放器入口资源的版本指纹。
  *
  * 直接对文件内容取 sha256（而不是用 mtime / size）—— 这样「重新构建但产物没变」不会
  * 白白让全量用户重下 11 MB，而「产物变了」一定换指纹。启动时只读一次。
+ * wasm 参与指纹时把文件名一并混入，防排序后内容碰撞。
  */
 export function sharePlayerVersion(directory: string): string {
+  const names = readdirSync(directory)
+    .filter((name) => name === JS_ENTRY || name.endsWith(".wasm"))
+    .sort();
   const hash = createHash("sha256");
-  for (const name of ENTRY_FILES) {
+  for (const name of names) {
+    hash.update(name);
     hash.update(readFileSync(join(directory, name)));
   }
   return hash.digest("hex").slice(0, 12);
