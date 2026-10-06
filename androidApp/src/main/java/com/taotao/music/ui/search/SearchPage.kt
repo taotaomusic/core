@@ -13,7 +13,7 @@ import com.taotao.music.ui.theme.contentFadeIn
 import com.taotao.music.ui.theme.contentFadeOut
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.animateDpAsState
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.AnimationSpec
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
