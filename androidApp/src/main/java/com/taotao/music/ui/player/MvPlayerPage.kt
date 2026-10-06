@@ -35,12 +35,9 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -80,6 +77,7 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.taotao.music.data.TencentMusicApi
 import com.taotao.music.model.Song
+import com.taotao.music.playerui.theme.AppleStyleSlider
 import com.taotao.music.playerui.theme.TaotaoColors
 import com.taotao.music.playerui.theme.TaotaoShapes
 import com.taotao.music.playerui.theme.TaotaoSizes
@@ -577,7 +575,6 @@ private fun MvCenterButton(controller: MvPlayerController, modifier: Modifier = 
  * 竖屏垫在视频下方的黑色空白区、全屏垫在画面内的渐变浮条上，由外层负责
  * 底衬与内边距，这里只管两行内容本身。
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun MvControlRows(
     controller: MvPlayerController,
@@ -594,31 +591,24 @@ private fun MvControlRows(
                 color = TaotaoColors.videoOn,
                 style = timeStyle,
             )
-            Slider(
-                value = (if (controller.dragging) controller.draggedPositionMs else controller.positionMs)
-                    .toFloat()
-                    .coerceIn(0f, controller.durationMs.toFloat().coerceAtLeast(1f)),
-                onValueChange = {
+            AppleStyleSlider(
+                progress = ((if (controller.dragging) controller.draggedPositionMs else controller.positionMs)
+                    .toFloat() / controller.durationMs.coerceAtLeast(1L)).coerceIn(0f, 1f),
+                onProgressChange = { progress ->
                     controller.dragging = true
-                    controller.draggedPositionMs = it.toLong()
+                    controller.draggedPositionMs = (progress * controller.durationMs).toLong()
+                        .coerceIn(0L, controller.durationMs.coerceAtLeast(0L))
                 },
-                onValueChangeFinished = {
+                onProgressChangeFinished = {
                     controller.player.seekTo(controller.draggedPositionMs)
                     controller.positionMs = controller.draggedPositionMs
                     controller.dragging = false
                 },
-                valueRange = 0f..controller.durationMs.toFloat().coerceAtLeast(1f),
-                colors = SliderDefaults.colors(
-                    thumbColor = TaotaoCoral,
-                    activeTrackColor = TaotaoCoral,
-                    // 豁免：进度条未播放轨道用 35% 白，在黑底上够辨识又不抢画面，不进共享档位。
-                    inactiveTrackColor = Color.White.copy(alpha = 0.35f),
-                ),
-                // 显式给一枚小圆拇指：默认拇指在这条进度条上观感突兀（见用户截图里的竖条）。
-                thumb = {
-                    Box(Modifier.size(12.dp).background(TaotaoCoral, CircleShape))
-                },
+                enabled = controller.durationMs > 0L,
                 modifier = Modifier.weight(1f).padding(horizontal = TaotaoSpacing.xs),
+                // MV 页恒黑底：拇指/已播段用珊瑚主色、未播段用 35% 白，与控制块其他元素同一套色。
+                accentColor = TaotaoCoral,
+                inactiveColor = Color.White.copy(alpha = 0.35f),
             )
             Text(
                 formatTime(controller.durationMs.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()),
