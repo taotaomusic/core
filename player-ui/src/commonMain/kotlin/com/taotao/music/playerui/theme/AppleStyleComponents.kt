@@ -63,6 +63,10 @@ fun AppleStyleSlider(
     highlightStart: Float? = null,
     /** 可选强调段的归一化终点（0..1，允许略超 1，绘制时会夹到轨道末端）。 */
     highlightEnd: Float? = null,
+    /** 沉浸式深底（如 MV 播放页）的配色覆盖：拇指与已播段主色；缺省沿用主题 onSurface 单色方案。 */
+    accentColor: Color? = null,
+    /** 未播段的配色覆盖；缺省沿用 onSurface 20% 透明的主题方案。 */
+    inactiveColor: Color? = null,
 ) {
     // iOS 式按压反馈：按住拖动期间整条轨道变粗、拇指放大，松手回弹。
     // onValueChange 首次触发即视为按下，onValueChangeFinished（拖动结束和点击跳转都会调）即视为松开。
@@ -93,7 +97,7 @@ fun AppleStyleSlider(
                 modifier = Modifier
                     .size(SliderThumbSize)
                     .scale(thumbScale)
-                    .background(MaterialTheme.colorScheme.onSurface, CircleShape)
+                    .background(accentColor ?: MaterialTheme.colorScheme.onSurface, CircleShape)
             )
         },
         track = { sliderState ->
@@ -109,8 +113,8 @@ fun AppleStyleSlider(
             val value = sliderState.value
             val inHighlight = highlightStart != null && highlightEnd != null &&
                 value >= highlightStart && value <= highlightEnd
-            val inactiveColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f)
-            val activeColor = MaterialTheme.colorScheme.onSurface
+            val resolvedInactive = inactiveColor ?: MaterialTheme.colorScheme.onSurface.copy(alpha = 0.2f)
+            val resolvedActive = accentColor ?: MaterialTheme.colorScheme.onSurface
             val highlightColor = MaterialTheme.colorScheme.primary.copy(
                 alpha = if (inHighlight) 1f else SliderHighlightIdleAlpha,
             )
@@ -122,7 +126,7 @@ fun AppleStyleSlider(
                 val trackEnd = (size.width - half).coerceAtLeast(half)
                 // 层序自下而上：底轨 → 强调段 → 已播段。已播段从强调段上面扫过，
                 // 强调段只预告尚未播到的部分——它是轨道的属性，而不是贴在进度上的补丁。
-                drawSegment(inactiveColor, Offset(half, y), Offset(trackEnd, y), stroke)
+                drawSegment(resolvedInactive, Offset(half, y), Offset(trackEnd, y), stroke)
                 val startRatio = highlightStart
                 val endRatio = highlightEnd
                 if (startRatio != null && endRatio != null && startRatio in 0f..1f && endRatio > startRatio) {
@@ -133,7 +137,7 @@ fun AppleStyleSlider(
                         stroke,
                     )
                 }
-                drawSegment(activeColor, Offset(half, y), Offset((size.width * value).coerceIn(half, trackEnd), y), stroke)
+                drawSegment(resolvedActive, Offset(half, y), Offset((size.width * value).coerceIn(half, trackEnd), y), stroke)
             }
         }
     )
