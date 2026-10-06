@@ -29,8 +29,8 @@ kotlin {
             implementation(compose.foundation)
             implementation(compose.material3)
             implementation(compose.materialIconsExtended)
-            implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
-            implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
+            implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
+            implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
             // 与 Kotlin 2.0.21 内置版本保持一致，避免生产构建依赖 GitHub Release 直连。
             implementation(npm("binaryen", "118.0.0"))
         }
