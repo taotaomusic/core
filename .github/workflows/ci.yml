@@ -513,15 +513,16 @@ jobs:
         with:
           node-version: 22
       # npm 锁文件解析有平台差异：Windows 侧生成的 kotlin-js-store 锁在 Linux
-      # 会被 npm 改写，kotlinStorePackageLock 直接判死（本 job 已固定在 Linux 跑，
+      # 会被 npm 改写，包锁校验任务直接判死（本 job 已固定在 Linux 跑，
       # 这里先自愈并把新锁回写仓库，之后锁文件以 Linux 解析为准）。
       # 注意 org.gradle.configureondemand=true 下直接调 :kotlinNpmInstall 会因
       # root 未注册任务而失败，所以要借 :webApp 的构建图并临时排除锁校验；
-      # KGP 2.0.21 没有 kotlinUpgradePackageLock 任务，故手工对齐两个锁文件。
+      # Kotlin 2.2 起锁校验任务拆分为 kotlinWasmStorePackageLock（旧名
+      # kotlinStorePackageLock 已不存在，--exclude-task 会因歧义直接报错）。
       - name: 刷新 kotlin-js-store 锁文件（漂移时回写）
         run: |
           for attempt in 1 2 3; do
-            if ./gradlew :webApp:wasmJsBrowserDistribution -x :kotlinStorePackageLock --build-cache --no-daemon; then break; fi
+            if ./gradlew :webApp:wasmJsBrowserDistribution -x :kotlinWasmStorePackageLock --build-cache --no-daemon; then break; fi
             echo "::warning::wasm 构建第 ${attempt} 次失败（wasm-opt 偶发启动问题），重试"
             if [ "$attempt" = 3 ]; then exit 1; fi
             sleep 5
