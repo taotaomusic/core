@@ -30,6 +30,11 @@ taotao-release.jks
 /grep
 /2026-*-this-session-is-being-continued-from-a-previous-c.txt
 
+# 根目录临时调试脚本与截图（视觉验证用，跑完即弃）。
+# 未跟踪文件长期堆在 `git status` 里，迟早被 `git add -A` 卷进提交，必须显式屏蔽。
+/.tmp-*.mjs
+/*.png
+
 # 发布签名密钥。taotao-release.jks 的 base64 形式，与 .jks 等价，泄露即可伪造发布包。
 # 注意：它不叫 *.jks，不会被上面的规则覆盖，必须单独列。
 keystore.b64
