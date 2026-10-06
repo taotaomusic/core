@@ -11,6 +11,7 @@ import type {
   UpstreamAlbumDetail,
   UpstreamArtist,
   UpstreamArtistDetail,
+  UpstreamPlaylistDetail,
   UpstreamSearchPlaylist,
   UpstreamSongWithExtras,
 } from "./music-source.client";
@@ -749,6 +750,42 @@ export class KuwoClient implements MusicSourceClient, MusicSourceCredentialManag
   ): Promise<{ songs: UpstreamSong[]; total: number }> {
     const client = await this.clientOf();
     const detail = await client.getAlbumSongs(albumId, page, limit);
+    return { songs: detail.songs.map((song) => this.toUpstreamSong(song)), total: detail.total };
+  }
+
+  // ---------- 在线歌单详情（2026-10 新增） ----------
+
+  /**
+   * 波点在线歌单详情，产出 `GET /online-playlists/:id` 的 `data.playlist`
+   * （`source` 由控制器补）。`playnum` / `musicCount` / `collectedCnt` 的改名与
+   * `pic` / `creatorIcon` 的 https 升级已在协议层完成，这里只负责带上当前生效凭据，
+   * 不做第二层映射。
+   *
+   * [sourceMarker] 是搜索行（[searchPlaylists]）带回来的数字标记，上游要求原样
+   * 回传 —— 调用链是「搜索拿到标记 → 客户端点歌单 → 详情请求带上标记」。
+   * 取不到（上游业务码非 200）时协议层返回 null，控制器统一归成 502。
+   */
+  async getPlaylistInfo(playlistId: number, sourceMarker: number): Promise<UpstreamPlaylistDetail | null> {
+    const client = await this.clientOf();
+    return client.getPlaylistInfo(playlistId, sourceMarker);
+  }
+
+  /**
+   * 波点在线歌单的歌曲列表。条目经 [toUpstreamSong] 换成 v3 形状 —— 与 `/search`
+   * 的歌曲行**同一条映射链路**，详情页的歌曲行必须与搜索结果完全同构，客户端才能
+   * 原样复用歌曲行组件与点播逻辑。
+   *
+   * 分页语义同 [getArtistSongs]：`pn` **1 基直传**，绝不能过 `upstreamPage()`
+   * 的 0 基换算（理由的实测表格见 [getArtistSongs] 的注释）；`limit` 直传当 `rn`。
+   */
+  async getPlaylistSongs(
+    playlistId: number,
+    page: number,
+    limit: number,
+    sourceMarker: number,
+  ): Promise<{ songs: UpstreamSong[]; total: number }> {
+    const client = await this.clientOf();
+    const detail = await client.getPlaylistSongs(playlistId, page, limit, sourceMarker);
     return { songs: detail.songs.map((song) => this.toUpstreamSong(song)), total: detail.total };
   }
 

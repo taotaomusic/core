@@ -167,12 +167,13 @@ Authorization: Bearer <accessToken>
 **歌单** `data = {playlists, meta}`,每项:
 
 ```json
-{"source":"kuwo","id":123456,"name":"周杰伦经典合集","pic":"https://...","creator":"波点用户","trackCount":88,"playCount":1234567}
+{"source":"kuwo","id":123456,"name":"周杰伦经典合集","pic":"https://...","creator":"波点用户","trackCount":88,"playCount":1234567,"sourceMarker":4}
 ```
 
-- 上游端点 `search/playlist/list`,条目的 `creator_name` / `musicnum` / `playnum` 出流前统一改名 `creator` / `trackCount` / `playCount`;`creator_id` / `sltype` / `hitcontent` 与上游的数字 `source` 标记是运营内容,不透传。
+- 上游端点 `search/playlist/list`,条目的 `creator_name` / `musicnum` / `playnum` 出流前统一改名 `creator` / `trackCount` / `playCount`;`creator_id` / `sltype` / `hitcontent` 与 `description`(App 解析类有它但线上条目实测没给)是运营内容,不透传。
+- `sourceMarker` 是上游条目的数字 `source` 标记(实测恒为 4):它平时确实展示用不到,但进在线歌单详情时要**原样回传**给上游当寻址参数(见第 9 节),所以是唯一保留下来的运营标记。
 - `pic` 上游给 **http 明文**(与详情族端点同坑),服务端统一升级 https。
-- 点击行为是进歌单详情页,歌单详情接口另行接入,客户端先按 `source` + `id` 保留跳转钥匙。实测「周杰伦」`total=143`。
+- 点击行为是进在线歌单详情页(`GET /api/v1/online-playlists/:id`,见第 9 节),`sourceMarker` + `id` 就是跳转钥匙。实测「周杰伦」`total=143`。
 
 **视频** `data = {videos, meta}`,每项:
 
@@ -299,11 +300,32 @@ Authorization: Bearer <accessToken>
 
 `desc` 就是上游的 `info`,是**全链路唯一保留长简介的契约**:专辑详情页要整段展示它;搜索行与歌手专辑列表照旧丢弃(单条几十 KB,进列表只会撑大响应)。`GET /api/v1/albums/:id/songs` 的请求参数与响应形状和歌手歌曲列表完全一致,只是数据源端点不同。
 
+### 在线歌单详情
+
+这是**音源侧的公开歌单**(搜索歌单标签点进去看到的),与账号自己的云端歌单(playlists 模块、`/api/v1/playlists/:id`)完全是两套东西 —— 那套路由只认当前账号的歌单,拿不到波点在线歌单的歌曲,所以这里用 `online-playlists` 前缀刻意区分,避免与云端的增删改接口撞形。
+
+```http
+GET /api/v1/online-playlists/2867496601?sourceMarker=4&source=kuwo
+GET /api/v1/online-playlists/2867496601/songs?page=1&num=30&sourceMarker=4&source=kuwo
+Authorization: Bearer <accessToken>
+```
+
+详情 `data.playlist`(`songs` 行与 `/search` 的 song data 完全同构,分页信封 `{songs, meta}` 同歌手歌曲列表):
+
+```json
+{"source":"kuwo","id":2867496601,"name":"终于等到周杰伦","pic":"https://...","description":"……长简介……","playCount":5657374,"trackCount":177,"collectedCount":23456,"createTime":"2020-01-01","creatorId":810,"creatorName":"第一天","creatorIcon":"https://...","isPrivate":false}
+```
+
+- 上游端点 `service/playlist/info/:id` 与 `service/playlist/:id/musicList`(字段来自 App 反汇编的 `SongListInfo.fromJson` / `DetailsSongListSongs.fromJson`):`playnum` / `musicCount` / `collectedCnt` 出流前统一改名 `playCount` / `trackCount` / `collectedCount`;`isFond`(对 App 当前用户的收藏态,服务端匿名态恒无意义)、`author` / `categories`(内层形状未实锤)与 `traceId` 不透传。歌曲列表的条目与专辑歌曲列表同构,走同一条 SongMapper 链路;上游 `data` 是 PageHelper 形状(`list` + `total`),`meta.total` 用整表总数。
+- **`sourceMarker` 是寻址参数**:搜索行(`GET /search/playlists`)带回的数字标记,上游要求原样回传。缺省 4 是搜索条目的实测常数,只服务于不带标记的直连调用;客户端应始终显式携带。
+- ⚠️ 上游这一族端点的**请求参数放在 GET 请求体里**(App 用 Dio 的 `request(path, data: ...)`,method 用默认 `"get"`;底层 OkHttp 允许 GET 带 body),body 是 `{"source": <sourceMarker>}`(详情)或 `{"source": <sourceMarker>, "pn": <页码>, "rn": <页大小>}`(歌曲)。裸 GET 不带体上游回 `-10 参数错误`,与「路径不存在」的 `-404` 是两个错误 —— 服务端用 `node:http(s)` 原生请求复刻这个形状(fetch 按 Web 规范禁止 GET 携带 body)。
+- 通用约定与详情族一致:要登录;`source` 缺省 `kuwo`、`source=all` 与未知音源 400/4001、音源未实现该能力 400/4007;路径 ID 非正整数 400/4001;上游取不到详情 502(`data.playlist` 缺失同理)。
+
 ### 波点分页的坑:详情族 `pn` 是 1 基
 
 同一上游两族端点的分页语义**不一致**,这是实测结论,别「顺手统一」:
 
 - 搜索接口(`search/music/list` 等):`pn` **0 基**,偏移 `pn × rn`,服务端要过 `upstreamPage()`(page-1)换算,见第 3 节与 `bodian.client.ts` 的实测表格。
-- 详情族(`service/artist/music/:id`、`service/album/music/:id` 等):`pn` **1 基**。实测(歌手 336)`pn=0` 与 `pn=1` 返回同一页,`pn=2` 才翻到第 11–20 首。服务端**直接把 1 基的 `page` 当 `pn` 传**,绝不能过 `upstreamPage()` —— 否则第 1 页拿到第 2 页、且 0/1 两页重复。
+- 详情族(`service/artist/music/:id`、`service/album/music/:id`、`service/playlist/:id/musicList` 等):`pn` **1 基**。实测(歌手 336)`pn=0` 与 `pn=1` 返回同一页,`pn=2` 才翻到第 11–20 首。服务端**直接把 1 基的 `page` 当 `pn` 传**,绝不能过 `upstreamPage()` —— 否则第 1 页拿到第 2 页、且 0/1 两页重复。
 
 契约验证脚本(`tools/verify-contract.mjs`)用「page=2 的首条不在 page=1 的 id 集合里」守住这条语义。
