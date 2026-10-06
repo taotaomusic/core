@@ -42,8 +42,6 @@ import com.taotao.music.playerui.SharedBackButton
 import com.taotao.music.playerui.SharedCard
 import com.taotao.music.playerui.SharedSectionHeader
 import com.taotao.music.playerui.SharedSectionLevel
-import com.taotao.music.playerui.theme.TaotaoShapes
-import com.taotao.music.playerui.theme.TaotaoSizes
 import com.taotao.music.playerui.theme.TaotaoSpacing
 import com.taotao.music.playerui.theme.TaotaoStroke
 import java.text.SimpleDateFormat
