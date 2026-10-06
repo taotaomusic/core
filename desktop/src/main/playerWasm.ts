@@ -15,7 +15,7 @@ import {
   type Lyric,
 } from "./lyrics";
 
-/** Kotlin/Wasm 门面的 TS 侧形态（与 PlayerFacade.kt 一一对应，手写保证类型严格）。 */
+/** Kotlin/Wasm 门面的 TS 侧形态：顶层 @JsExport 函数编译为模块命名导出。 */
 interface WasmPlayerModule {
   loadLyric(lrc: string | null, yrc: string | null): string;
   lyricIndexAt(positionMs: number): number;

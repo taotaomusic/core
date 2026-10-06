@@ -1,6 +1,7 @@
-// Kotlin/Wasm 共享层门面的类型声明（模块由根 CI 的 client-web job 生成到本目录）。
-// 手写声明而非编译器生成：Kotlin/Wasm 的导出面窄（@JsExport 仅支持扁平类型），
-// 手写能给出更严格的字面类型，并把 Kotlin 的有状态门面包成 TS 习惯的无状态形态。
+// Kotlin/Wasm 播放逻辑门面（:shared 的 wasmJsMain）的 TS 类型声明。
+// 模块本体（.mjs/.wasm）由根 CI 的 client-web job 从
+// shared/build/dist/wasmJs/productionExecutable/ 拷贝到本目录；
+// 这里手写声明：比编译器生成更严格，并把 Kotlin 顶层函数映射为 TS 命名导出。
 
 export interface TaotaoSharedWasm {
   /** 解析歌词并缓存到 wasm 侧，返回完整结构的 JSON 字符串。 */
@@ -17,6 +18,10 @@ export interface TaotaoSharedWasm {
   isLossless(value: number): boolean;
 }
 
-/** Kotlin 门面的单例导出（@JsExport object 编译产物形态）。 */
-declare const PlayerFacade: TaotaoSharedWasm;
-export default PlayerFacade;
+/** Kotlin 顶层 @JsExport 函数编译为模块的命名导出（非默认导出）。 */
+export declare function loadLyric(lrc: string | null, yrc: string | null): string;
+export declare function lyricIndexAt(positionMs: number): number;
+export declare function lyricProgressOf(lineIndex: number, positionMs: number): number;
+export declare function qualityLabel(value: number): string;
+export declare function defaultQualityValue(): number;
+export declare function isLossless(value: number): boolean;
