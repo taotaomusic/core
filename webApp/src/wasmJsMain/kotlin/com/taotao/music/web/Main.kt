@@ -15,6 +15,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Download
@@ -211,13 +213,20 @@ private fun SharePlayerPage(share: ShareSong) {
         errorMessage = audioState.errorMessage,
     )
 
-    BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+    // TopCenter：内容在矮视口（手机竖屏）里超出时，Center 会把顶部连同标题一起裁出
+    // 可滚范围（居中偏移为负），竖向滚动永远回不到顶；竖排列表顶对齐才是正解。
+    BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         val artworkSize = if (maxWidth < CompactWidthBreakpoint) ArtworkSizeCompact else ArtworkSizeWide
+        // 手机竖屏的视口高不足以放下整页内容（唱片+皮肤行+进度条+三个按钮），
+        // 超出部分会被一屏的 canvas 直接裁掉且浏览器侧滚不动（body overflow:hidden，
+        // 且 canvas 的 touch-action:none 本就是给 Compose 自己的滚动让路），
+        // 所以竖向滚动必须由 Compose 自己做：Column 包 verticalScroll。
         Column(
             modifier = Modifier
                 .widthIn(max = ShareContentMaxWidth)
-                .fillMaxWidth()
-                .padding(TaotaoSpacing.xl),
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = TaotaoSpacing.xl, vertical = TaotaoSpacing.xl),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Text(
