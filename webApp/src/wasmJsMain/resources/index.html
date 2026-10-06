@@ -7,8 +7,20 @@
     <meta name="theme-color" content="#fff9f7">
     <title>桃桃音乐 · 歌曲试听</title>
     <style>
-        html, body { width: 100%; height: 100%; margin: 0; background: #fff9f7; }
+        html, body { width: 100%; height: 100%; margin: 0; background: #fff9f7; overscroll-behavior: none; }
         body { min-height: 100dvh; overflow: hidden; }
+        /*
+         * Compose(wasm) 的输入桥监听 touchstart/touchmove/touchend/touchcancel。
+         * canvas 默认 touch-action: auto，手机浏览器的手势判定器（页面滚动、双击缩放、
+         * overscroll）一旦判定成立就会派发 touchcancel 掐断触摸流——表现为进度条
+         * 划不动、按钮点不动（桌面鼠标走 mousemove 链路，不受影响）。
+         * touch-action: none 让浏览器彻底不参与手势判定，触摸序列完整交给 Compose。
+         */
+        canvas {
+            touch-action: none;
+            -webkit-user-select: none;
+            user-select: none;
+        }
     </style>
 </head>
 <body>
