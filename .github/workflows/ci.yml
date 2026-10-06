@@ -521,34 +521,31 @@ jobs:
       # kotlinStorePackageLock 已不存在，--exclude-task 会因歧义直接报错）。
       - name: 刷新 kotlin-js-store 锁文件（漂移时回写）
         run: |
+          # Kotlin 2.2 起锁文件由 kotlinWasmUpgradePackageLock 实际化（wasm 锁与 js 锁
+          # 分离管理，都在 kotlin-js-store/ 下）。升级依赖后锁必漂移，构建图里带上
+          # 该任务一并 actualize；storePackageLock 校验继续排除避免顺序问题。
           for attempt in 1 2 3; do
-            if ./gradlew :webApp:wasmJsBrowserDistribution -x :kotlinWasmStorePackageLock --build-cache --no-daemon; then break; fi
+            if ./gradlew :webApp:wasmJsBrowserDistribution :kotlinWasmUpgradePackageLock -x :kotlinWasmStorePackageLock --build-cache --no-daemon; then break; fi
             echo "::warning::wasm 构建第 ${attempt} 次失败（wasm-opt 偶发启动问题），重试"
             if [ "$attempt" = 3 ]; then exit 1; fi
             sleep 5
           done
-          # Kotlin 2.2 起 wasmJs 的 npm 目录与 js 分离（build/wasm/js），自适应探测新旧行路径。
-          LOCK=""
-          for cand in build/wasm/js/package-lock.json build/js/package-lock.json; do
-            if [ -f "$cand" ]; then LOCK="$cand"; break; fi
-          done
-          if [ -z "$LOCK" ]; then
-            echo "::warning::未找到 npm 锁文件（build/wasm/js 与 build/js 均无），跳过锁回写"
-          elif ! git diff --quiet --no-index kotlin-js-store/package-lock.json "$LOCK"; then
-            cp "$LOCK" kotlin-js-store/package-lock.json
+          # 漂移检测走 git 层面（对 kotlin-js-store 整目录），不依赖锁文件的具体生成路径。
+          git add kotlin-js-store
+          if git diff --cached --quiet; then
+            echo "锁文件无漂移"
+          else
             # PR 上只刷新不落库：往 PR 分支推提交既打扰作者，fork PR 又没有写权限。
             # 漂移会在合并进 main 后的那次 push 运行里自动回写。
             if [ "${{ github.event_name }}" != "push" ]; then
+              git reset --hard >/dev/null
               echo "::warning::锁文件有漂移，PR 上不回写仓库；合并进 main 后由 push 运行自动刷新"
             else
               git config user.name "github-actions[bot]"
               git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-              git add kotlin-js-store
               git commit -m "build: CI 刷新 kotlin-js-store 锁文件（Linux 侧 npm 解析）[skip ci]"
               git push || echo "::warning::锁文件回写推送失败，下次运行重试"
             fi
-          else
-            echo "锁文件无漂移"
           fi
       - name: 构建 Kotlin/Wasm 分享播放器
         run: |
