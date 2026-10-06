@@ -35,6 +35,9 @@ taotao-release.jks
 /.tmp-*.mjs
 /*.png
 
+# tools/audit-deps.mjs 导出的 Gradle 依赖树缓存，本机专用
+/.gradle-release-runtime.txt
+
 # 发布签名密钥。taotao-release.jks 的 base64 形式，与 .jks 等价，泄露即可伪造发布包。
 # 注意：它不叫 *.jks，不会被上面的规则覆盖，必须单独列。
 keystore.b64
