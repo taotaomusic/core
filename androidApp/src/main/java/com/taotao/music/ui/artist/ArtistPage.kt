@@ -50,9 +50,11 @@ import com.taotao.music.data.AlbumSearchResult
 import com.taotao.music.data.ArtistDetail
 import com.taotao.music.data.ArtistSearchResult
 import com.taotao.music.model.Song
+import com.taotao.music.playerui.theme.TaotaoColors
 import com.taotao.music.playerui.theme.TaotaoShapes
 import com.taotao.music.playerui.theme.TaotaoSizes
 import com.taotao.music.playerui.theme.TaotaoSpacing
+import com.taotao.music.playerui.theme.TaotaoWash
 import com.taotao.music.ui.common.AlbumArt
 import com.taotao.music.ui.common.EmptyStateView
 import com.taotao.music.ui.common.SongListItem
@@ -70,13 +72,11 @@ import com.taotao.music.ui.theme.TaotaoCoral
  */
 
 /**
- * 歌手页大头像的边长。
+ * 歌手页大头像的边长：品牌标识语义，走共享档位 [TaotaoSizes.artworkBrand]。
  *
- * 规格在 72–96dp 之间取 88dp：介于现有头像档（TaotaoSizes.avatar = 64dp）与
- * 网格封面档（TaotaoSizes.artworkGrid = 112dp）之间。刻意不进 TaotaoSizes ——
- * 这是歌手页的一次性视觉规格，按 HistoryChipMaxWidth 的先例做页面私有常量。
+ * （视觉收敛 2026-10：原为页面私有 88dp，数值不变，收编进共享 token。）
  */
-private val ArtistHeroAvatarSize = 88.dp
+private val ArtistHeroAvatarSize = TaotaoSizes.artworkBrand
 
 /**
  * 目录页顶部珊瑚渐变的高度。
@@ -303,7 +303,7 @@ private fun ArtistTabRow(currentTab: ArtistPageTab, onSelect: (ArtistPageTab) ->
                 fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
                 modifier = Modifier
                     .clip(TaotaoShapes.pill)
-                    .background(if (selected) TaotaoCoral else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+                    .background(if (selected) TaotaoCoral else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = TaotaoWash.selected))
                     .clickable { onSelect(tab) }
                     .padding(horizontal = TaotaoSpacing.md, vertical = TaotaoSpacing.xs),
             )
@@ -341,7 +341,7 @@ internal fun CatalogPageBackdrop() {
     Box(
         Modifier
             .fillMaxWidth()
-            .height(CatalogBackdropHeight)
+            .height(CatalogBackdropHeight) // 豁免：品牌渐变起点浓度属装饰画法，不进共享压色档。
             .background(Brush.verticalGradient(listOf(TaotaoCoral.copy(alpha = 0.18f), Color.Transparent))),
     )
 }
@@ -591,9 +591,9 @@ private fun CatalogAlbumCard(
             .clickable { onAlbumClick(album) }
             .padding(bottom = TaotaoSpacing.xxs),
     ) {
-        // 与搜索区块一致的占位色：无图时由 AlbumArt 画色块 + 音符，整页观感统一。
+        // 走共享占位色 token：与搜索区块同一处兜底色（TaotaoColors 唯一数据源）。
         AlbumArt(
-            color = Color(0xFFFFB4A2),
+            color = TaotaoColors.placeholderArtwork,
             size = TaotaoSizes.artworkGrid,
             imageUri = album.pic,
             shape = TaotaoShapes.artwork,

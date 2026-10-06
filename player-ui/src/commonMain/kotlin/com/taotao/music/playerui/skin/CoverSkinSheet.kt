@@ -24,6 +24,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import com.taotao.music.playerui.theme.TaotaoSpacing
+import com.taotao.music.playerui.theme.TaotaoStroke
 
 /**
  * 封面皮肤选择面板（三端共用）：底部弹层里逐个预览 [CoverSkinId.entries]，
@@ -89,7 +90,7 @@ private fun CoverSkinOption(
                 .clip(MaterialTheme.shapes.small)
                 .background(MaterialTheme.colorScheme.surfaceContainerHigh)
                 .border(
-                    width = if (selected) 2.dp else 1.dp,
+                    width = if (selected) TaotaoStroke.medium else TaotaoStroke.thin,
                     color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
                     shape = MaterialTheme.shapes.small,
                 ),
@@ -115,8 +116,19 @@ private fun CoverSkinOption(
     }
 }
 
-/** 预览缩略图边长。 */
+/**
+ * 预览缩略图边长。
+ *
+ * 数值与 `TaotaoSizes.avatar`（64dp）相同，但语义属于皮肤缩略图域：
+ * 头像是「个人页列表元素」，这里是「皮肤选择面板的预览框」，二者将来可能独立调整，
+ * 因此不强行换用同一 token，避免改头像尺寸时缩略图被静默牵连。
+ */
 private val SKIN_THUMB_SIZE = 64.dp
 
-/** 皮肤控件在缩略图里留出的内边距，避免贴边。 */
+/**
+ * 皮肤控件在缩略图里留出的内边距，避免贴边。
+ *
+ * 同样属于皮肤缩略图域的局部画布余量，不对应任何现有 spacing 档位，
+ * 不参与全应用间距节奏，故保持局部常量、不强行归档。
+ */
 private val THUMB_INNER_PADDING = 12.dp

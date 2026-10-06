@@ -26,6 +26,7 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.Dp
+import com.taotao.music.playerui.PlayerCoralGlow
 import com.taotao.music.playerui.theme.LocalReduceMotion
 
 /**
@@ -147,7 +148,7 @@ private fun PaletteDots(
         label = "glowDotPulse",
     )
     val colors = listOf(
-        Color(0xFFFF7A66),
+        PlayerCoralGlow,
         Color(0xFFFFC46B),
         Color(0xFFB388FF),
     )

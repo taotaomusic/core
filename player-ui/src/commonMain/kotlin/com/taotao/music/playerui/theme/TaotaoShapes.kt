@@ -92,6 +92,9 @@ object TaotaoShapes {
  *
  * 分隔线用 [hairline]：在 1x 到 3x 屏上都渲染为 1 物理像素左右，
  * 写成 1.dp 在高密度屏上会显得过重。
+ *
+ * **边框宽度禁止裸写**：`1.dp` / `2.dp` 的边框一律取对应档位（视觉走查 2026-10：
+ * CoverSkinSheet 选中态与 MineLibraryPages 头像描边都曾裸写，token 改值时会静默脱队）。
  */
 object TaotaoStroke {
     /** 分隔线、卡片描边。 */

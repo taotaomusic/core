@@ -30,6 +30,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
+import com.taotao.music.playerui.PlayerCoralGlow
 import com.taotao.music.playerui.theme.LocalReduceMotion
 
 /**
@@ -241,7 +242,7 @@ private fun DrawScope.drawCassetteBottom(isPlaying: Boolean) {
     )
     if (isPlaying) {
         drawRoundRect(
-            Color(0xFFFF7A66),
+            PlayerCoralGlow,
             topLeft = topLeft,
             size = Size(barWidth, d * 0.028f),
             cornerRadius = CornerRadius(d * 0.014f),

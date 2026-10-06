@@ -14,6 +14,7 @@ import com.taotao.music.playerui.PlayerBackgroundDark
 import com.taotao.music.playerui.PlayerCoral
 import com.taotao.music.playerui.PlayerCoralDark
 import com.taotao.music.playerui.TaotaoPlayerTheme
+import com.taotao.music.playerui.theme.TaotaoLyricDim
 
 /** 主色：珊瑚红，用于强调按钮、选中态和图标。亮暗两套配色共用。 */
 val TaotaoCoral = PlayerCoral
@@ -63,14 +64,10 @@ fun TaotaoTheme(darkTheme: Boolean = isSystemInDarkTheme(), content: @Composable
  *
  * 单独定义而不是用 `onSurfaceVariant`：逐字高亮要求「已唱」与「未唱」有明确落差，
  * 常规的次要文字色对比度不够，滚动时看不出唱到哪了。
+ *
+ * 双值实现已上收为三端共享的 [TaotaoLyricDim]，这里委托它以保留原有的调用写法。
  */
 val LyricDim: Color
-    @Composable get() = if (isDarkTheme()) Color(0xFF6E6462) else Color(0xFFB9AEAB)
-
-/** 当前主题是否为暗色。按背景亮度反推，省去再往下传一个参数。 */
-@Composable
-fun isDarkTheme(): Boolean = MaterialTheme.colorScheme.background.luminanceIsDark()
-
-private fun Color.luminanceIsDark(): Boolean = (red * 0.299f + green * 0.587f + blue * 0.114f) < 0.5f
+    @Composable get() = TaotaoLyricDim
 
 

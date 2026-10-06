@@ -56,6 +56,7 @@ import com.taotao.music.playerui.theme.TaotaoShapes
 import com.taotao.music.playerui.theme.TaotaoSizes
 import com.taotao.music.playerui.theme.TaotaoSpacing
 import com.taotao.music.playerui.theme.TaotaoTypeScale
+import com.taotao.music.playerui.theme.TaotaoWash
 
 /** 快捷时长圆钮，与设计稿一致的 10-90 分钟六档。 */
 private val SleepTimerQuickMinutes = listOf(10, 20, 30, 45, 60, 90)
@@ -174,7 +175,7 @@ fun SleepTimerSheet(
                 }
                 HorizontalDivider(
                     Modifier.padding(top = TaotaoSpacing.md),
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f),
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = TaotaoWash.subtle),
                 )
                 if (!customExpanded) {
                     Text(
@@ -229,8 +230,10 @@ fun SleepTimerSheet(
 /** 「上次定时」的展示格式：整分时长显示为 分:秒（90 分钟 -> 90:00）。 */
 private fun formatTimerDuration(minutes: Int): String = "%d:00".format(minutes.coerceAtLeast(0))
 
-/** 勾选徽标的外径与对勾尺寸；触达面积由整行 clickable 承担，不靠徽标自身。 */
+/** 勾选徽标外径：22dp 属勾选徽标专属规格，不强行套图标刻度；触达面积由整行 clickable 承担，不靠徽标自身。 */
 private val CheckCircleBadgeSize = 22.dp
+
+/** 徽标内对勾：14dp，约为外径的 2/3，保证圆内留白均衡。 */
 private val CheckCircleIconSize = 14.dp
 
 /**
@@ -256,8 +259,10 @@ private fun CheckCircleBadge(checked: Boolean, modifier: Modifier = Modifier) {
         animationSpec = taotaoTween(AnimationDurations.MICRO),
         label = "播完再停底色",
     )
+    // 未勾选圆环是状态描边（前景小元素，与图标/文字同族）：按 token 归档表 0.45 档的去向，
+    // 直接用正牌次要色 onSurfaceVariant，不再叠加散装透明度。
     val ringColor by animateColorAsState(
-        targetValue = if (checked) TaotaoCoral else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f),
+        targetValue = if (checked) TaotaoCoral else MaterialTheme.colorScheme.onSurfaceVariant,
         animationSpec = taotaoTween(AnimationDurations.MICRO),
         label = "播完再停圆环",
     )

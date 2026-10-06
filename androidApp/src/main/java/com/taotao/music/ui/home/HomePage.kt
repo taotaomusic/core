@@ -28,6 +28,7 @@ import com.taotao.music.data.TencentMusicApi
 import com.taotao.music.playerui.theme.TaotaoShapes
 import com.taotao.music.playerui.theme.TaotaoSizes
 import com.taotao.music.playerui.theme.TaotaoSpacing
+import com.taotao.music.playerui.theme.TaotaoTextAlpha
 import com.taotao.music.ui.common.AlbumArt
 import java.util.Calendar
 
@@ -88,11 +89,12 @@ internal fun RecommendationCard() {
             )
             Text(
                 "20 首 · 精选推荐",
-                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.72f),
+                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = TaotaoTextAlpha.secondary),
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(top = TaotaoSpacing.xs),
             )
         }
+        // 促销卡右侧装饰封面底色：主色淡染属装饰画法，30% 档已删，用 tint(14%) 会太淡，保留豁免。
         AlbumArt(MaterialTheme.colorScheme.primary.copy(alpha = 0.32f), TaotaoSizes.artworkGrid)
     }
 }

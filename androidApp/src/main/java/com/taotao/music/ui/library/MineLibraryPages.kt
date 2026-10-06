@@ -42,7 +42,10 @@ import com.taotao.music.playerui.SharedBackButton
 import com.taotao.music.playerui.SharedCard
 import com.taotao.music.playerui.SharedSectionHeader
 import com.taotao.music.playerui.SharedSectionLevel
+import com.taotao.music.playerui.theme.TaotaoShapes
+import com.taotao.music.playerui.theme.TaotaoSizes
 import com.taotao.music.playerui.theme.TaotaoSpacing
+import com.taotao.music.playerui.theme.TaotaoStroke
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -55,7 +58,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Bedtime
@@ -278,7 +280,7 @@ fun SongDiaryPage(
         Box(
             Modifier
                 .fillMaxWidth()
-                .height(300.dp)
+                .height(300.dp) // 页内 hero 渐变区：高度与起点浓度(22%)均属装饰画法，有意例外不进 token。
                 .align(Alignment.TopCenter)
                 .background(Brush.verticalGradient(listOf(TaotaoCoral.copy(alpha = 0.22f), Color.Transparent))),
         )
@@ -348,7 +350,7 @@ fun DiaryRecordsPage(
         Box(
             Modifier
                 .fillMaxWidth()
-                .height(240.dp)
+                .height(240.dp) // 页内 hero 渐变区：高度与起点浓度(18%)均属装饰画法，有意例外不进 token。
                 .align(Alignment.TopCenter)
                 .background(Brush.verticalGradient(listOf(TaotaoCoral.copy(alpha = 0.18f), Color.Transparent))),
         )
@@ -479,8 +481,8 @@ private fun DiaryHeader(song: Song, recordCount: Int, onOpenRecords: (() -> Unit
                 Box(
                     modifier = Modifier
                         .padding(top = TaotaoSpacing.sm)
-                        .clip(RoundedCornerShape(percent = 50))
-                        .border(1.dp, TaotaoCoral, RoundedCornerShape(percent = 50))
+                        .clip(TaotaoShapes.pill)
+                        .border(TaotaoStroke.thin, TaotaoCoral, TaotaoShapes.pill)
                         .clickable(onClick = onOpenRecords)
                         .padding(horizontal = TaotaoSpacing.md, vertical = TaotaoSpacing.xs),
                 ) {
@@ -592,7 +594,7 @@ private fun DiaryYearlyCard(diary: SongDiary) {
             }
             DiaryYearlyChart(
                 diary.yearly,
-                Modifier.weight(0.58f).height(112.dp).padding(start = TaotaoSpacing.sm),
+                Modifier.weight(0.58f).height(TaotaoSizes.artworkGrid).padding(start = TaotaoSpacing.sm),
             )
         }
     }
@@ -665,7 +667,7 @@ private fun DiaryHalfYearCard(diary: SongDiary) {
             }
             DiaryHeatmap(
                 diary.dailyCounts,
-                Modifier.weight(0.58f).height(112.dp).padding(start = TaotaoSpacing.sm),
+                Modifier.weight(0.58f).height(TaotaoSizes.artworkGrid).padding(start = TaotaoSpacing.sm),
             )
         }
     }

@@ -27,6 +27,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.Dp
+import com.taotao.music.playerui.PlayerCoralGlow
 import com.taotao.music.playerui.theme.LocalReduceMotion
 
 /**
@@ -92,7 +93,7 @@ internal fun CardSkin(
             modifier = Modifier.graphicsLayer { alpha = pulse },
             horizontalArrangement = Arrangement.spacedBy(discSize * 0.012f),
         ) {
-            for (color in listOf(Color(0xFFFF7A66), Color(0xFFFFC46B), Color(0xFFB388FF))) {
+            for (color in listOf(PlayerCoralGlow, Color(0xFFFFC46B), Color(0xFFB388FF))) {
                 Box(
                     Modifier
                         .size(discSize * 0.024f)

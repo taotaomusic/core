@@ -133,7 +133,9 @@ private fun taotaoTextStyle(size: Int, lineHeight: Int, weight: FontWeight): Tex
  * | `labelSmall` | 11sp | 11sp | 是（徽标） |
  *
  * 凡是「在用」的槽位都保持原字号，只改中文字距与行距。
- * 真实收益来自两处：**从 22 种字号收敛到 8 种**（页面里写死的那些由阶段 2 迁移），
+ * 真实收益来自两处：**从 22 种字号收敛到 8 种**（此处「8」指下表映射到 MaterialTheme
+ * 槽位的字号种数；[TaotaoTypeScale] 本身是 10 档，见其文件头说明。
+ * 页面里写死的那些由阶段 2 迁移），
  * 以及**中文行距与字距的修正**。后者不需要改任何页面就已经生效。
  *
  * [TaotaoTypeScale.subtitle]（20sp）与 [TaotaoTypeScale.sectionTitle]（18sp）

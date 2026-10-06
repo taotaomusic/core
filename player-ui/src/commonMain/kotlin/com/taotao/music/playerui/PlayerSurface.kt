@@ -29,6 +29,7 @@ import com.taotao.music.playerui.theme.TaotaoElevation
 import com.taotao.music.playerui.theme.TaotaoShapes
 import com.taotao.music.playerui.theme.TaotaoSizes
 import com.taotao.music.playerui.theme.TaotaoSpacing
+import com.taotao.music.playerui.theme.TaotaoWash
 import com.taotao.music.playerui.theme.taotaoShadowColors
 
 /**
@@ -41,7 +42,7 @@ import com.taotao.music.playerui.theme.taotaoShadowColors
  * 截图实测：矩形阴影比圆形封面每边多出约 30dp，四个角最明显。
  * 所以默认值改成 [CircleShape] —— 封面在三个平台上本来就是圆的。
  *
- * 阴影颜色随亮暗主题走：此前这里写死 `Color.Black.copy(alpha = 0.5f)`，
+ * 阴影颜色随亮暗主题走：此前这里把阴影写死为纯黑 50% 透明，
  * 而 [SharedMiniPlayer] 用的是 0.1f，同一套界面里两处阴影相差 5 倍。
  */
 @Composable
@@ -120,7 +121,7 @@ fun PlayerSongHeader(
                 val artistClickable = onArtistClick != null && song.artistId != null
                 Text(
                     text = song.artist,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.titleMedium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -139,7 +140,7 @@ fun PlayerSongHeader(
                     val albumClickable = onAlbumClick != null && song.albumId != null
                     Text(
                         text = " · ${song.album}",
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.titleMedium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -229,12 +230,12 @@ fun PlayerPlaybackDetails(
             ) {
                 Text(
                     text = positionLabel,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.labelMedium,
                 )
                 Text(
                     text = durationLabel,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.labelMedium,
                 )
             }
@@ -251,7 +252,7 @@ fun PlayerPlaybackDetails(
                     modifier = Modifier
                         .padding(top = TaotaoSpacing.xxs)
                         .clip(TaotaoShapes.badge)
-                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = TaotaoWash.tint))
                         .clickable(onClickLabel = "跳到高潮起点") {
                             actions.onSeek(refrainStart)
                             actions.onSeekFinished()
@@ -351,7 +352,7 @@ fun PlayerTransportControls(
                         PlayerRepeatMode.ONE -> "单曲循环"
                     },
                     tint = if (state.repeatMode == PlayerRepeatMode.OFF) {
-                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                        MaterialTheme.colorScheme.onSurfaceVariant
                     } else {
                         MaterialTheme.colorScheme.primary
                     },

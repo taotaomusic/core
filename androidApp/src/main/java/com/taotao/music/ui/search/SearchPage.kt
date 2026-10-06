@@ -114,10 +114,12 @@ import com.taotao.music.playerui.SharedContentState
 import com.taotao.music.playerui.SharedContentStateType
 import com.taotao.music.playerui.SharedSectionHeader
 import com.taotao.music.playerui.SharedSectionLevel
+import com.taotao.music.playerui.theme.TaotaoColors
 import com.taotao.music.playerui.theme.TaotaoElevation
 import com.taotao.music.playerui.theme.TaotaoShapes
 import com.taotao.music.playerui.theme.TaotaoSizes
 import com.taotao.music.playerui.theme.TaotaoSpacing
+import com.taotao.music.playerui.theme.TaotaoWash
 import com.taotao.music.playerui.theme.TaotaoTypeScale
 // 「歌手 / 专辑」标签的失败占位与统计缩写复用歌手页已有的内部组件：同一模块内
 // internal 可见，避免在搜索页再长一份一模一样的实现。
@@ -136,10 +138,10 @@ private val HistoryChipMaxWidth = 160.dp
 /**
  * 「歌手」区块头像的边长。
  *
- * 刻意不进 [TaotaoSizes]：这是搜索区块的一次性视觉规格，现有头像档（64dp）与
- * 网格封面档（112dp）都不合适；与 [HistoryChipMaxWidth] 一样按页面私有常量处理。
+ * 歌手头像归头像语义：直接引用共享 token [TaotaoSizes.avatar]，与个人页头像同档；
+ * 保留私有常量名是为了让区块与列表行两个调用点共用一个入口，改动仍只落在一处。
  */
-private val ArtistAvatarSize = 72.dp
+private val ArtistAvatarSize = TaotaoSizes.avatar
 
 /** 搜索页面：负责关键词输入、结果展示和异步状态过渡。 */
 @OptIn(ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
@@ -348,7 +350,7 @@ fun SearchPage(
             }
             Card(
                 modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = TaotaoWash.selected)),
             ) {
                 Column(Modifier.fillMaxWidth().padding(horizontal = TaotaoSpacing.xs, vertical = TaotaoSpacing.xxs)) {
                     hotSearches.take(10).chunked(2).forEachIndexed { rowIndex, rowItems ->
@@ -637,7 +639,7 @@ private fun SearchTabRow(
                 fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
                 modifier = Modifier
                     .clip(TaotaoShapes.pill)
-                    .background(if (selected) TaotaoCoral else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+                    .background(if (selected) TaotaoCoral else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = TaotaoWash.selected))
                     .clickable { onSelect(tab) }
                     .padding(horizontal = TaotaoSpacing.md, vertical = TaotaoSpacing.xs),
             )
@@ -784,7 +786,7 @@ private fun SearchHistoryChips(
                         }
                     }
                     .clip(TaotaoShapes.pill)
-                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = TaotaoWash.selected))
                     .clickable { onHistoryClick(item) }
                     .pointerInput(item) {
                         detectDragGesturesAfterLongPress(
@@ -900,7 +902,7 @@ private fun ArtistSearchSection(
 /**
  * 歌手头像：有图用图，无图回退为主题色圆形 + 名字首字符。
  * 兜底思路与公共组件 [AlbumArt] 一致（图片淡入、色块占位），只是占位内容换成了首字符。
- * 「歌手」标签的列表行与「综合」区块共用，只是尺寸不同（区块 72dp、列表行用全局头像档）。
+ * 「歌手」标签的列表行与「综合」区块共用，尺寸统一走头像语义（[TaotaoSizes.avatar]）。
  */
 @Composable
 private fun ArtistSearchAvatar(name: String, pic: String?, size: Dp = ArtistAvatarSize) {
@@ -979,9 +981,9 @@ private fun AlbumResultCard(
     ) {
         // 封面直接复用全局 [AlbumArt]：112dp 高于列表行封面档，组件会按尺寸
         // 自动判成圆形，这里显式传圆角形状覆盖；无图时组件自带色块 + 音符兜底，
-        // 颜色沿用歌曲行封面的占位色，整页观感一致。
+        // 走共享 token TaotaoColors.placeholderArtwork，整页观感一致。
         AlbumArt(
-            color = Color(0xFFFFB4A2),
+            color = TaotaoColors.placeholderArtwork,
             size = TaotaoSizes.artworkGrid,
             imageUri = album.pic,
             shape = TaotaoShapes.artwork,
@@ -1266,8 +1268,9 @@ private fun PlaylistResultCard(
     ) {
         // 歌单封面是列表行封面角色，用全局 48dp 封面档；显式传圆角形状覆盖，
         // 与专辑卡片同一做法（AlbumArt 在更大尺寸会自动判成圆形）。
+        // 占位色走共享 token TaotaoColors.placeholderArtwork。
         AlbumArt(
-            color = Color(0xFFFFB4A2),
+            color = TaotaoColors.placeholderArtwork,
             size = TaotaoSizes.artworkRow,
             imageUri = playlist.pic,
             shape = TaotaoShapes.artwork,
@@ -1401,7 +1404,7 @@ private fun VideoResultCard(
                     .align(Alignment.Center)
                     .size(TaotaoSizes.playButton)
                     .clip(CircleShape)
-                    .background(Color.Black.copy(alpha = 0.45f)),
+                    .background(Color.Black.copy(alpha = TaotaoWash.scrim)),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
@@ -1804,7 +1807,9 @@ private fun LyricCardActionButton(
 
 /** 搜索页骨架的占位条尺寸：与 components.kt 的歌曲骨架同一规格，页面私有常量（理由同 HistoryChipMaxWidth）；height 修饰符需要显式导入，勿删。 */
 private val SearchSkeletonBarWidth = 150.dp
-private val SearchSkeletonBarHeight = 14.dp
+
+/** 与 common/components.kt 共享骨架规格一致（标题条 SkeletonTitleHeight = 16.dp）。 */
+private val SearchSkeletonBarHeight = 16.dp
 
 /** 上游命中片段的高亮标记（`<em>` / `</em>`），以及可能出现的转义形式。 */
 private val LyricSnippetHighlightTag = Regex("</?em\\b[^>]*>", RegexOption.IGNORE_CASE)

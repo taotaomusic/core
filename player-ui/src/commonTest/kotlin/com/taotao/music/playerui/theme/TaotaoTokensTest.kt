@@ -302,6 +302,36 @@ class TaotaoTokensTest {
         assertEquals(0.dp, levels.first(), "最低一级必须是 0dp，代表真正平铺的内容。")
     }
 
+    // ---- 语义色 ----
+
+    /**
+     * 透明度档位必须「一眼能分辨」。
+     *
+     * 收敛之前散装 alpha 多达 14 档（0.08–0.8），相邻档位常只差 0.02–0.05，
+     * 真机上分辨不出来，只会让调用点不知道该用哪个。这条断言把「相邻档至少差 0.08」
+     * 固定下来，逼着后来者归档而不是再插一档近似的。
+     */
+    @Test
+    fun washLevelsStayDistinguishable() {
+        val levels = TaotaoWash.levels
+        assertEquals(4, levels.size, "背景压色只允许四档，当前：$levels")
+        levels.zipWithNext().forEach { (lighter, darker) ->
+            assertTrue(
+                darker - lighter >= 0.08f,
+                "压色档位 $lighter 与 $darker 只差 ${darker - lighter}，真机上无法分辨；应当归档而不是新增。",
+            )
+        }
+    }
+
+    @Test
+    fun textAlphaLevelsStayOrdered() {
+        val levels = TaotaoTextAlpha.levels
+        assertEquals(2, levels.size, "彩底文字透明度只允许两档，当前：$levels")
+        levels.zipWithNext().forEach { (lighter, darker) ->
+            assertTrue(darker > lighter, "文字透明度档位必须递增，但 $lighter 之后是 $darker。")
+        }
+    }
+
     // ---- 断言辅助 ----
 
     private fun assertStrictlyIncreasingDps(values: List<Dp>, label: String) {

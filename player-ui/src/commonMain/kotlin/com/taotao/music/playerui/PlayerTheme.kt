@@ -13,6 +13,14 @@ import com.taotao.music.playerui.theme.TaotaoTypography
 /** 三端播放详情共用的品牌色，平台外围页面可以继续保留自己的主题扩展。 */
 val PlayerCoral = Color(0xFFFA5E5B)
 val PlayerCoralDark = Color(0xFFFC7773)
+
+/**
+ * 品牌珊瑚色的亮色旁系：偏橙的浅珊瑚，用于皮肤灯带与调色点等装饰点缀。
+ *
+ * 收编了 CassetteSkin（灯带）、GlowSkin / CardSkin（调色点）共 3 处裸写的 `0xFFFF7A66` ——
+ * 这是「品牌色旁系」，正式调珊瑚色时三处皮肤会跟着联动。
+ */
+val PlayerCoralGlow = Color(0xFFFF7A66)
 val PlayerBackground = Color(0xFFFFF9F7)
 val PlayerBackgroundDark = Color(0xFF1A1615)
 private val playerLightColors = lightColorScheme(

@@ -78,8 +78,10 @@ import com.taotao.music.model.Song
 import com.taotao.music.playerui.SharedContentState
 import com.taotao.music.playerui.SharedContentStateType
 import com.taotao.music.playerui.SharedSongRow
+import com.taotao.music.playerui.SharedVipBadge
 import com.taotao.music.playerui.theme.TaotaoShapes
 import com.taotao.music.playerui.theme.TaotaoSizes
+import com.taotao.music.playerui.theme.TaotaoTextAlpha
 import com.taotao.music.playerui.theme.TaotaoElevation
 import com.taotao.music.playerui.theme.taotaoShadowColors
 import com.taotao.music.playerui.theme.TaotaoSpacing
@@ -360,19 +362,15 @@ fun PlayPauseIcon(isPlaying: Boolean, modifier: Modifier = Modifier, tint: Color
     )
 }
 
-/** VIP / 付费标记。容器色成对取用，避免透明度叠加在亮色白底上淡到看不见。 */
+/**
+ * VIP / 付费标记。
+ *
+ * 委托 [SharedVipBadge]：皮肤侧是唯一 VIP 徽标实现，Android 端不再自绘第二份
+ * （旧实现与皮肤侧逐行雷同却各自维护，改一处漏一处）。保留函数名与签名，
+ * 平台层调用点无需跟着改。
+ */
 @Composable
-fun VipBadge(modifier: Modifier = Modifier) {
-    Box(
-        modifier
-            .clip(TaotaoShapes.badge)
-            .background(MaterialTheme.colorScheme.primaryContainer)
-            // 纵向只留 1dp：徽标高度应当由行高决定，再撑开就会把整行顶高。
-            .padding(horizontal = TaotaoSpacing.xxs, vertical = TaotaoSpacing.tightVertical),
-    ) {
-        Text("VIP", color = MaterialTheme.colorScheme.onPrimaryContainer, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
-    }
-}
+fun VipBadge(modifier: Modifier = Modifier) = SharedVipBadge(modifier)
 
 /**
  * 搜索栏，首页和搜索页共用。
@@ -478,7 +476,7 @@ fun PagerDots(current: Int, total: Int, modifier: Modifier = Modifier) {
                 targetValue = if (selected) {
                     TaotaoCoral
                 } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
+                    MaterialTheme.colorScheme.outlineVariant
                 },
                 animationSpec = taotaoTween(AnimationDurations.MICRO),
                 label = "分页点着色",

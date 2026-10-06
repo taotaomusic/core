@@ -25,7 +25,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Fullscreen
@@ -77,8 +76,12 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.taotao.music.data.TencentMusicApi
 import com.taotao.music.model.Song
+import com.taotao.music.playerui.theme.TaotaoColors
+import com.taotao.music.playerui.theme.TaotaoShapes
 import com.taotao.music.playerui.theme.TaotaoSizes
 import com.taotao.music.playerui.theme.TaotaoSpacing
+import com.taotao.music.playerui.theme.TaotaoStroke
+import com.taotao.music.playerui.theme.TaotaoWash
 import com.taotao.music.ui.theme.AnimationDurations
 import com.taotao.music.ui.theme.LocalReduceMotion
 import com.taotao.music.ui.theme.TaotaoCoral
@@ -159,6 +162,7 @@ internal fun MvPlayerPage(
         }
     }
 
+    // 页面打底纯黑：视频浮层的黑不属于任何主题色，保持字面量（MV 页豁免）。
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         // 模糊封面打底，给竖屏的纯黑页面一点来自歌曲本身的氛围；全屏时画面
         // 本身铺满，不再铺背景。低版本系统不支持 blur 时退化为「低透明度清晰
@@ -172,6 +176,8 @@ internal fun MvPlayerPage(
                     alpha = 0.4f,
                     modifier = Modifier.fillMaxSize().blur(48.dp),
                 )
+                // 豁免：0.55 比共享遮罩档 TaotaoWash.scrim(0.35) 更深，这里是「模糊封面的暗化打底」，
+                // 需要比常规遮罩更沉才能托住上层信息，保留原值。
                 Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.55f)))
             }
         }
@@ -190,11 +196,11 @@ internal fun MvPlayerPage(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = Color.White)
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TaotaoColors.videoOn)
                     }
                     Text(
                         "MV",
-                        color = Color.White,
+                        color = TaotaoColors.videoOn,
                         fontWeight = FontWeight.Bold,
                         style = MaterialTheme.typography.titleMedium,
                         modifier = Modifier.weight(1f),
@@ -225,7 +231,7 @@ internal fun MvPlayerPage(
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
                                     mvInfo?.name?.takeIf { it.isNotBlank() } ?: song.title,
-                                    color = Color.White,
+                                    color = TaotaoColors.videoOn,
                                     style = MaterialTheme.typography.titleMedium,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
@@ -233,21 +239,24 @@ internal fun MvPlayerPage(
                                 )
                                 Spacer(Modifier.width(TaotaoSpacing.sm))
                                 Surface(
-                                    shape = RoundedCornerShape(4.dp),
+                                    shape = TaotaoShapes.extraSmall,
                                     color = Color.Transparent,
-                                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.4f)),
+                                    // 豁免：徽标描边用 40% 白，比次要文字更淡以退到装饰层，
+                                    // 提亮会喧宾夺主，不进共享文字档位。
+                                    border = BorderStroke(TaotaoStroke.thin, Color.White.copy(alpha = 0.4f)),
                                 ) {
                                     Text(
                                         "MV",
-                                        color = Color.White.copy(alpha = 0.75f),
+                                        color = TaotaoColors.videoOnMuted,
                                         style = MaterialTheme.typography.labelSmall,
-                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
+                                        // vertical 1.dp 是像素级微调，不进 4dp 栅格；水平间距对齐共享 xs 档。
+                                        modifier = Modifier.padding(horizontal = TaotaoSpacing.xs, vertical = 1.dp),
                                     )
                                 }
                             }
                             Text(
                                 song.artist,
-                                color = Color.White.copy(alpha = 0.65f),
+                                color = TaotaoColors.videoOnMuted,
                                 style = MaterialTheme.typography.bodySmall,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
@@ -447,8 +456,8 @@ private fun MvPlayerSurface(
                 Box(
                     Modifier
                         .align(Alignment.Center)
-                        .size(64.dp)
-                        .background(Color.Black.copy(alpha = 0.45f), CircleShape)
+                        .size(TaotaoSizes.playButton)
+                        .background(Color.Black.copy(alpha = TaotaoWash.scrim), CircleShape)
                         .clickable { togglePlayback() },
                     contentAlignment = Alignment.Center,
                 ) {
@@ -458,7 +467,7 @@ private fun MvPlayerSurface(
                         isPlaying -> Icons.Default.Pause
                         else -> Icons.Default.PlayArrow
                     }
-                    Icon(centerIcon, null, tint = Color.White, modifier = Modifier.size(36.dp))
+                    Icon(centerIcon, null, tint = TaotaoColors.videoOn, modifier = Modifier.size(TaotaoSizes.iconButton))
                 }
                 // 底部控制条：压一层向上的黑色渐变保证白色文字可读。
                 Column(
@@ -467,6 +476,8 @@ private fun MvPlayerSurface(
                         .fillMaxWidth()
                         .background(
                             Brush.verticalGradient(
+                                // 豁免：底部控制条渐变的终点比共享遮罩档更深（0.75），
+                                // 是「向上渐隐压暗」的终点值，保证时间文字可读，不归 scrim 档。
                                 listOf(Color.Transparent, Color.Black.copy(alpha = 0.75f)),
                             ),
                         )
@@ -475,7 +486,7 @@ private fun MvPlayerSurface(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
                             formatTime(positionMs.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()),
-                            color = Color.White.copy(alpha = 0.85f),
+                            color = TaotaoColors.videoOn,
                             style = MaterialTheme.typography.labelSmall,
                         )
                         Slider(
@@ -495,13 +506,15 @@ private fun MvPlayerSurface(
                             colors = SliderDefaults.colors(
                                 thumbColor = TaotaoCoral,
                                 activeTrackColor = TaotaoCoral,
+                                // 豁免：进度条未播放轨道用 30% 白，比次要文字更淡以退居背景层，
+                                // 既不是文字也不是遮罩，不进共享档位。
                                 inactiveTrackColor = Color.White.copy(alpha = 0.3f),
                             ),
                             modifier = Modifier.weight(1f).padding(horizontal = TaotaoSpacing.xs),
                         )
                         Text(
                             formatTime(durationMs.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()),
-                            color = Color.White.copy(alpha = 0.85f),
+                            color = TaotaoColors.videoOn,
                             style = MaterialTheme.typography.labelSmall,
                         )
                     }
@@ -535,7 +548,7 @@ private fun MvPlayerSurface(
                             Icon(
                                 if (isFullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
                                 if (isFullscreen) "退出全屏" else "全屏",
-                                tint = Color.White,
+                                tint = TaotaoColors.videoOn,
                             )
                         }
                     }
@@ -554,10 +567,11 @@ private fun MvQualityChip(
     enabled: Boolean,
     onClick: () -> Unit,
 ) {
+    // 浮层白色文字只保留两档：主信息 videoOn、次要信息 videoOnMuted（禁用态归次要档）。
     val contentColor = when {
-        !enabled -> Color.White.copy(alpha = 0.35f)
+        !enabled -> TaotaoColors.videoOnMuted
         selected -> TaotaoCoral
-        else -> Color.White.copy(alpha = 0.8f)
+        else -> TaotaoColors.videoOn
     }
     TextButton(onClick = onClick, enabled = enabled) {
         Text(
@@ -581,13 +595,13 @@ private fun MvStatusFallback(message: String, onRetry: (() -> Unit)?) {
         Icon(
             Icons.Default.VideoLibrary,
             contentDescription = null,
-            tint = Color.White.copy(alpha = 0.5f),
+            tint = TaotaoColors.videoOnMuted,
             modifier = Modifier.size(44.dp),
         )
         Spacer(Modifier.height(TaotaoSpacing.sm))
         Text(
             message,
-            color = Color.White.copy(alpha = 0.75f),
+            color = TaotaoColors.videoOnMuted,
             style = MaterialTheme.typography.bodyMedium,
             textAlign = TextAlign.Center,
         )

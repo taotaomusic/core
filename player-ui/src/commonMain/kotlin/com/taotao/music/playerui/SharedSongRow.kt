@@ -27,6 +27,7 @@ import com.taotao.music.model.Song
 import com.taotao.music.playerui.theme.TaotaoShapes
 import com.taotao.music.playerui.theme.TaotaoSizes
 import com.taotao.music.playerui.theme.TaotaoSpacing
+import com.taotao.music.playerui.theme.TaotaoWash
 
 /**
  * Android 与 Windows 共用的歌曲列表视觉骨架。
@@ -153,7 +154,11 @@ fun SharedSongRow(
  */
 private val SongRowMinHeight = TaotaoSizes.artworkRow + TaotaoSpacing.listItemVertical * 2
 
-/** 三端统一的 VIP 标识。 */
+/**
+ * 三端统一的 VIP 标识。
+ *
+ * androidApp 的 VipBadge 已改为委托本组件，平台层不要再画第二份 VIP 标记。
+ */
 @Composable
 fun SharedVipBadge(modifier: Modifier = Modifier) {
     Text(
@@ -186,7 +191,7 @@ fun SharedUnplayableBadge(modifier: Modifier = Modifier) {
         style = MaterialTheme.typography.labelSmall,
         modifier = modifier
             .clip(TaotaoShapes.badge)
-            .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = TaotaoWash.tint))
             .padding(horizontal = TaotaoSpacing.xxs, vertical = TaotaoSpacing.tightVertical),
     )
 }

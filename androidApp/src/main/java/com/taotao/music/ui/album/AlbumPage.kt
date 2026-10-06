@@ -21,14 +21,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
 import com.taotao.music.data.AlbumDetail
 import com.taotao.music.data.AlbumSearchResult
 import com.taotao.music.model.Song
+import com.taotao.music.playerui.theme.TaotaoColors
 import com.taotao.music.playerui.theme.TaotaoShapes
+import com.taotao.music.playerui.theme.TaotaoSizes
 import com.taotao.music.playerui.theme.TaotaoSpacing
 import com.taotao.music.ui.artist.CatalogExpandableText
 import com.taotao.music.ui.artist.CatalogLoadMoreThreshold
@@ -48,13 +48,11 @@ import com.taotao.music.ui.theme.TaotaoCoral
  */
 
 /**
- * 专辑页封面的边长。
+ * 专辑页头图封面的边长：hero 语义，走三端共用封面刻度最大档 [TaotaoSizes.artworkHero]。
  *
- * 任务规格 120dp；介于网格封面档（112dp）与播放页大封面档（132dp）之间。
- * 刻意不进 TaotaoSizes —— 这是专辑页的一次性视觉规格，按 HistoryChipMaxWidth 的先例
- * 做页面私有常量。
+ * （视觉收敛 2026-10：原为页面私有 120dp，收编进共享 token，与播放页大封面同档。）
  */
-private val AlbumCoverSize = 120.dp
+private val AlbumCoverSize = TaotaoSizes.artworkHero
 
 /**
  * 专辑页装配。
@@ -176,8 +174,9 @@ private fun AlbumSummaryHeader(
     val songCount = detail?.songCount ?: target.songCount
     val showtime = detail?.showtime?.takeIf { it.isNotBlank() } ?: target.showtime
     Row(Modifier.fillMaxWidth().padding(top = TaotaoSpacing.xs), verticalAlignment = Alignment.CenterVertically) {
+        // 走共享占位色 token：无封面兜底色全端唯一（0xFFFFB4A2 收编进 TaotaoColors）。
         AlbumArt(
-            color = Color(0xFFFFB4A2),
+            color = TaotaoColors.placeholderArtwork,
             size = AlbumCoverSize,
             imageUri = pic,
             shape = TaotaoShapes.artwork,

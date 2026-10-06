@@ -361,8 +361,10 @@ private fun ChatInputBar(
     }
 }
 
-/** 气泡旁的头像直径与会话列表头像直径。 */
+/** 气泡旁的头像直径：与 TaotaoSizes.iconButton(36dp) 数值巧合，属聊天头像域，不共用 token。 */
 private val BubbleAvatarSize = 36.dp
+
+/** 会话列表头像直径：与 TaotaoSizes.stateIcon(44dp) 数值巧合，属聊天头像域，不共用 token。 */
 private val ConversationAvatarSize = 44.dp
 
 /** 头像解码上限（像素）：4 倍直径的余量，避免相册原图整幅解码。 */
