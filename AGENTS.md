@@ -56,6 +56,37 @@ GitHub 侧三个仓库（music / music-server / tools）都是**正式仓库**�
 - **music-server 仓库**：`server/.github/workflows/backend.yml`（源文件在 `server/.github/` 内）——Ubuntu + PostgreSQL 服务容器，构建时从 `share-player-latest` 拉取真实分享播放器放进 `dist/share-player/`（拉不到退回占位文件），然后起验证实例执行完整 `verify-contract.mjs`，**全绿才算通过**，通过后把完整 dist 发布到固定 tag 预发布版 **Release `server-dist-latest`**，并把复用这份已验证 dist 的运行时镜像（`server/Dockerfile`）推到 **ghcr.io**（`ghcr.io/hdppppppp/music-server` 打三个 tag：`latest`、`<package.json 的 version>`、`<sha 前 12 位>`；仅 push 到 main 时推，手动触发只验证）。后端版本号单一来源是 `server/package.json` 的 `version`（手动 SemVer 维护），要发新版本先改它再提交。独立仓库没有 Gradle 工程，`build:web-player` 会自动跳过（见 `build-web-player.mjs`）。
 - **APK 签名**：在 music 仓库 Secrets 配 `ANDROID_KEYSTORE_BASE64`（`taotao-release.jks` 的 base64）、`ANDROID_STORE_PASSWORD`、`ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD` 后出签名 Release 包；未配置时自动退回 Debug 包，仅验证工具链。
 
+## Git 协作流程（强制）
+
+**任何改动进 `main` 都必须走完整 PR 流程，禁止把本地分支直接 merge 到 main 后推走。**
+
+固定六步，顺序不可颠倒：
+
+1. **从 main 拉分支**：`git switch -c <type>/<slug>`（`fix/`、`feat/`、`docs/`、`chore/`）。
+2. **提交改动**：在分支上完成并提交，工作区不得残留未提交内容。
+3. **推分支**：`git push core <branch>`。
+4. **建 PR**：`POST /repos/taotaomusic/core/pulls`，`base: main`、`head: <branch>`，body 写清**问题 → 根因 → 修复 → 验证**四段。
+5. **等 CI 绿**：PR 会触发 `ci.yml`；只改 `server/**` 等单模块时下游 job 按路径过滤 skip 属正常。**CI 未绿不得合并。**
+6. **合并后删分支**：合并 PR，再 `git push core --delete <branch>` + `git branch -d <branch>` + `git remote prune core`。
+
+### 为什么这条不能省
+
+**PR 必须在合并之前创建，事后无法补建。** GitHub 的语义是「head 相对 base 必须有领先提交」；分支一旦被 merge 吸收进 main，`compare/main...<branch>` 返回 `ahead_by=0`，建 PR 会被拒：
+
+```
+422 Validation Failed
+"No commits between main and <branch>"
+```
+
+这是**不可逆**的 —— 2026-10-06 踩过一次：`ac3782e`（剥 `<em>` 高亮）与 `240c5ef`（歌词卡片化）两次修复都直接 merge 到 main，事后想补 PR 记录，两个分支均已 `ahead_by=0`，补不回来，只能删分支认账。回滚 redo 会更糟（丢失已验证 sha、可能触发版本号链路副作用）。
+
+### 与本仓库相关的几个事实
+
+- **git 远端 `core` 走 SSH**（`git@github.com:taotaomusic/core.git`），身份 `hdppppppp`，可推可删分支。
+- ⚠️ **SSH 密钥不能建 PR**：SSH 只承载 `git-upload-pack` / `git-receive-pack`（推拉代码），PR 走 REST API 只认 Bearer token。两者是**并行的两套认证体系**，设计上不通用。
+- ⚠️ **GitHub connector 默认只有读权限**：调 `POST /pulls` 返回 `403 Resource not accessible by integration`。要建 PR 得用 PAT（classic 勾 `repo`；仓库公开时 `public_repo` 也够）或给对应 GitHub App 开 `Pull requests: Read and write`。
+- ⚠️ **`git push` 到 `origin`（gitee）与推 `core`（GitHub）是两件事**，别用推了 gitee 当作流程走完。
+
 </details>
 
 ## 文档索引
