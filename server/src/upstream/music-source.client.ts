@@ -166,8 +166,11 @@ export interface UpstreamArtistDetail {
  *
  * 字段名就是**下发契约名** —— 上游的 `creator_name` / `musicnum` / `playnum` 必须
  * 在适配器里就地改成 `creator` / `trackCount` / `playCount`，出流后不再有第二层改名。
- * 上游条目里的 `creator_id` / `sltype` / `hitcontent` 与数字 `source` 标记是列表展示
- * 用不到的内容，适配器映射时**必须丢弃**；`pic` 上游给 http 明文，适配器必须升级 https。
+ * 上游条目里的 `creator_id` / `sltype` / `hitcontent` 是列表展示用不到的内容，
+ * 适配器映射时**必须丢弃**；`pic` 上游给 http 明文，适配器必须升级 https。
+ * 数字 `source` 标记是唯一的例外：它平时确实展示用不到，但进歌单详情时
+ * 要作为寻址参数**原样回传**给上游（见 [getPlaylistInfo]），所以以
+ * [UpstreamSearchPlaylist.sourceMarker] 的形式保留。
  */
 export interface UpstreamSearchPlaylist {
   id: number;
@@ -180,6 +183,45 @@ export interface UpstreamSearchPlaylist {
   trackCount: number;
   /** 播放次数。上游叫 `playnum`。 */
   playCount: number;
+  /**
+   * 上游条目的数字 `source` 标记（实测恒为 4）。**在线歌单详情端点的寻址参数**：
+   * 波点 App 打开歌单详情时把它放进请求体原样回传。缺失或非数值收敛成 0，
+   * 由调用方决定缺省口径。
+   */
+  sourceMarker: number;
+}
+
+/**
+ * 在线歌单详情（`GET /online-playlists/:id` 的 `data.playlist`，去掉 `source`）。
+ *
+ * 字段名就是**下发契约名** —— 上游的 `playnum` / `musicCount` / `collectedCnt`
+ * 必须在适配器里就地改成 `playCount` / `trackCount` / `collectedCount`，出流后
+ * 不再有第二层改名。与搜索行 [UpstreamSearchPlaylist] 的关键差别：详情保留长简介
+ * `description`、创建者信息与 `createTime` / `isPrivate` —— 歌单详情页要整段展示
+ * 简介与创建者行。上游的 `isFond`（对 App 当前用户的收藏态，服务端匿名态恒无意义）
+ * 与 `traceId` 是用户/链路维度内容，不透传。
+ */
+export interface UpstreamPlaylistDetail {
+  id: number;
+  name: string;
+  /** 封面绝对地址。上游可能给 http 明文，适配器必须升级成 https。 */
+  pic: string;
+  /** 歌单长简介。上游可能给空串。 */
+  description: string;
+  /** 播放次数。上游叫 `playnum`。 */
+  playCount: number;
+  /** 歌单内歌曲数。上游叫 `musicCount`（注意与搜索行的 `musicnum` 不同名）。 */
+  trackCount: number;
+  /** 收藏次数。上游叫 `collectedCnt`。 */
+  collectedCount: number;
+  /** 创建时间，上游原样透传（展示串）。 */
+  createTime: string;
+  creatorId: number;
+  creatorName: string;
+  /** 创建者头像。上游可能给 http 明文，适配器必须升级成 https。 */
+  creatorIcon: string;
+  /** 是否私密歌单。 */
+  isPrivate: boolean;
 }
 
 /**
@@ -356,6 +398,32 @@ export interface MusicSourceClient {
     albumId: number,
     page: number,
     limit: number,
+  ): Promise<{ songs: UpstreamSong[]; total: number }>;
+
+  /**
+   * 在线歌单详情，产出 `GET /online-playlists/:id` 的 `data.playlist`（`source` 由调用方补）。
+   *
+   * 这是**音源侧的公开歌单**（搜索歌单标签点进去看到的），与账号自己的云端歌单
+   * （playlists 模块、`/api/v1/playlists/:id`）完全是两套东西，路由前缀刻意分开。
+   * [sourceMarker] 是搜索行 [UpstreamSearchPlaylist.sourceMarker] 带回来的数字标记，
+   * 上游要求原样回传 —— 调用链是「搜索拿到标记 → 客户端点歌单 → 详情请求带上标记」。
+   * 取不到时返回 `null`，理由同 [getArtistInfo]。
+   * 只有上游提供该能力时才实现；调用方必须先判断方法存在。
+   */
+  getPlaylistInfo?(
+    playlistId: number,
+    sourceMarker: number,
+  ): Promise<UpstreamPlaylistDetail | null>;
+
+  /**
+   * 在线歌单的歌曲列表（分页），形状与 [getArtistSongs] 一致；[sourceMarker] 的语义
+   * 同 [getPlaylistInfo]。只有上游提供该能力时才实现；调用方必须先判断方法存在。
+   */
+  getPlaylistSongs?(
+    playlistId: number,
+    page: number,
+    limit: number,
+    sourceMarker: number,
   ): Promise<{ songs: UpstreamSong[]; total: number }>;
 
   /** 单曲信息与**真实可用**的音质档位。 */

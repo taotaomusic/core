@@ -1,6 +1,8 @@
 import * as crypto from "crypto";
 import * as fs from "fs";
 import * as path from "path";
+import * as http from "http";
+import * as https from "https";
 import { once } from "node:events";
 import { inflateSync } from "zlib";
 import { kpkSign } from "./kpk.util";
@@ -181,10 +183,12 @@ export interface AlbumDetail {
  *
  * 字段名就是 `GET /search/playlists` 的**下发契约名**：上游的 `creator_name` /
  * `musicnum` / `playnum` 在 [BodianClient.searchPlaylists] 里就地改名，调用方
- * 不必再做一层翻译。上游条目里的 `creator_id` / `sltype` / `hitcontent` 与数字
- * `source` 标记（实测为 4）是列表展示用不到的内容，`description` 实测缺失
- * （App 侧解析类有它但线上条目没给）—— 一律**不映射**。App 侧点击行为是
- * C_LIST 进歌单详情页，详情接口另行接入。
+ * 不必再做一层翻译。上游条目里的 `creator_id` / `sltype` / `hitcontent` 与
+ * `description`（App 侧解析类有它但线上条目实测没给）是列表展示用不到的内容，
+ * **不映射**；数字 `source` 标记是唯一的例外 —— 它平时确实展示用不到，但
+ * App 进歌单详情页时会把搜索条目带的这个值**原样回传**给详情端点（见
+ * [getPlaylistInfo]），所以以 [SearchPlaylistItem.sourceMarker] 的形式保留。
+ * App 侧点击行为是 C_LIST 进歌单详情页。
  */
 export interface SearchPlaylistItem {
   id: number;
@@ -197,6 +201,47 @@ export interface SearchPlaylistItem {
   trackCount: number;
   /** 播放次数。上游叫 `playnum`。 */
   playCount: number;
+  /**
+   * 上游条目的数字 `source` 标记（实测恒为 4）。**详情端点的寻址参数**：
+   * 波点 App 打开歌单详情时把它放进请求体原样回传，缺失或非数值收敛成 0
+   * 由调用方兜底（服务端对缺省值有自己的口径）。
+   */
+  sourceMarker: number;
+}
+
+/**
+ * 在线歌单详情。字段来自 `service/playlist/info/:id` 的 `data`（无包裹层，直出对象，
+ * 见 [BodianClient.getPlaylistInfo]）。
+ *
+ * 字段名就是 `GET /online-playlists/:id` 的**下发契约名**：上游的 `playnum` /
+ * `musicCount` / `collectedCnt` 在 [BodianClient.getPlaylistInfo] 里就地改名，调用方
+ * 不必再做一层翻译。与搜索行 [SearchPlaylistItem] 的关键差别：详情保留长简介
+ * `description`、创建者信息（`creatorId` / `creatorName` / `creatorIcon`）与
+ * `createTime` / `isPrivate` —— 歌单详情页要整段展示简介与创建者行。
+ * 上游的 `isFond`（对 App 当前用户的收藏态，服务端匿名态恒无意义）、
+ * `author` / `categories`（内层形状未从反汇编实锤，不盲发）与 `traceId` 不映射。
+ */
+export interface OnlinePlaylistDetail {
+  id: number;
+  name: string;
+  /** 封面绝对地址。上游可能给 http 明文，映射处统一升级 https。 */
+  pic: string;
+  /** 歌单长简介。上游可能给空串。 */
+  description: string;
+  /** 播放次数。上游叫 `playnum`。 */
+  playCount: number;
+  /** 歌单内歌曲数。上游叫 `musicCount`（注意与搜索行的 `musicnum` 不同名）。 */
+  trackCount: number;
+  /** 收藏次数。上游叫 `collectedCnt`。 */
+  collectedCount: number;
+  /** 创建时间，上游原样透传（展示串）。 */
+  createTime: string;
+  creatorId: number;
+  creatorName: string;
+  /** 创建者头像，上游可能给 http 明文，映射处统一升级 https。 */
+  creatorIcon: string;
+  /** 是否私密歌单。 */
+  isPrivate: boolean;
 }
 
 export interface User {
@@ -395,6 +440,24 @@ export const UPSTREAM_UNPARSABLE = -1;
  * 只要一个上游不响应，整个搜索就再也返回不了。
  */
 const REQUEST_TIMEOUT_MS = 15_000;
+
+/**
+ * 从上游响应文本解析 JSON。
+ *
+ * 上游偶尔在响应体前面带几个换行（实测普通歌词接口返回 `\r\n\r\n\r\n{...}`），
+ * 直接 `JSON.parse` 在有些运行时上会失败。这里统一从第一个 `{` 开始截取；
+ * 截不出来或解析失败一律返回 `{}`，让调用方的「业务码 NaN」路径兜底
+ * （[BodianClient.signedGetMeta] 的注释解释了为什么不能压成 null）。
+ */
+function parseJsonBody(text: string): any {
+  const start = text.indexOf("{");
+  if (start < 0) return {};
+  try {
+    return JSON.parse(text.slice(start));
+  } catch {
+    return {};
+  }
+}
 
 /** 音频下载超时。比普通请求宽松：要留够整个文件的传输时间。 */
 const DOWNLOAD_TIMEOUT_MS = 120_000;
@@ -694,20 +757,57 @@ export class BodianClient {
   }
 
   /**
+   * **GET 带 JSON body** 的签名请求。
+   *
+   * 波点的歌单详情族端点（`service/playlist/info/:id`、`service/playlist/:id/musicList`）
+   * 在 App 里走的是 Dio 的 `request(path, data: ...)`，method 用默认的 `"get"` ——
+   * 也就是**请求参数放在请求体而不是 query**（底层 OkHttp 允许 GET 带 body）。
+   * 这不是波点详情族的惯例（歌手/专辑详情确实是无 body 的纯 GET），而是歌单详情
+   * 这一族自己的形状，从 `_SongListPageState::doGetHeaderInfo` / `doGetListInfo`
+   * 的反汇编实锤。裸 GET 不带体时上游回 `-10 参数错误`，与「路径不存在」的
+   * `-404` 是两个错误，可以据此区分「端点对了但请求形状不对」。
+   *
+   * 为什么不继续用 fetch：Web 规范禁止 GET/HEAD 请求携带 body，Node 的
+   * undici 实现会直接抛 `TypeError`，所以这里退回 `node:http(s)` 原生请求。
+   * 头（[officialHeaders]）、签名（[officialSign] 覆盖 query 与 body hash）与
+   * query 上的 `uid` / `token` / `timestamp` 拼装沿用 [officialUrl] 的同一套口径，
+   * 与 App 的请求形状保持一致。
+   */
+  private async signedGetBodyMeta(
+    url: string,
+    bodyDict: Record<string, unknown>,
+  ): Promise<{ status: number; data: any }> {
+    const body = JSON.stringify(bodyDict);
+    const fullUrl = this.officialUrl(url, undefined, body);
+    const payload = await new Promise<{ status: number; text: string }>((resolve, reject) => {
+      const parsed = new URL(fullUrl);
+      const transport = parsed.protocol === "http:" ? http : https;
+      const request = transport.request(
+        parsed,
+        { method: "GET", headers: this.officialHeaders() },
+        (response) => {
+          const chunks: Buffer[] = [];
+          response.on("data", (chunk: Buffer) => chunks.push(chunk));
+          response.on("end", () =>
+            resolve({ status: response.statusCode ?? 0, text: Buffer.concat(chunks).toString("utf-8") }),
+          );
+        },
+      );
+      request.on("error", reject);
+      request.setTimeout(REQUEST_TIMEOUT_MS, () => request.destroy(new Error("上游请求超时")));
+      request.end(body);
+    });
+    return { status: payload.status, data: parseJsonBody(payload.text) };
+  }
+
+  /**
    * 解析 JSON 响应。
    *
    * 上游偶尔在响应体前面带几个换行（实测普通歌词接口返回 `\r\n\r\n\r\n{...}`），
    * 直接 `response.json()` 在有些运行时上会失败。这里统一从第一个 `{` 开始截取。
    */
   private async parseJson(response: Response): Promise<any> {
-    const text = await response.text();
-    const start = text.indexOf("{");
-    if (start < 0) return {};
-    try {
-      return JSON.parse(text.slice(start));
-    } catch {
-      return {};
-    }
+    return parseJsonBody(await response.text());
   }
 
   private xorDecode(data: Buffer, key: Buffer = LRCX_KEY): Buffer {
@@ -1065,6 +1165,8 @@ export class BodianClient {
         creator: String(s.creator_name ?? ""),
         trackCount: Number(s.musicnum) || 0,
         playCount: Number(s.playnum) || 0,
+        // 数字 source 标记是详情端点的寻址参数（见 [SearchPlaylistItem.sourceMarker]）。
+        sourceMarker: Number(s.source) || 0,
       })),
       total: Number(d.data?.total) || 0,
     };
@@ -1328,6 +1430,69 @@ export class BodianClient {
     const d = await this.signedGet(`${BASE_URL}service/album/music/${albumId}`, { pn: page, rn: size });
     return {
       songs: (d.data?.resultList || []).map((s: any) => this.toDetailSong(s)),
+      total: Number(d.data?.total) || 0,
+    };
+  }
+
+  // ---------- 在线歌单详情（2026-10 新增） ----------
+
+  /**
+   * 在线歌单详情：`service/playlist/info/:id`，取 `data`（无包裹层，直出对象）。
+   *
+   * ⚠️ 这一族端点与歌手/专辑详情不同：**请求参数放在 GET 请求体里**（App 用
+   * Dio 的 `request(path, data: ...)`，method 用默认 `"get"`；见
+   * [signedGetBodyMeta]），body 只有一个键 `{"source": <sourceMarker>}` ——
+   * 数字标记来自搜索条目（[SearchPlaylistItem.sourceMarker]），App 的语义是
+   * 原样回传。裸 GET 不带体会回 `-10 参数错误`。
+   *
+   * 业务码不是 200 返回 `null`，理由同 [getArtistInfo]：调用方对「详情取不到」
+   * 有统一的 502 出口，协议层不替它们挑文案。
+   */
+  async getPlaylistInfo(playlistId: number, sourceMarker: number): Promise<OnlinePlaylistDetail | null> {
+    const d = await this.signedGetBodyMeta(`${BASE_URL}service/playlist/info/${playlistId}`, {
+      source: sourceMarker,
+    });
+    if (Number(d.code) !== 200 || !d.data || typeof d.data !== "object") return null;
+    const info = d.data;
+    return {
+      id: Number(info.id),
+      name: String(info.name ?? ""),
+      pic: this.httpsImage(info.pic),
+      description: String(info.description ?? ""),
+      playCount: Number(info.playnum) || 0,
+      trackCount: Number(info.musicCount) || 0,
+      collectedCount: Number(info.collectedCnt) || 0,
+      createTime: String(info.createTime ?? ""),
+      creatorId: Number(info.creatorId) || 0,
+      creatorName: String(info.creatorName ?? ""),
+      creatorIcon: this.httpsImage(info.creatorIcon),
+      isPrivate: Boolean(info.isPrivate),
+    };
+  }
+
+  /**
+   * 在线歌单的歌曲列表：`service/playlist/:id/musicList`，取 `data.list` + `data.total`。
+   *
+   * 与 [getPlaylistInfo] 同一形状：**GET 带请求体**，body 是
+   * `{"source": <sourceMarker>, "pn": <页码>, "rn": <页大小>}`。App 固定
+   * `rn=400` 一次拉整单，这里开放成页大小参数由调用方决定。
+   *
+   * ⚠️ `pn` 是 **1 基**的，与歌手/专辑详情族一致，绝不能过 [upstreamPage]
+   * （搜索接口 0 基的换算规则不适用，实测表格见 [upstreamPage] 注释）。
+   *
+   * 响应的 `data` 是 PageHelper 分页对象：`list` 是歌曲数组（条目就是 App 的标准
+   * Song 模型，与 [getAlbumSongs] 的 resultList **同构**，映射复用 [toDetailSong]），
+   * `total` 是整表总数。上游还下发 `pageNum` / `pageSize` / `hasNextPage` 等字段，
+   * 语义与这里的 total 换算重复，不透传。
+   */
+  async getPlaylistSongs(playlistId: number, page: number = 1, size: number = 30, sourceMarker: number = 0): Promise<{ songs: Song[]; total: number }> {
+    const d = await this.signedGetBodyMeta(`${BASE_URL}service/playlist/${playlistId}/musicList`, {
+      source: sourceMarker,
+      pn: page,
+      rn: size,
+    });
+    return {
+      songs: (d.data?.list || []).map((s: any) => this.toDetailSong(s)),
       total: Number(d.data?.total) || 0,
     };
   }
