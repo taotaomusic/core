@@ -62,8 +62,40 @@ export interface Song {
   /**
    * 歌词搜索条目（`search/lyric/list`）的纯文本歌词摘要，来自上游 `lyric` 字段。
    * 上游可能缺失，映射处统一收敛成空串。仅歌词搜索条目携带。
+   *
+   * 「纯文本」是**必须维持的不变量**：上游该字段带 `<em>` 高亮标记
+   * （见 [stripSearchHighlight]），映射时必须剥掉。客户端把它当纯文本渲染，
+   * 漏剥会直接把标记画到界面上。
    */
   lyricSnippet?: string;
+}
+
+/**
+ * 剥掉上游搜索接口在命中片段上打的高亮标记。
+ *
+ * **上游现状**：`search/lyric/list` 的 `lyric` 字段把命中的片段用 `<em>` / `</em>`
+ * 包起来，例如 `"<em>让我们荡起双桨</em> 小船儿推开波浪"`。实测传 `highlight=false`、
+ * `needHighlight=0` 都无法关掉，只能在本地剥。其余搜索端点（歌曲 / 歌手 / 专辑 /
+ * 歌单 / 视频）的字段干净，**只有歌词搜索这一处**。
+ *
+ * **为什么必须在服务端剥**：`lyricSnippet` 的下发契约是纯文本
+ * （见 [UpstreamSongWithExtras.lyricSnippet]），三个客户端都按纯文本渲染，
+ * Android 上就是把 `<em>` 当可见字符画出来（2026-10-06 线上实测）。
+ *
+ * 顺手把上游可能转义的 `&lt;` / `&gt;` / `&amp;` 还原：先还原实体再剥标签，
+ * 否则 `&lt;em&gt;` 这种二次编码会漏网；顺序反过来则会把转义过的**正文**
+ * 误当标签删掉。
+ */
+function stripSearchHighlight(raw: unknown): string {
+  return String(raw ?? "")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/g, "'")
+    // `&amp;` 必须最后还原，否则 `&amp;lt;` 会被前一步变成 `<` 再当标签剥掉。
+    .replace(/&amp;/gi, "&")
+    .replace(/<\/?em\b[^>]*>/gi, "")
+    .trim();
 }
 
 /**
@@ -1080,6 +1112,9 @@ export class BodianClient {
    * App 侧歌词搜索结果的点击行为与普通歌曲一致（PLAYSONG 播该歌），客户端
    * 不需要为它做新交互。
    *
+   * ⚠️ 上游 `lyric` 带 `<em>` 高亮标记，**必须**经 [stripSearchHighlight] 剥离后再
+   * 下发 —— 客户端按纯文本渲染，漏剥会把标记直接画到界面上。
+   *
    * 返回值带 `total`，取法与语义同 [searchArtists]（「晴天」实测 100）。
    */
   async searchLyrics(keyword: string, page: number = 1, size: number = 5): Promise<{ songs: Song[]; total: number }> {
@@ -1087,7 +1122,7 @@ export class BodianClient {
     return {
       songs: (d.data?.resultList || []).map((s: any) => ({
         ...this.toDetailSong(s),
-        lyricSnippet: String(s.lyric ?? ""),
+        lyricSnippet: stripSearchHighlight(s.lyric),
       })),
       total: Number(d.data?.total) || 0,
     };

@@ -2657,6 +2657,14 @@ async function main() {
       && kuwoSearchLyricRows.every((song) => detailSongShape(song) && typeof song?.lyricSnippet === "string"),
     `${kuwoSearchLyricsRes.status} ${JSON.stringify(kuwoSearchLyricsBody).slice(0, 220)}`,
   );
+  // 上游 `lyric` 带 <em> 高亮标记，且实测关不掉（highlight=false / needHighlight=0 均无效），
+  // 只能在服务端剥。这条断言守的是「下发即纯文本」这个不变量：漏剥时 Android 会把标记
+  // 当可见字符画出来（2026-10-06 线上实测）。出现 `<` 即视为回归。
+  check(
+    "歌词搜索的 lyricSnippet 已剥掉上游 <em> 高亮标记（不下发任何 HTML 标签）",
+    kuwoSearchLyricRows.every((song) => !/[<>]/.test(song?.lyricSnippet ?? "")),
+    JSON.stringify(kuwoSearchLyricRows.map((song) => song?.lyricSnippet).slice(0, 3)),
+  );
   check(
     "歌词分页搜索的 meta 信封正确（total 数字、hasMore = page*num < total）",
     detailMetaShape(kuwoSearchLyricsBody.data?.meta, 1, 10)

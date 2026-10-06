@@ -1485,7 +1485,9 @@ private fun LazyListScope.searchTabLyricSection(
                     ) { onLyricClick(index, song) }
                     // 摘要行与行内标题文字对齐：歌曲行的水平留白（sm）+ 封面宽（artworkRow）
                     // + 文字列的左留白（sm）。缺摘要时不组合，行高与普通歌曲行一致。
-                    song.lyricSnippet?.takeIf { it.isNotBlank() }?.let { snippet ->
+                    // `plainLyricSnippet` 是防御性清洗：服务端契约本就是纯文本，这里只兜住
+                    // 旧后端版本或直接调上游的调用方，避免标记被当可见字符画出来。
+                    song.lyricSnippet?.let(::plainLyricSnippet)?.takeIf { it.isNotBlank() }?.let { snippet ->
                         Text(
                             snippet,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1517,6 +1519,32 @@ private fun LazyListScope.searchTabLyricSection(
 /** 搜索页骨架的占位条尺寸：与 components.kt 的歌曲骨架同一规格，页面私有常量（理由同 HistoryChipMaxWidth）；height 修饰符需要显式导入，勿删。 */
 private val SearchSkeletonBarWidth = 150.dp
 private val SearchSkeletonBarHeight = 14.dp
+
+/** 上游命中片段的高亮标记（`<em>` / `</em>`），以及可能出现的转义形式。 */
+private val LyricSnippetHighlightTag = Regex("</?em\\b[^>]*>", RegexOption.IGNORE_CASE)
+
+/**
+ * 把歌词摘要清洗成可安全当纯文本渲染的一行。
+ *
+ * 正常路径下服务端已经把上游的 `<em>` 高亮标记剥掉了（见
+ * `bodian.client.ts` 的 `stripSearchHighlight`），这里只是客户端侧的兜底：
+ * 旧后端版本仍在线上、或调用方绕过服务端直连上游时，标记会原样进来，
+ * Compose 的 `Text` 不做任何解析，会把 `<em>` 当可见字符画出来。
+ *
+ * 顺序与账号脱敏那套一致：**先还原实体再删标签**。反过来会把转义过的正文
+ * （`&lt;3` 这类）误当标签删掉。
+ */
+private fun plainLyricSnippet(raw: String): String {
+    return raw
+        .replace("&lt;", "<", ignoreCase = true)
+        .replace("&gt;", ">", ignoreCase = true)
+        .replace("&quot;", "\"", ignoreCase = true)
+        .replace("&#39;", "'")
+        // `&amp;` 必须最后还原，否则 `&amp;lt;` 会被前一步变成 `<` 再当标签删掉。
+        .replace("&amp;", "&", ignoreCase = true)
+        .replace(LyricSnippetHighlightTag, "")
+        .trim()
+}
 private val SearchSkeletonSubWidth = 90.dp
 private val SearchSkeletonSubHeight = 12.dp
 
