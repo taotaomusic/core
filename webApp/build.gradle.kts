@@ -1,6 +1,7 @@
 @file:OptIn(org.jetbrains.kotlin.gradle.ExperimentalWasmDsl::class)
 
-import org.jetbrains.kotlin.gradle.targets.js.binaryen.BinaryenRootExtension
+import org.jetbrains.kotlin.gradle.ExperimentalWasmDsl
+import org.jetbrains.kotlin.gradle.targets.wasm.binaryen.BinaryenEnvSpec
 
 plugins {
     kotlin("multiplatform")
@@ -37,16 +38,20 @@ kotlin {
     }
 }
 
-rootProject.extensions.configure<BinaryenRootExtension> {
-    download = false
-    command = rootProject.layout.projectDirectory
-        .file(
-            if (System.getProperty("os.name").startsWith("Windows")) {
-                "build/js/node_modules/.bin/wasm-opt.cmd"
-            } else {
-                "build/js/node_modules/.bin/wasm-opt"
-            },
-        )
-        .asFile
-        .absolutePath
+// Kotlin 2.2 起 BinaryenRootExtension 改名为 BinaryenEnvSpec，属性迁移到 Provider API。
+// download = false：不走 GitHub Release 直连下载，改用 npm 包里的 wasm-opt 二进制。
+rootProject.extensions.configure<BinaryenEnvSpec> {
+    download.set(false)
+    command.set(
+        rootProject.layout.projectDirectory
+            .file(
+                if (System.getProperty("os.name").startsWith("Windows")) {
+                    "build/js/node_modules/.bin/wasm-opt.cmd"
+                } else {
+                    "build/js/node_modules/.bin/wasm-opt"
+                },
+            )
+            .asFile
+            .absolutePath
+    )
 }

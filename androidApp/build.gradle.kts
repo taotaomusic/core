@@ -21,6 +21,12 @@ val appVersionName = versionProperties.getProperty("VERSION_NAME")
 
 android { namespace = "com.taotao.music"; compileSdk = 35
     buildFeatures { buildConfig = true }  // 用 BuildConfig.VERSION_NAME 拼真实版本进 User-Agent
+    // AGP 8.7.3 内置 lint 的 Kotlin Analysis API 与 Kotlin 2.2 编译产物不兼容，lifecycle 库的
+    // NonNullableMutableLiveDataDetector 会在 lintVitalAnalyzeRelease 直接崩溃（按 lint 自身
+    // 给出的处置禁用该 detector；它只覆盖 MutableLiveData 的可空性提示，不影响发布校验）。
+    lint {
+        disable += "NullSafeMutableLiveData"
+    }
     defaultConfig {
         applicationId = "com.taotao.music"
         minSdk = 24
