@@ -12,6 +12,11 @@ import com.taotao.music.ui.theme.TaotaoCoral
 import com.taotao.music.ui.theme.contentFadeIn
 import com.taotao.music.ui.theme.contentFadeOut
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.animateDpAsState
+import androidx.compose.animation.core.AnimationSpec
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.slideInVertically
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -29,10 +34,13 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyRow
@@ -93,6 +101,7 @@ import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -114,6 +123,7 @@ import com.taotao.music.playerui.SharedContentState
 import com.taotao.music.playerui.SharedContentStateType
 import com.taotao.music.playerui.SharedSectionHeader
 import com.taotao.music.playerui.SharedSectionLevel
+import com.taotao.music.playerui.theme.LocalReduceMotion
 import com.taotao.music.playerui.theme.TaotaoColors
 import com.taotao.music.playerui.theme.TaotaoElevation
 import com.taotao.music.playerui.theme.TaotaoShapes
@@ -121,6 +131,8 @@ import com.taotao.music.playerui.theme.TaotaoSizes
 import com.taotao.music.playerui.theme.TaotaoSpacing
 import com.taotao.music.playerui.theme.TaotaoWash
 import com.taotao.music.playerui.theme.TaotaoTypeScale
+import com.taotao.music.playerui.theme.taotaoSpring
+import com.taotao.music.playerui.theme.taotaoTween
 // 「歌手 / 专辑」标签的失败占位与统计缩写复用歌手页已有的内部组件：同一模块内
 // internal 可见，避免在搜索页再长一份一模一样的实现。
 import com.taotao.music.ui.app.SearchTab
@@ -142,6 +154,14 @@ private val HistoryChipMaxWidth = 160.dp
  * 保留私有常量名是为了让区块与列表行两个调用点共用一个入口，改动仍只落在一处。
  */
 private val ArtistAvatarSize = TaotaoSizes.avatar
+
+/**
+ * 七标签行里主色指示胶囊相对轨道上下的内缩量。
+ *
+ * 指示器比轨道矮一圈，两端露出浅色轨道边，才有「分段选择器」的层次；
+ * 完全同高会变成一整条色带贴着另一条色带。
+ */
+private val SearchTabIndicatorInset = 3.dp
 
 /** 搜索页面：负责关键词输入、结果展示和异步状态过渡。 */
 @OptIn(ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
@@ -412,8 +432,8 @@ fun SearchPage(
         }
         if (hasSearched) {
             val listState = rememberLazyListState()
-            // 七标签切换行：视觉沿用歌手页的内嵌胶囊标签（选中主色胶囊、未选中浅底），
-            // 一行放不下时在自身容器里横向滚动（见 SearchTabRow）。
+            // 七标签切换行：浅色胶囊轨道 + 主色指示器滑动到选中项（见 SearchTabRow），
+            // 一行放不下时在轨道内横向滚动。
             SearchTabRow(
                 currentTab = searchTab,
                 onSelect = onTabSelected,
@@ -606,10 +626,12 @@ fun SearchPage(
 }
 
 /**
- * 七个结果标签：视觉沿用歌手页的内嵌胶囊标签 —— 选中主色胶囊，未选中浅色底。
+ * 七个结果标签：一条浅色胶囊「轨道」收拢全部标签，选中项由主色指示胶囊以弹簧
+ * 动画滑过去（iOS 分段选择器的语言）；标签本身只保留文字 —— 未选中灰、选中白，
+ * 颜色渐变过渡、字重同步切换。
  *
- * 标签从四个涨到七个后一行放不下（小屏总宽超出可用宽度），换成横向滚动容器；
- * 选中项变化时自动滚进可视区，点最后一个标签不会停在一个看不见选中态的位置。
+ * 七个标签小屏一行放不下，轨道内容保留横向滚动；指示器读的是选中项在视口里的
+ * 实时几何，滚动时跟着内容一起平移，选中项暂时滚出视口的间隙则冻结在原位等它回来。
  */
 @Composable
 private fun SearchTabRow(
@@ -618,31 +640,114 @@ private fun SearchTabRow(
     modifier: Modifier = Modifier,
 ) {
     val listState = rememberLazyListState()
+    val reduceMotion = LocalReduceMotion.current
     // 选中标签滚到可视区；animateScrollToItem 在首帧布局完成前调用会被忽略，无需特判。
     LaunchedEffect(currentTab) {
         val index = SearchTab.entries.indexOf(currentTab)
         if (index >= 0) runCatching { listState.animateScrollToItem(index) }
     }
-    LazyRow(
-        modifier = modifier,
-        state = listState,
-        horizontalArrangement = Arrangement.spacedBy(TaotaoSpacing.xs),
-        // 两端内边距让首尾标签滚动到尽头时不贴着屏幕边。
-        contentPadding = PaddingValues(horizontal = TaotaoSpacing.xxs),
+
+    // 选中项在视口内的实时几何（px）：layoutInfo 随滚动逐帧变化，指示器由此取位。
+    // derivedStateOf 按 currentTab 重建 —— 过滤条件里引用了它，漏掉 key 会一直按旧标签找。
+    val visibleGeometry = remember(currentTab) {
+        derivedStateOf {
+            listState.layoutInfo.visibleItemsInfo
+                .firstOrNull { it.key == currentTab.name }
+                ?.let { it.offset to it.size }
+        }
+    }
+    // 选中项不在视口时沿用上一次的位置（同值写入不触发重组），滚动把它带回视口后
+    // geometry 重新取到真值、指示器自然接管。
+    var lastGeometry by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    visibleGeometry.value?.let { lastGeometry = it }
+    val geometry = visibleGeometry.value ?: lastGeometry
+    // 轨道高度由内容（LazyRow）撑出，实测后供指示器对齐用；首帧为 0 时指示器不画。
+    var trackHeightPx by remember { mutableStateOf(0) }
+    // 首次落位必须瞬切（snap）：重进页面 / 首帧才有几何，若用弹簧会看到指示器
+    // 从 (0,0) 一路滑到选中项；此后再切标签才走弹簧。
+    var indicatorPlaced by remember { mutableStateOf(false) }
+    // 显式标注 AnimationSpec<Dp>：snap / taotaoSpring 的泛型参数没有上下文时
+    // 推断不出 Dp，合到一个 if 表达式里就再也对不上。
+    val indicatorSpec: AnimationSpec<Dp> = if (reduceMotion || !indicatorPlaced) snap() else taotaoSpring()
+
+    val density = LocalDensity.current
+    val indicatorX by animateDpAsState(
+        // 内缩不放 LazyRow 的 contentPadding 上：那会让 item.offset 的参照系是否
+        // 含 beforeContentPadding 变得含糊；外层 padding 保证 item.offset 与指示器
+        // 严格同坐标系，加上内容区内缩即得轨道内位置。
+        targetValue = TaotaoSpacing.xxs + with(density) { (geometry?.first ?: 0).toDp() },
+        animationSpec = indicatorSpec,
+        label = "search-tab-indicator-x",
+    )
+    val indicatorWidth by animateDpAsState(
+        targetValue = with(density) { (geometry?.second ?: 0).toDp() },
+        animationSpec = indicatorSpec,
+        label = "search-tab-indicator-width",
+    )
+
+    Box(
+        modifier
+            .clip(TaotaoShapes.pill)
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = TaotaoWash.selected))
+            .onGloballyPositioned { trackHeightPx = it.size.height },
     ) {
-        items(SearchTab.entries, key = { tab -> tab.name }) { tab ->
-            val selected = tab == currentTab
-            Text(
-                tab.label,
-                color = if (selected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                modifier = Modifier
+        if (geometry != null && trackHeightPx > 0) {
+            // 滑动指示器垫在标签下层：宽度对齐选中项（含其点击内边距），高度取实测
+            // 轨道高再靠 vertical padding 内缩一圈露出轨道边，圆角与轨道同源。
+            // 高度必须显式给值：轨道是 wrap 高度的 Box，对子项的 max 高度约束是
+            // 无穷，fillMaxHeight 会退化成 0 高；matchParentSize 则传固定约束、
+            // 链上的 width() 会被忽略，两条路都不通。
+            Box(
+                Modifier
+                    .align(Alignment.CenterStart)
+                    .offset(x = indicatorX)
+                    .width(indicatorWidth)
+                    .height(with(density) { trackHeightPx.toDp() })
+                    .padding(vertical = SearchTabIndicatorInset)
                     .clip(TaotaoShapes.pill)
-                    .background(if (selected) TaotaoCoral else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = TaotaoWash.selected))
-                    .clickable { onSelect(tab) }
-                    .padding(horizontal = TaotaoSpacing.md, vertical = TaotaoSpacing.xs),
+                    .background(TaotaoCoral),
             )
+            indicatorPlaced = true
+        }
+        Box(Modifier.padding(horizontal = TaotaoSpacing.xxs)) {
+            LazyRow(
+                state = listState,
+                horizontalArrangement = Arrangement.spacedBy(TaotaoSpacing.xxs),
+            ) {
+                items(SearchTab.entries, key = { tab -> tab.name }) { tab ->
+                    val selected = tab == currentTab
+                    val interactionSource = remember { MutableInteractionSource() }
+                    val pressed by interactionSource.collectIsPressedAsState()
+                    val pressScale by animateFloatAsState(
+                        targetValue = if (pressed && !reduceMotion) 0.94f else 1f,
+                        animationSpec = taotaoTween(AnimationDurations.PRESS),
+                        label = "search-tab-press",
+                    )
+                    val textColor by animateColorAsState(
+                        targetValue = if (selected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                        animationSpec = if (reduceMotion) snap() else taotaoTween(AnimationDurations.MICRO),
+                        label = "search-tab-text-color",
+                    )
+                    Text(
+                        tab.label,
+                        color = textColor,
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                        modifier = Modifier
+                            .graphicsLayer {
+                                scaleX = pressScale
+                                scaleY = pressScale
+                            }
+                            // 轨道已给出整体形状反馈，不再叠 ripple，按压缩放即反馈。
+                            .clickable(
+                                interactionSource = interactionSource,
+                                indication = null,
+                            ) { onSelect(tab) }
+                            .semantics { this.selected = selected }
+                            .padding(horizontal = TaotaoSpacing.md, vertical = TaotaoSpacing.xs),
+                    )
+                }
+            }
         }
     }
 }
