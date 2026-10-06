@@ -43,7 +43,16 @@ import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
@@ -51,6 +60,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
@@ -67,12 +78,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -448,6 +461,12 @@ fun SearchPage(
                 }
             }
 
+            // 「歌词」标签各卡片的展开态，按歌曲键索引。
+            //
+            // 必须**放在 LazyColumn 之外**：`LazyListScope` 的 lambda 不是 @Composable
+            // 上下文，`remember` 在那里编不过；而且状态放这里才不会被列表回收带走。
+            val expandedLyricKeys = remember { mutableStateMapOf<String, Boolean>() }
+
             LazyColumn(
                 Modifier.fillMaxSize(),
                 state = listState,
@@ -567,12 +586,11 @@ fun SearchPage(
                         isLoadingMore = tabLyricsLoadingMore,
                         hasMore = tabLyricsHasMore,
                         total = tabLyricsTotal,
+                        expandedKeys = expandedLyricKeys,
                         onRetry = onEnsureTabLyrics,
                         onLyricClick = onLyricClick,
                         favoriteRevision = favoriteRevision,
-                        downloadedRevision = downloadedRevision,
                         isFavorite = isFavorite,
-                        isDownloaded = isDownloaded,
                         onToggleFavorite = onToggleFavorite,
                         onPlayNext = onPlayNext,
                         onAddToPlaylist = onAddToPlaylist,
@@ -1415,10 +1433,29 @@ private fun VideoResultCard(
 }
 
 /**
- * 「歌词」标签：分页的歌曲行列表，每行下方带一行命中歌词摘要；点击整列入队播放该行。
+ * 「歌词」标签：卡片式行列表，每行上方是歌曲信息、下方是歌词正文预览。
  *
- * 行组件复用 [SongListItem]，收藏 / 下载 / 菜单的接法与歌曲标签完全一致；
- * 摘要是 [Song.lyricSnippet]（仅歌词搜索下发），单行省略，为空时不占位。
+ * ## 布局对照（目标设计）
+ *
+ * ```
+ * ┌──────────────────────────────────────────┐
+ * │ 茶汤                              ♡  ＋  ⋮ │  ← 大标题 + 右侧三个动作
+ * │ 郁可唯 · 微加幸福 (微笑幸福庆功版)           │  ← 歌手 · 专辑
+ * │                                          │
+ * │ 我说再喝一碗我熬的茶汤                        │  ← 歌词正文（3 行）
+ * │ 你说你现在马上要渡江                          │
+ * │ 渡江到那遥远的寒冷北方                        │
+ * │                                          │
+ * │ 展开歌词 ⌄                                 │  ← 折叠开关
+ * └──────────────────────────────────────────┘
+ * ```
+ *
+ * 与旧版（方形封面 + 单行摘要）的差异集中在三处：
+ * ① 不再显示封面，标题从「行内小字」提升为**卡片主标题**；
+ * ② 摘要从 1 行变 3 行，折叠后可展开全文；
+ * ③ 动作按钮从行尾挪到标题右侧，与标题同一行。
+ *
+ * 点击整卡仍是播放该歌（与歌曲标签同机制），展开歌词只是卡片内的局部开关。
  */
 private fun LazyListScope.searchTabLyricSection(
     songs: List<Song>,
@@ -1427,10 +1464,10 @@ private fun LazyListScope.searchTabLyricSection(
     isLoadingMore: Boolean,
     hasMore: Boolean,
     total: Int,
+    /** 各卡片「展开歌词」的开关状态，按歌曲键索引；由调用方在可组合上下文里持有。 */
+    expandedKeys: MutableMap<String, Boolean>,
     favoriteRevision: Int,
-    downloadedRevision: Int,
     isFavorite: (Song) -> Boolean,
-    isDownloaded: (Song) -> Boolean,
     onToggleFavorite: ((Song) -> Unit)?,
     onPlayNext: ((Song) -> Unit)?,
     onAddToPlaylist: ((Song) -> Unit)?,
@@ -1460,48 +1497,31 @@ private fun LazyListScope.searchTabLyricSection(
                 songs,
                 // 状态层已按 songKeyOf 判重，这里的 key 必然唯一。
                 key = { _, song -> songKeyOf(song) },
-                contentType = { _, _ -> "lyric-song" },
+                contentType = { _, _ -> "lyric-card" },
             ) { index, song ->
                 val key = songKeyOf(song)
-                Column(Modifier.fillMaxWidth()) {
-                    SongListItem(
-                        song = song,
-                        active = false,
-                        favorited = remember(key, favoriteRevision) { isFavorite(song) },
-                        downloaded = remember(key, downloadedRevision) { isDownloaded(song) },
-                        onToggleFavorite = onToggleFavorite
-                            ?.takeIf { song.remoteId?.let { it > 0L } == true || !song.mid.isNullOrBlank() }
-                            ?.let { toggle -> { toggle(song) } },
-                        onPlayNext = onPlayNext?.let { callback -> { callback(song) } },
-                        onAddToPlaylist = onAddToPlaylist
-                            ?.takeIf { song.remoteId?.let { it > 0L } == true || !song.mid.isNullOrBlank() }
-                            ?.let { callback -> { callback(song) } },
-                        onOpenArtist = onOpenArtist
-                            ?.takeIf { song.artistId != null }
-                            ?.let { open -> { open(song) } },
-                        onOpenAlbum = onOpenAlbum
-                            ?.takeIf { song.albumId != null }
-                            ?.let { open -> { open(song) } },
-                    ) { onLyricClick(index, song) }
-                    // 摘要行与行内标题文字对齐：歌曲行的水平留白（sm）+ 封面宽（artworkRow）
-                    // + 文字列的左留白（sm）。缺摘要时不组合，行高与普通歌曲行一致。
-                    // `plainLyricSnippet` 是防御性清洗：服务端契约本就是纯文本，这里只兜住
-                    // 旧后端版本或直接调上游的调用方，避免标记被当可见字符画出来。
-                    song.lyricSnippet?.let(::plainLyricSnippet)?.takeIf { it.isNotBlank() }?.let { snippet ->
-                        Text(
-                            snippet,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            style = MaterialTheme.typography.bodySmall,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(
-                                start = TaotaoSpacing.sm + TaotaoSizes.artworkRow + TaotaoSpacing.sm,
-                                end = TaotaoSpacing.sm,
-                                bottom = TaotaoSpacing.xxs,
-                            ),
-                        )
-                    }
-                }
+                LyricSearchCard(
+                    song = song,
+                    expanded = expandedKeys[key] == true,
+                    // 收藏态按「键 + 版本号」缓存：版本号由状态层在集合变更时递增，
+                    // 依赖它才能在别处收藏后回到本页立刻反映出来。
+                    favorited = remember(key, favoriteRevision) { isFavorite(song) },
+                    onToggleExpanded = { expandedKeys[key] = expandedKeys[key] != true },
+                    onToggleFavorite = onToggleFavorite
+                        ?.takeIf { song.remoteId?.let { it > 0L } == true || !song.mid.isNullOrBlank() }
+                        ?.let { toggle -> { toggle(song) } },
+                    onPlayNext = onPlayNext?.let { callback -> { callback(song) } },
+                    onAddToPlaylist = onAddToPlaylist
+                        ?.takeIf { song.remoteId?.let { it > 0L } == true || !song.mid.isNullOrBlank() }
+                        ?.let { callback -> { callback(song) } },
+                    onOpenArtist = onOpenArtist
+                        ?.takeIf { song.artistId != null }
+                        ?.let { open -> { open(song) } },
+                    onOpenAlbum = onOpenAlbum
+                        ?.takeIf { song.albumId != null }
+                        ?.let { open -> { open(song) } },
+                    onClick = { onLyricClick(index, song) },
+                )
             }
             searchTabFooter(
                 key = "tab-lyrics-footer-more",
@@ -1513,6 +1533,272 @@ private fun LazyListScope.searchTabLyricSection(
                 total = total,
             )
         }
+    }
+}
+
+/**
+ * 卡片式标题用的一行文本：压缩换行与连续空白，避免上游字段里的 `\n` 把标题撑成两行。
+ *
+ * `player-ui` 里有一个同名同义的 `normalizedDisplayText`，但它是 `internal` ——
+ * 跨模块调不到，所以这里保持一份等价的本地实现。两处都要改时记得同步。
+ */
+private val SearchDisplayWhitespace = Regex("\\s+")
+
+private fun normalizeSearchText(value: String): String =
+    value.replace(SearchDisplayWhitespace, " ").trim()
+
+/** 折叠状态下歌词预览显示的行数。展开后不限行数。 */
+private const val LyricPreviewCollapsedLines = 3
+
+/**
+ * 「歌词」标签的单张结果卡片。
+ *
+ * 卡片整体可点（播放该歌）；卡内的动作按钮和「展开歌词」是**嵌套的可点元素**，
+ * Compose 的指针事件由最内层先接管，所以点它们不会顺带触发播放 —— 不需要额外
+ * 拦截，但新增可点元素时要确认它确实在卡片点击区**之内**（兄弟节点排在卡片外层
+ * 才会漏给父级）。
+ */
+@Composable
+private fun LyricSearchCard(
+    song: Song,
+    expanded: Boolean,
+    favorited: Boolean,
+    onToggleExpanded: () -> Unit,
+    onToggleFavorite: (() -> Unit)?,
+    onPlayNext: (() -> Unit)?,
+    onAddToPlaylist: (() -> Unit)?,
+    onOpenArtist: (() -> Unit)?,
+    onOpenAlbum: (() -> Unit)?,
+    onClick: () -> Unit,
+) {
+    val lyricText = song.lyricSnippet?.let(::plainLyricSnippet).orEmpty()
+    val playable = song.playable
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = TaotaoSpacing.sm)
+            .clip(TaotaoShapes.card)
+            .background(MaterialTheme.colorScheme.surface)
+            .then(if (playable) Modifier else Modifier.alpha(0.45f))
+            .clickable(enabled = playable, onClick = onClick)
+            .padding(horizontal = TaotaoSpacing.md, vertical = TaotaoSpacing.md),
+    ) {
+        Row(verticalAlignment = Alignment.Top) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(TaotaoSpacing.xxs),
+            ) {
+                // 标题：卡片主标题。用 sectionTitle(18sp) 而不是标准卡片标题 cardTitle(16sp) ——
+                // 这张卡片没有封面，标题是唯一的视觉锚点，沿用 16sp 会显得整张卡「没有重点」。
+                Text(
+                    text = normalizeSearchText(song.title),
+                    color = if (playable) MaterialTheme.colorScheme.onSurface
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = TaotaoTypeScale.sectionTitle,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                // 副标题：歌手 · 专辑（专辑为空时只留歌手，不留多余分隔符）。
+                val subtitle = buildString {
+                    append(normalizeSearchText(song.artist))
+                    val album = normalizeSearchText(song.album)
+                    if (album.isNotBlank() && album != "未知专辑") {
+                        append(" · ")
+                        append(album)
+                    }
+                }
+                Text(
+                    text = subtitle,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            // 动作区与标题同行的顶部：爱心 / 加号 / 更多。
+            // 展开与播放入口都在卡片本体上，这里只放「针对这首歌」的快捷操作。
+            LyricCardActions(
+                favorited = favorited,
+                onToggleFavorite = onToggleFavorite,
+                onPlayNext = onPlayNext,
+                onAddToPlaylist = onAddToPlaylist,
+                onOpenArtist = onOpenArtist,
+                onOpenAlbum = onOpenAlbum,
+                enabled = playable,
+            )
+        }
+        if (lyricText.isNotBlank()) {
+            Text(
+                text = lyricText,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodyMedium,
+                // 折叠 3 行；展开不限行。`lineHeight` 由 token 决定，多行不会挤在一起。
+                maxLines = if (expanded) Int.MAX_VALUE else LyricPreviewCollapsedLines,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = TaotaoSpacing.sm),
+            )
+            // 只有真的超过预览行数才给「展开歌词」——否则点开也没东西可看。
+            if (expanded || lyricText.length > LyricExpandThresholdChars) {
+                LyricExpandToggle(
+                    expanded = expanded,
+                    onToggle = onToggleExpanded,
+                    modifier = Modifier.padding(top = TaotaoSpacing.xs),
+                )
+            }
+        } else {
+            Text(
+                text = "此歌曲为没有填词的纯音乐，请您欣赏",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(top = TaotaoSpacing.sm),
+            )
+        }
+    }
+}
+
+/**
+ * 「展开歌词」开关的可见阈值（字符数）。
+ *
+ * 上游摘要是**从歌词正文截断而来**的一段，不是完整歌词，所以「要不要给展开开关」
+ * 只能靠长度粗略判断。阈值取 3 行正文的典型容量（每行约 20 个汉字），
+ * 短于这个长度的摘要展开后也还是那几行，给了开关反而像失灵。
+ */
+private const val LyricExpandThresholdChars = 60
+
+/** 「展开歌词」/「收起歌词」开关。图标跟随展开态翻转。 */
+@Composable
+private fun LyricExpandToggle(
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = modifier
+            .clip(TaotaoShapes.button)
+            .clickable(onClick = onToggle)
+            .padding(vertical = TaotaoSpacing.xxs, horizontal = TaotaoSpacing.xxs),
+    ) {
+        Text(
+            text = if (expanded) "收起歌词" else "展开歌词",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Icon(
+            imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+            contentDescription = if (expanded) "收起歌词" else "展开歌词",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(start = TaotaoSpacing.xxs).size(TaotaoSizes.iconXs),
+        )
+    }
+}
+
+/**
+ * 歌词卡片的动作区：爱心 / 加号 / 更多。
+ *
+ * 与歌曲行共用同一套菜单项与可见性规则（收藏、下一首播放、查看歌手/专辑），
+ * 但排布不同 —— 这里把最常用的「收藏」「加入歌单」提到卡片上，其余收进更多菜单。
+ *
+ * 没有「已下载」图标：`downloaded` 曾经传进来过，但卡片上只有三个动作位，
+ * 再塞一个下载标记会把标题挤窄；下载态在歌曲列表里已经能看到。
+ */
+@Composable
+private fun LyricCardActions(
+    favorited: Boolean,
+    onToggleFavorite: (() -> Unit)?,
+    onPlayNext: (() -> Unit)?,
+    onAddToPlaylist: (() -> Unit)?,
+    onOpenArtist: (() -> Unit)?,
+    onOpenAlbum: (() -> Unit)?,
+    enabled: Boolean,
+) {
+    var showActions by remember { mutableStateOf(false) }
+    // 收藏与加入歌单已在卡片上直接可见，「更多」里只放导航与队列类条目；
+    // 一个只有「收藏」的菜单等于把同一个操作说两遍。
+    val hasMenuItems = onPlayNext != null || onOpenArtist != null || onOpenAlbum != null
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        if (onToggleFavorite != null) {
+            LyricCardActionButton(
+                icon = if (favorited) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                description = if (favorited) "取消收藏" else "收藏",
+                tint = if (favorited) TaotaoCoral else MaterialTheme.colorScheme.onSurfaceVariant,
+                enabled = enabled,
+                onClick = onToggleFavorite,
+            )
+        }
+        if (onAddToPlaylist != null) {
+            LyricCardActionButton(
+                icon = Icons.Default.Add,
+                description = "加入歌单",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                enabled = enabled,
+                onClick = onAddToPlaylist,
+            )
+        }
+        if (hasMenuItems) {
+            Box {
+                LyricCardActionButton(
+                    icon = Icons.Default.MoreVert,
+                    description = "更多操作",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    enabled = enabled,
+                    onClick = { showActions = true },
+                )
+                DropdownMenu(
+                    expanded = showActions,
+                    onDismissRequest = { showActions = false },
+                    containerColor = MaterialTheme.colorScheme.surface,
+                ) {
+                    if (onPlayNext != null) {
+                        DropdownMenuItem(
+                            text = { Text("下一首播放") },
+                            onClick = { showActions = false; onPlayNext() },
+                            leadingIcon = { Icon(Icons.AutoMirrored.Filled.PlaylistPlay, null) },
+                        )
+                    }
+                    if (onOpenArtist != null) {
+                        DropdownMenuItem(
+                            text = { Text("查看歌手") },
+                            onClick = { showActions = false; onOpenArtist() },
+                            leadingIcon = { Icon(Icons.Default.Person, null) },
+                        )
+                    }
+                    if (onOpenAlbum != null) {
+                        DropdownMenuItem(
+                            text = { Text("查看专辑") },
+                            onClick = { showActions = false; onOpenAlbum() },
+                            leadingIcon = { Icon(Icons.Default.Album, null) },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 歌词卡片动作区的单个图标按钮，统一触达尺寸与配色。 */
+@Composable
+private fun LyricCardActionButton(
+    icon: ImageVector,
+    description: String,
+    tint: Color,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    IconButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier.size(TaotaoSizes.iconButton),
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = description,
+            tint = tint,
+            modifier = Modifier.size(TaotaoSizes.iconSm),
+        )
     }
 }
 
@@ -1673,41 +1959,44 @@ private fun SearchVideoSkeletonList() {
     }
 }
 
-/** 「歌词」标签的加载骨架：歌曲行（圆角封面 + 名称/歌手条）+ 摘要占位条，与真实行同布局。 */
+/** 「歌词」标签的加载骨架：卡片式行（标题条 + 副标题条 + 三行歌词占位条），与真实卡片同布局。 */
 @Composable
 private fun SearchLyricSkeletonList() {
     Column(
         verticalArrangement = Arrangement.spacedBy(TaotaoSpacing.sm),
-        modifier = Modifier.padding(top = TaotaoSpacing.md),
+        modifier = Modifier.padding(top = TaotaoSpacing.md, start = TaotaoSpacing.sm, end = TaotaoSpacing.sm),
     ) {
-        repeat(5) {
-            Column {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+        repeat(4) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(TaotaoShapes.card)
+                    .background(MaterialTheme.colorScheme.surface)
+                    .padding(horizontal = TaotaoSpacing.md, vertical = TaotaoSpacing.md),
+            ) {
+                // 标题条（宽一些、高一些，对应卡片主标题）。
+                Box(
+                    Modifier.width(SearchSkeletonBarWidth).height(SearchSkeletonBarHeight)
+                        .clip(TaotaoShapes.small).background(MaterialTheme.colorScheme.surfaceVariant),
+                )
+                Spacer(Modifier.height(TaotaoSpacing.xs))
+                // 副标题条（歌手 · 专辑）。
+                Box(
+                    Modifier.width(SearchSkeletonSubWidth).height(SearchSkeletonSubHeight)
+                        .clip(TaotaoShapes.extraSmall).background(MaterialTheme.colorScheme.surfaceVariant),
+                )
+                Spacer(Modifier.height(TaotaoSpacing.sm))
+                // 三行歌词占位：行宽递减，贴近真实正文的参差感。
+                repeat(3) { line ->
                     Box(
-                        Modifier.size(TaotaoSizes.artworkRow).clip(TaotaoShapes.artwork)
+                        Modifier
+                            .fillMaxWidth(if (line == 2) 0.55f else 1f)
+                            .height(SearchSkeletonSubHeight)
+                            .clip(TaotaoShapes.extraSmall)
                             .background(MaterialTheme.colorScheme.surfaceVariant),
                     )
-                    Column(Modifier.padding(start = TaotaoSpacing.sm)) {
-                        Box(
-                            Modifier.width(SearchSkeletonBarWidth).height(SearchSkeletonBarHeight)
-                                .clip(TaotaoShapes.small).background(MaterialTheme.colorScheme.surfaceVariant),
-                        )
-                        Spacer(Modifier.height(TaotaoSpacing.xs))
-                        Box(
-                            Modifier.width(SearchSkeletonSubWidth).height(SearchSkeletonSubHeight)
-                                .clip(TaotaoShapes.extraSmall).background(MaterialTheme.colorScheme.surfaceVariant),
-                        )
-                    }
+                    if (line < 2) Spacer(Modifier.height(TaotaoSpacing.xs))
                 }
-                // 摘要占位条与真实摘要行同缩进，加载态和内容态不会左右跳。
-                Spacer(
-                    Modifier
-                        .padding(start = TaotaoSpacing.sm + TaotaoSizes.artworkRow + TaotaoSpacing.sm, top = TaotaoSpacing.xxs)
-                        .width(SearchSkeletonSubWidth)
-                        .height(SearchSkeletonSubHeight)
-                        .clip(TaotaoShapes.extraSmall)
-                        .background(MaterialTheme.colorScheme.surfaceVariant),
-                )
             }
         }
     }
