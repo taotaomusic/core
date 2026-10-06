@@ -106,6 +106,7 @@ export class AdminAuthService {
       role: admin.role,
       display_name: admin.display_name,
       must_change_password: admin.must_change_password,
+      totp_enabled: admin.totp_enabled,
     };
   }
 

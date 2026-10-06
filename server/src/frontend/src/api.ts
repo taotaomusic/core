@@ -19,6 +19,8 @@ export interface AdminIdentity {
   role: string;
   display_name: string;
   must_change_password?: boolean;
+  /** 本人是否已开启 TOTP 两步验证。 */
+  totp_enabled?: boolean;
 }
 
 interface Envelope<T> {
@@ -189,6 +191,45 @@ export async function adminChangePassword(token: string, oldPassword: string, ne
     method: "POST",
     headers: { "content-type": "application/json", "authorization": `Bearer ${token}` },
     body: JSON.stringify({ oldPassword, newPassword }),
+  });
+  if (response.status === 204) return;
+  await unwrap<unknown>(response);
+}
+
+/**
+ * 管理员认证 —— 请求开启两步验证。
+ *
+ * 服务端校验登录密码后生成 TOTP 密钥：此时密钥已入库但**尚未启用**，
+ * 必须再用 [adminTotpConfirm] 校验一次动态码才真正生效。
+ * 返回的 `otpauth_url` 供验证器扫码，`secret` 作为手动输入的备用渠道。
+ */
+export async function adminTotpEnable(token: string, password: string) {
+  const response = await fetch(`${BASE}/admin/auth/totp-enable`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "authorization": `Bearer ${token}` },
+    body: JSON.stringify({ password }),
+  });
+  return unwrap<{ secret: string; otpauth_url: string }>(response);
+}
+
+/** 管理员认证 —— 校验动态码并正式启用两步验证（204 无响应体）。 */
+export async function adminTotpConfirm(token: string, code: string) {
+  const response = await fetch(`${BASE}/admin/auth/totp-confirm`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "authorization": `Bearer ${token}` },
+    // 服务端把 6 位动态码也收在 `token` 字段里，与会话令牌无关。
+    body: JSON.stringify({ token: code }),
+  });
+  if (response.status === 204) return;
+  await unwrap<unknown>(response);
+}
+
+/** 管理员认证 —— 关闭两步验证（需再次校验登录密码，204 无响应体）。 */
+export async function adminTotpDisable(token: string, password: string) {
+  const response = await fetch(`${BASE}/admin/auth/totp-disable`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "authorization": `Bearer ${token}` },
+    body: JSON.stringify({ password }),
   });
   if (response.status === 204) return;
   await unwrap<unknown>(response);

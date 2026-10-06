@@ -19,6 +19,8 @@ export type AdminActor = {
   role: string;
   display_name: string;
   must_change_password: number;
+  /** 数据库列原样透传（1/0），是否对外转成布尔由 [publicAdmin] 决定。 */
+  totp_enabled: number;
 };
 
 /** 经过 [AdminAuthGuard] 的请求。 */

@@ -104,6 +104,7 @@ export class AdminAuthController {
         role: credentials.role,
         display_name: credentials.display_name,
         must_change_password: credentials.must_change_password,
+        totp_enabled: credentials.totp_enabled,
       };
     }
 
@@ -181,7 +182,9 @@ export class AdminAuthController {
 
     return {
       token: sessionToken,
-      admin: { id: admin.id, username: admin.username, display_name: admin.display_name, role: admin.role },
+      // 走 publicAdmin 统一投影：这里原先手写了对象、漏掉 must_change_password，
+      // 开了 TOTP 但仍在强制改密期的账号会绕过前端的改密拦截。
+      admin: this.publicAdmin(admin),
     };
   }
 
@@ -526,7 +529,8 @@ export class AdminAuthController {
    * `must_change_password` 转成布尔量给前端用，避免让客户端理解 0/1 约定。
    */
   private publicAdmin(admin: {
-    id: number; username: string; display_name: string; role: string; must_change_password: number;
+    id: number; username: string; display_name: string; role: string;
+    must_change_password: number; totp_enabled: number;
   }) {
     return {
       id: admin.id,
@@ -534,6 +538,8 @@ export class AdminAuthController {
       display_name: admin.display_name,
       role: admin.role,
       must_change_password: admin.must_change_password === 1,
+      // 前端「两步验证」开关按它决定展示开启流程还是关闭入口。
+      totp_enabled: admin.totp_enabled === 1,
     };
   }
 }
