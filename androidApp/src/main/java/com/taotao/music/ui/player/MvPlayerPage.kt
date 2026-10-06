@@ -1,6 +1,7 @@
 package com.taotao.music.ui.player
 
 import android.app.Activity
+import android.content.Context
 import android.content.pm.ActivityInfo
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
@@ -63,6 +64,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -97,7 +99,8 @@ import kotlinx.coroutines.withContext
  *
  * 全屏黑底沉浸式：竖屏时视频区垂直居中（封面模糊打底、歌曲信息跟在视频下方），
  * 底部导航与迷你播放器由 SharedMainLayout 的 hideBottomBar 收起；控制层支持
- * 播放/暂停、进度拖动、高清/标清切换与横屏全屏。
+ * 播放/暂停、进度拖动、高清/标清切换与横屏全屏。竖屏时控制块整体放在视频
+ * 下方的黑色空白区、不遮挡画面；全屏时控制层盖在画面上，无操作自动收起。
  *
  * 歌曲音频的暂停与恢复由路由层（AppPageRouter 的 [MvPlayerPageRoute]）负责，
  * 这里只管 MV 自己的播放，两边互不掺和。
@@ -215,7 +218,7 @@ internal fun MvPlayerPage(
                 contentAlignment = Alignment.Center,
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    MvVideoArea(
+                    MvPlaybackArea(
                         mvInfo = mvInfo,
                         loadError = loadError,
                         onRetryLoad = { loadGeneration++ },
@@ -232,7 +235,9 @@ internal fun MvPlayerPage(
                                 Text(
                                     mvInfo?.name?.takeIf { it.isNotBlank() } ?: song.title,
                                     color = TaotaoColors.videoOn,
-                                    style = MaterialTheme.typography.titleMedium,
+                                    // 歌名从 cardTitle(16sp) 收到 bodyCompact(14sp)：控制块搬进
+                                    // 黑区后整页信息密度收紧一档，让位给画面。
+                                    style = MaterialTheme.typography.bodyMedium,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                     modifier = Modifier.weight(1f, fill = false),
@@ -270,28 +275,29 @@ internal fun MvPlayerPage(
     }
 }
 
-/** 视频区域：竖屏 16:9 居中，全屏铺满；承载加载中、拉取失败与播放器三种互斥状态。 */
+/** 播放区：拉到 MV 信息后进入播放器装配，加载中/失败落在 16:9 视频位上兜底。 */
 @Composable
-private fun MvVideoArea(
+private fun MvPlaybackArea(
     mvInfo: TencentMusicApi.MvInfo?,
     loadError: String?,
     onRetryLoad: () -> Unit,
     isFullscreen: Boolean,
     onToggleFullscreen: () -> Unit,
 ) {
-    Box(
-        (if (isFullscreen) Modifier.fillMaxSize() else Modifier.fillMaxWidth().aspectRatio(16f / 9f))
-            .background(Color(0xFF101010)),
-        contentAlignment = Alignment.Center,
-    ) {
-        when {
-            mvInfo != null -> MvPlayerSurface(
-                mvInfo = mvInfo,
-                isFullscreen = isFullscreen,
-                onToggleFullscreen = onToggleFullscreen,
-            )
-            loadError != null -> MvStatusFallback(message = loadError, onRetry = onRetryLoad)
-            else -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+    when {
+        mvInfo != null -> MvPlayingSection(
+            mvInfo = mvInfo,
+            isFullscreen = isFullscreen,
+            onToggleFullscreen = onToggleFullscreen,
+        )
+        else -> Box(
+            (if (isFullscreen) Modifier.fillMaxSize() else Modifier.fillMaxWidth().aspectRatio(16f / 9f))
+                .background(Color(0xFF101010)),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (loadError != null) {
+                MvStatusFallback(message = loadError, onRetry = onRetryLoad)
+            } else {
                 CircularProgressIndicator(color = TaotaoCoral)
             }
         }
@@ -299,39 +305,151 @@ private fun MvVideoArea(
 }
 
 /**
- * MV 播放面：ExoPlayer + 自定义控制层。
+ * 播放器装配：视频面 + 控制块。
  *
- * 控制层（中央播放按钮、底部进度与清晰度/全屏条）在播放中 3.5 秒无操作后自动收起，
- * 点击视频任意位置呼出；暂停、拖动进度或刚切换全屏时保持常显。
+ * 竖屏时控制块（时间/进度/清晰度/全屏）整体移出视频面，放到视频下方的黑色
+ * 空白区，不再遮挡画面；全屏时回到「盖在画面上 + 3.5 秒无操作自动收起」的
+ * 常规播放器形态。两种形态共用同一套 [MvControlRows]。
+ *
+ * 点视频的语义随之分家：竖屏控制块常驻，点视频 = 播放/暂停；全屏点视频 =
+ * 呼出/收起控制层。
  */
 @Composable
-private fun MvPlayerSurface(
+private fun MvPlayingSection(
     mvInfo: TencentMusicApi.MvInfo,
     isFullscreen: Boolean,
     onToggleFullscreen: () -> Unit,
 ) {
-    val context = LocalContext.current
-    // 默认高清；上游只给到标清流时直接用标清。
-    var preferHigh by remember(mvInfo) { mutableStateOf(mvInfo.highUrl != null) }
-    val activeUrl = (if (preferHigh) mvInfo.highUrl else mvInfo.lowUrl)
-        ?: mvInfo.lowUrl
-        ?: mvInfo.highUrl
-    val playingHigh = activeUrl == mvInfo.highUrl
+    val controller = rememberMvPlayerController(mvInfo)
 
-    val player = remember(mvInfo) {
-        ExoPlayer.Builder(context).build().apply { playWhenReady = true }
+    // 全屏时播放中 3.5 秒无操作自动收起；暂停、拖动进度与刚切全屏时保持常显，
+    // 否则用户找不到退出全屏的按钮。竖屏控制块常驻，不参与收起。
+    LaunchedEffect(controller.controlsVisible, controller.isPlaying, controller.dragging, isFullscreen) {
+        if (isFullscreen && controller.controlsVisible && controller.isPlaying && !controller.dragging) {
+            delay(3500L)
+            controller.controlsVisible = false
+        }
     }
 
-    // ---- 播放器状态镜像为 Compose 状态，UI 一律只读镜像 ----
-    var isPlaying by remember { mutableStateOf(false) }
-    var isBuffering by remember(mvInfo) { mutableStateOf(true) }
-    var hasEnded by remember(mvInfo) { mutableStateOf(false) }
-    var playbackError by remember(mvInfo) { mutableStateOf<String?>(null) }
-    var dragging by remember { mutableStateOf(false) }
-    var draggedPositionMs by remember { mutableLongStateOf(0L) }
-    var positionMs by remember(mvInfo) { mutableLongStateOf(0L) }
+    Box(
+        (if (isFullscreen) Modifier.fillMaxSize() else Modifier.fillMaxWidth().aspectRatio(16f / 9f))
+            .background(Color(0xFF101010)),
+        contentAlignment = Alignment.Center,
+    ) {
+        AndroidView(
+            factory = { viewContext ->
+                PlayerView(viewContext).apply {
+                    this.player = controller.player
+                    // 自带控制器风格与应用脱节，全部换成自绘控制层。
+                    useController = false
+                }
+            },
+            update = { it.player = controller.player },
+            modifier = Modifier.fillMaxSize(),
+        )
+        // 控制层之下垫一层点击面板：竖屏点视频切播放/暂停，全屏呼出/收起控制层。
+        Box(
+            Modifier
+                .fillMaxSize()
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                ) {
+                    if (isFullscreen) {
+                        controller.controlsVisible = !controller.controlsVisible
+                    } else {
+                        controller.togglePlayback()
+                    }
+                },
+        )
+
+        if (controller.isBuffering && controller.playbackError == null) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = TaotaoCoral)
+            }
+        }
+        controller.playbackError?.let { message ->
+            // 地址缺失时重试没有意义，只有网络型错误才给重试入口。
+            MvStatusFallback(
+                message = message,
+                onRetry = controller.activeUrl?.let { url ->
+                    { controller.loadSource(url, controller.positionMs) }
+                },
+            )
+        }
+
+        if (isFullscreen) {
+            AnimatedVisibility(
+                visible = controller.controlsVisible,
+                enter = contentFadeIn(),
+                exit = contentFadeOut(),
+            ) {
+                Box(Modifier.fillMaxSize()) {
+                    MvCenterButton(controller, Modifier.align(Alignment.Center))
+                    // 底部控制条：压一层向上的黑色渐变保证白色文字可读。
+                    Column(
+                        Modifier
+                            .align(Alignment.BottomCenter)
+                            .fillMaxWidth()
+                            .background(
+                                Brush.verticalGradient(
+                                    // 豁免：底部控制条渐变的终点比共享遮罩档更深（0.75），
+                                    // 是「向上渐隐压暗」的终点值，保证时间文字可读，不归 scrim 档。
+                                    listOf(Color.Transparent, Color.Black.copy(alpha = 0.75f)),
+                                ),
+                            )
+                            .padding(horizontal = TaotaoSpacing.md, vertical = TaotaoSpacing.xs),
+                    ) {
+                        MvControlRows(controller, isFullscreen, onToggleFullscreen)
+                    }
+                }
+            }
+        } else if (!controller.isPlaying && !controller.isBuffering && controller.playbackError == null) {
+            // 竖屏暂停/播完时在画面中央给一枚明确的「可继续播放」按钮，播放中不打扰画面。
+            MvCenterButton(controller)
+        }
+    }
+
+    if (!isFullscreen) {
+        // 竖屏控制块：落在视频下方的黑色空白区，与画面脱开，不再遮挡视频。
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(top = TaotaoSpacing.sm, horizontal = TaotaoSpacing.lg),
+        ) {
+            MvControlRows(controller, isFullscreen, onToggleFullscreen)
+        }
+    }
+}
+
+/**
+ * MV 播放器状态持有者：Media3 播放器实例 + 镜像给 Compose 的状态 + 动作方法。
+ * 状态一律用 `mutableStateOf` 挂在类身上，UI 组合只读；写操作收敛为方法，
+ * 供视频面（竖屏/全屏）与视频下方的控制块两边共享同一份播放状态。
+ */
+private class MvPlayerController(
+    context: Context,
+    val mvInfo: TencentMusicApi.MvInfo,
+) {
+    val player: ExoPlayer = ExoPlayer.Builder(context).build().apply { playWhenReady = true }
+
+    // 默认高清；上游只给到标清流时直接用标清。
+    var preferHigh by mutableStateOf(mvInfo.highUrl != null)
+    var isPlaying by mutableStateOf(false)
+    var isBuffering by mutableStateOf(true)
+    var hasEnded by mutableStateOf(false)
+    var playbackError by mutableStateOf<String?>(null)
+    var dragging by mutableStateOf(false)
+    var draggedPositionMs by mutableLongStateOf(0L)
+    var positionMs by mutableLongStateOf(0L)
     // 拉取接口给了时长，缓冲未就绪时先用它撑起进度条，避免 0/0 的尴尬。
-    var durationMs by remember(mvInfo) { mutableLongStateOf(mvInfo.durationMs.coerceAtLeast(0L)) }
+    var durationMs by mutableLongStateOf(mvInfo.durationMs.coerceAtLeast(0L))
+    var controlsVisible by mutableStateOf(true)
+
+    val activeUrl: String?
+        get() = (if (preferHigh) mvInfo.highUrl else mvInfo.lowUrl) ?: mvInfo.lowUrl ?: mvInfo.highUrl
+    val playingHigh: Boolean
+        get() = activeUrl == mvInfo.highUrl
 
     /** 装载或换源：带进度换 MediaItem，清晰度切换不打断观看位置。 */
     fun loadSource(url: String, resumePositionMs: Long) {
@@ -340,58 +458,8 @@ private fun MvPlayerSurface(
         player.prepare()
         player.play()
     }
-    LaunchedEffect(mvInfo) {
-        // 上游可能两条流都为空：这时不装载播放器，直接给错误态。
-        val url = activeUrl
-        if (url == null) playbackError = "没有可用的 MV 播放地址" else loadSource(url, 0L)
-    }
 
-    DisposableEffect(player) {
-        val listener = object : Player.Listener {
-            override fun onIsPlayingChanged(playing: Boolean) {
-                isPlaying = playing
-                if (playing) hasEnded = false
-            }
-
-            override fun onPlaybackStateChanged(state: Int) {
-                isBuffering = state == Player.STATE_BUFFERING
-                if (state == Player.STATE_ENDED) hasEnded = true
-            }
-
-            override fun onPlayerError(error: PlaybackException) {
-                playbackError = "MV 播放失败，请检查网络后重试"
-            }
-        }
-        player.addListener(listener)
-        onDispose { player.removeListener(listener) }
-    }
-    DisposableEffect(player) {
-        onDispose { player.release() }
-    }
-
-    // 位置轮询：Media3 的当前位置只有主线程可读，LaunchedEffect 默认就在主线程调度。
-    LaunchedEffect(player) {
-        while (isActive) {
-            if (!dragging) {
-                positionMs = player.currentPosition.coerceAtLeast(0L)
-                val duration = player.duration
-                if (duration > 0L) durationMs = duration
-            }
-            delay(500L)
-        }
-    }
-
-    var controlsVisible by remember { mutableStateOf(true) }
-    // 播放中 3.5 秒无操作自动收起；暂停、拖动进度与刚进全屏时保持常显，
-    // 否则用户找不到退出全屏的按钮。
-    LaunchedEffect(controlsVisible, isPlaying, dragging, isFullscreen) {
-        if (controlsVisible && isPlaying && !dragging) {
-            delay(3500L)
-            controlsVisible = false
-        }
-    }
-
-    val togglePlayback = {
+    fun togglePlayback() {
         when {
             playbackError != null -> activeUrl?.let { loadSource(it, positionMs) }
             hasEnded -> {
@@ -403,156 +471,172 @@ private fun MvPlayerSurface(
             else -> player.play()
         }
     }
-    val switchQuality = { high: Boolean ->
+
+    fun switchQuality(high: Boolean) {
         val target = if (high) mvInfo.highUrl else mvInfo.lowUrl
         if (!target.isNullOrBlank() && target != activeUrl) {
             preferHigh = high
             loadSource(target, positionMs)
         }
     }
+}
 
-    Box(Modifier.fillMaxSize()) {
-        AndroidView(
-            factory = { viewContext ->
-                PlayerView(viewContext).apply {
-                    this.player = player
-                    // 自带控制器风格与应用脱节，全部换成自绘控制层。
-                    useController = false
-                }
-            },
-            update = { it.player = player },
-            modifier = Modifier.fillMaxSize(),
-        )
-        // 控制层之下垫一层点击面板：点视频任意位置呼出/收起控制层。
-        Box(
-            Modifier
-                .fillMaxSize()
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                ) { controlsVisible = !controlsVisible },
-        )
+/** 拉取成功后装配播放器：监听器、位置轮询与首次装载都在这里接好，页面只消费 [MvPlayerController]。 */
+@Composable
+private fun rememberMvPlayerController(mvInfo: TencentMusicApi.MvInfo): MvPlayerController {
+    val context = LocalContext.current
+    val controller = remember(mvInfo) { MvPlayerController(context, mvInfo) }
 
-        if (isBuffering && playbackError == null) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = TaotaoCoral)
+    LaunchedEffect(controller.mvInfo) {
+        // 上游可能两条流都为空：这时不装载播放器，直接给错误态。
+        val url = controller.activeUrl
+        if (url == null) controller.playbackError = "没有可用的 MV 播放地址" else controller.loadSource(url, 0L)
+    }
+
+    DisposableEffect(controller.player) {
+        val listener = object : Player.Listener {
+            override fun onIsPlayingChanged(playing: Boolean) {
+                controller.isPlaying = playing
+                if (playing) controller.hasEnded = false
+            }
+
+            override fun onPlaybackStateChanged(state: Int) {
+                controller.isBuffering = state == Player.STATE_BUFFERING
+                if (state == Player.STATE_ENDED) controller.hasEnded = true
+            }
+
+            override fun onPlayerError(error: PlaybackException) {
+                controller.playbackError = "MV 播放失败，请检查网络后重试"
             }
         }
-        playbackError?.let { message ->
-            // 地址缺失时重试没有意义，只有网络型错误才给重试入口。
-            MvStatusFallback(
-                message = message,
-                onRetry = activeUrl?.let { url -> { loadSource(url, positionMs) } },
+        controller.player.addListener(listener)
+        onDispose { controller.player.removeListener(listener) }
+    }
+    DisposableEffect(controller.player) {
+        onDispose { controller.player.release() }
+    }
+
+    // 位置轮询：Media3 的当前位置只有主线程可读，LaunchedEffect 默认就在主线程调度。
+    LaunchedEffect(controller.player) {
+        while (isActive) {
+            if (!controller.dragging) {
+                controller.positionMs = controller.player.currentPosition.coerceAtLeast(0L)
+                val duration = controller.player.duration
+                if (duration > 0L) controller.durationMs = duration
+            }
+            delay(500L)
+        }
+    }
+
+    return controller
+}
+
+/** 中央播放/暂停/重播按钮：半透明黑圆压在画面中心，只接管按钮自己的点击。 */
+@Composable
+private fun MvCenterButton(controller: MvPlayerController, modifier: Modifier = Modifier) {
+    Box(
+        modifier
+            .size(TaotaoSizes.playButton)
+            .background(Color.Black.copy(alpha = TaotaoWash.scrim), CircleShape)
+            .clickable { controller.togglePlayback() },
+        contentAlignment = Alignment.Center,
+    ) {
+        val centerIcon = when {
+            controller.playbackError != null -> Icons.Default.Replay
+            controller.hasEnded -> Icons.Default.Replay
+            controller.isPlaying -> Icons.Default.Pause
+            else -> Icons.Default.PlayArrow
+        }
+        Icon(centerIcon, null, tint = TaotaoColors.videoOn, modifier = Modifier.size(TaotaoSizes.iconButton))
+    }
+}
+
+/**
+ * 控制行：时间 + 进度条一行，清晰度 + 全屏一行。
+ *
+ * 竖屏垫在视频下方的黑色空白区、全屏垫在画面内的渐变浮条上，由外层负责
+ * 底衬与内边距，这里只管两行内容本身。
+ */
+@Composable
+private fun MvControlRows(
+    controller: MvPlayerController,
+    isFullscreen: Boolean,
+    onToggleFullscreen: () -> Unit,
+) {
+    // 时间标签收紧到 10sp 并开等宽数字：比共享 micro 档再小一号（豁免），
+    // 播放中位数变化时宽度不抖，时间戳读感更稳。
+    val timeStyle = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontFeatureSettings = "tnum")
+    Column {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                formatTime(controller.positionMs.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()),
+                color = TaotaoColors.videoOn,
+                style = timeStyle,
+            )
+            Slider(
+                value = (if (controller.dragging) controller.draggedPositionMs else controller.positionMs)
+                    .toFloat()
+                    .coerceIn(0f, controller.durationMs.toFloat().coerceAtLeast(1f)),
+                onValueChange = {
+                    controller.dragging = true
+                    controller.draggedPositionMs = it.toLong()
+                },
+                onValueChangeFinished = {
+                    controller.player.seekTo(controller.draggedPositionMs)
+                    controller.positionMs = controller.draggedPositionMs
+                    controller.dragging = false
+                },
+                valueRange = 0f..controller.durationMs.toFloat().coerceAtLeast(1f),
+                colors = SliderDefaults.colors(
+                    thumbColor = TaotaoCoral,
+                    activeTrackColor = TaotaoCoral,
+                    // 豁免：进度条未播放轨道用 35% 白，在黑底上够辨识又不抢画面，不进共享档位。
+                    inactiveTrackColor = Color.White.copy(alpha = 0.35f),
+                ),
+                // 显式给一枚小圆拇指：默认拇指在这条进度条上观感突兀（见用户截图里的竖条）。
+                thumb = {
+                    Box(Modifier.size(12.dp).background(TaotaoCoral, CircleShape))
+                },
+                modifier = Modifier.weight(1f).padding(horizontal = TaotaoSpacing.xs),
+            )
+            Text(
+                formatTime(controller.durationMs.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()),
+                color = TaotaoColors.videoOn,
+                style = timeStyle,
             )
         }
-
-        AnimatedVisibility(
-            visible = controlsVisible,
-            enter = contentFadeIn(),
-            exit = contentFadeOut(),
+        Row(
+            Modifier.fillMaxWidth().padding(top = TaotaoSpacing.xxs),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(Modifier.fillMaxSize()) {
-                // 中央播放/暂停/重播按钮；整块点击面板已存在，这里只接管按钮自己的点击。
-                Box(
-                    Modifier
-                        .align(Alignment.Center)
-                        .size(TaotaoSizes.playButton)
-                        .background(Color.Black.copy(alpha = TaotaoWash.scrim), CircleShape)
-                        .clickable { togglePlayback() },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    val centerIcon = when {
-                        playbackError != null -> Icons.Default.Replay
-                        hasEnded -> Icons.Default.Replay
-                        isPlaying -> Icons.Default.Pause
-                        else -> Icons.Default.PlayArrow
-                    }
-                    Icon(centerIcon, null, tint = TaotaoColors.videoOn, modifier = Modifier.size(TaotaoSizes.iconButton))
-                }
-                // 底部控制条：压一层向上的黑色渐变保证白色文字可读。
-                Column(
-                    Modifier
-                        .align(Alignment.BottomCenter)
-                        .fillMaxWidth()
-                        .background(
-                            Brush.verticalGradient(
-                                // 豁免：底部控制条渐变的终点比共享遮罩档更深（0.75），
-                                // 是「向上渐隐压暗」的终点值，保证时间文字可读，不归 scrim 档。
-                                listOf(Color.Transparent, Color.Black.copy(alpha = 0.75f)),
-                            ),
-                        )
-                        .padding(horizontal = TaotaoSpacing.md, vertical = TaotaoSpacing.xs),
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            formatTime(positionMs.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()),
-                            color = TaotaoColors.videoOn,
-                            style = MaterialTheme.typography.labelSmall,
-                        )
-                        Slider(
-                            value = (if (dragging) draggedPositionMs else positionMs)
-                                .toFloat()
-                                .coerceIn(0f, durationMs.toFloat().coerceAtLeast(1f)),
-                            onValueChange = {
-                                dragging = true
-                                draggedPositionMs = it.toLong()
-                            },
-                            onValueChangeFinished = {
-                                player.seekTo(draggedPositionMs)
-                                positionMs = draggedPositionMs
-                                dragging = false
-                            },
-                            valueRange = 0f..durationMs.toFloat().coerceAtLeast(1f),
-                            colors = SliderDefaults.colors(
-                                thumbColor = TaotaoCoral,
-                                activeTrackColor = TaotaoCoral,
-                                // 豁免：进度条未播放轨道用 30% 白，比次要文字更淡以退居背景层，
-                                // 既不是文字也不是遮罩，不进共享档位。
-                                inactiveTrackColor = Color.White.copy(alpha = 0.3f),
-                            ),
-                            modifier = Modifier.weight(1f).padding(horizontal = TaotaoSpacing.xs),
-                        )
-                        Text(
-                            formatTime(durationMs.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()),
-                            color = TaotaoColors.videoOn,
-                            style = MaterialTheme.typography.labelSmall,
-                        )
-                    }
-                    Row(
-                        Modifier.fillMaxWidth().padding(top = TaotaoSpacing.xxs),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        MvQualityChip(
-                            label = "高清",
-                            bitrate = mvInfo.highBitrate,
-                            selected = playingHigh,
-                            enabled = !mvInfo.highUrl.isNullOrBlank(),
-                            onClick = { switchQuality(true) },
-                        )
-                        Spacer(Modifier.width(TaotaoSpacing.sm))
-                        MvQualityChip(
-                            label = "标清",
-                            bitrate = mvInfo.lowBitrate,
-                            selected = !playingHigh,
-                            enabled = !mvInfo.lowUrl.isNullOrBlank(),
-                            onClick = { switchQuality(false) },
-                        )
-                        Spacer(Modifier.weight(1f))
-                        IconButton(
-                            onClick = {
-                                onToggleFullscreen()
-                                // 竖横切换后重置收起计时，保证退出全屏按钮至少停留一轮可见。
-                                controlsVisible = true
-                            },
-                        ) {
-                            Icon(
-                                if (isFullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
-                                if (isFullscreen) "退出全屏" else "全屏",
-                                tint = TaotaoColors.videoOn,
-                            )
-                        }
-                    }
-                }
+            MvQualityChip(
+                label = "高清",
+                bitrate = controller.mvInfo.highBitrate,
+                selected = controller.playingHigh,
+                enabled = !controller.mvInfo.highUrl.isNullOrBlank(),
+                onClick = { controller.switchQuality(true) },
+            )
+            Spacer(Modifier.width(TaotaoSpacing.sm))
+            MvQualityChip(
+                label = "标清",
+                bitrate = controller.mvInfo.lowBitrate,
+                selected = !controller.playingHigh,
+                enabled = !controller.mvInfo.lowUrl.isNullOrBlank(),
+                onClick = { controller.switchQuality(false) },
+            )
+            Spacer(Modifier.weight(1f))
+            IconButton(
+                onClick = {
+                    onToggleFullscreen()
+                    // 竖横切换后重置收起计时，保证退出全屏按钮至少停留一轮可见。
+                    controller.controlsVisible = true
+                },
+            ) {
+                Icon(
+                    if (isFullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
+                    if (isFullscreen) "退出全屏" else "全屏",
+                    tint = TaotaoColors.videoOn,
+                )
             }
         }
     }
@@ -577,7 +661,8 @@ private fun MvQualityChip(
         Text(
             if (bitrate > 0) "$label ${bitrate}K" else label,
             color = contentColor,
-            style = MaterialTheme.typography.labelMedium,
+            // 档位字号从 label(12sp) 收到 micro(11sp)，与收紧后的控制块密度一致。
+            style = MaterialTheme.typography.labelSmall,
         )
     }
 }
