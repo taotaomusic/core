@@ -56,6 +56,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
@@ -163,7 +164,24 @@ internal fun MvPlayerPage(
     }
 
     // 页面打底纯黑：视频浮层的黑不属于任何主题色，保持字面量（MV 页豁免）。
-    Box(Modifier.fillMaxSize().background(Color.Black)) {
+    // 本页是盖在搜索页/详情页之上的不透明浮层，但纯黑背景没有可点目标，Compose
+    // 里只有背景、没有指针处理的节点不拦截触摸 —— 不在这里吞事件，点按会落透到
+    // 下层页面：隔着 MV 页点到搜索结果里的另一张视频卡，正在看的 MV 会被静默
+    // 切走。视频区与控制层的子节点在命中测试里优先于本层，原有交互不受影响。
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+            .pointerInput(Unit) {
+                // 空白区域一律吞掉指针事件（点击/滑动/长按都无响应）；协程随页面
+                // 离开组合被取消，不需要额外的退出条件。
+                awaitPointerEventScope {
+                    while (true) {
+                        awaitPointerEvent().changes.forEach { it.consume() }
+                    }
+                }
+            },
+    ) {
         // 模糊封面打底，给竖屏的纯黑页面一点来自歌曲本身的氛围；全屏时画面
         // 本身铺满，不再铺背景。低版本系统不支持 blur 时退化为「低透明度清晰
         // 封面 + 深色遮罩」，观感依然成立。
