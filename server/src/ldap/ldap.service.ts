@@ -229,6 +229,8 @@ export class LdapService {
         role,
         // 目录账号不参与「首次登录强制改密」：它的口令在目录侧，本地没有可改的密码。
         must_change_password: 0,
+        // LDAP 登录不叠加本地 TOTP（目录本身就是第二因子），这里只透传数据库现状。
+        totp_enabled: existing.totp_enabled,
       };
     }
 
@@ -244,6 +246,7 @@ export class LdapService {
       display_name: created.display_name,
       role: created.role,
       must_change_password: 0,
+      totp_enabled: created.totp_enabled,
     };
   }
 

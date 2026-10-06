@@ -49,6 +49,17 @@
           >
             <el-icon><component :is="isDark ? Moon : Sunny" /></el-icon>
           </el-button>
+          <!-- 两步验证开关：开启后图标转绿，入口对观察者等全部角色开放 -->
+          <el-button
+            class="totp-toggle"
+            circle
+            text
+            :type="adminInfo?.totp_enabled ? 'success' : 'warning'"
+            title="两步验证（TOTP）"
+            @click="totpDialogOpen = true"
+          >
+            <el-icon><Lock /></el-icon>
+          </el-button>
           <span v-if="!isMobile" class="identity">
             <span class="identity-avatar">{{ identityInitial }}</span>
             <span class="identity-text">
@@ -129,6 +140,10 @@
           </el-tabs>
         </div>
       </main>
+
+      <!-- 两步验证对话框：v-if 挂在组件上，首次点击才拉取对应 chunk（含 qrcode 库） -->
+      <TotpDialog v-if="totpDialogOpen" v-model="totpDialogOpen"
+        :token="token" :totp-enabled="adminInfo?.totp_enabled === true" @changed="onTotpChanged" />
     </div>
   </el-config-provider>
 </template>
@@ -136,11 +151,14 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, ref, onMounted, onUnmounted, watch } from "vue";
 import zhCn from "element-plus/es/locale/lang/zh-cn";
-import { Upload, Connection, Bell, User, Key, Setting, Moon, Sunny, SwitchButton, Loading, Headset, Postcard } from '@element-plus/icons-vue'
+import { Upload, Connection, Bell, User, Key, Setting, Moon, Sunny, SwitchButton, Loading, Headset, Postcard, Lock } from '@element-plus/icons-vue'
 import { useDark, useToggle } from '@vueuse/core'
 import AdminLogin from "./components/AdminLogin.vue";
 import ForcePasswordChange from "./components/ForcePasswordChange.vue";
 import { adminLogout, adminMe, type AdminIdentity } from "./api";
+
+// 两步验证对话框与页签组件同样按需加载，不在首屏主包里。
+const TotpDialog = defineAsyncComponent(() => import("./components/TotpDialog.vue"));
 
 // 标签页使用异步组件：用户未打开的管理模块不进入首屏主包。
 // 加载器单独抽出来，既喂给 defineAsyncComponent，也能在启动加载动画期间
@@ -195,6 +213,9 @@ const adminInfo = ref<AdminIdentity | null>(null);
  * 否则用户会看到一堆报错的页签而不是一个明确的改密入口。
  */
 const mustChangePassword = ref(false);
+
+/** 两步验证对话框的显隐；组件本身 v-if 挂载，关闭即卸载。 */
+const totpDialogOpen = ref(false);
 
 /**
  * 正在用本地令牌确认身份。
@@ -305,6 +326,20 @@ async function onPasswordChanged() {
     mustChangePassword.value = info.must_change_password === true;
   } catch {
     // 会话在改密过程中失效（例如被别处撤销）：退回登录页重新来一次。
+    await forgetToken();
+  }
+}
+
+/**
+ * 两步验证开关变化后刷新身份信息。
+ *
+ * 不在本地猜测字段值：`/me` 是唯一权威来源，顺带能确认会话仍然有效。
+ */
+async function onTotpChanged() {
+  try {
+    adminInfo.value = await adminMe(token.value);
+  } catch {
+    // 会话失效：退回登录页重新来一次。
     await forgetToken();
   }
 }
