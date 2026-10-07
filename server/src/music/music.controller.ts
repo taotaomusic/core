@@ -421,6 +421,80 @@ export class MusicController {
   }
 
   /**
+   * 排行榜目录：模块分组 + 榜单简述 + 前 5 首预览。行形状与 `/search` 的 song data
+   * 同构；目录是首屏预览，收藏态批量查询刻意跳过（`skipFavorites`）。
+   */
+  @Get("rankings")
+  async rankings(@Req() request: Request, @Query("source") source?: string) {
+    const client = this.registry.of(this.detailSourceOf(source));
+    if (!client.getRankingGroups) {
+      throw ApiErrors.badRequest(4007, `${client.displayName}不支持排行榜`);
+    }
+    const groups = await client.getRankingGroups();
+    if (!groups) throw ApiErrors.upstream("榜单目录不可用");
+    return {
+      groups: await Promise.all(
+        groups.map(async (group) => ({
+          moduleName: group.moduleName,
+          bangs: await Promise.all(
+            group.bangs.map(async (bang) => ({
+              ...bang,
+              source: client.source,
+              preview: await this.toClientSongs(
+                request,
+                undefined,
+                client.source,
+                bang.preview,
+                this.mapper.qualityOf(undefined),
+                true,
+              ),
+            })),
+          ),
+        })),
+      ),
+    };
+  }
+
+  /**
+   * 榜单歌曲。**上游不支持分页**——固定返回全部（匿名权益约 20 首），本路由刻意
+   * 不收 page/num；`meta.total` 是上游写死的展示值（实测恒 100），仅用于展示。
+   */
+  @Get("rankings/:id/songs")
+  async rankingSongs(
+    @Req() request: Request,
+    @CurrentUser() user: SessionUser,
+    @Param("id") id?: string,
+    @Query("quality") quality?: string,
+    @Query("source") source?: string,
+  ) {
+    const selectedSource = this.detailSourceOf(source);
+    const client = this.registry.of(selectedSource);
+    if (!client.getRankingSongs) {
+      throw ApiErrors.badRequest(4007, `${client.displayName}不支持排行榜`);
+    }
+    const detail = await client.getRankingSongs(this.detailIdOf(id, "榜单"));
+    if (!detail) throw ApiErrors.upstream("榜单不可用");
+    return {
+      ranking: { ...detail.ranking, source: selectedSource },
+      songs: await this.toClientSongs(
+        request,
+        user,
+        selectedSource,
+        detail.songs,
+        this.mapper.qualityOf(quality),
+      ),
+      meta: {
+        page: 1,
+        // 上游不支持分页，这里不是「每页条数」而是当前返回的全部条数。
+        num: detail.songs.length,
+        // total 是上游写死的展示值（实测恒 100），不是真实条数。
+        total: detail.ranking.total,
+        hasMore: false,
+      },
+    };
+  }
+
+  /**
    * 歌手的专辑列表。行形状与 `/search` 的 album 行同构（上游的 `musicCount` 已在
    * 协议层改成 `songCount`，超长 `info` 简介与 `lastPlayTime` / `isshow` 照旧丢弃）。
    */
@@ -912,9 +986,11 @@ export class MusicController {
     source: MusicSource,
     items: UpstreamSong[],
     quality: number,
+    /** 首屏预览场景置 true：跳过收藏批量查询（榜单目录的 5 首预览不需要收藏态）。 */
+    skipFavorites = false,
   ): Promise<Array<ReturnType<SongMapper["toSong"]>>> {
     const client = this.registry.of(source);
-    const favorited = user === undefined
+    const favorited = user === undefined || skipFavorites
       ? new Set<string>()
       : await this.favorites.favoritedIds(
           user.id,

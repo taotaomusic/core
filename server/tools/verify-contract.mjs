@@ -2847,6 +2847,56 @@ async function main() {
     JSON.stringify(kuwoInfoBackfill).slice(0, 200),
   );
 
+  // ---------- 排行榜（2026-10 新增）----------
+  //
+  // 榜单目录 + 榜单歌曲。上游 musics 端点**不支持分页**（带 pn/rn 会 500），
+  // 固定返回全部（匿名权益约 20 首）；data.total 是写死的展示值（恒 100）。
+  const rankingGroups = await (await fetch(`${base}/api/v1/rankings?source=kuwo`, {
+    headers: { authorization: `Bearer ${token}` },
+  })).json();
+  const rankingGroupList = rankingGroups.data?.groups ?? [];
+  check(
+    "排行榜目录返回模块分组且每组榜单带正数 id 与预览行",
+    rankingGroups.code === 0
+      && Array.isArray(rankingGroupList) && rankingGroupList.length > 0
+      && rankingGroupList.every((group) => typeof group?.moduleName === "string"
+        && Array.isArray(group?.bangs) && group.bangs.length > 0
+        && group.bangs.every((bang) => typeof bang?.id === "number" && bang.id > 0
+          && typeof bang?.name === "string" && bang.name.length > 0
+          && typeof bang?.pic === "string" && (!bang.pic || bang.pic.startsWith("https://"))
+          && Array.isArray(bang?.preview) && bang.preview.length > 0 && bang.preview.length <= 5
+          && bang.preview.every((song) => typeof song?.id === "number" && song.id > 0
+            && typeof song?.title === "string" && song.source === "kuwo"))),
+    JSON.stringify(rankingGroupList[0]).slice(0, 220),
+  );
+  const rankingSongs = await (await fetch(`${base}/api/v1/rankings/16/songs?quality=10&source=kuwo`, {
+    headers: { authorization: `Bearer ${token}` },
+  })).json();
+  check(
+    "榜单歌曲返回 200 且 ranking 信息与歌曲行同构",
+    rankingSongs.code === 0
+      && typeof rankingSongs.data?.ranking?.id === "number" && rankingSongs.data.ranking.id === 16
+      && typeof rankingSongs.data.ranking?.name === "string" && rankingSongs.data.ranking.name.length > 0
+      && Array.isArray(rankingSongs.data.songs) && rankingSongs.data.songs.length > 0
+      && rankingSongs.data.songs.every(detailSongShape),
+    `${JSON.stringify(rankingSongs).slice(0, 220)}`,
+  );
+  check(
+    "榜单歌曲的 meta 无分页语义（page 恒 1、hasMore 恒 false）",
+    rankingSongs.data?.meta?.page === 1
+      && rankingSongs.data.meta?.hasMore === false,
+    JSON.stringify(rankingSongs.data?.meta),
+  );
+  const rankingBadId = await fetch(`${base}/api/v1/rankings/abc/songs?source=kuwo`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  const rankingBadIdBody = await rankingBadId.json();
+  check(
+    "榜单路径 ID 非正整数被拒 400 且 code 4001",
+    rankingBadId.status === 400 && rankingBadIdBody.code === 4001,
+    `${rankingBadId.status} ${JSON.stringify(rankingBadIdBody).slice(0, 160)}`,
+  );
+
   // ---------- 分享链路的高潮区间透传 ----------
   //
   // 酷我上游在 payInfo 里带 refrain_start/end（毫秒），/search 与 /songs/:id/info

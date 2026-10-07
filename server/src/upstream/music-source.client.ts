@@ -139,6 +139,41 @@ export interface UpstreamAlbumDetail {
   desc: string;
 }
 
+/** 排行榜简述（`/api/v1/rankings` 的 bangs 条目，去掉 source）。命名约定同 [UpstreamArtist]。 */
+export interface UpstreamRankingBrief {
+  id: number;
+  name: string;
+  /** 封面绝对地址（协议层已 httpsImage 升级）。上游可能给空串。 */
+  pic: string;
+  /** 更新时间展示串（如 `10-05更新`）。上游可能缺失或空串。 */
+  pubStr: string;
+  /** 前 5 首歌曲预览，与 /search 的 song data 同构（去掉 source）。 */
+  preview: UpstreamSong[];
+}
+
+/** 排行榜目录的一个模块分组（置顶位/热力榜/全球榜/特色榜…）。 */
+export interface UpstreamRankingGroup {
+  moduleName: string;
+  bangs: UpstreamRankingBrief[];
+}
+
+/** 排行榜详情（`/api/v1/rankings/:id/songs` 的 data.ranking，去掉 source）。 */
+export interface UpstreamRankingInfo {
+  id: number;
+  name: string;
+  pic: string;
+  /** 更新日期（如 `2026-10-05`）。上游可能缺失或空串。 */
+  pub: string;
+  /** 上游写死的展示值（实测恒 100），不是真实条数。 */
+  total: number;
+}
+
+/** 排行榜详情：榜单信息 + 完整歌曲行（与 /search 的 song data 同构，去掉 source）。 */
+export interface UpstreamRankingDetail {
+  ranking: UpstreamRankingInfo;
+  songs: UpstreamSong[];
+}
+
 /**
  * 歌手详情（`GET /api/v1/artists/:id` 的 `data.artist`，去掉 `source`）。
  *
@@ -422,6 +457,19 @@ export interface MusicSourceClient {
     limit: number,
     sourceMarker: number,
   ): Promise<{ songs: UpstreamSong[]; total: number }>;
+
+  /**
+   * 排行榜目录（`GET /api/v1/rankings` 的 data，去掉 source）。模块分组 +
+   * 榜单简述 + 前 5 首预览。取不到时返回 `null`，由调用方统一归 502。
+   */
+  getRankingGroups?(): Promise<UpstreamRankingGroup[] | null>;
+
+  /**
+   * 榜单详情（`GET /api/v1/rankings/:id/songs` 的 data）：榜单信息 + 完整歌曲行。
+   * **上游不支持分页**——固定返回全部（匿名权益约 20 首），调用方不要传 pn/rn
+   * （实测带 pn/rn 会 500，2026-10-06 踩过）。取不到时返回 `null`。
+   */
+  getRankingSongs?(id: number): Promise<UpstreamRankingDetail | null>;
 
   /** 单曲信息与**真实可用**的音质档位。 */
   requestSongInfo(key: SongKey): Promise<UpstreamSongInfo>;

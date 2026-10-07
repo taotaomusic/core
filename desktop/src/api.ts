@@ -625,6 +625,91 @@ export async function fetchAlbumSongs(id: number, page: number, source = "kuwo")
   return { ...pagedMetaOf(data?.meta, page), songs };
 }
 
+// ---- 排行榜 ----
+
+/** 排行榜简述（/api/v1/rankings 的 bangs 条目）：pic/pubStr 上游可能缺失或空串，归一成 undefined。 */
+export type RankingBrief = {
+  source: string;
+  id: number;
+  name: string;
+  pic?: string;
+  /** 更新时间展示串（如「10-05更新」），语义完整可直接展示 */
+  pubStr?: string;
+  /** 前 5 首歌曲预览，与 /search 的歌曲行同构（目录首屏预览数据，卡片视图不展示） */
+  preview: Song[];
+};
+
+/** 排行榜目录的一个模块分组（置顶榜/热力榜/全球榜/特色榜…）。 */
+export type RankingGroup = {
+  moduleName: string;
+  bangs: RankingBrief[];
+};
+
+/** 榜单详情头（/api/v1/rankings/:id/songs 的 data.ranking）；pub 为更新日期（如 2026-10-05）。 */
+export type RankingInfo = {
+  source: string;
+  id: number;
+  name: string;
+  pic?: string;
+  pub?: string;
+  /** 上游写死的展示值（实测恒 100），不是真实条数，禁止当「共 N 首」使用 */
+  total: number;
+};
+
+/** 榜单歌曲结果：上游不支持分页，固定一次性返回全部（匿名权益约 20 首），meta 仅供展示不透出。 */
+export type RankingSongsResult = { ranking: RankingInfo; songs: Song[] };
+
+/** 榜单简述行归一：只认正 id；pic/pubStr 空串归一成 undefined，preview 复用歌曲行归一。 */
+function rankingBriefOf(d: any): RankingBrief | null {
+  if (!d || !(Number(d.id) > 0)) return null;
+  const list: any[] = Array.isArray(d.preview) ? d.preview : [];
+  return {
+    source: d.source || "kuwo",
+    id: Number(d.id),
+    name: d.name || "未知榜单",
+    pic: d.pic || undefined,
+    pubStr: d.pubStr || undefined,
+    preview: list.map(songOfRemoteData).filter((s): s is Song => s !== null),
+  };
+}
+
+/** 排行榜目录（/api/v1/rankings，仅酷我源提供）：模块分组 + 榜单简述 + 前 5 首预览。 */
+export async function fetchRankings(source = "kuwo"): Promise<RankingGroup[]> {
+  const q = new URLSearchParams({ source });
+  const resp = await authedGet(`/api/v1/rankings?${q}`, "application/json");
+  const data = await unwrap(resp);
+  const list: any[] = Array.isArray(data?.groups) ? data.groups : [];
+  return list
+    .map((g) => {
+      const bangs: any[] = Array.isArray(g?.bangs) ? g.bangs : [];
+      return {
+        moduleName: String(g?.moduleName ?? ""),
+        bangs: bangs.map(rankingBriefOf).filter((b): b is RankingBrief => b !== null),
+      };
+    })
+    .filter((g) => g.bangs.length > 0);
+}
+
+/** 榜单歌曲（/api/v1/rankings/:id/songs）：固定一次性返回全部、无分页；quality 语义与 /search 相同。 */
+export async function fetchRankingSongs(id: number, quality = 4, source = "kuwo"): Promise<RankingSongsResult> {
+  const q = new URLSearchParams({ quality: String(quality), source });
+  const resp = await authedGet(`/api/v1/rankings/${id}/songs?${q}`, "application/json");
+  const data = await unwrap(resp);
+  const d = data?.ranking;
+  if (!d || !(Number(d.id) > 0)) throw new Error("榜单不存在或已下线");
+  const ranking: RankingInfo = {
+    source: d.source || source,
+    id: Number(d.id),
+    name: d.name || "未知榜单",
+    pic: d.pic || undefined,
+    pub: d.pub || undefined,
+    total: Number(d.total) || 0,
+  };
+  const list: any[] = Array.isArray(data?.songs) ? data.songs : [];
+  const songs = list.map(songOfRemoteData).filter((s): s is Song => s !== null);
+  return { ranking, songs };
+}
+
 // ---- 收藏 ----
 
 export type FavoriteRecord = { source: string; songId: string };
