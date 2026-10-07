@@ -24,6 +24,7 @@ import androidx.compose.ui.Modifier
 import com.taotao.music.model.Song
 import com.taotao.music.data.AlbumSearchResult
 import com.taotao.music.data.ArtistSearchResult
+import com.taotao.music.data.OnlinePlaylistDetail
 import com.taotao.music.data.TencentMusicApi
 import com.taotao.music.data.toMvSong
 import com.taotao.music.playerui.SharedSectionHeader
@@ -46,6 +47,7 @@ import com.taotao.music.ui.mine.MinePage
 import com.taotao.music.ui.player.MvPlayerPage
 import com.taotao.music.ui.player.PlayerDetailPage
 import com.taotao.music.ui.player.QualitySheetKind
+import com.taotao.music.ui.playlist.OnlinePlaylistPage
 import com.taotao.music.ui.playlist.PlaylistDetailPage
 import com.taotao.music.ui.playlist.PlaylistEditorMode
 import com.taotao.music.ui.playlist.PlaylistLibraryPage
@@ -68,9 +70,10 @@ import kotlinx.coroutines.withContext
  *
  * 详情页是最顶层页面：从日记页点迷你播放器要能盖在日记之上进入详情，
  * 所以它必须排在 song-diary 前面，否则 diarySong 非空时详情永远显示不出来。
- * 歌手 / 专辑主页是从搜索页进入的下级页：必须排在 search 之前，否则搜索标志
- * 仍然为真时永远显示搜索页（两页互跳时同一时刻只会保留一个目标，见
- * [TaotaoAppState.openArtistPage]）。MV 播放页不是页面分支，而是盖在详情之上的
+ * 歌手 / 专辑 / 在线歌单主页是从搜索页进入的下级页：必须排在 search 之前，否则搜索标志
+ * 仍然为真时永远显示搜索页（互跳时同一时刻只会保留一个目标，见
+ * [TaotaoAppState.openArtistPage] 与 [TaotaoAppState.openOnlinePlaylistPage]）。
+ * MV 播放页不是页面分支，而是盖在详情之上的
  * 独立浮层（见 [MvPlayerOverlay]）：从详情进出 MV 只动浮层本身，详情页保持在
  * 组合中原位不动，返回时不重播升起动画。
  */
@@ -87,9 +90,10 @@ internal fun TaotaoAppPageRouter(
         state.diarySong != null -> "song-diary"
         state.showProfilePage -> "profile"
         state.showSettingsPage -> "settings"
-        // 歌手 / 专辑主页排在 search 之前：两者是从搜索页进入的下级页。
+        // 歌手 / 专辑 / 在线歌单主页排在 search 之前：三者都是从搜索页进入的下级页。
         state.artistPage.selected != null -> "artist"
         state.albumPage.selected != null -> "album"
+        state.onlinePlaylistPage.selected != null -> "online-playlist"
         state.showSearchPage -> "search"
         state.mineLibrarySection == MineLibrarySection.FAVORITES -> "mine-favorites"
         state.mineLibrarySection == MineLibrarySection.HISTORY -> "mine-history"
@@ -125,11 +129,11 @@ internal fun TaotaoAppPageRouter(
         transitionSpec = { pageTransition(pageReduceMotion) },
         label = "页面切换",
     ) { page ->
-        // 日记两页与歌手 / 专辑主页要沉浸式绘制顶部珊瑚渐变（画到状态栏底下），
+        // 日记两页与歌手 / 专辑 / 在线歌单主页要沉浸式绘制顶部珊瑚渐变（画到状态栏底下），
         // 顶部内边距由页面自己用 statusBarsPadding 让开；其余页面维持 Scaffold 的
         // 统一顶部内边距。MV 播放页已拆成独立浮层，不再走页面内边距。
         val pagePadding = if (page == "song-diary" || page == "diary-records" ||
-            page == "artist" || page == "album"
+            page == "artist" || page == "album" || page == "online-playlist"
         ) {
             PaddingValues(bottom = innerPadding.calculateBottomPadding())
         } else {
@@ -153,6 +157,9 @@ internal fun TaotaoAppPageRouter(
                 }
                 "album" -> state.albumPage.selected?.let { target ->
                     AlbumPageRoute(state, target)
+                }
+                "online-playlist" -> state.onlinePlaylistPage.selected?.let { target ->
+                    OnlinePlaylistPageRoute(state, target)
                 }
                 "profile" -> state.userProfile?.let { profile ->
                     AccountProfilePage(
@@ -525,9 +532,9 @@ private fun SearchPageRoute(state: TaotaoAppState) {
         onLoadMoreTabPlaylists = { state.search.loadMoreTabPlaylists() },
         onLoadMoreTabVideos = { state.search.loadMoreTabVideos() },
         onLoadMoreTabLyrics = { state.search.loadMoreTabLyrics() },
-        // 在线歌单详情链路未接入：PlaylistState 的详情路由只认当前账号自己的云端歌单
-        // （/api/v1/playlists/:id），拿不到酷我在线歌单的歌曲，点击只提示不跳转。
-        onPlaylistClick = { state.message = "歌单详情暂不支持在线歌单" },
+        // 「歌单」标签条目点击进在线歌单详情页（搜索行自带 sourceMarker 寻址钥匙，
+        // 见 PlaylistState 之外的 OnlinePlaylistPageState；与账号云端歌单详情是两套路由）。
+        onPlaylistClick = { state.openOnlinePlaylistPage(it) },
         // 点视频 = 播 MV：复用详情页 onOpenMv 的同一入口（mvSong 浮层），
         // 由 toMvSong 把视频条目折算成 MV 链路需要的歌曲句柄。
         onVideoClick = { video -> state.mvSong = video.toMvSong() },
@@ -624,6 +631,32 @@ private fun AlbumPageRoute(state: TaotaoAppState, target: AlbumSearchResult) {
                 ),
             )
         },
+    )
+}
+
+/** 在线歌单页装配：详情与歌曲分页来自在线歌单页状态；寻址参数（id + sourceMarker）已在状态层记录。 */
+@Composable
+private fun OnlinePlaylistPageRoute(state: TaotaoAppState, target: OnlinePlaylistDetail) {
+    OnlinePlaylistPage(
+        detail = target,
+        detailLoading = state.onlinePlaylistPage.detailLoading,
+        detailError = state.onlinePlaylistPage.detailError,
+        songs = state.onlinePlaylistPage.songs,
+        songsLoading = state.onlinePlaylistPage.songsLoading,
+        songsLoadingMore = state.onlinePlaylistPage.songsLoadingMore,
+        songsHasMore = state.onlinePlaylistPage.songsHasMore,
+        songsError = state.onlinePlaylistPage.songsError,
+        favoriteRevision = state.favoriteRevision,
+        downloadedRevision = state.downloadedSongs.size,
+        isFavorite = { song -> state.favoritesStore.contains(song) },
+        isDownloaded = { song -> song.remoteId != null && song.remoteId in state.downloadedIds },
+        onBack = { state.closeOnlinePlaylistPage() },
+        onRetry = { state.onlinePlaylistPage.retry() },
+        onLoadMoreSongs = { state.onlinePlaylistPage.loadMoreSongs() },
+        onSongClick = { index -> state.playSong(state.onlinePlaylistPage.songs, index) },
+        onToggleFavorite = { song -> state.toggleFavorite(song) },
+        onPlayNext = { song -> state.playNext(song) },
+        onAddToPlaylist = { song -> state.playlist.requestAddSong(song) },
     )
 }
 

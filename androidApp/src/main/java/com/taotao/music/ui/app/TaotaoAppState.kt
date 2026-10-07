@@ -29,6 +29,7 @@ import com.taotao.music.data.PlaybackHistoryEntry
 import com.taotao.music.data.PlaybackHistoryStore
 import com.taotao.music.data.PlaybackSnapshotPolicy
 import com.taotao.music.data.PlaybackStateStore
+import com.taotao.music.data.PlaylistSearchResult
 import com.taotao.music.data.PlaybackSyncCoordinator
 import com.taotao.music.data.PlaybackSyncStore
 import com.taotao.music.data.QualityStore
@@ -147,6 +148,12 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
         onMessage = { message = it },
     )
     val albumPage = AlbumPageState(
+        scope = scope,
+        musicApi = musicApi,
+        qualityStore = qualityStore,
+        onMessage = { message = it },
+    )
+    val onlinePlaylistPage = OnlinePlaylistPageState(
         scope = scope,
         musicApi = musicApi,
         qualityStore = qualityStore,
@@ -906,9 +913,10 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
         playlist.closeAll()
         diarySong = null
         showDiaryRecords = false
-        // 歌手 / 专辑主页同属叠放下级页，换标签时一并收起，否则路由会被它们抢走。
+        // 歌手 / 专辑 / 在线歌单主页同属叠放下级页，换标签时一并收起，否则路由会被它们抢走。
         artistPage.close()
         albumPage.close()
+        onlinePlaylistPage.close()
     }
 
     fun openSearchPage() {
@@ -917,19 +925,37 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
     }
 
     /**
-     * 打开歌手主页。歌手页与专辑页是平级下级页（都从搜索域进入），互跳时收起对方：
+     * 打开歌手主页。歌手页、专辑页与在线歌单页是平级下级页（都从搜索域进入），互跳时收起对方：
      * 同一时刻只保留一层下级页，返回键永远「先清当前页、回到搜索页」，
      * 不需要维护返回栈 —— 这是与 playlist.selected 同一套扁平导航约定。
      */
     fun openArtistPage(target: ArtistSearchResult) {
         albumPage.close()
+        onlinePlaylistPage.close()
         artistPage.open(target)
     }
 
-    /** 打开专辑页；同 [openArtistPage]，先收起歌手页。 */
+    /** 打开专辑页；同 [openArtistPage]，先收起歌手页与在线歌单页。 */
     fun openAlbumPage(target: AlbumSearchResult) {
         artistPage.close()
+        onlinePlaylistPage.close()
         albumPage.open(target)
+    }
+
+    /**
+     * 打开在线歌单页：从搜索「歌单」标签的条目点击进入，搜索行本身就是寻址钥匙
+     * （id + sourceMarker 原样记录）。同 [openArtistPage]，先收起歌手 / 专辑页，
+     * 一次只保留一层下级页。
+     */
+    fun openOnlinePlaylistPage(result: PlaylistSearchResult) {
+        artistPage.close()
+        albumPage.close()
+        onlinePlaylistPage.open(result)
+    }
+
+    /** 关闭在线歌单页；返回键与页面顶栏共用这一个入口。 */
+    fun closeOnlinePlaylistPage() {
+        onlinePlaylistPage.close()
     }
 
     /**

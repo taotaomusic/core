@@ -131,9 +131,9 @@ fun pageDepthOf(page: String): Int = when (page) {
     // 账号管理从设置页继续进入，不能和设置页标成同层，否则会被导航策略瞬切。
     // 歌单详情从我的歌单继续进入，不能和我的歌单标成同层。
     // 单曲日记从收藏/历史等列表的歌曲菜单继续进入，同样属于更深一层。
-    // 歌手 / 专辑主页从搜索页继续进入（两者互跳是平级，同层瞬切恰好正确），
+    // 歌手 / 专辑 / 在线歌单主页从搜索页继续进入（三者互跳是平级，同层瞬切恰好正确），
     // 漏登记会落进 else -> 0：从搜索（1）进歌手页被判成「返回」方向、动画反向。
-    "profile", "detail", "playlist-detail", "song-diary", "artist", "album" -> 2
+    "profile", "detail", "playlist-detail", "song-diary", "artist", "album", "online-playlist" -> 2
     else -> 0
 }
 

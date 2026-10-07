@@ -351,7 +351,7 @@ export class MusicController {
   // ---------- 歌手与专辑详情（2026-10 新增）----------
   //
   // 数据来源是 `/search` 流里的 artist / album 行：客户端拿到 `source` + `id` 后回这里
-  // 取详情与列表。六条路由全部要登录（未标 @Public，走全局访问令牌守卫），`source`
+  // 取详情与列表。详情族全部要登录（未标 @Public，走全局访问令牌守卫），`source`
   // 缺省 kuwo —— 这两族详情当前只有酷我（波点）提供；`source=all` 一律 4001 拒绝
   // （详情必须有确定的音源，聚合模式没有单一 client 可分派，见 [detailSourceOf]）。
   //
@@ -584,6 +584,80 @@ export class MusicController {
     const resolvedPage = this.positiveIntOr(page, 1);
     const resolvedNum = Math.min(MAX_PAGE_SIZE, this.positiveIntOr(num, DEFAULT_DETAIL_SONG_PAGE_SIZE));
     const detail = await client.getAlbumSongs(this.detailIdOf(id, "专辑"), resolvedPage, resolvedNum);
+    return {
+      songs: await this.toClientSongs(
+        request,
+        user,
+        selectedSource,
+        detail.songs,
+        this.mapper.qualityOf(quality),
+      ),
+      meta: {
+        page: resolvedPage,
+        num: resolvedNum,
+        total: detail.total,
+        hasMore: resolvedPage * resolvedNum < detail.total,
+      },
+    };
+  }
+
+  /**
+   * 在线歌单详情。这是**音源侧的公开歌单**（搜索歌单标签点进去看到的），与账号
+   * 自己的云端歌单（playlists 模块、`/api/v1/playlists/:id`）完全是两套东西 ——
+   * 那套路由只认当前账号的歌单，拿不到波点在线歌单的歌曲，所以这里用
+   * `online-playlists` 前缀刻意区分，避免与云端的增删改接口撞形。
+   *
+   * `sourceMarker` 是搜索行带回的数字标记（`/search/playlists` 的 `sourceMarker`
+   * 字段），上游要求**原样回传**；缺省 4 是搜索条目的实测常数（协议层说明见
+   * `bodian.client.ts`），只服务于不带标记的直连调用，客户端应始终显式携带。
+   */
+  @Get("online-playlists/:id")
+  async onlinePlaylistInfo(
+    @Param("id") id?: string,
+    @Query("sourceMarker") sourceMarker?: string,
+    @Query("source") source?: string,
+  ) {
+    const client = this.registry.of(this.detailSourceOf(source));
+    if (!client.getPlaylistInfo) {
+      throw ApiErrors.badRequest(4007, `${client.displayName}不支持在线歌单详情`);
+    }
+    const playlist = await client.getPlaylistInfo(
+      this.detailIdOf(id, "歌单"),
+      this.positiveIntOr(sourceMarker, 4),
+    );
+    if (!playlist) throw ApiErrors.upstream("歌单详情不可用");
+    // data.source 是契约字段，适配器不含它，与 /search 的实体行同一套补法。
+    return { playlist: { ...playlist, source: client.source } };
+  }
+
+  /**
+   * 在线歌单的歌曲列表。条目映射、收藏批量查询与分页信封同 [artistSongs]，
+   * 只是数据源端点与路径参数不同；`sourceMarker` 语义同 [onlinePlaylistInfo]。
+   */
+  @Get("online-playlists/:id/songs")
+  async onlinePlaylistSongs(
+    @Req() request: Request,
+    @CurrentUser() user: SessionUser,
+    @Param("id") id?: string,
+    @Query("page") page?: string,
+    @Query("num") num?: string,
+    @Query("quality") quality?: string,
+    @Query("sourceMarker") sourceMarker?: string,
+    @Query("source") source?: string,
+  ) {
+    const selectedSource = this.detailSourceOf(source);
+    const client = this.registry.of(selectedSource);
+    if (!client.getPlaylistSongs) {
+      throw ApiErrors.badRequest(4007, `${client.displayName}不支持在线歌单歌曲列表`);
+    }
+    const resolvedPage = this.positiveIntOr(page, 1);
+    const resolvedNum = Math.min(MAX_PAGE_SIZE, this.positiveIntOr(num, DEFAULT_DETAIL_SONG_PAGE_SIZE));
+    const detail = await client.getPlaylistSongs(
+      this.detailIdOf(id, "歌单"),
+      resolvedPage,
+      resolvedNum,
+      this.positiveIntOr(sourceMarker, 4),
+    );
     return {
       songs: await this.toClientSongs(
         request,
