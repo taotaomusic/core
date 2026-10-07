@@ -1449,7 +1449,7 @@ export class BodianClient {
    * 有统一的 502 出口，协议层不替它们挑文案。
    */
   async getPlaylistInfo(playlistId: number, sourceMarker: number): Promise<OnlinePlaylistDetail | null> {
-    const d = await this.signedGetBodyMeta(`${BASE_URL}service/playlist/info/${playlistId}`, {
+    const { data: d } = await this.signedGetBodyMeta(`${BASE_URL}service/playlist/info/${playlistId}`, {
       source: sourceMarker,
     });
     if (Number(d.code) !== 200 || !d.data || typeof d.data !== "object") return null;
@@ -1486,7 +1486,7 @@ export class BodianClient {
    * 语义与这里的 total 换算重复，不透传。
    */
   async getPlaylistSongs(playlistId: number, page: number = 1, size: number = 30, sourceMarker: number = 0): Promise<{ songs: Song[]; total: number }> {
-    const d = await this.signedGetBodyMeta(`${BASE_URL}service/playlist/${playlistId}/musicList`, {
+    const { data: d } = await this.signedGetBodyMeta(`${BASE_URL}service/playlist/${playlistId}/musicList`, {
       source: sourceMarker,
       pn: page,
       rn: size,
