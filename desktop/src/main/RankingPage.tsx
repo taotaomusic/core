@@ -5,6 +5,7 @@ import {
   fetchRankings,
   readableError,
   SessionExpired,
+  songKeyOf,
   type RankingBrief,
   type RankingGroup,
   type RankingInfo,
@@ -19,7 +20,8 @@ import "./search.css";
 /**
  * 排行榜页：顶层导航页（与搜索页平级），内部两个视图显隐切换（与主界面页面切换同一哲学）：
  * - 目录视图：页头 + 按模块分组的小节（组内榜单卡横向滚动：封面 + 榜单名 + pubStr）；
- * - 详情视图：榜单头部（封面 + 名 + 更新日期）+ 歌曲列表（整列入队，与搜索页同一播放链路）。
+ * - 详情视图：榜单头部（封面 + 名 + 更新日期 + 共 N 首）+ 歌曲列表（行首排名序号，
+ *   分页加载、滚动近底自动翻页；整列入队与搜索页同一播放链路）。
  * 目录数据挂载时拉一次，失败给重试、保留旧数据；详情视图按榜单身份 key 重挂载，切榜整体重置，
  * 歌曲数据未回时先用目录传入的 brief 渲染头部骨架。
  */
@@ -124,54 +126,107 @@ export function RankingPage() {
   );
 }
 
+/** 详情分页每页条数：服务端缺省 30、上限 100（主流榜单真实条数恒 100，约 4 页拉完）。 */
+const DETAIL_PAGE_NUM = 30;
+
 /**
- * 榜单详情视图：头部（160px 圆角封面 + 榜单名 + 更新日期）+ 歌曲列表。
- * 挂载即拉一次榜单歌曲（固定约 20 首、无分页）；请求未回时用目录传入的 brief 渲染头部骨架，
- * 失败给重试（头部骨架保留可看）；空榜单提示「该榜单暂无歌曲」。
- * 播放链路与搜索页一致（SongList 缺省把整列设为队列并从点击行播放）。
+ * 榜单详情视图：头部（160px 圆角封面 + 榜单名 + 更新日期/共 N 首）+ 歌曲列表。
+ * 歌曲分页加载：挂载拉第一页，滚动近底部自动翻页，口径与 PagedSongSection 一致
+ * （genRef 代数作废旧响应、busy 防滚动重入、新页按歌曲身份 key 去重拼接、hasMore 收口）；
+ * 每行行首渲染全局排名序号（前三名金/银/铜，其余次要灰）。
+ * 请求未回时用目录传入的 brief 渲染头部骨架，失败给重试（头部骨架保留可看）；
+ * 空榜单提示「该榜单暂无歌曲」。
+ * 播放链路与搜索页一致：SongList 缺省把**当前已加载的累积列表**整列设为队列并从点击行播放
+ * （分页追加场景下队列上下文即累积数组，后续翻页不影响已入队内容）。
  */
 function RankingDetail({ brief, onBack }: { brief: RankingBrief; onBack: () => void }) {
   const [info, setInfo] = useState<RankingInfo | null>(null);
   const [songs, setSongs] = useState<Song[]>([]);
+  const [total, setTotal] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState("");
 
-  const genRef = useRef(0); // 拉取代数：重试后旧响应作废
+  const songsRef = useRef<Song[]>([]); // 已加载累积快照：翻页合并去重用
+  const pageRef = useRef(0); // 已加载到的页码
+  const busyRef = useRef(false); // 翻页请求进行中，防滚动事件重复触发
+  const hasMoreRef = useRef(false); // hasMore 镜像：loadMore 闭包读最新值
+  const genRef = useRef(0); // 拉取代数：重试/卸载后旧响应作废
 
-  /** 拉取榜单歌曲：成功替换头部与列表，失败记录错误给重试。 */
-  function load() {
+  /** 拉取一页：首屏整体替换，翻页以请求前结果为快照去重拼接（与 PagedSongSection 同口径）。 */
+  function loadPage(page: number) {
     const gen = ++genRef.current;
-    setError("");
-    setLoading(true);
+    const isFirst = page === 1;
+    busyRef.current = true;
+    if (isFirst) {
+      songsRef.current = [];
+      setSongs([]);
+      setError("");
+      setLoading(true);
+    } else {
+      setLoadingMore(true);
+    }
     void (async () => {
       try {
-        const r = await fetchRankingSongs(brief.id);
-        if (genRef.current !== gen) return;
+        const r = await fetchRankingSongs(brief.id, 4, page, DETAIL_PAGE_NUM);
+        if (genRef.current !== gen) return; // 已重试或卸载，丢弃旧响应
         setInfo(r.ranking);
-        setSongs(r.songs);
+        // 新页按列表身份 key 去重后拼接，避免分页重叠出现重复行
+        const seen = new Set(songsRef.current.map(songKeyOf));
+        const merged = isFirst
+          ? r.songs
+          : [...songsRef.current, ...r.songs.filter((s) => !seen.has(songKeyOf(s)))];
+        songsRef.current = merged;
+        setSongs(merged);
+        setTotal(r.total);
+        hasMoreRef.current = r.hasMore;
+        setHasMore(r.hasMore);
+        pageRef.current = page;
+        setError("");
       } catch (e) {
         if (genRef.current !== gen) return;
         if (e instanceof SessionExpired) return; // 会话过期由 AppState 层统一处理
         setError(readableError(e));
       } finally {
-        if (genRef.current === gen) setLoading(false);
+        if (genRef.current === gen) {
+          busyRef.current = false;
+          if (isFirst) setLoading(false);
+          else setLoadingMore(false);
+        }
       }
     })();
   }
 
-  // 挂载即拉取；卸载时作废在途响应
+  // 挂载即拉第一页；卸载时作废在途响应
   useEffect(() => {
-    load();
+    loadPage(1);
     return () => {
       genRef.current++;
     };
   }, []);
+
+  /** 无限滚动（SongList 距底不足 300px 触发）：翻下一页；并发去抖由 busy 标记保证。 */
+  function loadMore() {
+    if (busyRef.current || !hasMoreRef.current) return;
+    loadPage(pageRef.current + 1);
+  }
+
+  /**
+   * 行首排名序号：服务端条目顺序即排名顺序（第 1 名在最前）；逐页顺序拼接下
+   * 累积下标 + 1 就等于 (page-1)*num + 页内 index + 1，即全局名次。
+   */
+  function rankAt(index: number): number {
+    return index + 1;
+  }
 
   // ---- 派生展示值：数据未到回退 brief 兜底 ----
   // 更新日期：详情 pub 到了拼「更新于 <日期>」；缺席退回目录的 pubStr（自带「更新」字样，直接展示）
   const name = info?.name ?? brief.name;
   const pic = info?.pic ?? brief.pic;
   const updated = info?.pub ? `更新于 ${info.pub}` : brief.pubStr ?? "";
+  // 头部副行：更新日期 + 「共 N 首」；total 取自分页 meta（真实条数），不是 ranking.total（上游展示值）
+  const subBits = [updated, total > 0 ? `共 ${total} 首` : ""].filter((t) => t !== "");
 
   return (
     <div className="rk-detail">
@@ -190,19 +245,30 @@ function RankingDetail({ brief, onBack }: { brief: RankingBrief; onBack: () => v
           <div className="al-name" title={name}>
             {name}
           </div>
-          {updated && <div className="al-sub">{updated}</div>}
+          {subBits.length > 0 && <div className="al-sub">{subBits.join(" · ")}</div>}
         </div>
       </div>
 
-      {/* 歌曲列表：加载中给骨架、失败给重试（错误块替代列表）、空榜单给提示；滚动容器在 SongList 内部 */}
+      {/* 歌曲列表：加载中给骨架、失败给重试（错误块替代列表）、空榜单给提示；
+          滚动容器在 SongList 内部，翻页页脚与收口提示也由它按 hasMore/total 渲染 */}
       <div className="rk-songs">
         {(!error || songs.length > 0) && (
-          <SongList songs={songs} loading={loading} error={error} emptyHint="该榜单暂无歌曲" />
+          <SongList
+            songs={songs}
+            loading={loading}
+            error={error}
+            emptyHint="该榜单暂无歌曲"
+            hasMore={hasMore}
+            total={total}
+            onLoadMore={loadMore}
+            loadingMore={loadingMore}
+            rankOf={rankAt}
+          />
         )}
         {!loading && error !== "" && songs.length === 0 && (
           <div className="detail-center-block">
             <p className="detail-center-hint err">{error}</p>
-            <button type="button" className="detail-retry" onClick={load}>
+            <button type="button" className="detail-retry" onClick={() => loadPage(1)}>
               重试
             </button>
           </div>

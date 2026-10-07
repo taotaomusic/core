@@ -13,6 +13,7 @@ import "./search.css";
  * 加载更多页脚都由本组件处理；播放与收藏走 useApp()。
  * 每行行尾带「⋯」更多菜单（下一首播放 / 加入歌单 / 查看歌手 / 查看专辑），
  * 菜单打开状态用「当前打开的行 key」单值 state 管理，同一时刻只有一行展开。
+ * 提供 rankOf 时每行行首额外渲染排名序号列（榜单详情用，样式 rk-rank-* 在 search.css）。
  */
 export function SongList({
   songs,
@@ -26,6 +27,7 @@ export function SongList({
   onPlayIndex,
   onOpenArtist,
   onOpenAlbum,
+  rankOf,
 }: {
   songs: Song[];
   /** 首屏加载中：显示骨架屏 */
@@ -48,6 +50,8 @@ export function SongList({
   onOpenArtist?: (song: Song) => void;
   /** 「⋯ → 查看专辑」回调：仅歌曲携带 albumId 时菜单项可见 */
   onOpenAlbum?: (song: Song) => void;
+  /** 行首排名序号插槽：按行下标返回全局名次（1 基）；缺省不渲染序号列 */
+  rankOf?: (index: number) => number;
 }) {
   const { current, isFavorite, toggleFavorite, playList, toast } = useApp();
   const currentKey = current != null ? songKeyOf(current) : null;
@@ -100,12 +104,19 @@ export function SongList({
           const active = currentKey !== null && key === currentKey;
           const off = s.playable === false;
           const fav = isFavorite(s);
+          // 行首排名序号：值由调用方换算的全局名次；前三名（1/2/3）加金/银/铜修饰类
+          const rank = rankOf?.(i);
           return (
             <div
               key={key}
               className={`song${active ? " active" : ""}${off ? " songrow-off" : ""}`}
               onClick={() => handleRowClick(i, s)}
             >
+              {rank != null && (
+                <span className={`rk-rank${rank > 0 && rank <= 3 ? ` rk-rank-${rank}` : ""}`}>
+                  {String(rank).padStart(2, "0")}
+                </span>
+              )}
               <div className="songrow-cover">
                 <span className="note">♪</span>
                 {/* 封面地址过 absoluteUrl 归一：相对路径补 API 域名，避免 webview 裂图 */}

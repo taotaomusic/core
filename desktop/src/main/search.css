@@ -1195,3 +1195,18 @@
   flex-direction: column;
   margin-top: 4px;
 }
+
+/* 详情歌曲行行首排名序号（SongList 的 rankOf 插槽，仅榜单详情传入）：
+   等宽数字防跳动；前三名金/银/铜（主题无对应变量，取固定色），其余次要灰复用 --muted */
+.rk-rank {
+  flex: none;
+  width: 30px;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+.rk-rank-1 { color: #dfa32e; }
+.rk-rank-2 { color: #9aa3ad; }
+.rk-rank-3 { color: #c88250; }

@@ -656,8 +656,21 @@ export type RankingInfo = {
   total: number;
 };
 
-/** 榜单歌曲结果：上游不支持分页，固定一次性返回全部（匿名权益约 20 首），meta 仅供展示不透出。 */
-export type RankingSongsResult = { ranking: RankingInfo; songs: Song[] };
+/**
+ * 榜单歌曲分页结果：信封 data.songs + data.meta 归一后的形状。
+ * 注意 total（真实条数，主流榜单恒 100，可当「共 N 首」展示）与 ranking.total
+ * （上游写死的展示值）不是同一个数，别混用。
+ */
+export type RankingSongsResult = {
+  ranking: RankingInfo;
+  songs: Song[];
+  /** 本次返回的页码（1 基） */
+  page: number;
+  /** 榜单真实条数（取自 meta.total） */
+  total: number;
+  /** 是否还有下一页（服务端口径：page*num < total） */
+  hasMore: boolean;
+};
 
 /** 榜单简述行归一：只认正 id；pic/pubStr 空串归一成 undefined，preview 复用歌曲行归一。 */
 function rankingBriefOf(d: any): RankingBrief | null {
@@ -690,9 +703,24 @@ export async function fetchRankings(source = "kuwo"): Promise<RankingGroup[]> {
     .filter((g) => g.bangs.length > 0);
 }
 
-/** 榜单歌曲（/api/v1/rankings/:id/songs）：固定一次性返回全部、无分页；quality 语义与 /search 相同。 */
-export async function fetchRankingSongs(id: number, quality = 4, source = "kuwo"): Promise<RankingSongsResult> {
-  const q = new URLSearchParams({ quality: String(quality), source });
+/**
+ * 榜单歌曲分页（/api/v1/rankings/:id/songs）：page 1 基、num 服务端缺省 30 上限 100，
+ * quality 语义与 /search 相同。条目顺序即排名顺序（第 1 名在最前），
+ * 全局名次 = (page-1)*num + 页内下标 + 1。翻页前进不交叠（仍按身份 key 去重兜底）。
+ */
+export async function fetchRankingSongs(
+  id: number,
+  quality = 4,
+  page = 1,
+  num = 30,
+  source = "kuwo",
+): Promise<RankingSongsResult> {
+  const q = new URLSearchParams({
+    page: String(page),
+    num: String(num),
+    quality: String(quality),
+    source,
+  });
   const resp = await authedGet(`/api/v1/rankings/${id}/songs?${q}`, "application/json");
   const data = await unwrap(resp);
   const d = data?.ranking;
@@ -707,7 +735,7 @@ export async function fetchRankingSongs(id: number, quality = 4, source = "kuwo"
   };
   const list: any[] = Array.isArray(data?.songs) ? data.songs : [];
   const songs = list.map(songOfRemoteData).filter((s): s is Song => s !== null);
-  return { ranking, songs };
+  return { ranking, songs, ...pagedMetaOf(data?.meta, page) };
 }
 
 // ---- 收藏 ----
