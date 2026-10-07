@@ -163,7 +163,7 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
         scope = scope,
         musicApi = musicApi,
         qualityStore = qualityStore,
-        onMessage = { message = it },
+        // 排行榜的错误都在页面内联展示（无分页、无全局兜底场景），不走全局提示条。
     )
 
     // ---- 外观与定时关闭 ----
