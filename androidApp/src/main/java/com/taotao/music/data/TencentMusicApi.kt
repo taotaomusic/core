@@ -2028,7 +2028,8 @@ class TencentMusicApi(
                 }
             }
         },
-    )
+        )
+    }
 
     companion object {
         /** 后端地址。热更新模块也要用，因此对包内公开，保持单一来源。 */
