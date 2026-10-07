@@ -21,6 +21,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -141,6 +142,7 @@ fun RankingPage(
                     isDownloaded = isDownloaded,
                     onRetry = onRetryDetail,
                     onLoadMore = onLoadMoreSongs,
+                    onPlayAll = onPlayAll,
                     onSongClick = onSongClick,
                     onToggleFavorite = onToggleFavorite,
                     onPlayNext = onPlayNext,
@@ -289,6 +291,7 @@ private fun RankingDetailView(
     isDownloaded: (Song) -> Boolean,
     onRetry: () -> Unit,
     onLoadMore: () -> Unit,
+    onPlayAll: () -> Unit,
     onSongClick: (Int) -> Unit,
     onToggleFavorite: (Song) -> Unit,
     onPlayNext: (Song) -> Unit,
