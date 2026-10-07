@@ -186,6 +186,23 @@ export interface AlbumDetail {
  * （App 侧解析类有它但线上条目没给）—— 一律**不映射**。App 侧点击行为是
  * C_LIST 进歌单详情页，详情接口另行接入。
  */
+export interface RankingBrief {
+  id: number;
+  name: string;
+  /** 封面绝对地址（映射处统一升级 https）。上游可能给空串。 */
+  pic: string;
+  /** 更新时间展示串（如 `10-05更新`）。上游可能缺失或空串。 */
+  pubStr: string;
+  /** 前 5 首歌曲预览，与 /search 的 song data 同构。 */
+  preview: Song[];
+}
+
+/** 排行榜目录的一个模块分组（置顶位/热力榜/全球榜/特色榜…）。 */
+export interface RankingGroup {
+  moduleName: string;
+  bangs: RankingBrief[];
+}
+
 export interface SearchPlaylistItem {
   id: number;
   name: string;
@@ -1329,6 +1346,66 @@ export class BodianClient {
     return {
       songs: (d.data?.resultList || []).map((s: any) => this.toDetailSong(s)),
       total: Number(d.data?.total) || 0,
+    };
+  }
+
+  /**
+   * 排行榜目录：`service/home/bangNew`，无业务参数。
+   *
+   * 返回 `data` 是**数组**（不是对象），每项 `{moduleName, bangList}`；`bangList` 条目
+   * 带 `{id, name, pic, pubStr, musics:[前5首歌曲预览]}`。**H5 榜单的 `id` 是
+   * undefined**（腾讯音乐榜/巅峰潮流榜），这些榜单点不进来，在这里整项跳过。
+   * 实测模块：置顶位（16 热歌榜/17 新歌榜）、热力榜（22/184/93/104）、
+   * 全球榜（265/335/12/13/246）、特色榜（187/154/158/284/278/290/26/164/180）。
+   */
+  async getRankingGroups(): Promise<RankingGroup[] | null> {
+    const d = await this.signedGet(`${BASE_URL}service/home/bangNew`);
+    if (Number(d.code) !== 200 || !Array.isArray(d.data)) return null;
+    const groups: RankingGroup[] = [];
+    for (const group of d.data) {
+      const moduleName = String(group?.moduleName ?? "");
+      const bangs: RankingBrief[] = [];
+      for (const bang of group?.bangList ?? []) {
+        const id = Number(bang?.id);
+        // H5 榜单没有数字 id，详情端点无法寻址，整项跳过。
+        if (!Number.isInteger(id) || id <= 0) continue;
+        bangs.push({
+          id,
+          name: String(bang?.name ?? ""),
+          pic: this.httpsImage(bang?.pic),
+          pubStr: String(bang?.pubStr ?? ""),
+          preview: (Array.isArray(bang?.musics) ? bang.musics : []).slice(0, 5).map((s: any) => this.toDetailSong(s)),
+        });
+      }
+      if (bangs.length > 0) groups.push({ moduleName, bangs });
+    }
+    return groups;
+  }
+
+  /**
+   * 榜单歌曲：`service/bang/{id}/musics`。
+   *
+   * ⚠️ **必须不带任何 query 参数**——实测带 `pn/rn` 会 500（Service error，
+   * 2026-10-06 踩过），上游不支持分页，返回的就是全部（匿名权益约 20 首）。
+   * `data.total` 是**写死的展示值**（实测恒 100），不是真实条数。
+   * 部分榜单（如歌手最热榜 19/20/21 等）`musics` 是空数组——照常返回空列表。
+   * code 非 200 返回 null，调用方统一归 502。
+   */
+  async getRankingSongs(
+    id: number,
+  ): Promise<{ ranking: { id: number; name: string; pic: string; pub: string; total: number }; songs: Song[] } | null> {
+    const d = await this.signedGet(`${BASE_URL}service/bang/${id}/musics`);
+    if (Number(d.code) !== 200 || !d.data) return null;
+    const info = d.data;
+    return {
+      ranking: {
+        id: Number(info.id) || id,
+        name: String(info.name ?? ""),
+        pic: this.httpsImage(info.pic),
+        pub: String(info.pub ?? ""),
+        total: Number(info.total) || 0,
+      },
+      songs: (Array.isArray(info.musics) ? info.musics : []).map((s: any) => this.toDetailSong(s)),
     };
   }
 

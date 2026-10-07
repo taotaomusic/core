@@ -307,3 +307,18 @@ Authorization: Bearer <accessToken>
 - 详情族(`service/artist/music/:id`、`service/album/music/:id` 等):`pn` **1 基**。实测(歌手 336)`pn=0` 与 `pn=1` 返回同一页,`pn=2` 才翻到第 11–20 首。服务端**直接把 1 基的 `page` 当 `pn` 传**,绝不能过 `upstreamPage()` —— 否则第 1 页拿到第 2 页、且 0/1 两页重复。
 
 契约验证脚本(`tools/verify-contract.mjs`)用「page=2 的首条不在 page=1 的 id 集合里」守住这条语义。
+
+
+## 10. 排行榜(2026-10 新增)
+
+**GET /api/v1/rankings?source=kuwo**(榜单目录)与 **GET /api/v1/rankings/:id/songs?quality=10&source=kuwo**(榜单歌曲),均需登录。
+
+```json
+{"groups":[{"moduleName":"置顶位","bangs":[{"id":16,"name":"热歌榜","pic":"https://...","pubStr":"10-05更新","preview":[/* 5 首 song data 行 */]}]}]}
+{"ranking":{"id":16,"name":"热歌榜","pic":"https://...","pub":"2026-10-05","total":100},"songs":[/* song data 行 */],"meta":{"page":1,"num":20,"total":100,"hasMore":false}}
+```
+
+上游坑:
+- 目录端点 `service/home/bangNew`,歌曲端点 `service/bang/{id}/musics` —— **后者必须不带任何 query 参数**,带 `pn/rn` 会 500(实测)。
+- 上游不支持分页:`musics` 固定返回全部(匿名权益约 20 首),`meta` 的 `page` 恒 1、`hasMore` 恒 false;`total` 是上游写死的展示值(实测恒 100),不是真实条数。
+- 部分榜单(歌手最热榜 19/20/21 等)`musics` 为空数组,照常返回空列表;H5 榜单(腾讯音乐榜/巅峰潮流榜)没有数字 `id`,目录里整项跳过。

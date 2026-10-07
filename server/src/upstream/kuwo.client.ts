@@ -10,6 +10,8 @@ import type {
   UpstreamAlbum,
   UpstreamAlbumDetail,
   UpstreamArtist,
+  UpstreamRankingDetail,
+  UpstreamRankingGroup,
   UpstreamArtistDetail,
   UpstreamSearchPlaylist,
   UpstreamSongWithExtras,
@@ -750,6 +752,31 @@ export class KuwoClient implements MusicSourceClient, MusicSourceCredentialManag
     const client = await this.clientOf();
     const detail = await client.getAlbumSongs(albumId, page, limit);
     return { songs: detail.songs.map((song) => this.toUpstreamSong(song)), total: detail.total };
+  }
+
+  /** 波点排行榜目录（模块分组 + 榜单简述 + 前 5 首预览），`source` 由控制器补。 */
+  async getRankingGroups(): Promise<UpstreamRankingGroup[] | null> {
+    const client = await this.clientOf();
+    const groups = await client.getRankingGroups();
+    if (!groups) return null;
+    return groups.map((group) => ({
+      moduleName: group.moduleName,
+      bangs: group.bangs.map((bang) => ({
+        ...bang,
+        preview: bang.preview.map((song) => this.toUpstreamSong(song)),
+      })),
+    }));
+  }
+
+  /**
+   * 波点榜单歌曲。条目经 [toUpstreamSong] 换 v3 形状（artistId/albumId 透传）。
+   * 上游不支持分页（带 pn/rn 会 500），返回的就是全部。
+   */
+  async getRankingSongs(id: number): Promise<UpstreamRankingDetail | null> {
+    const client = await this.clientOf();
+    const detail = await client.getRankingSongs(id);
+    if (!detail) return null;
+    return { ranking: detail.ranking, songs: detail.songs.map((song) => this.toUpstreamSong(song)) };
   }
 
   /** 官方目录的 size 可能是字节数，也可能是 `9.94Mb` 这类显示字符串。 */
