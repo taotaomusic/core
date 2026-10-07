@@ -341,6 +341,5 @@ Authorization: Bearer <accessToken>
 ```
 
 上游坑:
-- 目录端点 `service/home/bangNew`,歌曲端点 `service/bang/{id}/musics` —— **后者必须不带任何 query 参数**,带 `pn/rn` 会 500(实测)。
-- 上游不支持分页:`musics` 固定返回全部(匿名权益约 20 首),`meta` 的 `page` 恒 1、`hasMore` 恒 false;`total` 是上游写死的展示值(实测恒 100),不是真实条数。
-- 部分榜单(歌手最热榜 19/20/21 等)`musics` 为空数组,照常返回空列表;H5 榜单(腾讯音乐榜/巅峰潮流榜)没有数字 `id`,目录里整项跳过。
+- 目录端点 `service/home/bangNew`,歌曲端点 `service/bang/{id}/musics` 分页参数 `pn`/`rn` —— **`pn` 是 1 基**(榜单详情族与搜索族相反,`pn=0` 实测 500),`rn` 上限实测 100。
+- 主流榜单 `total` 恒 100 且是**真实条数**(`pn=4&rn=30` 收尾 10 首实测过);部分榜单(歌手最热榜 19/20/21 等)`musics` 为空数组,照常返回空列表;H5 榜单(腾讯音乐榜/巅峰潮流榜)没有数字 `id`,目录里整项跳过。

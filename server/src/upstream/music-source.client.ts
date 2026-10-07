@@ -465,11 +465,11 @@ export interface MusicSourceClient {
   getRankingGroups?(): Promise<UpstreamRankingGroup[] | null>;
 
   /**
-   * 榜单详情（`GET /api/v1/rankings/:id/songs` 的 data）：榜单信息 + 完整歌曲行。
-   * **上游不支持分页**——固定返回全部（匿名权益约 20 首），调用方不要传 pn/rn
-   * （实测带 pn/rn 会 500，2026-10-06 踩过）。取不到时返回 `null`。
+   * 榜单详情（分页，`GET /api/v1/rankings/:id/songs` 的 data）：榜单信息 + 本页歌曲行。
+   * `page` 1 基直传（上游榜单详情族 pn 1 基，实测 pn=0 会 500）；`limit` 上游实测
+   * 上限 100。`total` 是真实条数（主流榜单恒 100）。取不到时返回 `null`。
    */
-  getRankingSongs?(id: number): Promise<UpstreamRankingDetail | null>;
+  getRankingSongs?(id: number, page: number, limit: number): Promise<UpstreamRankingDetail | null>;
 
   /** 单曲信息与**真实可用**的音质档位。 */
   requestSongInfo(key: SongKey): Promise<UpstreamSongInfo>;

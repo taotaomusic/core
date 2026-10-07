@@ -1499,18 +1499,20 @@ export class BodianClient {
   }
 
   /**
-   * 榜单歌曲：`service/bang/{id}/musics`。
+   * 榜单歌曲（分页）：`service/bang/{id}/musics`，参数 `pn`/`rn`。
    *
-   * ⚠️ **必须不带任何 query 参数**——实测带 `pn/rn` 会 500（Service error，
-   * 2026-10-06 踩过），上游不支持分页，返回的就是全部（匿名权益约 20 首）。
-   * `data.total` 是**写死的展示值**（实测恒 100），不是真实条数。
-   * 部分榜单（如歌手最热榜 19/20/21 等）`musics` 是空数组——照常返回空列表。
+   * ⚠️ **`pn` 是 1 基**——实测 `pn=0` 会 500（Service error，2026-10-06 踩过：
+   * 当初误判为「不支持分页」，其实只是 pn 基数与搜索族相反）。`rn` 上限实测
+   * 100 可用。热歌榜/新歌榜/飙升榜等主流榜单 `total` 恒 100 且逐页拉全与
+   * `rn=100` 单页一致；部分歌手榜 `musics` 为空数组——照常返回空列表。
    * code 非 200 返回 null，调用方统一归 502。
    */
   async getRankingSongs(
     id: number,
+    page: number = 1,
+    size: number = 30,
   ): Promise<{ ranking: { id: number; name: string; pic: string; pub: string; total: number }; songs: Song[] } | null> {
-    const d = await this.signedGet(`${BASE_URL}service/bang/${id}/musics`);
+    const d = await this.signedGet(`${BASE_URL}service/bang/${id}/musics`, { pn: page, rn: size });
     if (Number(d.code) !== 200 || !d.data) return null;
     const info = d.data;
     return {

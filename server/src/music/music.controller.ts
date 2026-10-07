@@ -21,6 +21,8 @@ const MAX_PAGE_SIZE = 60;
 const MAX_INFO_BATCH_SIZE = 60;
 const DEFAULT_SUGGESTION_SIZE = 10;
 const MAX_SUGGESTION_SIZE = 20;
+/** 榜单歌曲单页上限：上游 `rn` 实测 100 可用（通用 MAX_PAGE_SIZE=60 覆盖不满整榜页）。 */
+const MAX_RANKING_PAGE_SIZE = 100;
 /** 歌手/专辑详情的歌曲列表默认条数，与对外契约示例（`?num=30`）一致。 */
 const DEFAULT_DETAIL_SONG_PAGE_SIZE = 30;
 /** 歌手专辑列表默认条数，与对外契约示例（`?num=20`）一致。 */
@@ -456,14 +458,17 @@ export class MusicController {
   }
 
   /**
-   * 榜单歌曲。**上游不支持分页**——固定返回全部（匿名权益约 20 首），本路由刻意
-   * 不收 page/num；`meta.total` 是上游写死的展示值（实测恒 100），仅用于展示。
+   * 榜单歌曲（分页）。上游榜单详情族 `pn` 1 基直传、`rn` 实测上限 100 —— 本路由
+   * 用独立常量放宽（通用 `MAX_PAGE_SIZE`=60 不够覆盖整榜单页）。`total` 是真实
+   * 条数（主流榜单恒 100），`hasMore = page * num < total`。
    */
   @Get("rankings/:id/songs")
   async rankingSongs(
     @Req() request: Request,
     @CurrentUser() user: SessionUser,
     @Param("id") id?: string,
+    @Query("page") page?: string,
+    @Query("num") num?: string,
     @Query("quality") quality?: string,
     @Query("source") source?: string,
   ) {
@@ -472,7 +477,9 @@ export class MusicController {
     if (!client.getRankingSongs) {
       throw ApiErrors.badRequest(4007, `${client.displayName}不支持排行榜`);
     }
-    const detail = await client.getRankingSongs(this.detailIdOf(id, "榜单"));
+    const resolvedPage = this.positiveIntOr(page, 1);
+    const resolvedNum = Math.min(MAX_RANKING_PAGE_SIZE, this.positiveIntOr(num, DEFAULT_DETAIL_SONG_PAGE_SIZE));
+    const detail = await client.getRankingSongs(this.detailIdOf(id, "榜单"), resolvedPage, resolvedNum);
     if (!detail) throw ApiErrors.upstream("榜单不可用");
     return {
       ranking: { ...detail.ranking, source: selectedSource },
@@ -484,12 +491,10 @@ export class MusicController {
         this.mapper.qualityOf(quality),
       ),
       meta: {
-        page: 1,
-        // 上游不支持分页，这里不是「每页条数」而是当前返回的全部条数。
-        num: detail.songs.length,
-        // total 是上游写死的展示值（实测恒 100），不是真实条数。
+        page: resolvedPage,
+        num: resolvedNum,
         total: detail.ranking.total,
-        hasMore: false,
+        hasMore: resolvedPage * resolvedNum < detail.ranking.total,
       },
     };
   }

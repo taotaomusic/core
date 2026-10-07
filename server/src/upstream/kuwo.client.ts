@@ -806,12 +806,13 @@ export class KuwoClient implements MusicSourceClient, MusicSourceCredentialManag
   }
 
   /**
-   * 波点榜单歌曲。条目经 [toUpstreamSong] 换 v3 形状（artistId/albumId 透传）。
-   * 上游不支持分页（带 pn/rn 会 500），返回的就是全部。
+   * 波点榜单歌曲（分页）。条目经 [toUpstreamSong] 换 v3 形状（artistId/albumId
+   * 透传）。`page` 1 基直传当上游 `pn`（榜单详情族 pn 1 基，实测 pn=0 会 500），
+   * `limit` 直传当 `rn`（实测上限 100）。
    */
-  async getRankingSongs(id: number): Promise<UpstreamRankingDetail | null> {
+  async getRankingSongs(id: number, page: number, limit: number): Promise<UpstreamRankingDetail | null> {
     const client = await this.clientOf();
-    const detail = await client.getRankingSongs(id);
+    const detail = await client.getRankingSongs(id, page, limit);
     if (!detail) return null;
     return { ranking: detail.ranking, songs: detail.songs.map((song) => this.toUpstreamSong(song)) };
   }

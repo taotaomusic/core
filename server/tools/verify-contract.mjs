@@ -2849,8 +2849,8 @@ async function main() {
 
   // ---------- 排行榜（2026-10 新增）----------
   //
-  // 榜单目录 + 榜单歌曲。上游 musics 端点**不支持分页**（带 pn/rn 会 500），
-  // 固定返回全部（匿名权益约 20 首）；data.total 是写死的展示值（恒 100）。
+  // 榜单目录 + 榜单歌曲（分页）。上游详情族 `pn` 是 1 基（pn=0 会 500）、`rn` 上限
+  // 实测 100；主流榜单 total 恒 100 是真实条数，pn=4&rn=30 收尾 10 首实测过。
   const rankingGroups = await (await fetch(`${base}/api/v1/rankings?source=kuwo`, {
     headers: { authorization: `Bearer ${token}` },
   })).json();
@@ -2869,23 +2869,35 @@ async function main() {
             && typeof song?.title === "string" && song.source === "kuwo"))),
     JSON.stringify(rankingGroupList[0]).slice(0, 220),
   );
-  const rankingSongs = await (await fetch(`${base}/api/v1/rankings/16/songs?quality=10&source=kuwo`, {
+  const rankingSongs = await (await fetch(`${base}/api/v1/rankings/16/songs?page=1&num=30&quality=10&source=kuwo`, {
     headers: { authorization: `Bearer ${token}` },
   })).json();
   check(
-    "榜单歌曲返回 200 且 ranking 信息与歌曲行同构",
+    "榜单歌曲返回 200 且 ranking 信息与歌曲行同构（第 1 页 30 首）",
     rankingSongs.code === 0
       && typeof rankingSongs.data?.ranking?.id === "number" && rankingSongs.data.ranking.id === 16
       && typeof rankingSongs.data.ranking?.name === "string" && rankingSongs.data.ranking.name.length > 0
-      && Array.isArray(rankingSongs.data.songs) && rankingSongs.data.songs.length > 0
+      && Array.isArray(rankingSongs.data.songs) && rankingSongs.data.songs.length === 30
       && rankingSongs.data.songs.every(detailSongShape),
     `${JSON.stringify(rankingSongs).slice(0, 220)}`,
   );
   check(
-    "榜单歌曲的 meta 无分页语义（page 恒 1、hasMore 恒 false）",
+    "榜单歌曲 meta 分页信封正确（total 真实、hasMore = page*num < total）",
     rankingSongs.data?.meta?.page === 1
-      && rankingSongs.data.meta?.hasMore === false,
+      && rankingSongs.data.meta?.num === 30
+      && typeof rankingSongs.data.meta?.total === "number" && rankingSongs.data.meta.total > 0
+      && rankingSongs.data.meta?.hasMore === (30 < rankingSongs.data.meta.total),
     JSON.stringify(rankingSongs.data?.meta),
+  );
+  const rankingSongsPage2 = await (await fetch(`${base}/api/v1/rankings/16/songs?page=2&num=30&source=kuwo`, {
+    headers: { authorization: `Bearer ${token}` },
+  })).json();
+  check(
+    "榜单歌曲翻页前进（pn 1 基：page=2 不与 page=1 交叠）",
+    rankingSongsPage2.code === 0
+      && (rankingSongsPage2.data?.songs ?? []).length > 0
+      && !rankingSongs.data.songs.some((song) => song.id === rankingSongsPage2.data.songs[0]?.id),
+    JSON.stringify({ p1: rankingSongs.data?.songs?.[0]?.id, p2: rankingSongsPage2.data?.songs?.[0]?.id }),
   );
   const rankingBadId = await fetch(`${base}/api/v1/rankings/abc/songs?source=kuwo`, {
     headers: { authorization: `Bearer ${token}` },
