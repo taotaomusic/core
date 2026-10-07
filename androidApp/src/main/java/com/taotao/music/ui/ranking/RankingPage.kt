@@ -23,11 +23,15 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.taotao.music.data.RankingBrief
@@ -40,9 +44,11 @@ import com.taotao.music.playerui.theme.TaotaoSizes
 import com.taotao.music.playerui.theme.TaotaoSpacing
 import com.taotao.music.playerui.theme.TaotaoWash
 import com.taotao.music.ui.artist.CatalogInlineStatus
+import com.taotao.music.ui.artist.CatalogLoadMoreThreshold
 import com.taotao.music.ui.artist.CatalogPageBackdrop
 import com.taotao.music.ui.artist.CatalogPageStatus
 import com.taotao.music.ui.artist.CatalogTopBar
+import com.taotao.music.ui.app.RANKING_SONGS_PAGE_NUM
 import com.taotao.music.ui.common.AlbumArt
 import com.taotao.music.ui.common.EmptyStateView
 import com.taotao.music.ui.common.SongListItem
@@ -55,7 +61,8 @@ import com.taotao.music.ui.theme.TaotaoCoral
  * 视图切换由 `selected` 决定（非空即详情态），页面自身不持有任何业务状态；
  * 数据与操作全部来自 [com.taotao.music.ui.app.RankingState]，由路由层注入。
  * 沉浸式头部、顶栏与状态占位复用歌手 / 专辑页的 internal 共用件（同模块跨包引用合法），
- * 歌曲行复用公共 [SongListItem]，菜单「查看歌手 / 查看专辑」照搜索页装配。
+ * 歌曲行复用公共 [SongListItem]、行首带全局名次序号（前三名金 / 银 / 铜高亮），
+ * 菜单「查看歌手 / 查看专辑」照搜索页装配。
  */
 @Composable
 fun RankingPage(
@@ -64,9 +71,15 @@ fun RankingPage(
     catalogError: String?,
     selected: RankingBrief?,
     ranking: RankingInfo?,
-    detailLoading: Boolean,
-    detailError: String?,
     songs: List<Song>,
+    /** 歌曲第一页加载中（头部资料与第一页是同一个请求）。 */
+    songsLoading: Boolean,
+    songsLoadingMore: Boolean,
+    songsHasMore: Boolean,
+    /** 第一页失败（songs 为空，列表位置重试）与加载更多失败（songs 非空，页脚重试）共用的内联错误。 */
+    songsError: String?,
+    /** 榜单真实条数（分页 meta.total）；详情头部「共 N 首」用它。 */
+    songsTotal: Long,
     favoriteRevision: Int = 0,
     downloadedRevision: Int = 0,
     isFavorite: (Song) -> Boolean = { false },
@@ -79,9 +92,11 @@ fun RankingPage(
     onClose: () -> Unit,
     /** 目录加载失败后的重试。 */
     onRetryCatalog: () -> Unit = {},
-    /** 详情加载失败后的重试。 */
+    /** 详情第一页失败后的重试。 */
     onRetryDetail: () -> Unit = {},
-    /** 点歌曲行：以整条榜单为队列上下文入队。 */
+    /** 滚到歌曲列表近底部时拉取下一页。 */
+    onLoadMoreSongs: () -> Unit = {},
+    /** 点歌曲行：以整条榜单（已累积、名次顺序）为队列上下文入队。 */
     onSongClick: (Int) -> Unit = {},
     onToggleFavorite: (Song) -> Unit = {},
     onPlayNext: (Song) -> Unit = {},
@@ -109,14 +124,18 @@ fun RankingPage(
                 RankingDetailView(
                     brief = brief,
                     detail = ranking,
-                    detailLoading = detailLoading,
-                    detailError = detailError,
                     songs = songs,
+                    songsLoading = songsLoading,
+                    songsLoadingMore = songsLoadingMore,
+                    songsHasMore = songsHasMore,
+                    songsError = songsError,
+                    songsTotal = songsTotal,
                     favoriteRevision = favoriteRevision,
                     downloadedRevision = downloadedRevision,
                     isFavorite = isFavorite,
                     isDownloaded = isDownloaded,
                     onRetry = onRetryDetail,
+                    onLoadMore = onLoadMoreSongs,
                     onSongClick = onSongClick,
                     onToggleFavorite = onToggleFavorite,
                     onPlayNext = onPlayNext,
@@ -242,24 +261,29 @@ private fun RankingCard(brief: RankingBrief, onOpen: () -> Unit) {
 }
 
 /**
- * 详情态：头部（榜单封面 + 名 + 更新日期）+ 榜单歌曲列表。
+ * 详情态：头部（榜单封面 + 名 + 更新日期 + 共 N 首）+ 榜单歌曲列表。
  *
  * 头部在详情资料到达前用 [brief] 兜底渲染，加载 / 失败占位挂在头部下方 ——
- * 不整页留白，用户至少知道自己在看哪个榜。榜单歌曲固定约 20 首且无分页，
- * 所以没有「加载更多」逻辑；空榜单（部分歌手榜）给专属空态而不是错误。
+ * 不整页留白，用户至少知道自己在看哪个榜。歌曲列表是分页累积的：行首展示
+ * 全局名次（前三名金 / 银 / 铜高亮），滚到近底部自动经 [onLoadMore] 翻页，
+ * 页脚给「加载更多 / 失败重试 / 没有更多了」三态；空榜单（部分歌手榜）给专属空态。
  */
 @Composable
 private fun RankingDetailView(
     brief: RankingBrief,
     detail: RankingInfo?,
-    detailLoading: Boolean,
-    detailError: String?,
     songs: List<Song>,
+    songsLoading: Boolean,
+    songsLoadingMore: Boolean,
+    songsHasMore: Boolean,
+    songsError: String?,
+    songsTotal: Long,
     favoriteRevision: Int,
     downloadedRevision: Int,
     isFavorite: (Song) -> Boolean,
     isDownloaded: (Song) -> Boolean,
     onRetry: () -> Unit,
+    onLoadMore: () -> Unit,
     onSongClick: (Int) -> Unit,
     onToggleFavorite: (Song) -> Unit,
     onPlayNext: (Song) -> Unit,
@@ -270,14 +294,30 @@ private fun RankingDetailView(
     val listState = rememberLazyListState()
     // 换榜单（含同榜单重试）时回到列表顶部；同榜单的普通重组不能重置滚动位置。
     LaunchedEffect(brief.id) { listState.scrollToItem(0) }
+    // 头部占一个 item，其后才是歌曲条目；预取触发点要加上这个前置 item。
+    val leadingItemCount = 1
+    val shouldLoadMore by remember(listState, songs.size) {
+        derivedStateOf {
+            val last = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index
+                ?: return@derivedStateOf false
+            // 条目数不足以滚出预取窗口时不触发（靠 hasMore 收口），与歌手 / 专辑页同一窗口。
+            songs.size > CatalogLoadMoreThreshold &&
+                last >= leadingItemCount + songs.size - CatalogLoadMoreThreshold
+        }
+    }
+    LaunchedEffect(shouldLoadMore, songs.size) {
+        if (shouldLoadMore) onLoadMore()
+    }
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize().padding(horizontal = TaotaoSpacing.screenHorizontal),
         verticalArrangement = Arrangement.spacedBy(TaotaoSpacing.xs),
     ) {
-        item(key = "ranking-header") { RankingDetailHeader(brief = brief, detail = detail) }
+        item(key = "ranking-header") {
+            RankingDetailHeader(brief = brief, detail = detail, songsTotal = songsTotal)
+        }
         when {
-            detailLoading && songs.isEmpty() -> {
+            songsLoading && songs.isEmpty() -> {
                 item(key = "ranking-songs-loading") {
                     Box(
                         Modifier.fillMaxWidth().padding(vertical = TaotaoSpacing.xl),
@@ -287,8 +327,8 @@ private fun RankingDetailView(
                     }
                 }
             }
-            songs.isEmpty() && detailError != null -> {
-                item(key = "ranking-songs-error") { CatalogInlineStatus(text = detailError, onRetry = onRetry) }
+            songs.isEmpty() && songsError != null -> {
+                item(key = "ranking-songs-error") { CatalogInlineStatus(text = songsError, onRetry = onRetry) }
             }
             songs.isEmpty() -> {
                 item(key = "ranking-songs-empty") {
@@ -306,25 +346,124 @@ private fun RankingDetailView(
                     contentType = { _, _ -> "ranking-song" },
                 ) { index, song ->
                     val key = songKeyOf(song)
-                    // 菜单双门槛照搜索页装配：回调非空且歌曲带音源内歌手 / 专辑 ID 才放行，
-                    // SongListItem 内部还有一层同口径判定，两层一致不会出现「点了没反应」。
-                    SongListItem(
+                    // 全局名次 = (已装载页码 - 1) × 每页条数 + 页内下标 + 1。
+                    // 服务端契约保证条目顺序即排名顺序、翻页前进不交叠，所以累积列表的
+                    // 线性下标天然连续，换算出的名次不重不漏（第 1 名在最前）。
+                    val rank = (songsPage - 1) * RANKING_SONGS_PAGE_NUM + index + 1
+                    RankingSongRow(
+                        rank = rank,
                         song = song,
-                        active = false,
                         favorited = remember(key, favoriteRevision) { isFavorite(song) },
                         downloaded = remember(key, downloadedRevision) { isDownloaded(song) },
                         onToggleFavorite = { onToggleFavorite(song) },
                         onPlayNext = { onPlayNext(song) },
                         onAddToPlaylist = { onAddToPlaylist(song) },
+                        // 菜单双门槛照搜索页装配：回调非空且歌曲带音源内歌手 / 专辑 ID 才放行，
+                        // SongListItem 内部还有一层同口径判定，两层一致不会出现「点了没反应」。
                         onOpenArtist = onOpenArtist.takeIf { song.artistId != null }?.let { open -> { open(song) } },
                         onOpenAlbum = onOpenAlbum.takeIf { song.albumId != null }?.let { open -> { open(song) } },
-                    ) { onSongClick(index) }
+                        onClick = { onSongClick(index) },
+                    )
+                }
+                // 页脚三态互斥：加载更多指示 / 加载更多失败重试 / 没有更多了。
+                // 列表非空时 songsError 只可能来自加载更多（第一页失败时列表是空的），
+                // 所以这里的重试直接续拉下一页，不必整榜重来。
+                when {
+                    songsLoadingMore -> item(key = "ranking-loading-more") {
+                        Row(
+                            Modifier.fillMaxWidth().padding(vertical = TaotaoSpacing.md),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            CircularProgressIndicator(Modifier.size(TaotaoSizes.progressInline), color = TaotaoCoral)
+                            Text(
+                                "正在加载更多…",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.padding(start = TaotaoSpacing.xs),
+                            )
+                        }
+                    }
+                    songsError != null -> item(key = "ranking-load-more-error") {
+                        CatalogInlineStatus(text = songsError, onRetry = onLoadMore)
+                    }
+                    !songsHasMore -> item(key = "ranking-list-end") {
+                        Text(
+                            "没有更多了",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.fillMaxWidth().padding(vertical = TaotaoSpacing.md),
+                            textAlign = TextAlign.Center,
+                        )
+                    }
                 }
             }
         }
         item(key = "ranking-detail-footer") { Spacer(Modifier.height(TaotaoSpacing.sm)) }
     }
 }
+
+/**
+ * 带排名序号的歌曲行：行首固定宽度序号列 + 公共 [SongListItem]。
+ *
+ * 序号照 `%02d` 补零（01…09；三位名次如 100 由 format 原样放下）；个位数用
+ * 大一号字体、两位数起换小一号，避免长名次挤压行高。名次配色照波点惯例：
+ * 金 / 银 / 铜区分冠军 / 亚军 / 季军，其余用 onSurfaceVariant 弱化。
+ * 序号列单独可点且与歌曲行等价 —— 用户点「01」时预期就是播这首歌。
+ */
+@Composable
+private fun RankingSongRow(
+    rank: Int,
+    song: Song,
+    favorited: Boolean,
+    downloaded: Boolean,
+    onToggleFavorite: () -> Unit,
+    onPlayNext: () -> Unit,
+    onAddToPlaylist: () -> Unit,
+    onOpenArtist: (() -> Unit)?,
+    onOpenAlbum: (() -> Unit)?,
+    onClick: () -> Unit,
+) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            "%02d".format(rank),
+            color = rankingRankColor(rank),
+            style = if (rank < 10) MaterialTheme.typography.titleMedium else MaterialTheme.typography.bodyMedium,
+            fontWeight = if (rank <= 3) FontWeight.Bold else FontWeight.Medium,
+            textAlign = TextAlign.Center,
+            modifier = Modifier
+                .width(RankingRankColumnWidth)
+                .clickable(onClick = onClick),
+        )
+        SongListItem(
+            song = song,
+            active = false,
+            favorited = favorited,
+            downloaded = downloaded,
+            onToggleFavorite = onToggleFavorite,
+            onPlayNext = onPlayNext,
+            onAddToPlaylist = onAddToPlaylist,
+            onOpenArtist = onOpenArtist,
+            onOpenAlbum = onOpenAlbum,
+            // 序号列吃掉固定宽度后，歌曲行吃剩余宽度（SongRow 内部自带 fillMaxWidth）。
+            modifier = Modifier.weight(1f),
+        ) { onClick() }
+    }
+}
+
+/** 名次序号配色：金 / 银 / 铜区分冠军 / 亚军 / 季军，其余弱化为 onSurfaceVariant。 */
+@Composable
+private fun rankingRankColor(rank: Int): Color = when (rank) {
+    1 -> RankingGold
+    2 -> RankingSilver
+    3 -> RankingBronze
+    else -> MaterialTheme.colorScheme.onSurfaceVariant
+}
+
+/** 前三名序号色：金 / 银 / 铜。榜单是一次性视觉配色，不进主题 token（页面私有常量先例）。 */
+private val RankingGold = Color(0xFFDFA32E)
+private val RankingSilver = Color(0xFF9AA3AD)
+private val RankingBronze = Color(0xFFC88250)
 
 /**
  * 榜单详情头部：封面 + 榜单名 + 更新日期。

@@ -1954,21 +1954,37 @@ class TencentMusicApi(
     }
 
     /**
-     * 单个榜单的歌曲（`GET /api/v1/rankings/:id/songs`，仅酷我源下发）。
+     * 单个榜单的歌曲，分页（`GET /api/v1/rankings/:id/songs`，仅酷我源下发）。
      *
-     * 服务端固定返回约 20 首、**无分页**（meta.hasMore 恒 false），这里一次读完不做翻页；
-     * `ranking.total` 是写死的展示值（恒 100），调用方不能拿它做「共 N 首」或进度计算。
+     * 条目顺序就是**排名顺序**（第 1 名在最前），翻页前进不交叠；`meta.total` 是榜单
+     * **真实条数**（主流榜单恒 100），`meta.hasMore = page * num < total` —— 界面的
+     * 全局名次由「(page - 1) × num + 页内下标」换算，[num] 必须与翻页请求保持一致，
+     * 否则名次会整体错位。注意 [RankingInfo.total] 仍是上游写死的展示值，
+     * 「共 N 首」要用 [RankingDetail.total]（meta.total）。
      * 空榜单 songs=[] 属正常（部分歌手榜），由界面按空态处理。
      * [quality] 语义与 [search] 相同：透传给服务端，歌曲解析出的占位播放地址按该档位生成。
+     * [page] 1 基；[num] 服务端缺省 30、上限 100。
      * 错误契约：路径 id 非正整数 → 4001；不支持音源 → 4007；上游故障 → 502。
      */
-    fun rankingSongs(id: Long, quality: Int = AudioQuality.Default.value): RankingDetail {
+    fun rankingSongs(
+        id: Long,
+        page: Int = 1,
+        num: Int = DEFAULT_CATALOG_PAGE_NUM,
+        quality: Int = AudioQuality.Default.value,
+    ): RankingDetail {
         val rankingId = id.requireCatalogId("榜单")
-        return authorized("/api/v1/rankings/$rankingId/songs?quality=${quality.coerceIn(0, MAX_QUALITY)}&source=${encode(SEARCH_SOURCE_KUWO)}") { connection ->
+        val query = "?page=${page.coerceAtLeast(1)}&num=${num.coerceIn(1, MAX_RANKING_PAGE_NUM)}" +
+            "&quality=${quality.coerceIn(0, MAX_QUALITY)}" +
+            "&source=${encode(SEARCH_SOURCE_KUWO)}"
+        return authorized("/api/v1/rankings/$rankingId/songs$query") { connection ->
             val root = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
             check(root.optInt("code") == 0) { root.optString("message", "无法获取榜单歌曲") }
             val data = root.optJSONObject("data") ?: JSONObject()
             val ranking = data.optJSONObject("ranking") ?: JSONObject()
+            // data = {ranking, songs, meta} 里 songs 数组与 meta 的相对位置和歌手 / 专辑
+            // 目录的分页信封完全一致，直接复用 [toPagedList] 同一条解析链路，meta 缺失
+            // （旧服务端）时按「无更多」处理。
+            val songs = data.toPagedList(arrayName = "songs", parse = { row -> row.toSong(quality) })
             RankingDetail(
                 ranking = RankingInfo(
                     id = ranking.optLong("id"),
@@ -1977,11 +1993,10 @@ class TencentMusicApi(
                     pub = ranking.optString("pub"),
                     total = ranking.optLong("total"),
                 ),
-                songs = (data.optJSONArray("songs") ?: JSONArray()).let { rows ->
-                    (0 until rows.length()).mapNotNull { index ->
-                        rows.optJSONObject(index)?.toSong(quality)
-                    }
-                },
+                songs = songs.items,
+                page = songs.page,
+                hasMore = songs.hasMore,
+                total = songs.total,
             )
         }
     }
@@ -2021,6 +2036,9 @@ class TencentMusicApi(
         /** 歌手 / 专辑目录歌曲接口的单页条数：默认值与上限（与 /search 的 num 上限一致）。 */
         private const val DEFAULT_CATALOG_PAGE_NUM = 30
         private const val MAX_CATALOG_PAGE_NUM = 60
+
+        /** 榜单歌曲接口的单页上限：与后端 `/rankings/:id/songs` 的 num 上限一致（100）。 */
+        private const val MAX_RANKING_PAGE_NUM = 100
 
         /**
          * 搜索范围：聚合查询（服务端按 `AGGREGATED_SOURCES` 并发查多个音源）。
@@ -2366,10 +2384,22 @@ data class RankingInfo(
     val total: Long,
 )
 
-/** 榜单详情：榜单头信息 + 完整歌曲行（与 /search 的 song data 同构）。 */
+/**
+ * 榜单详情：榜单头信息 + **一页**歌曲行（与 /search 的 song data 同构）。
+ *
+ * 分页字段与 [PagedList] 同一口径（同一套 toPagedList 解析链路产出）；
+ * 这里摊平成顶层字段而不是内嵌 PagedList，调用方读 `songs / page / hasMore / total`
+ * 与改造前的一次性列表用法保持接近。
+ */
 data class RankingDetail(
     val ranking: RankingInfo,
     val songs: List<Song>,
+    /** 服务端回显的页码（1 基），状态层据它推进翻页游标。 */
+    val page: Int,
+    /** 是否还有下一页（meta.hasMore = page × num < total）。 */
+    val hasMore: Boolean,
+    /** 榜单**真实条数**（meta.total，主流榜单恒 100）；区别于 [RankingInfo.total] 的上游写死展示值。 */
+    val total: Long,
 )
 
 /**
