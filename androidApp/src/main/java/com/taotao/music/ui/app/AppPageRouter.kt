@@ -573,8 +573,6 @@ private fun RankingPageRoute(state: TaotaoAppState) {
         catalogError = state.rankingPage.catalogError,
         selected = state.rankingPage.selected,
         ranking = state.rankingPage.detail,
-        detailLoading = state.rankingPage.detailLoading,
-        detailError = state.rankingPage.detailError,
         songs = state.rankingPage.songs,
         songsLoading = state.rankingPage.songsLoading,
         songsLoadingMore = state.rankingPage.songsLoadingMore,

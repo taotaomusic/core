@@ -48,7 +48,6 @@ import com.taotao.music.ui.artist.CatalogLoadMoreThreshold
 import com.taotao.music.ui.artist.CatalogPageBackdrop
 import com.taotao.music.ui.artist.CatalogPageStatus
 import com.taotao.music.ui.artist.CatalogTopBar
-import com.taotao.music.ui.app.RANKING_SONGS_PAGE_NUM
 import com.taotao.music.ui.common.AlbumArt
 import com.taotao.music.ui.common.EmptyStateView
 import com.taotao.music.ui.common.SongListItem
@@ -346,10 +345,10 @@ private fun RankingDetailView(
                     contentType = { _, _ -> "ranking-song" },
                 ) { index, song ->
                     val key = songKeyOf(song)
-                    // 全局名次 = (已装载页码 - 1) × 每页条数 + 页内下标 + 1。
-                    // 服务端契约保证条目顺序即排名顺序、翻页前进不交叠，所以累积列表的
-                    // 线性下标天然连续，换算出的名次不重不漏（第 1 名在最前）。
-                    val rank = (songsPage - 1) * RANKING_SONGS_PAGE_NUM + index + 1
+                    // 全局名次 = 累积列表的线性下标 + 1。服务端契约保证条目顺序即排名
+                    // 顺序、翻页前进不交叠，分页按页码顺序追加，所以线性下标天然连续
+                    // （= (page-1) × 每页条数 + 页内下标 + 1 的等价形式），名次不重不漏。
+                    val rank = index + 1
                     RankingSongRow(
                         rank = rank,
                         song = song,
@@ -512,3 +511,6 @@ private val RankingCardWidth = 216.dp
 
 /** 榜单横版卡的封面边长：卡内缩略图，介于列表行（48dp）与网格封面（112dp）之间。 */
 private val RankingCardCoverSize = 72.dp
+
+/** 详情列表行首排名序号列的定宽：两位数补零观感（「01」起），三位名次原样放下。 */
+private val RankingRankColumnWidth = 40.dp
