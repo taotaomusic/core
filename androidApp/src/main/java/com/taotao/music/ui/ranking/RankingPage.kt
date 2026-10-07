@@ -472,7 +472,7 @@ private val RankingBronze = Color(0xFFC88250)
  * 「10-05 更新」一种形态，避免出现「10-05更新更新」。
  */
 @Composable
-private fun RankingDetailHeader(brief: RankingBrief, detail: RankingInfo?) {
+private fun RankingDetailHeader(brief: RankingBrief, detail: RankingInfo?, songsTotal: Long) {
     val name = detail?.name?.takeIf { it.isNotBlank() } ?: brief.name
     val pic = detail?.pic ?: brief.pic
     val pub = detail?.pub?.takeIf { it.isNotBlank() } ?: brief.pubStr
@@ -494,9 +494,15 @@ private fun RankingDetailHeader(brief: RankingBrief, detail: RankingInfo?) {
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
-            if (pub.isNotBlank()) {
+            // 副行合并「更新于 … · 共 N 首」：total 是分页 meta 的真实条数
+            //（主流榜单恒 100），不是 ranking.total 的上游展示值。
+            val meta = buildList {
+                if (pub.isNotBlank()) add(if (pub.endsWith("更新")) pub else "$pub 更新")
+                if (songsTotal > 0) add("共 ${formatCatalogCount(songsTotal)} 首")
+            }.joinToString(" · ")
+            if (meta.isNotBlank()) {
                 Text(
-                    if (pub.endsWith("更新")) pub else "$pub 更新",
+                    meta,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(top = TaotaoSpacing.xs),
