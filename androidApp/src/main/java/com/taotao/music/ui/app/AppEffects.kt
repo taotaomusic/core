@@ -80,7 +80,8 @@ internal fun TaotaoAppPreAuthEffects(state: TaotaoAppState) {
         enabled = state.mvSong != null || state.showPlayerDetail || state.showSearchPage ||
             state.showSettingsPage || state.showProfilePage || state.playlist.selected != null ||
             state.mineLibrarySection != null || state.diarySong != null ||
-            state.artistPage.selected != null || state.albumPage.selected != null,
+            state.artistPage.selected != null || state.albumPage.selected != null ||
+            state.onlinePlaylistPage.selected != null,
     ) {
         when {
             // 与 currentPage 一致：MV 播放页盖在详情页之上，返回先退 MV；
@@ -91,10 +92,11 @@ internal fun TaotaoAppPreAuthEffects(state: TaotaoAppState) {
             state.diarySong != null -> state.diarySong = null
             state.showProfilePage -> state.showProfilePage = false
             state.showSettingsPage -> state.showSettingsPage = false
-            // 歌手 / 专辑主页是从搜索页进入的下级页（打开时 showSearchPage 仍为真），
+            // 歌手 / 专辑 / 在线歌单主页是从搜索页进入的下级页（打开时 showSearchPage 仍为真），
             // 必须先于搜索页判断退出，否则返回一次直接退回首页而不是回到搜索页。
             state.artistPage.selected != null -> state.artistPage.close()
             state.albumPage.selected != null -> state.albumPage.close()
+            state.onlinePlaylistPage.selected != null -> state.closeOnlinePlaylistPage()
             state.showSearchPage -> state.showSearchPage = false
             state.playlist.selected != null -> state.playlist.selected = null
             state.mineLibrarySection != null -> state.mineLibrarySection = null

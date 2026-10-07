@@ -606,6 +606,82 @@ class TencentMusicApi(
         }
     }
 
+    // ---------------------------------------------------------------------
+    // 在线歌单详情（音源侧公开歌单，与账号云端歌单 /api/v1/playlists 那套分开）
+    // ---------------------------------------------------------------------
+    //
+    // 两条路由都是普通 JSON 信封（{code, message, data}），与歌手 / 专辑主页同一套写法：
+    // 整包读取，`authorized()` 的 401 重放只产出一份完整结果。寻址参数 sourceMarker
+    // 来自歌单搜索行（[PlaylistSearchResult.sourceMarker]），客户端原样回传、不做解读。
+
+    /**
+     * 在线歌单的资料。
+     *
+     * [sourceMarker] 是搜索行带来的上游数字标记，与 [id] 一起构成寻址钥匙；
+     * 缺它（旧搜索行兜 0）时服务端无法定位上游歌单，请求会失败并由页面提示重试。
+     */
+    suspend fun fetchOnlinePlaylistDetail(
+        id: Long,
+        sourceMarker: Long,
+        source: String = SEARCH_SOURCE_KUWO,
+    ): OnlinePlaylistDetail = withContext(Dispatchers.IO) {
+        val playlistId = id.requireCatalogId("歌单")
+        val query = "?source=${encode(source.ifBlank { SEARCH_SOURCE_KUWO })}" +
+            "&sourceMarker=${sourceMarker.coerceAtLeast(0L)}"
+        authorized("/api/v1/online-playlists/$playlistId$query") { connection ->
+            val root = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+            check(root.optInt("code") == 0) { root.optString("message", "无法获取歌单资料") }
+            root.optJSONObject("data")?.optJSONObject("playlist")?.toOnlinePlaylistDetail()
+                ?: error("歌单资料缺失")
+        }
+    }
+
+    /**
+     * 在线歌单名下的歌曲，分页。
+     *
+     * 歌曲行与 /search 的 song 行完全同构，直接复用 [toSong] 解析；分页信封
+     * （`{songs, meta}`）与歌手歌曲列表同一形状，走 [toPagedList] 同一条解析链路。
+     * 占位播放地址的音质档位取默认值即可 —— 入队播放时 [TencentMusicApi.placeholderUri]
+     * 会按用户偏好重新生成，与歌手 / 专辑页的占位地址同一生命周期。
+     */
+    suspend fun fetchOnlinePlaylistSongs(
+        id: Long,
+        sourceMarker: Long,
+        source: String = SEARCH_SOURCE_KUWO,
+        page: Int = 1,
+        num: Int = DEFAULT_CATALOG_PAGE_NUM,
+        quality: Int = AudioQuality.Default.value,
+    ): PagedList<Song> = withContext(Dispatchers.IO) {
+        val playlistId = id.requireCatalogId("歌单")
+        val query = "?source=${encode(source.ifBlank { SEARCH_SOURCE_KUWO })}" +
+            "&sourceMarker=${sourceMarker.coerceAtLeast(0L)}" +
+            "&page=${page.coerceAtLeast(1)}&num=${num.coerceIn(1, MAX_CATALOG_PAGE_NUM)}" +
+            "&quality=${quality.coerceIn(0, MAX_QUALITY)}"
+        authorized("/api/v1/online-playlists/$playlistId/songs$query") { connection ->
+            val root = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+            check(root.optInt("code") == 0) { root.optString("message", "无法获取歌单歌曲") }
+            val data = root.optJSONObject("data") ?: JSONObject()
+            data.toPagedList(arrayName = "songs", parse = { row -> row.toSong(quality) })
+        }
+    }
+
+    /** 解析在线歌单资料。pic / creatorIcon 可能空，归一成 null；description 可能为空串，由界面判空。 */
+    private fun JSONObject.toOnlinePlaylistDetail(): OnlinePlaylistDetail = OnlinePlaylistDetail(
+        source = optString("source").ifBlank { SEARCH_SOURCE_KUWO },
+        id = optLong("id"),
+        name = optString("name"),
+        pic = nullableString("pic"),
+        description = optString("description"),
+        playCount = optLong("playCount"),
+        trackCount = optLong("trackCount"),
+        collectedCount = optLong("collectedCount"),
+        createTime = optString("createTime"),
+        creatorId = optLong("creatorId"),
+        creatorName = optString("creatorName"),
+        creatorIcon = nullableString("creatorIcon"),
+        isPrivate = optBoolean("isPrivate"),
+    )
+
     /** 解析歌手主页资料。pic 可能空，归一成 null；aliasName / desc 保留空串语义由界面判空。 */
     private fun JSONObject.toArtistDetail(): ArtistDetail = ArtistDetail(
         source = optString("source").ifBlank { SEARCH_SOURCE_KUWO },
@@ -1816,6 +1892,8 @@ class TencentMusicApi(
         creator = optString("creator"),
         trackCount = optLong("trackCount"),
         playCount = optLong("playCount"),
+        // 寻址参数：服务端保证下发；旧服务端缺键时 optLong 兜 0，详情请求会失败并可重试。
+        sourceMarker = optLong("sourceMarker"),
     )
 
     /** 解析视频搜索行。歌手 / 专辑 ID 非正归一成 null（与歌曲行的 artistId/albumId 同口径）。 */
@@ -2111,13 +2189,13 @@ data class AlbumSearchResult(
  * 搜索命中的歌单条目（`GET /api/v1/search/playlists`，仅酷我源下发）。
  *
  * 与账号的云端歌单 [TencentMusicApi.Playlist] 刻意分开：这是**音源侧**的公开歌单，只有元数据；
- * `/api/v1/playlists` 那套详情路由只认当前账号自己的歌单，拿不到酷我在线歌单的歌曲，
- * 所以目前点击条目不能进歌单详情页（界面侧给出提示，见搜索页）。
+ * 账号歌单详情走 `/api/v1/playlists` 那套路由，在线歌单详情走 `/api/v1/online-playlists`
+ * （见 [OnlinePlaylistDetail]），点击条目即进在线歌单详情页。
  */
 data class PlaylistSearchResult(
     /** 所属音源；当前只有酷我下发。 */
     val source: String,
-    /** 音源内的歌单 ID，将来接入在线歌单详情时是寻址钥匙。 */
+    /** 音源内的歌单 ID，进在线歌单详情时与 [sourceMarker] 一起作为寻址参数。 */
     val id: Long,
     val name: String,
     /** 封面地址；服务端已保证 https，可能为空，解析时归一成 null。 */
@@ -2128,6 +2206,12 @@ data class PlaylistSearchResult(
     val trackCount: Long,
     /** 歌单累计播放次数；数字过万由界面用 formatCatalogCount 缩写。 */
     val playCount: Long,
+    /**
+     * 上游数字标记，进在线歌单详情时随 [id] 原样回传给服务端寻址。
+     * 实测恒为 4，但它是上游接口的约定值而不是客户端语义，客户端不做解读；
+     * 服务端保证下发，旧服务端缺键时按 0 兜底（详情请求会失败，由页面给出错误与重试）。
+     */
+    val sourceMarker: Long,
 )
 
 /**
@@ -2255,6 +2339,42 @@ data class AlbumDetail(
     val showtime: String,
     /** 专辑长简介；服务端可能给很长的文本，也可能为空串，由界面折叠展示。 */
     val desc: String,
+)
+
+/**
+ * 在线歌单详情页的完整资料（`GET /api/v1/online-playlists/:id`）。
+ *
+ * 这是**音源侧**的公开歌单，与账号的云端歌单 [TencentMusicApi.Playlist] 刻意分开：
+ * 两者只有「歌单」这个名字相同，字段、路由与生命周期都不同 —— 云端歌单是账号数据、
+ * 走 `/api/v1/playlists`，本模型随在线歌单详情页拉取、按 `source + sourceMarker` 寻址。
+ * 旧的「点击歌单条目只提示不支持」链路就此移除，搜索行的 [PlaylistSearchResult] 是它的入口。
+ */
+data class OnlinePlaylistDetail(
+    /** 所属音源；当前只有酷我下发。 */
+    val source: String,
+    /** 音源内的歌单 ID，与 [PlaylistSearchResult.id] 同一取值域。 */
+    val id: Long,
+    val name: String,
+    /** 封面地址；可能为空，解析时归一成 null，界面用音符占位兜底。 */
+    val pic: String?,
+    /** 歌单简介；可能为空串，空串不渲染简介区。 */
+    val description: String,
+    /** 歌单累计播放次数；数字过万由界面用 formatCatalogCount 缩写。 */
+    val playCount: Long,
+    /** 歌单内的歌曲总数。 */
+    val trackCount: Long,
+    /** 歌单被收藏次数；数字过万由界面用 formatCatalogCount 缩写。 */
+    val collectedCount: Long,
+    /** 创建时间（上游展示串）；可能为空串，由界面决定是否展示。 */
+    val createTime: String,
+    /** 创建者的音源内用户 ID；当前界面不用于跳转，仅随详情下发。 */
+    val creatorId: Long,
+    /** 创建者昵称（服务端直接下发展示串）。 */
+    val creatorName: String,
+    /** 创建者头像地址；可能为空，解析时归一成 null。 */
+    val creatorIcon: String?,
+    /** 是否为创建者的私人歌单；仅用于潜在的身份标识，当前界面不据此改变展示。 */
+    val isPrivate: Boolean,
 )
 
 /**
