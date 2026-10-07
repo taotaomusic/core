@@ -6,16 +6,17 @@ import { FavoritesPage } from "./FavoritesPage";
 import { PlayerBar } from "./PlayerBar";
 import { PlayerDetail } from "./PlayerDetail";
 import { PlaylistsPage } from "./PlaylistsPage";
+import { RankingPage } from "./RankingPage";
 import { RecentPage } from "./RecentPage";
 import { SearchPage } from "./SearchPage";
 
-type Page = "search" | "playlists" | "recent" | "favorites" | "artist" | "album";
+type Page = "search" | "ranking" | "playlists" | "recent" | "favorites" | "artist" | "album";
 
 /** 页面退场动画时长（毫秒），与 App.css 里 .page-exit 的 0.15s 对齐。 */
 const PAGE_EXIT_MS = 150;
 
 /** 导航小图标：16px 线性风格，随文字颜色走（currentColor）。 */
-function NavIcon({ kind }: { kind: "search" | "playlists" | "recent" | "heart" | "logout" }) {
+function NavIcon({ kind }: { kind: "search" | "ranking" | "playlists" | "recent" | "heart" | "logout" }) {
   const common = {
     width: 16,
     height: 16,
@@ -32,6 +33,17 @@ function NavIcon({ kind }: { kind: "search" | "playlists" | "recent" | "heart" |
       <svg {...common}>
         <circle cx="11" cy="11" r="7" />
         <line x1="16.5" y1="16.5" x2="21" y2="21" />
+      </svg>
+    );
+  }
+  if (kind === "ranking") {
+    // 领奖台式三根柱：中高侧低 + 底线，对应「排行榜」的榜单语义
+    return (
+      <svg {...common}>
+        <line x1="3" y1="20" x2="21" y2="20" />
+        <line x1="6" y1="20" x2="6" y2="13" />
+        <line x1="12" y1="20" x2="12" y2="5" />
+        <line x1="18" y1="20" x2="18" y2="9" />
       </svg>
     );
   }
@@ -72,7 +84,7 @@ function NavIcon({ kind }: { kind: "search" | "playlists" | "recent" | "heart" |
 }
 
 /**
- * 登录后的主界面：左侧导航（搜索 / 歌单 / 最近播放 / 我的收藏）+ 内容区 + 底部播放条 + 全屏播放详情。
+ * 登录后的主界面：左侧导航（搜索 / 排行榜 / 歌单 / 最近播放 / 我的收藏）+ 内容区 + 底部播放条 + 全屏播放详情。
  * 各页面常驻挂载、用 CSS 隐藏切换，保留各自的搜索结果与滚动位置。
  * 歌手主页 / 专辑页是从搜索页进入的二级页面（同属「搜索」导航项）：不设侧边栏按钮，
  * 由搜索横排或播放详情页的可点歌手名打开并携带目标身份，页内「返回」键回到搜索页；歌手页 ↔ 专辑页可互相跳转。
@@ -118,6 +130,11 @@ export function MainScreen({ onLogout }: { onLogout: () => void }) {
     switchPage("album");
   }
 
+  /** 打开排行榜页：顶层导航页，与搜索页平级（目录 / 榜单详情两个视图在页内自行切换）。 */
+  function openRanking() {
+    switchPage("ranking");
+  }
+
   /** 从歌手/专辑页返回搜索页。 */
   function backToSearch() {
     switchPage("search");
@@ -139,6 +156,13 @@ export function MainScreen({ onLogout }: { onLogout: () => void }) {
         >
           <NavIcon kind="search" />
           搜索
+        </button>
+        <button
+          className={`nav-btn${navActive === "ranking" ? " on" : ""}`}
+          onClick={openRanking}
+        >
+          <NavIcon kind="ranking" />
+          排行榜
         </button>
         <button
           className={`nav-btn${navActive === "playlists" ? " on" : ""}`}
@@ -174,6 +198,12 @@ export function MainScreen({ onLogout }: { onLogout: () => void }) {
           style={{ display: page === "search" || exiting === "search" ? "flex" : "none" }}
         >
           <SearchPage onOpenArtist={openArtist} onOpenAlbum={openAlbum} />
+        </div>
+        <div
+          className={`page${page === "ranking" ? " page-enter" : ""}${exiting === "ranking" ? " page-exit" : ""}`}
+          style={{ display: page === "ranking" || exiting === "ranking" ? "flex" : "none" }}
+        >
+          <RankingPage />
         </div>
         <div
           className={`page${page === "playlists" ? " page-enter" : ""}${exiting === "playlists" ? " page-exit" : ""}`}

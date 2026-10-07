@@ -1011,3 +1011,187 @@
     height: 120px;
   }
 }
+
+/* ---- 排行榜页（rk-）：目录视图 + 榜单详情视图 ---- */
+/* 榜单卡 / 详情头 / 返回键 / 居中提示复用 sp-section-title、al-head、detail- 系列样式 */
+
+.rk-root {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+/* 目录 / 详情两视图显隐切换：目录隐藏时保留分组数据与滚动位置，详情按榜单 key 重挂载 */
+.rk-pane {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.rk-detail {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+
+/* 目录页头：与最近播放页头（rc-head）同一设计语言 */
+.rk-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 22px 8px;
+}
+.rk-head-text { min-width: 0; }
+.rk-title {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
+.rk-sub {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+/* 目录拉取失败的重试行：红字 + 重试，列表无数据时可整体保留旧分组 */
+.rk-error {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 22px 8px;
+  padding: 10px 14px;
+  background: var(--err-bg);
+  color: var(--err);
+  border-radius: 10px;
+  font-size: 13px;
+}
+.rk-error-msg {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.rk-retry {
+  flex: none;
+  border: 1px solid var(--err);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--err);
+  font-size: 12px;
+  padding: 4px 14px;
+  transition: background .15s;
+}
+.rk-retry:hover { background: #fff; }
+
+/* 目录纵向滚动容器；底部 96px 给播放条留位（与 sp-pane-scroll 同口径） */
+.rk-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 18px 96px;
+}
+
+/* 模块小节：标题复用搜索页的珊瑚短竖条设计语言 */
+.rk-section { margin-top: 14px; }
+.rk-section .sp-section-title { margin-bottom: 10px; }
+
+/* 组内榜单卡横向滚动：单行不换行，右端留收尾空隙（与 sp-hscroll 同口径） */
+.rk-bangs {
+  display: flex;
+  gap: 14px;
+  overflow-x: auto;
+  padding: 4px 2px 10px;
+}
+.rk-bangs > * { flex: none; }
+
+/* 榜单卡：120px 圆角封面 + 榜单名（两行省略）+ 更新串小字，hover 抬升（与专辑卡同一视觉语言） */
+.rk-bang-item {
+  width: 132px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 6px 8px;
+  border-radius: 10px;
+  cursor: pointer;
+  user-select: none;
+  transition: background .15s, transform .1s;
+}
+.rk-bang-item:hover { background: var(--coral-tint-soft); transform: translateY(-1px); }
+.rk-bang-item:active { transform: translateY(0); }
+.rk-bang-cover {
+  width: 120px;
+  height: 120px;
+  border-radius: 10px;
+  overflow: hidden;
+  background: linear-gradient(135deg, #fdeceb, #fbd3d0);
+  display: grid;
+  place-items: center;
+  box-shadow: var(--shadow-sm);
+}
+.rk-bang-cover img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.rk-bang-cover .note { color: var(--coral); font-size: 28px; opacity: .85; }
+.rk-bang-name {
+  font-size: 13px;
+  line-height: 1.35;
+  /* 两行省略：line-clamp 在 Chromium 系 webview（WebView2）下可用 */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+.rk-bang-item:hover .rk-bang-name { color: var(--coral); }
+.rk-bang-pub {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 目录加载骨架：标题条 + 卡片块占位，复用搜索骨架的渐变动画（sp-shimmer 全局 keyframes） */
+.rk-skel-title {
+  width: 128px;
+  height: 15px;
+  border-radius: 6px;
+  margin: 14px 2px 12px;
+}
+.rk-skel-card {
+  width: 132px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.rk-skel-cover {
+  width: 120px;
+  height: 120px;
+  border-radius: 10px;
+}
+.rk-skel-text {
+  width: 110px;
+  height: 12px;
+  border-radius: 6px;
+}
+.rk-skel-title,
+.rk-skel-cover,
+.rk-skel-text {
+  background: linear-gradient(90deg, #f1eaea 25%, #faf4f4 45%, #f1eaea 65%);
+  background-size: 200% 100%;
+  animation: sp-shimmer 1.2s ease-in-out infinite;
+}
+
+/* 详情歌曲列表容器：滚动在 SongList 内部（与专辑页 .al-songs 同口径） */
+.rk-songs {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  margin-top: 4px;
+}
