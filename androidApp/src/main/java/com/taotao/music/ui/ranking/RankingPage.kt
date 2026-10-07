@@ -48,6 +48,7 @@ import com.taotao.music.ui.artist.CatalogLoadMoreThreshold
 import com.taotao.music.ui.artist.CatalogPageBackdrop
 import com.taotao.music.ui.artist.CatalogPageStatus
 import com.taotao.music.ui.artist.CatalogTopBar
+import com.taotao.music.ui.artist.formatCatalogCount
 import com.taotao.music.ui.common.AlbumArt
 import com.taotao.music.ui.common.EmptyStateView
 import com.taotao.music.ui.common.SongListItem
