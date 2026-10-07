@@ -159,6 +159,12 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
         qualityStore = qualityStore,
         onMessage = { message = it },
     )
+    val rankingPage = RankingState(
+        scope = scope,
+        musicApi = musicApi,
+        qualityStore = qualityStore,
+        onMessage = { message = it },
+    )
 
     // ---- 外观与定时关闭 ----
     var appearance by mutableStateOf(appearanceStore.mode())
@@ -173,6 +179,8 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
     // MV 播放页盖在详情页之上；非空即显示。只从详情页的 MV 按钮进入。
     var mvSong by mutableStateOf<Song?>(null)
     var showSearchPage by mutableStateOf(false)
+    /** 排行榜整页开关；页内的目录 / 详情两视图由 rankingPage.selected 决定。 */
+    var showRankingPage by mutableStateOf(false)
     var showSettingsPage by mutableStateOf(false)
     var showSleepTimerDialog by mutableStateOf(false)
     var showProfilePage by mutableStateOf(false)
@@ -917,11 +925,27 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
         artistPage.close()
         albumPage.close()
         onlinePlaylistPage.close()
+        // 排行榜虽从首页进入，但不从属于任何底部标签 —— 它是全局叠放页，路由 when 链里
+        // 排在所有标签之前；换标签时若不收起，排行榜会继续抢走路由，
+        // 表现就是「点了底部标签却还停在排行榜」。
+        showRankingPage = false
+        rankingPage.close()
     }
 
     fun openSearchPage() {
         search.openPage()
         showSearchPage = true
+    }
+
+    /**
+     * 打开排行榜页。排行榜从首页（第 0 层）进入，是与搜索页同层的第 1 层下级页：
+     * 打开时回到目录视图并按需拉取榜单目录。榜单歌曲行菜单可以把歌手 / 专辑页
+     * 叠进来（层级更高，见 openArtistPageFromSong），这里刻意不收起它们 ——
+     * 关闭歌手 / 专辑页后自然落回排行榜详情，返回路径不需要额外的返回栈。
+     */
+    fun openRankingPage() {
+        rankingPage.openRankingPage()
+        showRankingPage = true
     }
 
     /**

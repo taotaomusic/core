@@ -1927,6 +1927,87 @@ class TencentMusicApi(
 
     private fun encode(value: String) = URLEncoder.encode(value, Charsets.UTF_8.name())
 
+    // ---------------------------------------------------------------------
+    // 排行榜（仅酷我源下发）
+    // ---------------------------------------------------------------------
+    //
+    // 两条路由都是普通 JSON 信封（{code, message, data}），与歌手 / 专辑目录同一套做法：
+    // 整个响应体一次读完，`authorized()` 的 401 重放只会产出一份完整结果。
+    // 服务端固定按酷我音源下发（?source=kuwo），客户端不再暴露音源选择。
+
+    /**
+     * 排行榜目录（`GET /api/v1/rankings`，仅酷我源下发）。
+     *
+     * 返回按模块分组的榜单列表（实测：置顶位 / 热力榜 / 全球榜 / 特色榜）；
+     * 每个榜单的 [RankingBrief.preview] 是 ≤5 首与 /search 歌曲行完全同构的预览行，
+     * 直接复用 [toSong] 解析（占位地址按默认音质生成，目录预览不用于播放）。
+     */
+    fun rankings(source: String = SEARCH_SOURCE_KUWO): List<RankingGroup> {
+        return authorized("/api/v1/rankings?source=${encode(source.ifBlank { SEARCH_SOURCE_KUWO })}") { connection ->
+            val root = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+            check(root.optInt("code") == 0) { root.optString("message", "无法获取排行榜") }
+            val groups = root.optJSONObject("data")?.optJSONArray("groups") ?: JSONArray()
+            (0 until groups.length()).mapNotNull { index ->
+                groups.optJSONObject(index)?.toRankingGroup()
+            }
+        }
+    }
+
+    /**
+     * 单个榜单的歌曲（`GET /api/v1/rankings/:id/songs`，仅酷我源下发）。
+     *
+     * 服务端固定返回约 20 首、**无分页**（meta.hasMore 恒 false），这里一次读完不做翻页；
+     * `ranking.total` 是写死的展示值（恒 100），调用方不能拿它做「共 N 首」或进度计算。
+     * 空榜单 songs=[] 属正常（部分歌手榜），由界面按空态处理。
+     * [quality] 语义与 [search] 相同：透传给服务端，歌曲解析出的占位播放地址按该档位生成。
+     * 错误契约：路径 id 非正整数 → 4001；不支持音源 → 4007；上游故障 → 502。
+     */
+    fun rankingSongs(id: Long, quality: Int = AudioQuality.Default.value): RankingDetail {
+        val rankingId = id.requireCatalogId("榜单")
+        return authorized("/api/v1/rankings/$rankingId/songs?quality=${quality.coerceIn(0, MAX_QUALITY)}&source=${encode(SEARCH_SOURCE_KUWO)}") { connection ->
+            val root = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+            check(root.optInt("code") == 0) { root.optString("message", "无法获取榜单歌曲") }
+            val data = root.optJSONObject("data") ?: JSONObject()
+            val ranking = data.optJSONObject("ranking") ?: JSONObject()
+            RankingDetail(
+                ranking = RankingInfo(
+                    id = ranking.optLong("id"),
+                    name = ranking.optString("name"),
+                    pic = ranking.optString("pic").ifBlank { null },
+                    pub = ranking.optString("pub"),
+                    total = ranking.optLong("total"),
+                ),
+                songs = (data.optJSONArray("songs") ?: JSONArray()).let { rows ->
+                    (0 until rows.length()).mapNotNull { index ->
+                        rows.optJSONObject(index)?.toSong(quality)
+                    }
+                },
+            )
+        }
+    }
+
+    /** 解析排行榜目录的一个模块分组。 */
+    private fun JSONObject.toRankingGroup(): RankingGroup = RankingGroup(
+        moduleName = optString("moduleName"),
+        bangs = (optJSONArray("bangs") ?: JSONArray()).let { rows ->
+            (0 until rows.length()).mapNotNull { index ->
+                rows.optJSONObject(index)?.let { bang ->
+                    RankingBrief(
+                        id = bang.optLong("id"),
+                        name = bang.optString("name"),
+                        pic = nullableString("pic") ?: bang.optString("pic").ifBlank { null },
+                        pubStr = bang.optString("pubStr"),
+                        preview = (bang.optJSONArray("preview") ?: JSONArray()).let { songs ->
+                            (0 until songs.length()).mapNotNull { songIndex ->
+                                songs.optJSONObject(songIndex)?.toSong(AudioQuality.Default.value)
+                            }
+                        },
+                    )
+                }
+            }
+        },
+    )
+
     companion object {
         /** 后端地址。热更新模块也要用，因此对包内公开，保持单一来源。 */
         const val ENDPOINT = "https://music.xydaigua.cn"
@@ -2253,6 +2334,43 @@ data class VideoSearchResult(
     /** 界面展示封面：优先 MV 自己的封面，缺失时回退歌曲封面（与桌面端同口径）。 */
     val displayCover: String? get() = mvCover ?: cover
 }
+
+/**
+ * 排行榜简述（`GET /api/v1/rankings` 的 bangs 条目，仅酷我源下发）。
+ * [preview] 是 ≤5 首与搜索歌曲行同构的预览（复用 [Song]），用于目录卡下方直接展示。
+ */
+data class RankingBrief(
+    val id: Long,
+    val name: String,
+    /** 封面地址；服务端已升级 https。可能为空。 */
+    val pic: String?,
+    /** 更新时间展示串（如「10-05更新」）。可能为空串。 */
+    val pubStr: String,
+    val preview: List<Song>,
+)
+
+/** 排行榜目录的一个模块分组（置顶位/热力榜/全球榜/特色榜…）。 */
+data class RankingGroup(
+    val moduleName: String,
+    val bangs: List<RankingBrief>,
+)
+
+/** 榜单详情头信息（`GET /api/v1/rankings/:id/songs` 的 data.ranking）。 */
+data class RankingInfo(
+    val id: Long,
+    val name: String,
+    val pic: String?,
+    /** 更新日期（如「2026-10-05」）。可能为空串。 */
+    val pub: String,
+    /** 上游写死的展示值（实测恒 100），**不是真实条数**，不能做进度计算。 */
+    val total: Long,
+)
+
+/** 榜单详情：榜单头信息 + 完整歌曲行（与 /search 的 song data 同构）。 */
+data class RankingDetail(
+    val ranking: RankingInfo,
+    val songs: List<Song>,
+)
 
 /**
  * 把视频条目折算成 MV 播放链路认识的 [Song] 句柄（详情页 `onOpenMv` 同款入口）。

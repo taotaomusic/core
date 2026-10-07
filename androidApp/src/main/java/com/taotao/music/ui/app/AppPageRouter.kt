@@ -37,6 +37,7 @@ import com.taotao.music.ui.artist.ArtistPage
 import com.taotao.music.ui.common.MusicSearchBar
 import com.taotao.music.ui.home.AnnouncementPreview
 import com.taotao.music.ui.home.HomeHeader
+import com.taotao.music.ui.home.RankingEntryRow
 import com.taotao.music.ui.home.RecommendationCard
 import com.taotao.music.ui.library.DiaryRecordsPage
 import com.taotao.music.ui.library.MineLibrarySection
@@ -51,6 +52,7 @@ import com.taotao.music.ui.playlist.OnlinePlaylistPage
 import com.taotao.music.ui.playlist.PlaylistDetailPage
 import com.taotao.music.ui.playlist.PlaylistEditorMode
 import com.taotao.music.ui.playlist.PlaylistLibraryPage
+import com.taotao.music.ui.ranking.RankingPage
 import com.taotao.music.ui.search.SearchPage
 import com.taotao.music.ui.settings.SettingsPage
 import com.taotao.music.ui.chat.ChatPageHost
@@ -70,12 +72,12 @@ import kotlinx.coroutines.withContext
  *
  * 详情页是最顶层页面：从日记页点迷你播放器要能盖在日记之上进入详情，
  * 所以它必须排在 song-diary 前面，否则 diarySong 非空时详情永远显示不出来。
- * 歌手 / 专辑 / 在线歌单主页是从搜索页进入的下级页：必须排在 search 之前，否则搜索标志
- * 仍然为真时永远显示搜索页（互跳时同一时刻只会保留一个目标，见
- * [TaotaoAppState.openArtistPage] 与 [TaotaoAppState.openOnlinePlaylistPage]）。
- * MV 播放页不是页面分支，而是盖在详情之上的
- * 独立浮层（见 [MvPlayerOverlay]）：从详情进出 MV 只动浮层本身，详情页保持在
- * 组合中原位不动，返回时不重播升起动画。
+ * 歌手 / 专辑 / 在线歌单主页是从搜索页或排行榜歌曲行菜单进入的下级页：必须排在
+ * search 之前，否则搜索标志仍然为真时永远显示宿主页（互跳时同一时刻只会保留一个
+ * 目标，见 [TaotaoAppState.openArtistPage] 与 [TaotaoAppState.openOnlinePlaylistPage]）。
+ * 排行榜从首页进入，是与 search 同层的第 1 层下级页，排在所有底部标签之前。
+ * MV 播放页不是页面分支，而是盖在详情之上的独立浮层（见 [MvPlayerOverlay]）：
+ * 从详情进出 MV 只动浮层本身，详情页保持在组合中原位不动，返回时不重播升起动画。
  */
 @Composable
 internal fun TaotaoAppPageRouter(
@@ -94,6 +96,10 @@ internal fun TaotaoAppPageRouter(
         state.artistPage.selected != null -> "artist"
         state.albumPage.selected != null -> "album"
         state.onlinePlaylistPage.selected != null -> "online-playlist"
+        // 排行榜从首页（第 0 层）进入，是与 search 同层的第 1 层下级页：宿主是 when 链
+        // 末尾的 home 分支，所以只需排在所有底部标签之前即可。榜单歌曲行还能把
+        // 歌手 / 专辑页叠进来，后两者的分支排在更上面先被截获。
+        state.showRankingPage -> "ranking"
         state.showSearchPage -> "search"
         state.mineLibrarySection == MineLibrarySection.FAVORITES -> "mine-favorites"
         state.mineLibrarySection == MineLibrarySection.HISTORY -> "mine-history"
@@ -129,11 +135,12 @@ internal fun TaotaoAppPageRouter(
         transitionSpec = { pageTransition(pageReduceMotion) },
         label = "页面切换",
     ) { page ->
-        // 日记两页与歌手 / 专辑 / 在线歌单主页要沉浸式绘制顶部珊瑚渐变（画到状态栏底下），
-        // 顶部内边距由页面自己用 statusBarsPadding 让开；其余页面维持 Scaffold 的
-        // 统一顶部内边距。MV 播放页已拆成独立浮层，不再走页面内边距。
+        // 日记两页与歌手 / 专辑、在线歌单、排行榜主页要沉浸式绘制顶部珊瑚渐变
+        // （画到状态栏底下），顶部内边距由页面自己用 statusBarsPadding 让开；
+        // 其余页面维持 Scaffold 的统一顶部内边距。MV 播放页已拆成独立浮层。
         val pagePadding = if (page == "song-diary" || page == "diary-records" ||
-            page == "artist" || page == "album" || page == "online-playlist"
+            page == "artist" || page == "album" || page == "online-playlist" ||
+            page == "ranking"
         ) {
             PaddingValues(bottom = innerPadding.calculateBottomPadding())
         } else {
@@ -152,6 +159,7 @@ internal fun TaotaoAppPageRouter(
                 )
                 "detail" -> if (state.playbackSongs.isNotEmpty()) PlayerDetailPageRoute(state)
                 "search" -> SearchPageRoute(state)
+                "ranking" -> RankingPageRoute(state)
                 "artist" -> state.artistPage.selected?.let { target ->
                     ArtistPageRoute(state, target)
                 }
@@ -324,7 +332,7 @@ private fun MvPlayerOverlay(state: TaotaoAppState) {
     }
 }
 
-/** 首页：问候、搜索入口、公告预览与推荐卡。 */
+/** 首页：问候、搜索入口、排行榜入口、公告预览与推荐卡。 */
 @Composable
 private fun HomePage(state: TaotaoAppState) {
     Column(Modifier.fillMaxSize().padding(horizontal = TaotaoSpacing.screenHorizontal)) {
@@ -350,6 +358,8 @@ private fun HomePage(state: TaotaoAppState) {
             style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.padding(top = TaotaoSpacing.xs),
         )
+        // 排行榜入口：放在搜索提示与公告卡之间，点击进排行榜目录（第 1 层下级页）。
+        RankingEntryRow(onOpenRankings = { state.openRankingPage() })
         if (state.announcements.isNotEmpty()) {
             AnnouncementPreview(state.announcements.first(), onClick = { state.showAnnouncementDialog = true })
         }
@@ -546,6 +556,45 @@ private fun SearchPageRoute(state: TaotaoAppState) {
         onOpenArtist = { song -> state.openArtistPageFromSong(song) },
         onOpenAlbum = { song -> state.openAlbumPageFromSong(song) },
         searchSession = state.search.generation,
+    )
+}
+
+/**
+ * 排行榜页装配：目录与详情两个视图共用一个页面状态，视图切换由 rankingPage.selected 决定。
+ * 点歌曲行以「整条榜单」为队列上下文播放（与搜索页点歌同一机制）；
+ * 歌曲行菜单的「查看歌手 / 查看专辑」复用从歌曲构造跳转目标的状态层逻辑，
+ * 打开时不收起排行榜 —— 歌手 / 专辑页层级更高，关闭后自然落回榜单详情。
+ */
+@Composable
+private fun RankingPageRoute(state: TaotaoAppState) {
+    RankingPage(
+        groups = state.rankingPage.groups,
+        catalogLoading = state.rankingPage.catalogLoading,
+        catalogError = state.rankingPage.catalogError,
+        selected = state.rankingPage.selected,
+        ranking = state.rankingPage.detail,
+        detailLoading = state.rankingPage.detailLoading,
+        detailError = state.rankingPage.detailError,
+        songs = state.rankingPage.songs,
+        // 读一下 revision 让收藏变化能触发重组：SharedPreferences 本身不可观察。
+        favoriteRevision = state.favoriteRevision,
+        downloadedRevision = state.downloadedSongs.size,
+        isFavorite = { song -> state.favoritesStore.contains(song) },
+        isDownloaded = { song -> song.remoteId != null && song.remoteId in state.downloadedIds },
+        onOpenDetail = { brief -> state.rankingPage.openRankingDetail(brief) },
+        onCloseDetail = { state.rankingPage.closeDetail() },
+        onClose = {
+            state.showRankingPage = false
+            state.rankingPage.close()
+        },
+        onRetryCatalog = { state.rankingPage.ensureCatalog() },
+        onRetryDetail = { state.rankingPage.retry() },
+        onSongClick = { index -> state.playSong(state.rankingPage.songs, index) },
+        onToggleFavorite = { song -> state.toggleFavorite(song) },
+        onPlayNext = { song -> state.playNext(song) },
+        onAddToPlaylist = { song -> state.playlist.requestAddSong(song) },
+        onOpenArtist = { song -> state.openArtistPageFromSong(song) },
+        onOpenAlbum = { song -> state.openAlbumPageFromSong(song) },
     )
 }
 

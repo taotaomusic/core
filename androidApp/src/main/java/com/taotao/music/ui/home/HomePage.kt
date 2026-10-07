@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Leaderboard
 import androidx.compose.material.icons.filled.NotificationsNone
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -50,6 +51,38 @@ internal fun HomeHeader(userName: String, onOpenAnnouncements: () -> Unit) {
 /** 只依赖设备本地时区，离线时也能给出符合当前时段的问候。 */
 internal fun timeGreeting(hour: Int = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)): String =
     GreetingFormatter.greetingForHour(hour)
+
+/**
+ * 首页功能入口行：目前只有「排行榜」一个入口。
+ *
+ * 视觉与公告预览条同一套语言（圆角容器 + 前置图标 + 尾部箭头），放在搜索提示文案
+ * 与公告卡之间 —— 它既不属于问候区也不属于推荐区，独立一行不破坏既有布局的纵向节奏；
+ * 后续若再加功能入口（如歌单广场），直接在这行里并列扩展即可。
+ */
+@Composable
+internal fun RankingEntryRow(onOpenRankings: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(top = TaotaoSpacing.sm)
+            .clip(TaotaoShapes.medium).background(MaterialTheme.colorScheme.surfaceVariant)
+            .clickable(onClick = onOpenRankings).padding(horizontal = TaotaoSpacing.sm, vertical = TaotaoSpacing.sm),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Default.Leaderboard, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(TaotaoSizes.iconMd))
+        Text(
+            "排行榜",
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.weight(1f).padding(start = TaotaoSpacing.xs),
+        )
+        Text(
+            "看看大家都在听什么",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.padding(end = TaotaoSpacing.xxs),
+        )
+        Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(TaotaoSizes.iconSm))
+    }
+}
 
 /** 首页只占一行展示最新或置顶公告，详情放进弹层，避免正文挤占搜索与推荐内容。 */
 @Composable
