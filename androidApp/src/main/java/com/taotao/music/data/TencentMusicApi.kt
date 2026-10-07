@@ -2002,8 +2002,12 @@ class TencentMusicApi(
     }
 
     /** 解析排行榜目录的一个模块分组。 */
-    private fun JSONObject.toRankingGroup(): RankingGroup = RankingGroup(
-        moduleName = optString("moduleName"),
+    private fun JSONObject.toRankingGroup(): RankingGroup {
+        // 先取局部变量：内层 RankingBrief 的 groupName 引用外层命名实参会被
+        // K2 判成 Unresolved（与形参同名的外层实参不可见，CI 踩过）。
+        val moduleName = optString("moduleName")
+        return RankingGroup(
+        moduleName = moduleName,
         bangs = (optJSONArray("bangs") ?: JSONArray()).let { rows ->
             (0 until rows.length()).mapNotNull { index ->
                 rows.optJSONObject(index)?.let { bang ->
