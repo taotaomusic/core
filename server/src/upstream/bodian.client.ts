@@ -189,6 +189,7 @@ export interface AlbumDetail {
  * App 侧点击行为是 C_LIST 进歌单详情页。
  */
 export interface RankingBrief {
+  /** 榜单 id；H5 榜单（external）没有数字 id，此处为 0，详情数据由目录自带。 */
   id: number;
   name: string;
   /** 封面绝对地址（映射处统一升级 https）。上游可能给空串。 */
@@ -197,6 +198,10 @@ export interface RankingBrief {
   pubStr: string;
   /** 前 5 首歌曲预览，与 /search 的 song data 同构。 */
   preview: Song[];
+  /** H5 榜单（腾讯音乐榜/巅峰潮流榜）：无数字 id、无详情端点，歌曲由目录自带。 */
+  external: boolean;
+  /** H5 榜单的完整榜单页面地址（仅记录，客户端暂不内嵌 webview）。 */
+  h5Url: string;
 }
 
 /** 排行榜目录的一个模块分组（置顶位/热力榜/全球榜/特色榜…）。 */
@@ -1469,10 +1474,12 @@ export class BodianClient {
    * 排行榜目录：`service/home/bangNew`，无业务参数。
    *
    * 返回 `data` 是**数组**（不是对象），每项 `{moduleName, bangList}`；`bangList` 条目
-   * 带 `{id, name, pic, pubStr, musics:[前5首歌曲预览]}`。**H5 榜单的 `id` 是
-   * undefined**（腾讯音乐榜/巅峰潮流榜），这些榜单点不进来，在这里整项跳过。
+   * 带 `{id, name, pic, pubStr, musics:[前5首歌曲预览]}`。**H5 榜单（腾讯音乐榜/
+   * 巅峰潮流榜，bangType=qq）没有数字 id**，但目录响应里自带完整歌曲（实测各 2 首），
+   * 标记 `external: true` 下发，客户端直接用预览进详情、不发详情请求。
    * 实测模块：置顶位（16 热歌榜/17 新歌榜）、热力榜（22/184/93/104）、
-   * 全球榜（265/335/12/13/246）、特色榜（187/154/158/284/278/290/26/164/180）。
+   * 全球榜（265/335/12/13/246）、特色榜（187/154/158/284/278/290/26/164/180）、
+   * H5 榜单（腾讯音乐榜/巅峰潮流榜）。
    */
   async getRankingGroups(): Promise<RankingGroup[] | null> {
     const d = await this.signedGet(`${BASE_URL}service/home/bangNew`);
@@ -1482,11 +1489,15 @@ export class BodianClient {
       const moduleName = String(group?.moduleName ?? "");
       const bangs: RankingBrief[] = [];
       for (const bang of group?.bangList ?? []) {
+        // H5 榜单（腾讯音乐榜/巅峰潮流榜，bangType=qq）没有数字 id、详情端点无法
+        // 寻址，但目录响应里自带完整歌曲列表（实测各 2 首）——标记 external 下发，
+        // 客户端直接用目录里的歌曲进详情，不发详情请求。
         const id = Number(bang?.id);
-        // H5 榜单没有数字 id，详情端点无法寻址，整项跳过。
-        if (!Number.isInteger(id) || id <= 0) continue;
+        const external = !Number.isInteger(id) || id <= 0;
         bangs.push({
-          id,
+          id: external ? 0 : id,
+          external,
+          h5Url: external ? String(bang?.h5Url ?? "") : "",
           name: String(bang?.name ?? ""),
           pic: this.httpsImage(bang?.pic),
           pubStr: String(bang?.pubStr ?? ""),

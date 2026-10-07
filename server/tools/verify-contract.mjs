@@ -2856,18 +2856,26 @@ async function main() {
   })).json();
   const rankingGroupList = rankingGroups.data?.groups ?? [];
   check(
-    "排行榜目录返回模块分组且每组榜单带正数 id 与预览行",
+    "排行榜目录返回模块分组且榜单行符合契约（普通榜 id 正数 / H5 榜 external=true 且 id=0）",
     rankingGroups.code === 0
       && Array.isArray(rankingGroupList) && rankingGroupList.length > 0
       && rankingGroupList.every((group) => typeof group?.moduleName === "string"
         && Array.isArray(group?.bangs) && group.bangs.length > 0
-        && group.bangs.every((bang) => typeof bang?.id === "number" && bang.id > 0
+        && group.bangs.every((bang) => typeof bang?.id === "number" && bang.id >= 0
           && typeof bang?.name === "string" && bang.name.length > 0
           && typeof bang?.pic === "string" && (!bang.pic || bang.pic.startsWith("https://"))
+          && typeof bang?.external === "boolean"
+          && (bang.external ? bang.id === 0 && typeof bang?.h5Url === "string" && bang.h5Url.startsWith("https://") : bang.id > 0)
           && Array.isArray(bang?.preview) && bang.preview.length > 0 && bang.preview.length <= 5
           && bang.preview.every((song) => typeof song?.id === "number" && song.id > 0
             && typeof song?.title === "string" && song.source === "kuwo"))),
     JSON.stringify(rankingGroupList[0]).slice(0, 220),
+  );
+  const h5Bangs = rankingGroupList.flatMap((group) => group.bangs ?? []).filter((bang) => bang.external);
+  check(
+    "H5 榜单（腾讯音乐榜/巅峰潮流榜）出现在目录且 external 榜单 ≥ 2 个",
+    h5Bangs.length >= 2 && h5Bangs.every((bang) => bang.name.length > 0),
+    JSON.stringify(h5Bangs.map((bang) => bang.name)).slice(0, 160),
   );
   const rankingSongs = await (await fetch(`${base}/api/v1/rankings/16/songs?page=1&num=30&quality=10&source=kuwo`, {
     headers: { authorization: `Bearer ${token}` },

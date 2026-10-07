@@ -239,10 +239,12 @@ private fun RankingCard(brief: RankingBrief, onOpen: () -> Unit) {
             .padding(TaotaoSpacing.sm),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        // 封面图源：上游 pic 多为多榜单共用的运营占位图（2026-10-07 反馈「图源不对」），
+        // 以第 1 名歌曲的专辑封面优先（每榜不同、语义正确），占位 pic 兜底。
         AlbumArt(
             color = TaotaoColors.placeholderArtwork,
             size = RankingCardCoverSize,
-            imageUri = brief.pic,
+            imageUri = brief.preview.firstOrNull()?.coverUri ?: brief.pic,
             shape = TaotaoShapes.small,
         )
         Column(Modifier.weight(1f).padding(start = TaotaoSpacing.sm)) {
@@ -324,7 +326,7 @@ private fun RankingDetailView(
         verticalArrangement = Arrangement.spacedBy(TaotaoSpacing.xs),
     ) {
         item(key = "ranking-header") {
-            RankingDetailHeader(brief = brief, detail = detail, songsTotal = songsTotal)
+            RankingDetailHeader(brief = brief, detail = detail, songs = songs, songsTotal = songsTotal)
         }
         // 「全部播放」：从第 1 名起整榜入队（等价点击第 1 行）；有歌才可用。
         if (songs.isNotEmpty()) {
@@ -513,9 +515,14 @@ private val RankingBronze = Color(0xFFC88250)
  * 「10-05 更新」一种形态，避免出现「10-05更新更新」。
  */
 @Composable
-private fun RankingDetailHeader(brief: RankingBrief, detail: RankingInfo?, songsTotal: Long) {
+private fun RankingDetailHeader(brief: RankingBrief, detail: RankingInfo?, songs: List<Song>, songsTotal: Long) {
     val name = detail?.name?.takeIf { it.isNotBlank() } ?: brief.name
-    val pic = detail?.pic ?: brief.pic
+    // 封面图源同目录卡：第 1 名歌曲专辑封面优先（详情未到时用目录 preview 的第 1 名），
+    // 上游 pic 是多榜单共用的运营占位图，仅作最后兜底。
+    val pic = songs.firstOrNull()?.coverUri
+        ?: brief.preview.firstOrNull()?.coverUri
+        ?: detail?.pic
+        ?: brief.pic
     val pub = detail?.pub?.takeIf { it.isNotBlank() } ?: brief.pubStr
     Row(
         Modifier.fillMaxWidth().padding(top = TaotaoSpacing.xs),

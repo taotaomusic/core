@@ -141,6 +141,7 @@ export interface UpstreamAlbumDetail {
 
 /** 排行榜简述（`/api/v1/rankings` 的 bangs 条目，去掉 source）。命名约定同 [UpstreamArtist]。 */
 export interface UpstreamRankingBrief {
+  /** 榜单 id；H5 榜单（external）没有数字 id，此处为 0，详情数据由目录自带。 */
   id: number;
   name: string;
   /** 封面绝对地址（协议层已 httpsImage 升级）。上游可能给空串。 */
@@ -149,6 +150,10 @@ export interface UpstreamRankingBrief {
   pubStr: string;
   /** 前 5 首歌曲预览，与 /search 的 song data 同构（去掉 source）。 */
   preview: UpstreamSong[];
+  /** H5 榜单（腾讯音乐榜/巅峰潮流榜）：无数字 id、无详情端点，歌曲由目录自带。 */
+  external: boolean;
+  /** H5 榜单的完整榜单页面地址（仅记录，客户端暂不内嵌 webview）。 */
+  h5Url: string;
 }
 
 /** 排行榜目录的一个模块分组（置顶位/热力榜/全球榜/特色榜…）。 */

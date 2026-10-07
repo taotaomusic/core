@@ -2012,6 +2012,8 @@ class TencentMusicApi(
                         name = bang.optString("name"),
                         pic = nullableString("pic") ?: bang.optString("pic").ifBlank { null },
                         pubStr = bang.optString("pubStr"),
+                        external = bang.optString("bangType") == "qq" || !bang.has("id") || bang.isNull("id"),
+                        h5Url = bang.optString("h5Url"),
                         preview = (bang.optJSONArray("preview") ?: JSONArray()).let { songs ->
                             (0 until songs.length()).mapNotNull { songIndex ->
                                 songs.optJSONObject(songIndex)?.toSong(AudioQuality.Default.value)
@@ -2358,13 +2360,22 @@ data class VideoSearchResult(
  * [preview] 是 ≤5 首与搜索歌曲行同构的预览（复用 [Song]），用于目录卡下方直接展示。
  */
 data class RankingBrief(
+    /**
+     * 榜单 id。H5 榜单（腾讯音乐榜/巅峰潮流榜，[external]）没有数字 id，此处为 0 ——
+     * 详情数据由目录的 [preview] 自带（上游各 2 首），不发起详情请求。
+     */
     val id: Long,
     val name: String,
-    /** 封面地址；服务端已升级 https。可能为空。 */
+    /** 封面地址；服务端已升级 https。**上游多为多榜单共用的运营占位图**，
+     * 展示时以第 1 名歌曲的专辑封面优先（见 RankingCard / 详情头部）。可能为空。 */
     val pic: String?,
     /** 更新时间展示串（如「10-05更新」）。可能为空串。 */
     val pubStr: String,
     val preview: List<Song>,
+    /** H5 榜单标记：true 表示无详情端点，歌曲由 [preview] 自带。 */
+    val external: Boolean = false,
+    /** H5 榜单的完整榜单页面地址（仅记录，客户端暂不内嵌 webview）。 */
+    val h5Url: String = "",
 )
 
 /** 排行榜目录的一个模块分组（置顶位/热力榜/全球榜/特色榜…）。 */

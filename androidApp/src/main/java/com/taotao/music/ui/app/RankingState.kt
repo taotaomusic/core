@@ -129,6 +129,16 @@ internal class RankingState(
         selected = brief
         detail = null
         resetSongsForReload()
+        // H5 榜单（腾讯音乐榜/巅峰潮流榜）没有详情端点：目录响应里自带的 preview
+        // 就是它的全部歌曲（上游各 2 首），直接装载进列表、不发详情请求。
+        if (brief.external || brief.id <= 0L) {
+            songs = dedupeSongs(brief.preview)
+            songsPage = 1
+            songsHasMore = false
+            songsTotal = brief.preview.size.toLong()
+            songsLoading = false
+            return
+        }
         scope.launch {
             val result = runCatching {
                 withContext(Dispatchers.IO) {
