@@ -17,6 +17,8 @@ export type UpstreamSong = {
    */
   artistId?: number;
   albumId?: number;
+  /** 榜单内排名（仅巅峰潮流榜下发，1 基）；非榜单场景缺席。 */
+  rank?: number;
   subtitle?: string;
   time?: string;
   interval?: number;
@@ -90,6 +92,8 @@ export type UpstreamSongInfo = {
    */
   artistId?: number;
   albumId?: number;
+  /** 榜单内排名（仅巅峰潮流榜下发，1 基）；非榜单场景缺席。 */
+  rank?: number;
 };
 
 /**

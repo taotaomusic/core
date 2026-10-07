@@ -20,6 +20,8 @@ import { kpkSign } from "./kpk.util";
 /** 搜索结果里的一首歌。字段来自 `search/music/list` 的 resultList 条目。 */
 export interface Song {
   id: number;
+  /** 榜单内的排名（仅巅峰潮流榜下发，1 基）；非榜单场景缺席。 */
+  rank?: number;
   name: string;
   artist: string;
   album: string;
@@ -1539,6 +1541,48 @@ export class BodianClient {
         total: Number(info.total) || 0,
       },
       songs: (Array.isArray(info.musics) ? info.musics : []).map((s: any) => this.toDetailSong(s)),
+    };
+  }
+
+  /**
+   * 巅峰潮流榜（bangType=qq 的 external 榜）：`service/bang/popular/day`。
+   *
+   * App 里这个榜的原生处理是内嵌网页（点击分派 jumpToCommonWebPage(h5Url)），
+   * 但接口本身是干净的 JSON：`topInfo.songs` 全量下发（实测 300 首），每条自带
+   * `rank` 排名与 `kwSongID`（酷我 id，可走现有播放链路）。
+   * 上游偶发返回空 topInfo（同参数连续重放 300 首/空交替，实测）——最多重试一次。
+   * 取不到（code!=200 或两次皆空）返回 null。
+   */
+  async getPopularRanking(): Promise<{ ranking: { id: number; name: string; pic: string; pub: string; total: number }; songs: Song[] } | null> {
+    let d: any = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 600));
+      d = await this.signedGet(`${BASE_URL}service/bang/popular/day`);
+      if (Number(d.code) === 200 && Array.isArray(d.data?.topInfo?.songs) && d.data.topInfo.songs.length > 0) break;
+      d = null;
+    }
+    if (!d) return null;
+    const info = d.data;
+    const top = info.topInfo ?? {};
+    const songs: Song[] = (Array.isArray(top.songs) ? top.songs : []).map((s: any) => ({
+      id: Number(s.kwSongID) || 0,
+      name: String(s.kwSongName ?? s.songName ?? ""),
+      artist: (Array.isArray(s.kwSingers) ? s.kwSingers : []).map((a: any) => String(a?.name ?? "")).filter(Boolean).join(","),
+      album: "",
+      cover: this.httpsImage(s.kwCover ?? s.cover ?? ""),
+      durationSeconds: 0,
+      rank: Number(s.rank) || undefined,
+      playable: this.hasCredentials() || true,
+    }));
+    return {
+      ranking: {
+        id: 0,
+        name: String(top.name ?? "巅峰潮流榜"),
+        pic: this.httpsImage(top.cover ?? ""),
+        pub: String(top.updateText ?? ""),
+        total: Number(top.totalNum) || songs.length,
+      },
+      songs,
     };
   }
 

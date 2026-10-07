@@ -2916,6 +2916,28 @@ async function main() {
     rankingBadId.status === 400 && rankingBadIdBody.code === 4001,
     `${rankingBadId.status} ${JSON.stringify(rankingBadIdBody).slice(0, 160)}`,
   );
+  const popularDay = await (await fetch(`${base}/api/v1/rankings/external/popular-day?quality=10&source=kuwo`, {
+    headers: { authorization: `Bearer ${token}` },
+  })).json();
+  check(
+    "巅峰潮流榜（external）返回 300 首且每行带 rank 排名",
+    popularDay.code === 0
+      && typeof popularDay.data?.ranking?.name === "string" && popularDay.data.ranking.name.length > 0
+      && Array.isArray(popularDay.data.songs) && popularDay.data.songs.length >= 250
+      && popularDay.data.songs.every((song, idx) => typeof song?.id === "number" && song.id > 0
+        && typeof song?.title === "string" && song.source === "kuwo"
+        && song?.rank === idx + 1),
+    `条数 ${popularDay.data?.songs?.length} | ${JSON.stringify(popularDay.data?.songs?.[0]).slice(0, 200)}`,
+  );
+  const popularBadKey = await fetch(`${base}/api/v1/rankings/external/unknown?source=kuwo`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  const popularBadKeyBody = await popularBadKey.json();
+  check(
+    "external 未知 key 被拒 400 且 code 4001",
+    popularBadKey.status === 400 && popularBadKeyBody.code === 4001,
+    `${popularBadKey.status} ${JSON.stringify(popularBadKeyBody).slice(0, 160)}`,
+  );
 
   // ---------- 分享链路的高潮区间透传 ----------
   //

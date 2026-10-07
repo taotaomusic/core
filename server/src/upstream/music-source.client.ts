@@ -281,6 +281,8 @@ export type UpstreamSongWithExtras = UpstreamSong & {
   vid?: number;
   /** MV 元数据，来自上游 `mv` 子对象（App 侧取 name/pic/duration）。 */
   mv?: { name: string; pic: string; duration: number };
+  /** 榜单内排名（仅巅峰潮流榜下发，1 基）；非榜单场景缺席。 */
+  rank?: number;
   /** 歌词搜索条目的纯文本歌词摘要（上游 `lyric` 字段），可能为空串。 */
   lyricSnippet?: string;
 };
@@ -477,6 +479,12 @@ export interface MusicSourceClient {
    * 上限 100。`total` 是真实条数（主流榜单恒 100）。取不到时返回 `null`。
    */
   getRankingSongs?(id: number, page: number, limit: number): Promise<UpstreamRankingDetail | null>;
+
+  /**
+   * 巅峰潮流榜（external 的 qq 榜之一）：`service/bang/popular/day`，歌曲行带
+   * rank 排名。取不到时返回 `null`。
+   */
+  getPopularRanking?(): Promise<UpstreamRankingDetail | null>;
 
   /** 单曲信息与**真实可用**的音质档位。 */
   requestSongInfo(key: SongKey): Promise<UpstreamSongInfo>;

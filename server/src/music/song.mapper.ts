@@ -39,6 +39,8 @@ export type Song = {
   artistId?: number;
   /** 上游的专辑 ID。语义与 [artistId] 相同，对应「查看专辑」入口。 */
   albumId?: number;
+  /** 榜单内排名（仅巅峰潮流榜下发，1 基）；非榜单场景缺席。 */
+  rank?: number;
   /** 是否为付费/VIP 歌曲。搜索结果里本来就有 `pay` 字段，之前一直没读。 */
   vip: boolean;
   /**
@@ -129,6 +131,8 @@ export class SongMapper {
       // 丢弃 undefined 键，所以「没有」的形态就是整个键缺席，绝不发 0 / null。
       artistId: item.artistId || undefined,
       albumId: item.albumId || undefined,
+      // 榜单排名（仅巅峰潮流榜下发）；非榜单场景整键缺席。
+      rank: item.rank || undefined,
       vip: (item.pay ?? "").includes("付费"),
       // 只有酷我会判断；`undefined`（QQ 音乐 / 网易云）按可播处理。
       playable: item.playable !== false,

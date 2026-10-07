@@ -818,6 +818,14 @@ export class KuwoClient implements MusicSourceClient, MusicSourceCredentialManag
     return { ranking: detail.ranking, songs: detail.songs.map((song) => this.toUpstreamSong(song)) };
   }
 
+  /** 巅峰潮流榜（external qq 榜之一）：条目已是播放链路可直接用的形状，rank 保留。 */
+  async getPopularRanking(): Promise<UpstreamRankingDetail | null> {
+    const client = await this.clientOf();
+    const detail = await client.getPopularRanking();
+    if (!detail) return null;
+    return { ranking: detail.ranking, songs: detail.songs.map((song) => this.toUpstreamSong(song)) };
+  }
+
   /** 官方目录的 size 可能是字节数，也可能是 `9.94Mb` 这类显示字符串。 */
   private audioSizeBytes(value: unknown): number {
     if (typeof value === "number" && Number.isFinite(value) && value > 0) return Math.round(value);
@@ -871,6 +879,7 @@ export class KuwoClient implements MusicSourceClient, MusicSourceCredentialManag
       // 否则 SongMapper 拿不到、/search 的 song 行就整键缺席（2026-10-04 实测踩过）。
       artistId: song.artistId,
       albumId: song.albumId,
+      rank: song.rank,
       pay: "",
       // `undefined` 按可播处理，只有明确为 false 才置灰 —— 判据见 [searchSongs]。
       playable: song.playable !== false,

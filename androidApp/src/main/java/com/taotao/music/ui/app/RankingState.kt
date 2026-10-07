@@ -57,6 +57,8 @@ internal class RankingState(
 
     /** 当前打开的榜单；null 表示在目录视图。详情到达前头部先用它兜底渲染。 */
     var selected by mutableStateOf<RankingBrief?>(null)
+    /** H5 榜单（external）的 webview 加载地址；非空即显示 webview 视图。 */
+    var webUrl by mutableStateOf<String?>(null)
     /** 榜单详情头资料；到达前头部用 [selected]，到达后以它为准（封面 / 日期可能被运营更新）。 */
     var detail by mutableStateOf<RankingInfo?>(null)
 
@@ -129,13 +131,11 @@ internal class RankingState(
         selected = brief
         detail = null
         resetSongsForReload()
-        // H5 榜单（腾讯音乐榜/巅峰潮流榜）没有详情端点：目录响应里自带的 preview
-        // 就是它的全部歌曲（上游各 2 首），直接装载进列表、不发详情请求。
+        // H5 榜单（腾讯音乐榜/巅峰潮流榜，external）没有原生详情：上游无歌曲列表接口
+        //（App 侧点击跳 webview 打开 h5Url，service/bang/null/musics 实测 400）。
+        // 视图层据 [selected.external] 显示 webview 加载 [RankingBrief.h5Url]。
         if (brief.external || brief.id <= 0L) {
-            songs = dedupeSongs(brief.preview)
-            songsPage = 1
-            songsHasMore = false
-            songsTotal = brief.preview.size.toLong()
+            webUrl = brief.h5Url.ifBlank { null }
             songsLoading = false
             return
         }
@@ -208,6 +208,7 @@ internal class RankingState(
         epoch += 1
         selected = null
         detail = null
+        webUrl = null
         clearSongs()
     }
 
@@ -216,6 +217,7 @@ internal class RankingState(
         epoch += 1
         selected = null
         detail = null
+        webUrl = null
         clearSongs()
         groups = emptyList()
         catalogLoading = false

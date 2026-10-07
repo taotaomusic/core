@@ -458,6 +458,50 @@ export class MusicController {
   }
 
   /**
+   * external 榜单详情（无数字 id 的 qq 榜）：当前只有「巅峰潮流榜」（popular-day /
+   * popular-week，接口即上游 `service/bang/popular/*`）。歌曲行自带 rank 排名，
+   * 其余与 `/rankings/:id/songs` 同构。
+   */
+  @Get("rankings/external/:key")
+  async externalRanking(
+    @Req() request: Request,
+    @CurrentUser() user: SessionUser,
+    @Param("key") key?: string,
+    @Query("quality") quality?: string,
+    @Query("source") source?: string,
+  ) {
+    const selectedSource = this.detailSourceOf(source);
+    const client = this.registry.of(selectedSource);
+    if (!client.getPopularRanking) {
+      throw ApiErrors.badRequest(4007, `${client.displayName}不支持该榜单`);
+    }
+    switch (key) {
+      case "popular-day": {
+        const detail = await client.getPopularRanking();
+        if (!detail) throw ApiErrors.upstream("榜单不可用");
+        return {
+          ranking: { ...detail.ranking, source: selectedSource },
+          songs: await this.toClientSongs(
+            request,
+            user,
+            selectedSource,
+            detail.songs,
+            this.mapper.qualityOf(quality),
+          ),
+          meta: {
+            page: 1,
+            num: detail.songs.length,
+            total: detail.songs.length,
+            hasMore: false,
+          },
+        };
+      }
+      default:
+        throw ApiErrors.badRequest(4001, `未知的外部榜单：${key ?? ""}`);
+    }
+  }
+
+  /**
    * 榜单歌曲（分页）。上游榜单详情族 `pn` 1 基直传、`rn` 实测上限 100 —— 本路由
    * 用独立常量放宽（通用 `MAX_PAGE_SIZE`=60 不够覆盖整榜单页）。`total` 是真实
    * 条数（主流榜单恒 100），`hasMore = page * num < total`。
