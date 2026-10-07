@@ -191,6 +191,9 @@ export interface AlbumDetail {
 export interface RankingBrief {
   /** 榜单 id；H5 榜单（external）没有数字 id，此处为 0，详情数据由目录自带。 */
   id: number;
+  /** 所属模块分组名（置顶位/热力榜/全球榜/特色榜/H5榜单）。客户端封面策略按它分派：
+   *  「全球榜」的 pic 是各榜专属 logo 封面（可直接用），其余模块的 pic 多为共用占位图。 */
+  groupName: string;
   name: string;
   /** 封面绝对地址（映射处统一升级 https）。上游可能给空串。 */
   pic: string;
@@ -1491,10 +1494,11 @@ export class BodianClient {
       for (const bang of group?.bangList ?? []) {
         // H5 榜单（腾讯音乐榜/巅峰潮流榜，bangType=qq）没有数字 id、详情端点无法
         // 寻址，但目录响应里自带完整歌曲列表（实测各 2 首）——标记 external 下发，
-        // 客户端直接用目录里的歌曲进详情，不发详情请求。
+        // 客户端直接用目录里的歌曲进详情，不发详情请求（App 侧同场景跳 webview）。
         const id = Number(bang?.id);
         const external = !Number.isInteger(id) || id <= 0;
         bangs.push({
+          groupName: moduleName,
           id: external ? 0 : id,
           external,
           h5Url: external ? String(bang?.h5Url ?? "") : "",

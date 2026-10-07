@@ -239,12 +239,10 @@ private fun RankingCard(brief: RankingBrief, onOpen: () -> Unit) {
             .padding(TaotaoSpacing.sm),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // 封面图源：上游 pic 多为多榜单共用的运营占位图（2026-10-07 反馈「图源不对」），
-        // 以第 1 名歌曲的专辑封面优先（每榜不同、语义正确），占位 pic 兜底。
         AlbumArt(
             color = TaotaoColors.placeholderArtwork,
             size = RankingCardCoverSize,
-            imageUri = brief.preview.firstOrNull()?.coverUri ?: brief.pic,
+            imageUri = rankingCover(brief, brief.preview.firstOrNull()?.coverUri),
             shape = TaotaoShapes.small,
         )
         Column(Modifier.weight(1f).padding(start = TaotaoSpacing.sm)) {
@@ -508,6 +506,21 @@ private val RankingSilver = Color(0xFF9AA3AD)
 private val RankingBronze = Color(0xFFC88250)
 
 /**
+ * 榜单封面取图策略（2026-10-07 按波点 App 行为对齐，用户确认）：
+ *
+ * - **全球榜**模块（GENIE/Melon/Billboard/UK/油管）的 `pic` 是各榜专属 logo 封面，
+ *   目录卡与详情头部都用它；
+ * - **其余模块**（置顶位/热力榜/特色榜/H5）的 `pic` 大多为多榜单共用的运营占位图
+ *   （实测热力榜+特色榜 12 榜共用一张），封面用**第 1 名歌曲的专辑封面**
+ *   （详情已加载用 songs[0]，未加载用目录 preview[0]），占位 pic 仅作兜底；
+ * - H5 榜（external）上游只给 2 首，封面同样取第 1 名专辑封面。
+ */
+private fun rankingCover(brief: RankingBrief, firstSongCover: String?): String? {
+    if (brief.groupName == "全球榜" && !brief.pic.isNullOrBlank()) return brief.pic
+    return firstSongCover ?: brief.pic
+}
+
+/**
  * 榜单详情头部：封面 + 榜单名 + 更新日期。
  *
  * [detail] 未到达时用 [brief]（目录卡点击时已有的最小资料）渲染；到达后以详情为准。
@@ -517,12 +530,9 @@ private val RankingBronze = Color(0xFFC88250)
 @Composable
 private fun RankingDetailHeader(brief: RankingBrief, detail: RankingInfo?, songs: List<Song>, songsTotal: Long) {
     val name = detail?.name?.takeIf { it.isNotBlank() } ?: brief.name
-    // 封面图源同目录卡：第 1 名歌曲专辑封面优先（详情未到时用目录 preview 的第 1 名），
-    // 上游 pic 是多榜单共用的运营占位图，仅作最后兜底。
-    val pic = songs.firstOrNull()?.coverUri
-        ?: brief.preview.firstOrNull()?.coverUri
-        ?: detail?.pic
-        ?: brief.pic
+    // 封面图源走统一策略（见 [rankingCover]）：详情已加载优先 songs[0]，
+    // 未加载回退目录 preview[0]，全球榜固定用 pic。
+    val pic = rankingCover(brief, songs.firstOrNull()?.coverUri ?: brief.preview.firstOrNull()?.coverUri)
     val pub = detail?.pub?.takeIf { it.isNotBlank() } ?: brief.pubStr
     Row(
         Modifier.fillMaxWidth().padding(top = TaotaoSpacing.xs),

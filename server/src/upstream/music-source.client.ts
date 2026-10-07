@@ -143,6 +143,8 @@ export interface UpstreamAlbumDetail {
 export interface UpstreamRankingBrief {
   /** 榜单 id；H5 榜单（external）没有数字 id，此处为 0，详情数据由目录自带。 */
   id: number;
+  /** 所属模块分组名。客户端封面策略按它分派：「全球榜」pic 是专属 logo 封面。 */
+  groupName: string;
   name: string;
   /** 封面绝对地址（协议层已 httpsImage 升级）。上游可能给空串。 */
   pic: string;

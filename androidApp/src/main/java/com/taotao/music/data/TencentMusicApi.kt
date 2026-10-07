@@ -2009,6 +2009,7 @@ class TencentMusicApi(
                 rows.optJSONObject(index)?.let { bang ->
                     RankingBrief(
                         id = bang.optLong("id"),
+                        groupName = moduleName,
                         name = bang.optString("name"),
                         pic = nullableString("pic") ?: bang.optString("pic").ifBlank { null },
                         pubStr = bang.optString("pubStr"),
@@ -2365,6 +2366,9 @@ data class RankingBrief(
      * 详情数据由目录的 [preview] 自带（上游各 2 首），不发起详情请求。
      */
     val id: Long,
+    /** 所属模块分组名（置顶位/热力榜/全球榜/特色榜/H5榜单）。封面策略按它分派：
+     *  「全球榜」的 [pic] 是各榜专属 logo 封面可直接用，其余模块的 pic 是共用占位图。 */
+    val groupName: String,
     val name: String,
     /** 封面地址；服务端已升级 https。**上游多为多榜单共用的运营占位图**，
      * 展示时以第 1 名歌曲的专辑封面优先（见 RankingCard / 详情头部）。可能为空。 */
