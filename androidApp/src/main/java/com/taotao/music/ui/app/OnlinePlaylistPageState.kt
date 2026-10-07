@@ -198,7 +198,6 @@ private fun PlaylistSearchResult.toOpenTarget(): OnlinePlaylistDetail = OnlinePl
     playCount = playCount,
     trackCount = trackCount,
     collectedCount = 0L,
-    createTime = "",
     creatorId = 0L,
     creatorName = creator,
     creatorIcon = null,

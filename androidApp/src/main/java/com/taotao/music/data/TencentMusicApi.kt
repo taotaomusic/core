@@ -675,7 +675,6 @@ class TencentMusicApi(
         playCount = optLong("playCount"),
         trackCount = optLong("trackCount"),
         collectedCount = optLong("collectedCount"),
-        createTime = optString("createTime"),
         creatorId = optLong("creatorId"),
         creatorName = optString("creatorName"),
         creatorIcon = nullableString("creatorIcon"),
@@ -2365,8 +2364,6 @@ data class OnlinePlaylistDetail(
     val trackCount: Long,
     /** 歌单被收藏次数；数字过万由界面用 formatCatalogCount 缩写。 */
     val collectedCount: Long,
-    /** 创建时间（上游展示串）；可能为空串，由界面决定是否展示。 */
-    val createTime: String,
     /** 创建者的音源内用户 ID；当前界面不用于跳转，仅随详情下发。 */
     val creatorId: Long,
     /** 创建者昵称（服务端直接下发展示串）。 */

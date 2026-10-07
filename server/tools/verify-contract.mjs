@@ -2623,7 +2623,6 @@ async function main() {
       && typeof onlinePlaylistDetail.data.playlist.playCount === "number" && onlinePlaylistDetail.data.playlist.playCount > 0
       && typeof onlinePlaylistDetail.data.playlist.trackCount === "number" && onlinePlaylistDetail.data.playlist.trackCount > 0
       && typeof onlinePlaylistDetail.data.playlist.collectedCount === "number"
-      && typeof onlinePlaylistDetail.data.playlist.createTime === "string"
       && typeof onlinePlaylistDetail.data.playlist.creatorId === "number"
       && typeof onlinePlaylistDetail.data.playlist.creatorName === "string" && onlinePlaylistDetail.data.playlist.creatorName.length > 0
       && typeof onlinePlaylistDetail.data.playlist.creatorIcon === "string" && (onlinePlaylistDetail.data.playlist.creatorIcon === "" || onlinePlaylistDetail.data.playlist.creatorIcon.startsWith("https://"))

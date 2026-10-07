@@ -197,8 +197,7 @@ export interface UpstreamSearchPlaylist {
  * 字段名就是**下发契约名** —— 上游的 `playnum` / `musicCount` / `collectedCnt`
  * 必须在适配器里就地改成 `playCount` / `trackCount` / `collectedCount`，出流后
  * 不再有第二层改名。与搜索行 [UpstreamSearchPlaylist] 的关键差别：详情保留长简介
- * `description`、创建者信息与 `createTime` / `isPrivate` —— 歌单详情页要整段展示
- * 简介与创建者行。上游的 `isFond`（对 App 当前用户的收藏态，服务端匿名态恒无意义）
+ * `description` 与创建者信息 —— 歌单详情页要整段展示简介与创建者行。上游的 `isFond`（对 App 当前用户的收藏态，服务端匿名态恒无意义）
  * 与 `traceId` 是用户/链路维度内容，不透传。
  */
 export interface UpstreamPlaylistDetail {
@@ -214,8 +213,6 @@ export interface UpstreamPlaylistDetail {
   trackCount: number;
   /** 收藏次数。上游叫 `collectedCnt`。 */
   collectedCount: number;
-  /** 创建时间，上游原样透传（展示串）。 */
-  createTime: string;
   creatorId: number;
   creatorName: string;
   /** 创建者头像。上游可能给 http 明文，适配器必须升级成 https。 */

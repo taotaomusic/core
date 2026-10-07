@@ -313,12 +313,12 @@ Authorization: Bearer <accessToken>
 详情 `data.playlist`(`songs` 行与 `/search` 的 song data 完全同构,分页信封 `{songs, meta}` 同歌手歌曲列表):
 
 ```json
-{"source":"kuwo","id":2867496601,"name":"终于等到周杰伦","pic":"https://...","description":"……长简介……","playCount":5657374,"trackCount":177,"collectedCount":23456,"createTime":"2020-01-01","creatorId":810,"creatorName":"第一天","creatorIcon":"https://...","isPrivate":false}
+{"source":"kuwo","id":2867496601,"name":"终于等到周杰伦","pic":"https://...","description":"……长简介……","playCount":5657374,"trackCount":177,"collectedCount":23456,"creatorId":810,"creatorName":"第一天","creatorIcon":"https://...","isPrivate":false}
 ```
 
-- 上游端点 `service/playlist/info/:id` 与 `service/playlist/:id/musicList`(字段来自 App 反汇编的 `SongListInfo.fromJson` / `DetailsSongListSongs.fromJson`):`playnum` / `musicCount` / `collectedCnt` 出流前统一改名 `playCount` / `trackCount` / `collectedCount`;`isFond`(对 App 当前用户的收藏态,服务端匿名态恒无意义)、`author` / `categories`(内层形状未实锤)与 `traceId` 不透传。歌曲列表的条目与专辑歌曲列表同构,走同一条 SongMapper 链路;上游 `data` 是 PageHelper 形状(`list` + `total`),`meta.total` 用整表总数。
+- 上游端点 `service/playlist/info/:id` 与 `service/playlist/:id/musicList`(端点与字段从 App 反汇编实锤,并以线上响应校验):上游的 `playNum` / `musicCount` / `collectedCnt` 出流前统一改名 `playCount` / `trackCount` / `collectedCount`;上游还下发 `praise` / `lastPlayTime` / `collectTime`(后者两个是「当前用户」维度)与 `isFond`、`traceId`,均不透传。歌曲列表的条目与专辑歌曲列表同构,走同一条 SongMapper 链路;上游 `data` 是 PageHelper 形状(`list` + `total`),`meta.total` 用整表总数。
 - **`sourceMarker` 是寻址参数**:搜索行(`GET /search/playlists`)带回的数字标记,上游要求原样回传。缺省 4 是搜索条目的实测常数,只服务于不带标记的直连调用;客户端应始终显式携带。
-- ⚠️ 上游这一族端点的**请求参数放在 GET 请求体里**(App 用 Dio 的 `request(path, data: ...)`,method 用默认 `"get"`;底层 OkHttp 允许 GET 带 body),body 是 `{"source": <sourceMarker>}`(详情)或 `{"source": <sourceMarker>, "pn": <页码>, "rn": <页大小>}`(歌曲)。裸 GET 不带体上游回 `-10 参数错误`,与「路径不存在」的 `-404` 是两个错误 —— 服务端用 `node:http(s)` 原生请求复刻这个形状(fetch 按 Web 规范禁止 GET 携带 body)。
+- 上游这一族端点的请求参数以 **GET query** 投放:`?source=<sourceMarker>`(详情)或 `?source=<sourceMarker>&pn=<页码>&rn=<页大小>`(歌曲)。反汇编里 App 用 Dio 的 `request(path, data: ...)`,method 用默认 `"get"`,其 Dio 栈把 GET 的 `data` 并进了 queryParameters —— 实测定型时确认上游只在 query 里认这些参数(裸 GET 不带 source 回 `-10 参数错误`,与「路径不存在」的 `-404` 是两个错误)。
 - 通用约定与详情族一致:要登录;`source` 缺省 `kuwo`、`source=all` 与未知音源 400/4001、音源未实现该能力 400/4007;路径 ID 非正整数 400/4001;上游取不到详情 502(`data.playlist` 缺失同理)。
 
 ### 波点分页的坑:详情族 `pn` 是 1 基
