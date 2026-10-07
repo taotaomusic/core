@@ -1037,6 +1037,31 @@
   background: var(--bg);
 }
 
+/* 「全部播放」行：紧贴详情头部下方 */
+.rk-playall {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 22px 4px;
+}
+.rk-playall-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--coral-tint-soft);
+  color: var(--coral);
+  border: 0;
+  border-radius: 999px;
+  padding: 7px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .15s, transform .15s;
+}
+.rk-playall-btn:hover { background: var(--coral-tint); transform: translateY(-1px); }
+.rk-playall-count { font-size: 12px; color: var(--muted); }
+
 /* 目录页头：与最近播放页头（rc-head）同一设计语言 */
 .rk-head {
   flex: none;

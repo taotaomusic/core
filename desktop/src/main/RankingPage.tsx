@@ -13,6 +13,7 @@ import {
 } from "../api";
 import { hideOnError } from "./img";
 import { SongList } from "./SongList";
+import { useApp } from "../state/AppState";
 // 榜单卡与详情头部复用搜索页/专辑页的全局类（sp-section-title / al-head / detail-*），
 // 显式导入 search.css 保证样式自足
 import "./search.css";
@@ -228,6 +229,7 @@ function RankingDetail({ brief, onBack }: { brief: RankingBrief; onBack: () => v
   // 头部副行：更新日期 + 「共 N 首」；total 取自分页 meta（真实条数），不是 ranking.total（上游展示值）
   const subBits = [updated, total > 0 ? `共 ${total} 首` : ""].filter((t) => t !== "");
 
+  const { playList } = useApp();
   return (
     <div className="rk-detail">
       <button type="button" className="detail-back" onClick={onBack}>
@@ -248,6 +250,16 @@ function RankingDetail({ brief, onBack }: { brief: RankingBrief; onBack: () => v
           {subBits.length > 0 && <div className="al-sub">{subBits.join(" · ")}</div>}
         </div>
       </div>
+
+      {/* 「全部播放」：从第 1 名起整榜入队（等价点击第 1 行）；有歌才显示 */}
+      {songs.length > 0 && (
+        <div className="rk-playall">
+          <button type="button" className="rk-playall-btn" onClick={() => playList(songs, 0)}>
+            <PlayIcon /> 全部播放
+          </button>
+          <span className="rk-playall-count">（{total} 首）</span>
+        </div>
+      )}
 
       {/* 歌曲列表：加载中给骨架、失败给重试（错误块替代列表）、空榜单给提示；
           滚动容器在 SongList 内部，翻页页脚与收口提示也由它按 hasMore/total 渲染 */}
@@ -296,5 +308,14 @@ function CatalogSkeleton() {
         </div>
       ))}
     </>
+  );
+}
+
+/** 「全部播放」的播放三角小图标（与搜索横排播放角标同一设计语言）。 */
+function PlayIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden>
+      <path d="M4 2.5v11l9-5.5-9-5.5z" />
+    </svg>
   );
 }

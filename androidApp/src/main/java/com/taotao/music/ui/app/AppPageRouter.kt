@@ -593,6 +593,8 @@ private fun RankingPageRoute(state: TaotaoAppState) {
         onRetryCatalog = { state.rankingPage.ensureCatalog() },
         onRetryDetail = { state.rankingPage.retry() },
         onLoadMoreSongs = { state.rankingPage.loadMoreSongs() },
+        // 「全部播放」= 从第 1 名起整榜入队（等价点击第 1 行）。
+        onPlayAll = { state.playSong(state.rankingPage.songs, 0) },
         onSongClick = { index -> state.playSong(state.rankingPage.songs, index) },
         onToggleFavorite = { song -> state.toggleFavorite(song) },
         onPlayNext = { song -> state.playNext(song) },

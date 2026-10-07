@@ -18,9 +18,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -96,6 +99,8 @@ fun RankingPage(
     onRetryDetail: () -> Unit = {},
     /** 滚到歌曲列表近底部时拉取下一页。 */
     onLoadMoreSongs: () -> Unit = {},
+    /** 「全部播放」：从第 1 名起整榜入队（宿主实现等价 onSongClick(0)）。 */
+    onPlayAll: () -> Unit = {},
     /** 点歌曲行：以整条榜单（已累积、名次顺序）为队列上下文入队。 */
     onSongClick: (Int) -> Unit = {},
     onToggleFavorite: (Song) -> Unit = {},
@@ -310,11 +315,43 @@ private fun RankingDetailView(
     }
     LazyColumn(
         state = listState,
-        modifier = Modifier.fillMaxSize().padding(horizontal = TaotaoSpacing.screenHorizontal),
+        // 榜单行自带行内水平边距（SharedSongRow 的 sm），列表容器再用整页 screenHorizontal
+        // 会让左侧空白累计过大（2026-10-07 反馈），详情态收敛到 md。
+        modifier = Modifier.fillMaxSize().padding(horizontal = TaotaoSpacing.md),
         verticalArrangement = Arrangement.spacedBy(TaotaoSpacing.xs),
     ) {
         item(key = "ranking-header") {
             RankingDetailHeader(brief = brief, detail = detail, songsTotal = songsTotal)
+        }
+        // 「全部播放」：从第 1 名起整榜入队（等价点击第 1 行）；有歌才可用。
+        if (songs.isNotEmpty()) {
+            item(key = "ranking-play-all") {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = TaotaoSpacing.xxs),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TextButton(onClick = { onPlayAll() }) {
+                        Icon(
+                            Icons.Default.PlayArrow,
+                            contentDescription = null,
+                            tint = TaotaoCoral,
+                        )
+                        Text(
+                            "全部播放",
+                            color = TaotaoCoral,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                        )
+                    }
+                    Text(
+                        "（$songsTotal 首）",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
         }
         when {
             songsLoading && songs.isEmpty() -> {
