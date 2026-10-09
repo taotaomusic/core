@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { absoluteUrl, refrainRangeOf } from "../api";
 import { useApp } from "../state/AppState";
 import { hideOnError } from "./img";
@@ -12,6 +12,7 @@ import {
   IconPrev,
   IconQueue,
   IconRepeat,
+  IconVolume,
 } from "./icons";
 import "./player.css";
 
@@ -23,13 +24,15 @@ function repeatTitle(mode: "off" | "all" | "one"): string {
 }
 
 /**
- * 底部播放条：封面/歌名（点击打开详情页）+ 细进度条 + 传输/循环/收藏/队列控制。
+ * 底部播放条：封面/歌名（点击打开详情页）+ 细进度条 + 传输/循环/收藏/音量/队列控制。
  * 全部状态来自 useApp，自身零 props；无当前歌曲时整体置灰只显示「未在播放」。
  * 按钮统一使用共享线性图标集 icons.tsx，不再使用 unicode 字符。
  */
 export function PlayerBar() {
   const app = useApp();
   const [dismissedError, setDismissedError] = useState("");
+  // 静音前的音量记忆：点喇叭图标切换静音时用它恢复，避免恢复到固定值
+  const volumeBeforeMuteRef = useRef(1);
   const current = app.current;
   const empty = !current;
   // 细进度条为纯展示：duration 未知（0）时保持 0%
@@ -38,6 +41,19 @@ export function PlayerBar() {
   const refrain = refrainRangeOf(current, app.duration);
   // 已关闭过的错误不再显示；出现新错误（文案不同）会再次浮出
   const showError = !!app.playError && app.playError !== dismissedError;
+  // 音量滑杆弹出层：悬浮音量区域时展开
+  const [volumeHover, setVolumeHover] = useState(false);
+
+  /** 点喇叭按钮：静音与恢复之间切换。静音前记住原音量，取消静音时恢复它。 */
+  function toggleMute() {
+    if (app.volume > 0) {
+      volumeBeforeMuteRef.current = app.volume;
+      app.setVolume(0);
+    } else {
+      // 恢复音量过低时回退到 30%，避免恢复后仍然几乎无声
+      app.setVolume(volumeBeforeMuteRef.current > 0.02 ? volumeBeforeMuteRef.current : 0.3);
+    }
+  }
 
   return (
     <div className={`playerbar${empty ? " is-empty" : ""}`}>
@@ -110,6 +126,34 @@ export function PlayerBar() {
         >
           <IconHeart size={16} filled={!!current && app.isFavorite(current)} />
         </button>
+        {/* 音量：喇叭按钮点击在静音/恢复间切换，悬浮弹出滑杆微调；
+            空态下仍可用（音量是设备侧属性，与是否在播无关），故不 disabled */}
+        <div
+          className="playerbar-volume"
+          onMouseEnter={() => setVolumeHover(true)}
+          onMouseLeave={() => setVolumeHover(false)}
+        >
+          <button
+            className={`playerbar-btn${app.volume === 0 ? " playerbar-volume-muted" : ""}`}
+            title={app.volume === 0 ? "取消静音" : "静音"}
+            onClick={toggleMute}
+          >
+            <IconVolume size={16} muted={app.volume === 0} />
+          </button>
+          <div className={`playerbar-volume-pop${volumeHover ? " show" : ""}`}>
+            <input
+              className="playerbar-volume-slider"
+              type="range"
+              min={0}
+              max={100}
+              step={1}
+              value={Math.round(app.volume * 100)}
+              onChange={(e) => app.setVolume(Number(e.currentTarget.value) / 100)}
+              aria-label="播放音量"
+            />
+            <span className="playerbar-volume-num">{Math.round(app.volume * 100)}</span>
+          </div>
+        </div>
         {/* 打开详情页（详情页内自带队列面板，默认展开） */}
         <button className="playerbar-btn" title="播放队列" disabled={empty} onClick={() => app.setShowDetail(true)}>
           <IconQueue size={16} />

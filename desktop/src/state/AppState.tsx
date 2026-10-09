@@ -35,6 +35,8 @@ type AppContextValue = {
   duration: number; // 秒，未知为 0
   repeat: RepeatMode;
   playError: string;
+  volume: number; // 0-1 的播放音量，直接映射 <audio>.volume
+  setVolume: (v: number) => void;
   playList: (list: Song[], i: number) => void;
   playAt: (i: number) => void;
   togglePlay: () => void;
@@ -233,6 +235,22 @@ export function AppProvider(props: { children: ReactNode; onExpired: () => void 
   const [repeat, setRepeat] = useState<RepeatMode>("off");
   const repeatRef = useRef<RepeatMode>("off");
   const [playError, setPlayError] = useState("");
+
+  // ---- 音量状态 ----
+  // 播放音量（0-1）：localStorage "taotao.volume" 存数字字符串，非法值回退默认 1。
+  // 初次挂载时统一施加到 <audio> 元素（见下方 effect），之后每次变更同步写元素。
+  const [volume, setVolumeState] = useState<number>(() => {
+    try {
+      const raw = localStorage.getItem("taotao.volume");
+      if (raw !== null) {
+        const n = Number(raw);
+        if (Number.isFinite(n) && n >= 0 && n <= 1) return n;
+      }
+    } catch {
+      // localStorage 不可用时忽略，使用默认音量
+    }
+    return 1;
+  });
 
   // ---- 音质状态 ----
   // 默认播放音质档：localStorage "taotao.quality" 存数字字符串，仅接受 0-18 的整数档位，缺省 4
@@ -648,6 +666,23 @@ export function AppProvider(props: { children: ReactNode; onExpired: () => void 
     }
   }, []);
 
+  /**
+   * 设置播放音量（0-1）：同步到音频元素并持久化到 localStorage。
+   * 刻意不进 ref：音量只由 UI 滑杆驱动，不存在异步闭包读旧值的场景。
+   */
+  const setVolume = useCallback((v: number) => {
+    // 输入夹取到 [0,1]，滑杆拖动与未来快捷键都只走这一个入口
+    const clamped = Math.min(1, Math.max(0, v));
+    setVolumeState(clamped);
+    const el = audioRef.current;
+    if (el) el.volume = clamped;
+    try {
+      localStorage.setItem("taotao.volume", String(clamped));
+    } catch {
+      // localStorage 不可用时忽略，仅本次会话内生效
+    }
+  }, []);
+
   const seek = useCallback((sec: number) => {
     const el = audioRef.current;
     if (!el || !el.src) return;
@@ -967,6 +1002,15 @@ export function AppProvider(props: { children: ReactNode; onExpired: () => void 
     };
   }, []);
 
+  // 音量：初次挂载把持久化的音量施加到音频元素（JSX 里不能直接写 volume 的受控语义，
+  // 且换 src 不会重置 volume，之后由 setVolume 单向同步即可，无需依赖数组随动）
+  useEffect(() => {
+    const el = audioRef.current;
+    if (el) el.volume = volume;
+    // 仅挂载时初始化一次；后续变更由 setVolume 直写元素
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // ---- 音频元素事件：isPlaying/进度全部以元素事件为准 ----
 
   const handleTimeUpdate = (e: SyntheticEvent<HTMLAudioElement>) => {
@@ -1029,6 +1073,8 @@ export function AppProvider(props: { children: ReactNode; onExpired: () => void 
     duration,
     repeat,
     playError,
+    volume,
+    setVolume,
     playList,
     playAt,
     togglePlay,
