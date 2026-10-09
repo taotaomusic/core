@@ -180,6 +180,60 @@
   cursor: not-allowed;
 }
 
+/* ---- 音量控件（悬浮弹滑杆） ---- */
+
+/* 音量容器：按钮 + 右侧弹出滑杆的定位锚点 */
+.playerbar-volume {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: none;
+}
+/* 静音态按钮图标降饱和，与循环模式的 off 视觉一致 */
+.playerbar-volume-muted {
+  opacity: .38;
+}
+/* 弹出层：横向滑杆 + 百分比数字，悬浮展开在按钮左侧；默认收起并右移 4px */
+.playerbar-volume-pop {
+  position: absolute;
+  right: 44px;
+  top: 50%;
+  transform: translateY(-50%) translateX(4px);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, .08);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity .15s, transform .15s, visibility .15s;
+  pointer-events: none;
+  z-index: 50;
+}
+.playerbar-volume-pop.show {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(-50%) translateX(0);
+  pointer-events: auto;
+}
+/* 纵向滑杆改横向：120px 宽，占用可控不挤压播放条 */
+.playerbar-volume-slider {
+  width: 120px;
+  height: 4px;
+  accent-color: var(--coral);
+  cursor: pointer;
+}
+.playerbar-volume-num {
+  min-width: 3ch;
+  text-align: right;
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
 /* 循环模式：off 降透明度；one 叠加「1」角标 */
 .playerbar-repeat[data-mode="off"] {
   opacity: .38;

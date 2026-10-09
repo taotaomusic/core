@@ -195,6 +195,25 @@ export function IconClose({ size = 20 }: IconProps) {
   );
 }
 
+/** 音量：喇叭 + 一段声波弧线；静音时由调用方改用斜线版本。 */
+export function IconVolume({ size = 20, muted = false }: IconProps & { muted?: boolean }) {
+  return (
+    <IconBase size={size}>
+      <polygon
+        points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"
+        fill="currentColor"
+        stroke="currentColor"
+        strokeWidth={1.6}
+      />
+      {muted ? (
+        <line x1="16" y1="9.5" x2="22" y2="14.5" />
+      ) : (
+        <path d="M15.5 8.6a5 5 0 0 1 0 6.8" />
+      )}
+    </IconBase>
+  );
+}
+
 /** 音乐占位：双符头音符（feather music），替代 unicode「♪」。 */
 export function IconMusicNote({ size = 20 }: IconProps) {
   return (
