@@ -15,6 +15,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
@@ -30,10 +31,13 @@ import com.itgsa.animation.sharedview.ViewAnimationManager
 import com.itgsa.animation.sharedview.ViewAnimationType
 import com.taotao.music.TaotaoApplication
 import com.taotao.music.data.AppearanceMode
+import com.taotao.music.playerui.layout.SharedMainLayout
 import com.taotao.music.ui.app.MvPlayerOverlay
 import com.taotao.music.ui.app.SnackbarHostWithTheme
 import com.taotao.music.ui.app.TaotaoAppDialogs
 import com.taotao.music.ui.app.TaotaoAppState
+import com.taotao.music.ui.app.taotaoNavigationItems
+import com.taotao.music.ui.theme.LocalReduceMotion
 import com.taotao.music.ui.theme.TaotaoTheme
 import kotlinx.coroutines.launch
 
@@ -194,16 +198,36 @@ private fun PlayerDetailActivityContent(state: TaotaoAppState, onBack: (Boolean)
         // MV 浮层开着时物理返回先退 MV：组合内注册的 BackHandler 比分发器里的
         // 详情兜底回调晚添加，优先级更高。
         BackHandler(enabled = state.mvSong != null) { state.mvSong = null }
-        Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize()) {
-            Box(Modifier.fillMaxSize()) {
-                PlayerDetailPageRoute(state = state, onBack = onBack)
-                MvPlayerOverlay(state)
-                // 详情内的操作反馈（下载、收藏、分享）在详情自己的提示条上显示；
-                // 主界面组合此时冻结，不会与之争抢同一条消息。
-                SnackbarHostWithTheme(
-                    state = state,
-                    modifier = Modifier.align(Alignment.BottomCenter),
-                )
+        // 与主界面同一套主骨架：详情页是「主骨架里的一页」，底部应用标签栏
+        // 必须一直在（旧组合内实现的观感）。标签点击走 switchTab，它会发
+        // closeDetailEvents 让本 Activity 带一镜到底回落、主界面落到对应标签。
+        SharedMainLayout(
+            selectedNavigationId = state.bottomTab,
+            navigationItems = taotaoNavigationItems,
+            onNavigationSelected = { target -> state.switchTab(target) },
+            // 详情页不渲染迷你播放器（旧观感：详情打开时迷你让位）；播放由服务继续。
+            miniPlayerContent = { },
+            // MV 浮层盖住底部时标签栏同步让位，与主界面同一规则。
+            hideBottomBar = state.mvSong != null,
+            reduceMotion = LocalReduceMotion.current,
+        ) { innerPadding ->
+            Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize()) {
+                Box(Modifier.fillMaxSize()) {
+                    // 页面内容沿用旧路由的边距规则：让出系统栏与底部标签栏。
+                    Box(Modifier.fillMaxSize().padding(innerPadding)) {
+                        PlayerDetailPageRoute(state = state, onBack = onBack)
+                    }
+                    SnackbarHostWithTheme(
+                        state = state,
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(bottom = innerPadding.calculateBottomPadding()),
+                    )
+                    // MV 浮层盖住整个骨架（标签栏同步让位），与主界面同一挂法。
+                    if (state.mvSong != null) {
+                        MvPlayerOverlay(state)
+                    }
+                }
             }
         }
     }
