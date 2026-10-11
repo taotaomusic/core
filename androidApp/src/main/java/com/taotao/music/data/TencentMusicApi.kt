@@ -2013,6 +2013,13 @@ class TencentMusicApi(
             check(root.optInt("code") == 0) { root.optString("message", "无法获取榜单歌曲") }
             val data = root.optJSONObject("data") ?: JSONObject()
             val ranking = data.optJSONObject("ranking") ?: JSONObject()
+            // external 榜全量一次返回（无分页）：page 恒 1、hasMore 恒 false，
+            // total 用歌曲行数（meta.total 与之一致）。
+            val songs = (data.optJSONArray("songs") ?: JSONArray()).let { rows ->
+                (0 until rows.length()).mapNotNull { index ->
+                    rows.optJSONObject(index)?.toSong(quality)
+                }
+            }
             RankingDetail(
                 ranking = RankingInfo(
                     id = ranking.optLong("id"),
@@ -2021,11 +2028,10 @@ class TencentMusicApi(
                     pub = ranking.optString("pub"),
                     total = ranking.optLong("total"),
                 ),
-                songs = (data.optJSONArray("songs") ?: JSONArray()).let { rows ->
-                    (0 until rows.length()).mapNotNull { index ->
-                        rows.optJSONObject(index)?.toSong(quality)
-                    }
-                },
+                songs = songs,
+                page = 1,
+                hasMore = false,
+                total = songs.size.toLong(),
             )
         }
     }
