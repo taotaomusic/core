@@ -46,6 +46,26 @@ object HostAccessRewriter {
             "(Ljava/lang/Object;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Object;)V", false))
     }
 
+    /** getstatic：栈从空开始。追加 owner/name 常量并调 Refl.getStatic，再按字段类型收口。 */
+    fun getStatic(out: InsnList, owner: String, name: String, desc: String) {
+        out.add(LdcInsnNode(owner))
+        out.add(LdcInsnNode(name))
+        out.add(MethodInsnNode(Opcodes.INVOKESTATIC, REFL, "getStatic",
+            "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/Object;", false))
+        coerceResult(out, Type.getType(desc))
+    }
+
+    /** putstatic：栈为 [value]。先把 value 装箱存 scratch（避免对双字值做栈上体操），再按 (owner,name,value) 调用。 */
+    fun putStatic(out: InsnList, owner: String, name: String, desc: String, scratchBase: Int) {
+        box(out, Type.getType(desc))
+        out.add(VarInsnNode(Opcodes.ASTORE, scratchBase)) // value → scratch，栈清空
+        out.add(LdcInsnNode(owner))
+        out.add(LdcInsnNode(name))
+        out.add(VarInsnNode(Opcodes.ALOAD, scratchBase))
+        out.add(MethodInsnNode(Opcodes.INVOKESTATIC, REFL, "setStatic",
+            "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Object;)V", false))
+    }
+
     /**
      * 方法调用改写。opcode ∈ {INVOKEVIRTUAL, INVOKEINTERFACE, INVOKESPECIAL, INVOKESTATIC}。
      * 实例调用栈为 [objectref, args...]，静态为 [args...]。

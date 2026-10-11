@@ -18,6 +18,12 @@ import org.objectweb.asm.tree.TypeInsnNode
 import java.io.File
 import java.security.MessageDigest
 
+/**
+ * 宿主包前缀（斜杠内部名），与 emit 层 `EmitConfig.hostPackagePrefixes` 的默认值一致。
+ * 扫描期只用来判断「引用的 owner 是否落在宿主包里」，不需要做成配置。
+ */
+private const val HOST_PACKAGE_PREFIX = "com/taotao/music"
+
 /** 一个方法的扫描结果：键、access、以及一个对「实现是否变化」稳定的指纹。 */
 data class MethodInfo(
     val key: String,
@@ -27,6 +33,11 @@ data class MethodInfo(
     val instrumentable: Boolean,
     /** 指纹只覆盖方法体语义，忽略行号与栈帧图，改缩进/挪行不算变化。 */
     val fingerprint: String,
+    /**
+     * 方法体里「结构上无法安全移植进补丁类」的事实（人类可读），空列表 = 可移植。
+     * 扫描期就收集齐，让闸门据以整包拒绝，而不是等发射阶段改写失败才暴露。
+     */
+    val portabilityIssues: List<String> = emptyList(),
 )
 
 /** 一个类的扫描结果。字段集合用于「是否新增字段」的闸门判断。 */
@@ -74,8 +85,11 @@ object ClassScanner {
                 name = method.name,
                 descriptor = method.desc,
                 access = method.access,
-                instrumentable = Instrumentable.isInstrumentable(isInterface, method.access, method.name),
+                instrumentable = Instrumentable.isInstrumentable(
+                    node.name, isInterface, method.access, method.name,
+                ),
                 fingerprint = fingerprintOf(method),
+                portabilityIssues = portabilityIssuesOf(method, node.name),
             )
         }
         // ClassNode.name 就是内部名（斜杠形式）。
@@ -113,5 +127,39 @@ object ClassScanner {
         }
         val digest = MessageDigest.getInstance("SHA-256").digest(sb.toString().toByteArray())
         return digest.joinToString("") { "%02x".format(it) }
+    }
+
+    /**
+     * 收集方法体里「结构上无法安全移植进补丁类」的指令事实（同一类事实只记一条）。
+     *
+     * 这些模式在发射阶段要么被硬拒（NEW / `<init>` 宿主类型）、要么被改写成会出错的
+     * 反射调用（super 调用经反射会从 receiver 具体类沿继承链找最派生实现再虚分发，
+     * 补丁方法自身 override 同一方法时无限递归），必须提前到闸门层整包拒绝。
+     *
+     * 注意：GETSTATIC / PUTSTATIC 不在此列 —— 宿主静态字段访问由发射层反射支持，不能拒。
+     */
+    private fun portabilityIssuesOf(method: MethodNode, classInternalName: String): List<String> {
+        val issues = LinkedHashSet<String>()
+        var insn: AbstractInsnNode? = method.instructions.first
+        while (insn != null) {
+            when (insn) {
+                is MethodInsnNode -> when {
+                    // super.foo() 这类调用：owner 不是本类且不是构造器。
+                    insn.opcode == Opcodes.INVOKESPECIAL && insn.name != "<init>" &&
+                        insn.owner != classInternalName ->
+                        issues += "super 调用无法安全移植：反射会虚分发到最派生实现导致递归"
+                    // new 宿主类型（<init> 调用只会以 INVOKESPECIAL 出现，按名字判定即可）。
+                    insn.name == "<init>" && insn.owner.startsWith(HOST_PACKAGE_PREFIX) ->
+                        issues += "补丁里构造宿主类型暂不支持"
+                }
+
+                is TypeInsnNode ->
+                    if (insn.opcode == Opcodes.NEW && insn.desc.startsWith(HOST_PACKAGE_PREFIX)) {
+                        issues += "补丁里构造宿主类型暂不支持"
+                    }
+            }
+            insn = insn.next
+        }
+        return issues.toList()
     }
 }
