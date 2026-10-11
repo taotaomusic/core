@@ -21,7 +21,7 @@ internal object PrefsToRoomMigrator {
     private var done = false
 
     @Volatile
-    private var kvDone = false
+    private var tablesDone = false
 
     private val PREFS_FILE_NAMES = listOf(
         "playback_history",
@@ -31,8 +31,8 @@ internal object PrefsToRoomMigrator {
         "playback_state",
     )
 
-    /** 第二阶段（小键值→local_kv）涉及的 prefs 文件；hotfix 有意排除。 */
-    private val KV_PREFS_FILE_NAMES = listOf(
+    /** 第二阶段（偏好域各表）涉及的 prefs 文件；hotfix 有意排除。 */
+    private val PREFERENCE_PREFS_FILE_NAMES = listOf(
         "auth",
         "playback_quality",
         "appearance",
@@ -59,38 +59,59 @@ internal object PrefsToRoomMigrator {
     }
 
     /**
-     * 第二阶段：剩余的小键值 prefs 文件 → local_kv 表。
+     * 第二阶段：剩余的小键值 prefs 文件 → 会话与偏好域各正式表。
      *
-     * 键名统一加存储域前缀（"<文件名>.<原键名>"），保证共表不撞键、可按前缀整域删除。
      * hotfix 计数不迁移：它挂在已弃用的补丁链路上，随补丁系统下线一起删除。
      */
-    fun migrateKvIfNeeded(context: Context, db: TaotaoLocalDatabase) {
-        if (kvDone) return
+    fun migratePreferenceTablesIfNeeded(context: Context, db: TaotaoLocalDatabase) {
+        if (tablesDone) return
         synchronized(lock) {
-            if (kvDone) return
-            if (db.localDbMetaDao().getValue(PrefsPayloadParser.KV_MIGRATED_FLAG) == "1") {
-                kvDone = true
+            if (tablesDone) return
+            if (db.localDbMetaDao().getValue(PrefsPayloadParser.TABLES_MIGRATED_FLAG) == "1") {
+                tablesDone = true
                 return
             }
             val appContext = context.applicationContext
-            val rows = mutableListOf<LocalKvRow>()
-            KV_PREFS_FILE_NAMES.forEach { fileName ->
-                val prefs = appContext.getSharedPreferences(fileName, Context.MODE_PRIVATE)
-                prefs.all.forEach { (key, value) ->
-                    val converted = PrefsPayloadParser.convertPrefValue(value) ?: return@forEach
-                    rows += LocalKvRow("$fileName.$key", converted)
-                }
-            }
+            fun file(name: String): Map<String, Any?> =
+                appContext.getSharedPreferences(name, Context.MODE_PRIVATE).all
+
+            val authRow = PrefsPayloadParser.parseAuthSessionRow(file("auth"))
+            val qualityRow = PrefsPayloadParser.parseQualityRow(file("playback_quality"))
+            val appearanceRow = PrefsPayloadParser.parseAppearanceRow(file("appearance"))
+            val coverSkinRow = PrefsPayloadParser.parseCoverSkinRow(file("cover_skin"))
+            val sleepTimerRow = PrefsPayloadParser.parseSleepTimerRow(file("sleep_timer"))
+            val updateDismissalRow = PrefsPayloadParser.parseUpdateDismissalRow(file("app_update"))
+            val deviceRow = PrefsPayloadParser.parseDeviceIdentityRow(file("device"))
+            val (searchEntries, searchState) = PrefsPayloadParser.parseSearchHistory(file("search_history"))
+            val (configEntries, configState) = PrefsPayloadParser.parseRemoteConfig(file("remote_config"))
+            val imSessionRow = PrefsPayloadParser.parseImSessionRow(file("im_session"))
+            val imPeerRows = PrefsPayloadParser.parseImPeerRows(file("im_peers"))
+
             db.runInTransaction {
                 val meta = db.localDbMetaDao()
-                if (meta.getValue(PrefsPayloadParser.KV_MIGRATED_FLAG) == "1") return@runInTransaction
-                if (rows.isNotEmpty()) db.localKvDao().insertAll(rows)
-                meta.upsert(LocalDbMetaRow(PrefsPayloadParser.KV_MIGRATED_FLAG, "1"))
+                // 双保险：并发入口已在对象锁上串行，这里再防一次跨进程的极端情况。
+                if (meta.getValue(PrefsPayloadParser.TABLES_MIGRATED_FLAG) == "1") return@runInTransaction
+                authRow?.let { db.authSessionDao().upsert(it) }
+                qualityRow?.let { db.preferenceDao().upsertQuality(it) }
+                appearanceRow?.let { db.preferenceDao().upsertAppearance(it) }
+                coverSkinRow?.let { db.preferenceDao().upsertCoverSkin(it) }
+                sleepTimerRow?.let { db.preferenceDao().upsertSleepTimer(it) }
+                updateDismissalRow?.let { db.preferenceDao().upsertUpdateDismissal(it) }
+                deviceRow?.let { db.preferenceDao().upsertDeviceIdentity(it) }
+                if (searchEntries.isNotEmpty()) db.searchHistoryDao().insertEntries(searchEntries)
+                searchState?.let { db.searchHistoryDao().upsertState(it) }
+                if (configEntries.isNotEmpty()) db.remoteConfigDao().insertEntries(configEntries)
+                configState?.let { db.remoteConfigDao().upsertState(it) }
+                imSessionRow?.let { db.imDao().upsertSession(it) }
+                if (imPeerRows.isNotEmpty()) db.imDao().insertPeers(imPeerRows)
+                meta.upsert(LocalDbMetaRow(PrefsPayloadParser.TABLES_MIGRATED_FLAG, "1"))
             }
-            KV_PREFS_FILE_NAMES.forEach { fileName ->
+
+            // 事务已提交，旧 prefs 键清掉，存储单一真相源回到本地库。
+            PREFERENCE_PREFS_FILE_NAMES.forEach { fileName ->
                 appContext.getSharedPreferences(fileName, Context.MODE_PRIVATE).edit().clear().apply()
             }
-            kvDone = true
+            tablesDone = true
         }
     }
 

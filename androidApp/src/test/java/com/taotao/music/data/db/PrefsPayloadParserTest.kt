@@ -2,6 +2,7 @@ package com.taotao.music.data.db
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 import kotlin.test.assertNull
 import org.json.JSONArray
 import org.json.JSONObject
@@ -104,14 +105,27 @@ class PrefsPayloadParserTest {
     }
 
     @Test
-    fun `prefs 值序列化为 kv 字符串`() {
-        assertEquals("1", PrefsPayloadParser.convertPrefValue(true))
-        assertEquals("0", PrefsPayloadParser.convertPrefValue(false))
-        assertEquals("9", PrefsPayloadParser.convertPrefValue(9L))
-        assertEquals("9", PrefsPayloadParser.convertPrefValue(9))
-        assertEquals("abc", PrefsPayloadParser.convertPrefValue("abc"))
-        assertEquals("""["a","b"]""", PrefsPayloadParser.stringSetToJson(setOf("b", "a")))
-        assertNull(PrefsPayloadParser.convertPrefValue(listOf("a")))
+    fun `登录会话行解析与空文件跳过`() {
+        val row = PrefsPayloadParser.parseAuthSessionRow(
+            mapOf("access_token" to "abc", "refresh_token" to "def", "expires_at" to 123L, "user_id" to 7L),
+        )
+        assertEquals("abc", row?.accessToken)
+        assertEquals(7L, row?.userId)
+        assertNull(PrefsPayloadParser.parseAuthSessionRow(emptyMap()))
+        assertNull(PrefsPayloadParser.parseAuthSessionRow(mapOf("expires_at" to 1L)))
+    }
+
+    @Test
+    fun `搜索历史解析出条目顺序与记录开关`() {
+        val (entries, state) = PrefsPayloadParser.parseSearchHistory(
+            mapOf("keywords" to """["jay","pop"]""", "recording_enabled" to false),
+        )
+        assertEquals(listOf("jay", "pop"), entries.map { it.keyword })
+        assertEquals(listOf(0, 1), entries.map { it.position })
+        assertEquals(false, state?.recordingEnabled)
+        val (emptyEntries, nullState) = PrefsPayloadParser.parseSearchHistory(emptyMap())
+        assertTrue(emptyEntries.isEmpty())
+        assertNull(nullState)
     }
 
     @Test

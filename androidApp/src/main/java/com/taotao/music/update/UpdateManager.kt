@@ -10,6 +10,10 @@ import com.taotao.music.hotfix.HotfixInstaller
 import com.taotao.music.data.DeviceIdStore
 import com.taotao.music.data.RemoteConfigStore
 import com.taotao.music.data.TokenProvider
+import com.taotao.music.data.db.MirroredPreference
+import com.taotao.music.data.db.PREFERENCE_ROW_ID
+import com.taotao.music.data.db.TaotaoLocalDatabase
+import com.taotao.music.data.db.UpdateDismissalRow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
@@ -37,7 +41,13 @@ class UpdateManager(
     val remoteConfig = RemoteConfigStore(appContext)
 
     /** 用户已划掉的版本号，跨启动记住。 */
-    private val kv = com.taotao.music.data.db.LocalKvStore.get(appContext)
+    private val dismissalMirror = object : MirroredPreference<UpdateDismissalRow>(appContext, "update_dismissal") {
+        override fun default() = UpdateDismissalRow(PREFERENCE_ROW_ID, 0L)
+        override fun load(db: TaotaoLocalDatabase) = db.preferenceDao().getUpdateDismissal()
+        override fun persist(db: TaotaoLocalDatabase, value: UpdateDismissalRow) {
+            db.preferenceDao().upsertUpdateDismissal(value)
+        }
+    }
 
     /** 同一时刻只允许一次检查。原来靠读 status 判断，两个协程可能同时通过。 */
     private val checkLock = Mutex()
@@ -207,11 +217,11 @@ class UpdateManager(
      */
     fun dismiss() {
         if (status.forced) return
-        status.release?.versionCode?.let { kv.putString(KEY_DISMISSED, it.toString()) }
+        status.release?.versionCode?.let { dismissalMirror.commit(UpdateDismissalRow(PREFERENCE_ROW_ID, it)) }
         status = UpdateStatus(stage = UpdateStage.UP_TO_DATE)
     }
 
-    private fun dismissedVersionCode(): Long = kv.getLong(KEY_DISMISSED, 0L)
+    private fun dismissedVersionCode(): Long = dismissalMirror.current().dismissedVersionCode
 
     /** 失败后重试：已下载的分片会被续传复用。 */
     suspend fun retry() {
@@ -228,7 +238,5 @@ class UpdateManager(
         else -> @Suppress("DEPRECATION") info.versionCode.toLong()
     }
 
-    private companion object {
-        const val KEY_DISMISSED = "app_update.dismissed_version_code"
-    }
+    private companion object
 }

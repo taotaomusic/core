@@ -1,7 +1,10 @@
 package com.taotao.music.data
 
 import android.content.Context
-import com.taotao.music.data.db.LocalKvStore
+import com.taotao.music.data.db.DeviceIdentityRow
+import com.taotao.music.data.db.MirroredPreference
+import com.taotao.music.data.db.PREFERENCE_ROW_ID
+import com.taotao.music.data.db.TaotaoLocalDatabase
 import java.util.UUID
 
 /**
@@ -12,17 +15,21 @@ import java.util.UUID
  * 只在本机生成，不含任何硬件标识符，不上传除自身以外的设备信息。
  */
 class DeviceIdStore(context: Context) {
-    private val kv = LocalKvStore.get(context)
+    private val mirror = object : MirroredPreference<DeviceIdentityRow>(context, "device") {
+        override fun default() = DeviceIdentityRow(PREFERENCE_ROW_ID, "")
+        override fun load(db: TaotaoLocalDatabase) = db.preferenceDao().getDeviceIdentity()
+        override fun persist(db: TaotaoLocalDatabase, value: DeviceIdentityRow) {
+            db.preferenceDao().upsertDeviceIdentity(value)
+        }
+    }
 
     fun deviceId(): String = synchronized(LOCK) {
-        kv.getString(KEY)?.takeIf { it.isNotBlank() } ?: UUID.randomUUID().toString().also {
-            kv.putString(KEY, it)
+        mirror.current().deviceId.takeIf { it.isNotBlank() } ?: UUID.randomUUID().toString().also {
+            mirror.commit(DeviceIdentityRow(PREFERENCE_ROW_ID, it))
         }
     }
 
     private companion object {
-        const val KEY = "device.device_id"
-
         /** 首次生成时加锁，避免两个线程同时初始化得到两个不同的标识。 */
         val LOCK = Any()
     }

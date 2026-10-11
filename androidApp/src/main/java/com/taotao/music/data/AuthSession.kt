@@ -2,26 +2,36 @@ package com.taotao.music.data
 
 import android.content.Context
 import android.util.Base64
-import com.taotao.music.data.db.LocalKvStore
+import com.taotao.music.data.db.AUTH_SESSION_ID
+import com.taotao.music.data.db.AuthSessionRow
+import com.taotao.music.data.db.MirroredPreference
+import com.taotao.music.data.db.TaotaoLocalDatabase
 import com.taotao.music.data.im.ImSessionStore
 import org.json.JSONObject
 
 /**
  * 管理访问令牌和刷新令牌，避免业务页面自行处理鉴权细节。
  *
- * 界面和播放服务各自持有实例，但底层是同一份进程级键值镜像（[LocalKvStore] 单例），
- * 因此续期锁定义在伴生对象上，保证整个进程内串行刷新。
+ * 界面和播放服务各自持有实例，但底层是同一份进程级镜像（auth_session 单行表，
+ * [MirroredPreference] 保证同域实例共享内存值），因此续期锁定义在伴生对象上，
+ * 保证整个进程内串行刷新。
  */
 class AuthSession(context: Context) : TokenProvider {
     private val applicationContext = context.applicationContext
-    private val kv = LocalKvStore.get(applicationContext)
+    private val mirror = object : MirroredPreference<AuthSessionRow>(context, "auth") {
+        override fun default() = AuthSessionRow(AUTH_SESSION_ID, null, null, 0L, null)
+        override fun load(db: TaotaoLocalDatabase) = db.authSessionDao().get()
+        override fun persist(db: TaotaoLocalDatabase, value: AuthSessionRow) {
+            db.authSessionDao().upsert(value)
+        }
+    }
 
     /** 会话彻底失效时通知界面回到登录页，由界面层注册。 */
     @Volatile
     var onSessionExpired: (() -> Unit)? = null
 
     val isSignedIn: Boolean get() = !refreshToken.isNullOrBlank()
-    private val refreshToken: String? get() = kv.getString(REFRESH_TOKEN)
+    private val refreshToken: String? get() = mirror.current().refreshToken
 
     /**
      * 服务端用户 ID，仅用作本地播放 outbox、缓存等数据的账号分桶键。
@@ -30,14 +40,16 @@ class AuthSession(context: Context) : TokenProvider {
      * 老客户端升级后还没重新登录时，再从已有 access token 的公开 payload 中恢复 sub。
      */
     val accountId: Long?
-        get() = kv.getLong(USER_ID, 0L).takeIf { it > 0L }
-            ?: accountIdFromAccessToken(currentToken())
+        get() = mirror.current().let { state ->
+            state.userId?.takeIf { it > 0L } ?: accountIdFromAccessToken(state.accessToken)
+        }
 
     /** 预留 30 秒余量，避免令牌在请求途中刚好过期。 */
     private val isAccessValid: Boolean
-        get() = !currentToken().isNullOrBlank() && kv.getLong(EXPIRES_AT, 0L) > System.currentTimeMillis() + 30_000L
+        get() = !currentToken().isNullOrBlank() &&
+            mirror.current().expiresAt > System.currentTimeMillis() + 30_000L
 
-    override fun currentToken(): String? = kv.getString(ACCESS_TOKEN)
+    override fun currentToken(): String? = mirror.current().accessToken
 
     override fun validToken(): String? {
         currentToken()?.takeIf { isAccessValid }?.let { return it }
@@ -103,13 +115,14 @@ class AuthSession(context: Context) : TokenProvider {
             ?: accountIdFromAccessToken(tokens.accessToken)
             // refresh 响应可以不带 user，只允许续期路径延续原账号；登录/注册绝不能回退。
             ?: if (preserveExistingAccount) this.accountId else null
-        // 四键一批写入：内存一次生效，落库一个事务，近似旧 Editor 批量写的原子性。
-        kv.putAll(
-            linkedMapOf(
-                ACCESS_TOKEN to tokens.accessToken,
-                REFRESH_TOKEN to tokens.refreshToken,
-                EXPIRES_AT to (System.currentTimeMillis() + tokens.expiresIn * 1000L).toString(),
-                USER_ID to accountId?.toString(),
+        // 单行整体写入：内存一次生效，后台事务落库，保持令牌四字段的近原子语义。
+        mirror.commit(
+            AuthSessionRow(
+                id = AUTH_SESSION_ID,
+                accessToken = tokens.accessToken,
+                refreshToken = tokens.refreshToken,
+                expiresAt = System.currentTimeMillis() + tokens.expiresIn * 1000L,
+                userId = accountId,
             )
         )
         return tokens
@@ -117,14 +130,7 @@ class AuthSession(context: Context) : TokenProvider {
 
     /** 清空本地保存的令牌，调用方负责在锁外通知界面。 */
     private fun clearTokens() {
-        kv.putAll(
-            mapOf(
-                ACCESS_TOKEN to null,
-                REFRESH_TOKEN to null,
-                EXPIRES_AT to null,
-                USER_ID to null,
-            )
-        )
+        mirror.commit(AuthSessionRow(AUTH_SESSION_ID, null, null, 0L, null))
     }
 
     private fun accountIdFromAccessToken(token: String?): Long? = runCatching {
@@ -141,11 +147,6 @@ class AuthSession(context: Context) : TokenProvider {
     }.getOrNull()
 
     private companion object {
-        const val ACCESS_TOKEN = "auth.access_token"
-        const val REFRESH_TOKEN = "auth.refresh_token"
-        const val EXPIRES_AT = "auth.expires_at"
-        const val USER_ID = "auth.user_id"
-
         /** 进程级续期锁：界面与播放服务的实例共用，防止并发消耗一次性刷新令牌。 */
         val TOKEN_LOCK = Any()
     }

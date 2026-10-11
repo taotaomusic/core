@@ -1,6 +1,7 @@
 package com.taotao.music.data.db
 
 import com.taotao.music.data.SongCodec
+import com.taotao.music.model.AudioQuality
 import com.taotao.music.model.Song
 import java.util.Locale
 import org.json.JSONArray
@@ -37,24 +38,147 @@ internal object PrefsPayloadParser {
     /** 迁移后的整库完成标记，落在 local_db_meta 里与数据同事务翻转。 */
     const val MIGRATED_FLAG = "prefs_migrated_v1"
 
-    /** 小键值第二阶段迁移的完成标记。 */
-    const val KV_MIGRATED_FLAG = "prefs_migrated_v2_kv"
+    /** 第二阶段（偏好域各表）迁移的完成标记。 */
+    const val TABLES_MIGRATED_FLAG = "prefs_migrated_v2_tables"
 
-    /**
-     * prefs 值 → local_kv 字符串值。布尔 "1"/"0"、数字十进制字符串、字符串原样；
-     * 字符串集合转 JSON 数组（ImPeerStore 的对端集合）。不认识的类型返回 null 丢弃。
-     */
-    fun convertPrefValue(value: Any?): String? = when (value) {
-        is Boolean -> if (value) "1" else "0"
-        is Number -> value.toString()
-        is String -> value
-        is Set<*> -> stringSetToJson(value.mapNotNull { it as? String }.toSet())
-        else -> null
+    // ---- prefs.getAll 值的类型化读取 ----
+
+    private fun mapString(map: Map<String, Any?>, key: String): String? = map[key] as? String
+
+    private fun mapLong(map: Map<String, Any?>, key: String, default: Long = 0L): Long = when (val value = map[key]) {
+        is Number -> value.toLong()
+        is String -> value.toLongOrNull() ?: default
+        else -> default
     }
 
-    fun stringSetToJson(values: Set<String>): String = JSONArray().apply {
-        values.sorted().forEach { put(it) }
-    }.toString()
+    private fun mapInt(map: Map<String, Any?>, key: String, default: Int = 0): Int = when (val value = map[key]) {
+        is Number -> value.toInt()
+        is String -> value.toIntOrNull() ?: default
+        else -> default
+    }
+
+    private fun mapBool(map: Map<String, Any?>, key: String, default: Boolean = false): Boolean =
+        when (val value = map[key]) {
+            is Boolean -> value
+            is Number -> value.toLong() != 0L
+            is String -> value == "1" || value.equals("true", ignoreCase = true)
+            else -> default
+        }
+
+    private fun mapStringSet(map: Map<String, Any?>, key: String): Set<String>? =
+        (map[key] as? Set<*>)?.mapNotNull { it as? String }?.toSet()
+
+    private fun mapNonBlank(map: Map<String, Any?>, key: String): String? = mapString(map, key)?.takeIf { it.isNotBlank() }
+
+    // ---- 各偏好域的行解析：返回 null 表示该文件没有可迁移的有效数据 ----
+
+    fun parseAuthSessionRow(map: Map<String, Any?>): AuthSessionRow? {
+        val accessToken = mapNonBlank(map, "access_token")
+        val refreshToken = mapNonBlank(map, "refresh_token")
+        if (accessToken == null && refreshToken == null) return null
+        return AuthSessionRow(
+            id = AUTH_SESSION_ID,
+            accessToken = accessToken,
+            refreshToken = refreshToken,
+            expiresAt = mapLong(map, "expires_at"),
+            userId = mapLong(map, "user_id").takeIf { it > 0L },
+        )
+    }
+
+    fun parseQualityRow(map: Map<String, Any?>): QualityRow? {
+        if (map.isEmpty()) return null
+        return QualityRow(
+            id = PREFERENCE_ROW_ID,
+            playback = mapInt(map, "playback", AudioQuality.Default.value),
+            download = mapInt(map, "download", AudioQuality.LOSSLESS.value),
+        )
+    }
+
+    fun parseAppearanceRow(map: Map<String, Any?>): AppearanceRow? {
+        if (map.isEmpty()) return null
+        return AppearanceRow(id = PREFERENCE_ROW_ID, mode = mapNonBlank(map, "mode"))
+    }
+
+    fun parseCoverSkinRow(map: Map<String, Any?>): CoverSkinRow? {
+        if (map.isEmpty()) return null
+        return CoverSkinRow(id = PREFERENCE_ROW_ID, skin = mapNonBlank(map, "skin"))
+    }
+
+    fun parseSleepTimerRow(map: Map<String, Any?>): SleepTimerRow? {
+        if (map.isEmpty()) return null
+        return SleepTimerRow(
+            id = PREFERENCE_ROW_ID,
+            lastMinutes = mapInt(map, "last_minutes", 45),
+            waitForSongEnd = mapBool(map, "wait_for_song_end"),
+        )
+    }
+
+    fun parseUpdateDismissalRow(map: Map<String, Any?>): UpdateDismissalRow? {
+        if (map.isEmpty()) return null
+        return UpdateDismissalRow(id = PREFERENCE_ROW_ID, dismissedVersionCode = mapLong(map, "dismissed_version_code"))
+    }
+
+    fun parseDeviceIdentityRow(map: Map<String, Any?>): DeviceIdentityRow? {
+        val deviceId = mapNonBlank(map, "device_id") ?: return null
+        return DeviceIdentityRow(id = PREFERENCE_ROW_ID, deviceId = deviceId)
+    }
+
+    /** 返回（历史条目行，记录开关行）；开关无记录时为 null（存储类回退默认开）。 */
+    fun parseSearchHistory(map: Map<String, Any?>): Pair<List<SearchHistoryEntryRow>, SearchHistoryStateRow?> {
+        val keywords = runCatching {
+            val array = JSONArray(mapString(map, "keywords") ?: return emptyList<SearchHistoryEntryRow>() to null)
+            (0 until array.length()).mapNotNull { array.optString(it).takeIf(String::isNotBlank) }
+        }.getOrDefault(emptyList())
+        val entries = keywords.distinct().mapIndexed { index, keyword -> SearchHistoryEntryRow(keyword, index) }
+        val state = if (map.containsKey("recording_enabled")) {
+            SearchHistoryStateRow(SEARCH_HISTORY_STATE_ID, mapBool(map, "recording_enabled", true))
+        } else {
+            null
+        }
+        return entries to state
+    }
+
+    /** 返回（配置项行，版本水位行）。 */
+    fun parseRemoteConfig(map: Map<String, Any?>): Pair<List<RemoteConfigEntryRow>, RemoteConfigStateRow?> {
+        val values = runCatching {
+            val data = JSONObject(mapString(map, "values") ?: return emptyList<RemoteConfigEntryRow>() to null)
+            data.keys().asSequence().map { it to data.optString(it) }.toList()
+        }.getOrDefault(emptyList())
+        val entries = values.map { (key, value) -> RemoteConfigEntryRow(key, value) }
+        val state = if (map.containsKey("version")) {
+            RemoteConfigStateRow(REMOTE_CONFIG_STATE_ID, mapLong(map, "version"))
+        } else {
+            null
+        }
+        return entries to state
+    }
+
+    fun parseImSessionRow(map: Map<String, Any?>): ImSessionCredentialRow? {
+        val uid = mapNonBlank(map, "uid") ?: return null
+        val token = mapNonBlank(map, "token") ?: return null
+        val gatewayUrl = mapNonBlank(map, "gateway_url") ?: return null
+        val accountId = mapLong(map, "account_id")
+        if (accountId <= 0L) return null
+        return ImSessionCredentialRow(
+            id = IM_SESSION_CREDENTIAL_ID,
+            accountId = accountId,
+            uid = uid,
+            token = token,
+            expiresAt = mapLong(map, "expires_at"),
+            deviceFlag = mapInt(map, "device_flag", 1),
+            deviceLevel = mapInt(map, "device_level", 1),
+            gatewayUrl = gatewayUrl,
+        )
+    }
+
+    /** 每个账号键（peers_<id>）一组；集合内排序保证落库顺序稳定。 */
+    fun parseImPeerRows(map: Map<String, Any?>): List<ImPeerRow> = map.flatMap { (key, value) ->
+        val match = Regex("^peers_(\\d+)$").matchEntire(key) ?: return@flatMap emptyList()
+        val accountId = match.groupValues[1].toLongOrNull() ?: return@flatMap emptyList()
+        (mapStringSet(map, key) ?: emptySet())
+            .filter { it.isNotBlank() }
+            .map { ImPeerRow(accountId, it) }
+    }
 
     fun parseHistoryRows(accountId: Long, raw: String?): List<PlaybackHistoryRow> {
         if (raw.isNullOrBlank()) return emptyList()
