@@ -1,6 +1,7 @@
 package com.taotao.music.data
 
 import android.content.Context
+import com.taotao.music.data.db.LocalKvStore
 import java.util.UUID
 
 /**
@@ -11,16 +12,16 @@ import java.util.UUID
  * 只在本机生成，不含任何硬件标识符，不上传除自身以外的设备信息。
  */
 class DeviceIdStore(context: Context) {
-    private val preferences = context.getSharedPreferences("device", Context.MODE_PRIVATE)
+    private val kv = LocalKvStore.get(context)
 
     fun deviceId(): String = synchronized(LOCK) {
-        preferences.getString(KEY, null)?.takeIf { it.isNotBlank() } ?: UUID.randomUUID().toString().also {
-            preferences.edit().putString(KEY, it).apply()
+        kv.getString(KEY)?.takeIf { it.isNotBlank() } ?: UUID.randomUUID().toString().also {
+            kv.putString(KEY, it)
         }
     }
 
     private companion object {
-        const val KEY = "device_id"
+        const val KEY = "device.device_id"
 
         /** 首次生成时加锁，避免两个线程同时初始化得到两个不同的标识。 */
         val LOCK = Any()

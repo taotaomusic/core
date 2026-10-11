@@ -20,12 +20,30 @@ internal object PrefsToRoomMigrator {
     @Volatile
     private var done = false
 
+    @Volatile
+    private var kvDone = false
+
     private val PREFS_FILE_NAMES = listOf(
         "playback_history",
         "playback_sync",
         "favorites",
         "ai_chat",
         "playback_state",
+    )
+
+    /** 第二阶段（小键值→local_kv）涉及的 prefs 文件；hotfix 有意排除。 */
+    private val KV_PREFS_FILE_NAMES = listOf(
+        "auth",
+        "playback_quality",
+        "appearance",
+        "search_history",
+        "sleep_timer",
+        "remote_config",
+        "device",
+        "app_update",
+        "cover_skin",
+        "im_session",
+        "im_peers",
     )
 
     fun migrateIfNeeded(context: Context, db: TaotaoLocalDatabase) {
@@ -37,6 +55,42 @@ internal object PrefsToRoomMigrator {
                 return
             }
             migrate(context, db)
+        }
+    }
+
+    /**
+     * 第二阶段：剩余的小键值 prefs 文件 → local_kv 表。
+     *
+     * 键名统一加存储域前缀（"<文件名>.<原键名>"），保证共表不撞键、可按前缀整域删除。
+     * hotfix 计数不迁移：它挂在已弃用的补丁链路上，随补丁系统下线一起删除。
+     */
+    fun migrateKvIfNeeded(context: Context, db: TaotaoLocalDatabase) {
+        if (kvDone) return
+        synchronized(lock) {
+            if (kvDone) return
+            if (db.localDbMetaDao().getValue(PrefsPayloadParser.KV_MIGRATED_FLAG) == "1") {
+                kvDone = true
+                return
+            }
+            val appContext = context.applicationContext
+            val rows = mutableListOf<LocalKvRow>()
+            KV_PREFS_FILE_NAMES.forEach { fileName ->
+                val prefs = appContext.getSharedPreferences(fileName, Context.MODE_PRIVATE)
+                prefs.all.forEach { (key, value) ->
+                    val converted = PrefsPayloadParser.convertPrefValue(value) ?: return@forEach
+                    rows += LocalKvRow("$fileName.$key", converted)
+                }
+            }
+            db.runInTransaction {
+                val meta = db.localDbMetaDao()
+                if (meta.getValue(PrefsPayloadParser.KV_MIGRATED_FLAG) == "1") return@runInTransaction
+                if (rows.isNotEmpty()) db.localKvDao().insertAll(rows)
+                meta.upsert(LocalDbMetaRow(PrefsPayloadParser.KV_MIGRATED_FLAG, "1"))
+            }
+            KV_PREFS_FILE_NAMES.forEach { fileName ->
+                appContext.getSharedPreferences(fileName, Context.MODE_PRIVATE).edit().clear().apply()
+            }
+            kvDone = true
         }
     }
 

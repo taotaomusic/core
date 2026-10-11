@@ -104,6 +104,17 @@ class PrefsPayloadParserTest {
     }
 
     @Test
+    fun `prefs 值序列化为 kv 字符串`() {
+        assertEquals("1", PrefsPayloadParser.convertPrefValue(true))
+        assertEquals("0", PrefsPayloadParser.convertPrefValue(false))
+        assertEquals("9", PrefsPayloadParser.convertPrefValue(9L))
+        assertEquals("9", PrefsPayloadParser.convertPrefValue(9))
+        assertEquals("abc", PrefsPayloadParser.convertPrefValue("abc"))
+        assertEquals("""["a","b"]""", PrefsPayloadParser.stringSetToJson(setOf("b", "a")))
+        assertNull(PrefsPayloadParser.convertPrefValue(listOf("a")))
+    }
+
+    @Test
     fun `队列优先新格式并回退旧版单歌曲`() {
         val queue = JSONArray()
             .put(JSONObject(songJson(remoteId = 5)))

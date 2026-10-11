@@ -37,6 +37,25 @@ internal object PrefsPayloadParser {
     /** 迁移后的整库完成标记，落在 local_db_meta 里与数据同事务翻转。 */
     const val MIGRATED_FLAG = "prefs_migrated_v1"
 
+    /** 小键值第二阶段迁移的完成标记。 */
+    const val KV_MIGRATED_FLAG = "prefs_migrated_v2_kv"
+
+    /**
+     * prefs 值 → local_kv 字符串值。布尔 "1"/"0"、数字十进制字符串、字符串原样；
+     * 字符串集合转 JSON 数组（ImPeerStore 的对端集合）。不认识的类型返回 null 丢弃。
+     */
+    fun convertPrefValue(value: Any?): String? = when (value) {
+        is Boolean -> if (value) "1" else "0"
+        is Number -> value.toString()
+        is String -> value
+        is Set<*> -> stringSetToJson(value.mapNotNull { it as? String }.toSet())
+        else -> null
+    }
+
+    fun stringSetToJson(values: Set<String>): String = JSONArray().apply {
+        values.sorted().forEach { put(it) }
+    }.toString()
+
     fun parseHistoryRows(accountId: Long, raw: String?): List<PlaybackHistoryRow> {
         if (raw.isNullOrBlank()) return emptyList()
         return runCatching {

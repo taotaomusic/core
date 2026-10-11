@@ -1,6 +1,8 @@
 package com.taotao.music.data
 
 import android.content.Context
+import com.taotao.music.data.db.LocalKvStore
+import org.json.JSONArray
 
 /**
  * 本机最近使用过的悟空 IM 对端 UUID。
@@ -9,11 +11,13 @@ import android.content.Context
  * 隔离，避免同一设备切换账号后把另一人的常用联系人展示出来。
  */
 class ImPeerStore(context: Context) {
-    private val preferences = context.applicationContext.getSharedPreferences("im_peers", Context.MODE_PRIVATE)
+    private val kv = LocalKvStore.get(context)
 
     fun read(accountId: Long?): List<String> {
         if (accountId == null || accountId <= 0) return emptyList()
-        return preferences.getStringSet(key(accountId), emptySet()).orEmpty().sorted()
+        val array = runCatching { JSONArray(kv.getString(key(accountId)) ?: return emptyList()) }
+            .getOrNull() ?: return emptyList()
+        return (0 until array.length()).mapNotNull { array.optString(it).takeIf(String::isNotBlank) }.sorted()
     }
 
     fun remember(accountId: Long?, uid: String): List<String> {
@@ -21,11 +25,11 @@ class ImPeerStore(context: Context) {
         val normalized = uid.trim().lowercase()
         if (!UUID_PATTERN.matches(normalized)) return read(accountId)
         val peers = read(accountId).toMutableSet().apply { add(normalized) }.take(MAX_PEERS).toSet()
-        preferences.edit().putStringSet(key(accountId), peers).apply()
+        kv.putString(key(accountId), JSONArray(peers.sorted()).toString())
         return peers.sorted()
     }
 
-    private fun key(accountId: Long) = "peers_$accountId"
+    private fun key(accountId: Long) = "im_peers.peers_$accountId"
 
     private companion object {
         const val MAX_PEERS = 30

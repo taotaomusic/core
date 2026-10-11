@@ -1,6 +1,7 @@
 package com.taotao.music.data
 
 import android.content.Context
+import com.taotao.music.data.db.LocalKvStore
 import com.taotao.music.model.AudioQuality
 
 /**
@@ -10,21 +11,18 @@ import com.taotao.music.model.AudioQuality
  * 无损一首约 55MB,默认播放档位刻意不选它。
  */
 class QualityStore(context: Context) {
-    private val preferences = context.getSharedPreferences("playback_quality", Context.MODE_PRIVATE)
+    private val kv = LocalKvStore.get(context)
 
-    fun playbackQuality(): AudioQuality = AudioQuality.of(preferences.getInt(KEY_PLAYBACK, AudioQuality.Default.value))
+    fun playbackQuality(): AudioQuality = AudioQuality.of(kv.getInt(KEY_PLAYBACK, AudioQuality.Default.value))
 
-    fun setPlaybackQuality(quality: AudioQuality) =
-        preferences.edit().putInt(KEY_PLAYBACK, quality.value).apply()
+    fun setPlaybackQuality(quality: AudioQuality) = kv.putInt(KEY_PLAYBACK, quality.value)
 
-    fun downloadQuality(): AudioQuality =
-        AudioQuality.of(preferences.getInt(KEY_DOWNLOAD, AudioQuality.LOSSLESS.value))
+    fun downloadQuality(): AudioQuality = AudioQuality.of(kv.getInt(KEY_DOWNLOAD, AudioQuality.LOSSLESS.value))
 
-    fun setDownloadQuality(quality: AudioQuality) =
-        preferences.edit().putInt(KEY_DOWNLOAD, quality.value).apply()
+    fun setDownloadQuality(quality: AudioQuality) = kv.putInt(KEY_DOWNLOAD, quality.value)
 
     private companion object {
-        const val KEY_PLAYBACK = "playback"
-        const val KEY_DOWNLOAD = "download"
+        const val KEY_PLAYBACK = "playback_quality.playback"
+        const val KEY_DOWNLOAD = "playback_quality.download"
     }
 }

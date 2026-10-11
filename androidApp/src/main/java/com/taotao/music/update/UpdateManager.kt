@@ -37,7 +37,7 @@ class UpdateManager(
     val remoteConfig = RemoteConfigStore(appContext)
 
     /** 用户已划掉的版本号，跨启动记住。 */
-    private val preferences = appContext.getSharedPreferences("app_update", Context.MODE_PRIVATE)
+    private val kv = com.taotao.music.data.db.LocalKvStore.get(appContext)
 
     /** 同一时刻只允许一次检查。原来靠读 status 判断，两个协程可能同时通过。 */
     private val checkLock = Mutex()
@@ -207,11 +207,11 @@ class UpdateManager(
      */
     fun dismiss() {
         if (status.forced) return
-        status.release?.versionCode?.let { preferences.edit().putLong(KEY_DISMISSED, it).apply() }
+        status.release?.versionCode?.let { kv.putString(KEY_DISMISSED, it.toString()) }
         status = UpdateStatus(stage = UpdateStage.UP_TO_DATE)
     }
 
-    private fun dismissedVersionCode(): Long = preferences.getLong(KEY_DISMISSED, 0L)
+    private fun dismissedVersionCode(): Long = kv.getLong(KEY_DISMISSED, 0L)
 
     /** 失败后重试：已下载的分片会被续传复用。 */
     suspend fun retry() {
@@ -229,6 +229,6 @@ class UpdateManager(
     }
 
     private companion object {
-        const val KEY_DISMISSED = "dismissed_version_code"
+        const val KEY_DISMISSED = "app_update.dismissed_version_code"
     }
 }
