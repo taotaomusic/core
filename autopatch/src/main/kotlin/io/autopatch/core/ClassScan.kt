@@ -166,14 +166,14 @@ object ClassScanner {
                     for (arg in insn.bsmArgs) sb.append(' ').append(constantText(arg))
                 }
                 is TableSwitchInsnNode -> {
-                    sb.append("tableswitch ").append(insn.min).append('..').append(insn.max)
+                    sb.append("tableswitch ").append(insn.min).append("..").append(insn.max)
                         .append(" dflt=").append(labelId(labelIds, insn.dflt))
-                    for (target in insn.targets) sb.append(' ').append(labelId(labelIds, target))
+                    for (target in insn.labels) sb.append(' ').append(labelId(labelIds, target))
                 }
                 is LookupSwitchInsnNode -> {
                     sb.append("lookupswitch dflt=").append(labelId(labelIds, insn.dflt))
                     for (key in insn.keys) sb.append(' ').append(key)
-                    for (target in insn.targets) sb.append(' ').append(labelId(labelIds, target))
+                    for (target in insn.labels) sb.append(' ').append(labelId(labelIds, target))
                 }
                 is LdcInsnNode -> sb.append("ldc ").append(insn.cst)
                 is TypeInsnNode -> sb.append(insn.opcode).append(' ').append(insn.desc)
@@ -202,7 +202,7 @@ object ClassScanner {
     }
 
     private fun handleText(handle: Handle): String =
-        "handle:${handle.owner}.${handle.name}${handle.desc}" + if (handle.itf) ";itf" else ""
+        "handle:${handle.owner}.${handle.name}${handle.desc}" + if (handle.isInterface) ";itf" else ""
 
     /**
      * 收集方法体里「结构上无法安全移植进补丁类」的指令事实（同一类事实只记一条）。
