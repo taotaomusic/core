@@ -15,6 +15,16 @@ package com.taotao.music.hotfix
  * 代价是 UI 层不能插桩：Compose 的可组合函数依赖 `startRestartGroup` / `endRestartGroup`
  * 严格配对，在函数开头插一条提前 return 会破坏组结构。所以插桩范围限定在
  * `data` / `player` / `update` / `model` 这些纯逻辑包，界面 bug 仍然只能发整包。
+ *
+ * ## 补丁作者须知
+ *
+ * - 异常边界：插桩的分发判断位于原方法体的第一条指令**之前**，在原方法任何 try 块的
+ *   覆盖范围之外。补丁 `dispatch`（及其实现）抛出的异常会直接向调用方传播，**不会**
+ *   被原方法自己的 catch 接住 —— 「原方法包了 try 不会崩」的直觉在打上补丁后失效，
+ *   可预期的异常必须在补丁实现里自行兜住。
+ * - 线程可见性：分发器字段是 volatile，加载器写入后各线程的下一次方法调用立即可见补丁；
+ *   但补丁实现内部若有延迟初始化（懒加载单例之类）仍需自带同步 —— volatile 只保证
+ *   分发器字段本身的可见性，不延伸到补丁自己的状态。
  */
 interface PatchDispatcher {
     /**

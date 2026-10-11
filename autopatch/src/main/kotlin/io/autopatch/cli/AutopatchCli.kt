@@ -16,12 +16,15 @@ import java.io.File
 /**
  * 一次补丁生成的输入。
  *
- * [baseDir] / [headDir] 是两份编译产物目录（如 `androidApp/build/tmp/kotlin-classes/release`）：
- * base = 线上那个版本，head = 修好之后。
+ * [baseDirs] / [headDirs] 是若干份编译产物目录（如 `androidApp` 与 `shared` 各自的
+ * `build/tmp/kotlin-classes/release`）：base = 线上那个版本，head = 修好之后。
+ * 必须把 shared 这类独立模块的目录一起传入 —— 漏掉的话其改动对 diff 不可见，
+ * 补丁会放行「方法体半新半旧」的类（补丁类走新实现、经父加载器拿到的同模块
+ * 旧类走旧实现），且无任何告警。
  */
 data class CliRequest(
-    val baseDir: File,
-    val headDir: File,
+    val baseDirs: List<File>,
+    val headDirs: List<File>,
     val outDir: File,
     val gateConfig: GateConfig,
     val emitConfig: EmitConfig,
@@ -47,8 +50,8 @@ sealed interface CliResult {
 object AutopatchCli {
 
     fun run(request: CliRequest): CliResult {
-        val base = ClassScanner.scanDir(request.baseDir)
-        val head = ClassScanner.scanDir(request.headDir)
+        val base = ClassScanner.scanDirs(request.baseDirs)
+        val head = ClassScanner.scanDirs(request.headDirs)
         val d = diff(base, head)
 
         val verdict = HotfixGate.evaluate(d, request.gateConfig)
@@ -56,7 +59,7 @@ object AutopatchCli {
         verdict as Verdict.Eligible
 
         // 为每个可热修方法键，从 head 产物里取带指令的 MethodNode。
-        val targets = verdict.patchableKeys.map { key -> toPatchTarget(key, request.headDir) }
+        val targets = verdict.patchableKeys.map { key -> toPatchTarget(key, request.headDirs) }
 
         val entryBytes = PatchEmitter(request.emitConfig).emit(targets)
 
@@ -78,7 +81,7 @@ object AutopatchCli {
     }
 
     /** 键形如 `owner#name(desc)ret`，据此定位 head 里的类文件与方法。 */
-    private fun toPatchTarget(key: String, headDir: File): PatchTarget {
+    private fun toPatchTarget(key: String, headDirs: List<File>): PatchTarget {
         val hash = key.indexOf('#')
         require(hash > 0) { "非法方法键：$key" }
         val owner = key.substring(0, hash)
@@ -88,8 +91,13 @@ object AutopatchCli {
         val name = methodPart.substring(0, paren)
         val desc = methodPart.substring(paren)
 
-        val classFile = File(headDir, "$owner.class")
-        require(classFile.isFile) { "head 里找不到类文件：$classFile" }
+        // scanDirs 已保证同一内部名只属于一个目录，命中第一个即唯一。
+        val classFile = headDirs.asSequence()
+            .map { File(it, "$owner.class") }
+            .firstOrNull { it.isFile }
+        requireNotNull(classFile) {
+            "head 里找不到类文件：$owner.class（查找过的目录：${headDirs.joinToString("、")}）"
+        }
         val node = ClassNode()
         ClassReader(classFile.readBytes()).accept(node, 0)
         val method: MethodNode = node.methods.single { it.name == name && it.desc == desc }

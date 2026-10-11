@@ -489,6 +489,17 @@ jobs:
             androidApp/build/outputs/apk/**/*.apk
             androidApp/build/outputs/apk/**/output-metadata.json
           if-no-files-found: error
+      # autopatch 生成补丁需要「线上那个版本」的 kotlin-classes 作为 base 侧 diff 的输入，
+      # 而该目录会被下一次构建覆盖 —— 不归档，现场就对不上 base，线上版本的补丁无法生成。
+      - name: 归档 kotlin-classes（补丁 base 输入）
+        uses: actions/upload-artifact@v4
+        with:
+          name: kotlin-classes-release
+          path: |
+            androidApp/build/tmp/kotlin-classes/release
+            shared/build/tmp/kotlin-classes/release
+          if-no-files-found: error
+          retention-days: 30
 
   # PLACEHOLDER_CLIENT_PUBLISH
   client-web:

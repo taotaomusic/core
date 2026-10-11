@@ -15,7 +15,7 @@ private const val DISPATCHER_DESC = "L$DISPATCHER_TYPE;"
  *
  * 做两件事：
  *
- * 1. 加一个 `public static PatchDispatcher $$patchDispatcher;` 字段，运行时由加载器赋值。
+ * 1. 加一个 `public static volatile PatchDispatcher $$patchDispatcher;` 字段，运行时由加载器赋值。
  * 2. 在每个可插桩方法开头插入等价于下面这段的字节码：
  *
  * ```
@@ -65,8 +65,13 @@ class HotfixClassVisitor(
         if (!isInterface) {
             // 字段必须是 public static：加载器跨类加载器反射赋值，private 在部分 ROM 上
             // 会被 setAccessible 限制拦住。
+            // 还必须是 volatile：加载器经 Field.set 的反射写（ART 对 volatile 字段走
+            // volatile 语义）与插桩读端（GETSTATIC）之间靠它建立 happens-before ——
+            // 普通静态字段的反射写没有该保证，已把字段读成 null 的工作线程按 JMM 不保证
+            // 能看到更新，表现为补丁挂上了但部分线程永远走旧代码。代价是每次方法调用
+            // 多一次 acquire 读，可忽略。
             cv.visitField(
-                Opcodes.ACC_PUBLIC or Opcodes.ACC_STATIC or Opcodes.ACC_SYNTHETIC,
+                Opcodes.ACC_PUBLIC or Opcodes.ACC_STATIC or Opcodes.ACC_SYNTHETIC or Opcodes.ACC_VOLATILE,
                 DISPATCHER_FIELD,
                 DISPATCHER_DESC,
                 null,

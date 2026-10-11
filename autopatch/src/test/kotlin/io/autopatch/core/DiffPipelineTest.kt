@@ -1,10 +1,14 @@
 package io.autopatch.core
 
 import org.objectweb.asm.ClassWriter
+import org.objectweb.asm.Handle
+import org.objectweb.asm.Label
 import org.objectweb.asm.MethodVisitor
 import org.objectweb.asm.Opcodes
+import org.objectweb.asm.Type
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 /**
@@ -236,5 +240,93 @@ class DiffPipelineTest {
             HotfixGate.evaluate(diff(base, head), GateConfig(allowedPackagePrefixes = listOf("com/taotao/music")))
         assertTrue(verdict is Verdict.Eligible)
         assertEquals(listOf("com/taotao/music/data/Foo#bar()I"), (verdict as Verdict.Eligible).patchableKeys)
+    }
+
+    @Test
+    fun `仅 lambda bootstrap 参数不同的 indy 方法指纹不同`() {
+        // lambda 捕获列表的变化只体现在 indy 的 bootstrap 方法与参数里；指纹若只记
+        // name+desc，这类改动会漏检成「无变化」，补丁键不命中就静默走旧逻辑。
+        val bsm = Handle(
+            Opcodes.H_INVOKESTATIC,
+            "java/lang/invoke/LambdaMetafactory",
+            "metafactory",
+            "(Ljava/lang/invoke/MethodHandles\$Lookup;Ljava/lang/String;Ljava/lang/invoke/MethodType;" +
+                "Ljava/lang/invoke/MethodType;Ljava/lang/invoke/MethodHandle;Ljava/lang/invoke/MethodType;" +
+                ")Ljava/lang/invoke/CallSite;",
+            false,
+        )
+        fun supplierClass(lambdaImplName: String): ByteArray = clazzWithBodies(
+            "com/app/data/LambdaHost",
+            methods = listOf(
+                Triple("make", "()Ljava/util/function/Supplier;") { mv ->
+                    mv.visitInvokeDynamicInsn(
+                        "get",
+                        "()Ljava/util/function/Supplier;",
+                        bsm,
+                        Type.getType("()Ljava/lang/Object;"),
+                        Handle(
+                            Opcodes.H_INVOKESTATIC,
+                            "com/app/data/LambdaHost",
+                            lambdaImplName,
+                            "()Ljava/lang/Object;",
+                            false,
+                        ),
+                        Type.getType("()Ljava/lang/Object;"),
+                    )
+                    mv.visitInsn(Opcodes.ARETURN)
+                },
+            ),
+        )
+
+        val base = ClassScanner.scanBytes(supplierClass("lambda\$make\$0"))
+        val head = ClassScanner.scanBytes(supplierClass("lambda\$make\$1"))
+        assertEquals(base.methods.keys, head.methods.keys, "两版应是同一个方法，只有方法体指纹不同")
+        assertNotEquals(
+            base.methods.values.single().fingerprint,
+            head.methods.values.single().fingerprint,
+            "bootstrap 参数不同必须产生不同指纹",
+        )
+    }
+
+    @Test
+    fun `仅 switch 分支目标不同的方法指纹不同`() {
+        // 分支目标重排不改变指令流的 opcode 序列，只改变 switch 指令指向哪些标签；
+        // 指纹若只记 opcode，这类改动同样漏检。表切换与键值切换两条路径都要覆盖。
+        fun switchClass(internalName: String, swap: Boolean): ByteArray = clazzWithBodies(
+            internalName,
+            methods = listOf(
+                Triple("pick", "(I)I") { mv ->
+                    mv.visitVarInsn(Opcodes.ILOAD, 1)
+                    val first = Label()
+                    val second = Label()
+                    val dflt = Label()
+                    if (swap) {
+                        mv.visitTableSwitchInsn(0, 1, dflt, second, first)
+                        mv.visitLookupSwitchInsn(dflt, intArrayOf(7, 9), arrayOf(second, first))
+                    } else {
+                        mv.visitTableSwitchInsn(0, 1, dflt, first, second)
+                        mv.visitLookupSwitchInsn(dflt, intArrayOf(7, 9), arrayOf(first, second))
+                    }
+                    mv.visitLabel(first)
+                    mv.visitInsn(Opcodes.ICONST_1)
+                    mv.visitInsn(Opcodes.IRETURN)
+                    mv.visitLabel(second)
+                    mv.visitInsn(Opcodes.ICONST_2)
+                    mv.visitInsn(Opcodes.IRETURN)
+                    mv.visitLabel(dflt)
+                    mv.visitInsn(Opcodes.ICONST_0)
+                    mv.visitInsn(Opcodes.IRETURN)
+                },
+            ),
+        )
+
+        val base = ClassScanner.scanBytes(switchClass("com/app/data/SwitchHost", swap = false))
+        val head = ClassScanner.scanBytes(switchClass("com/app/data/SwitchHost", swap = true))
+        assertEquals(base.methods.keys, head.methods.keys, "两版应是同一个方法，只有方法体指纹不同")
+        assertNotEquals(
+            base.methods.values.single().fingerprint,
+            head.methods.values.single().fingerprint,
+            "switch 分支目标不同必须产生不同指纹",
+        )
     }
 }

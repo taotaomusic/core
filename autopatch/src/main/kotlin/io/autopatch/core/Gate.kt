@@ -6,6 +6,12 @@ package io.autopatch.core
  * [allowedPackagePrefixes] 是宿主专属的白名单（斜杠内部名前缀，例如
  * `com/taotao/music/data`）。留空表示不按包限制 —— 让工具对开源使用方保持通用，
  * 具体范围由接入方传入。
+ *
+ * CLI 入口（`io.autopatch.cli.Main`）在 `--allow` 未传时默认填入桃桃音乐的插桩范围
+ * （data / player / update 三包）。该默认值必须与 build-logic 的
+ * `HotfixInstrumentationPlugin.includedPackages` 保持一致：插桩范围之外的包没有
+ * 分发器字段，这里若放行，生成的补丁加载即拒。两处是跨构建无法共享常量的重复定义，
+ * 改一边必须同步另一边。
  */
 data class GateConfig(
     val allowedPackagePrefixes: List<String> = emptyList(),

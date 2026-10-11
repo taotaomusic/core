@@ -1,7 +1,9 @@
 package io.autopatch.core
 
 import org.objectweb.asm.ClassReader
+import org.objectweb.asm.Handle
 import org.objectweb.asm.Opcodes
+import org.objectweb.asm.Type
 import org.objectweb.asm.tree.AbstractInsnNode
 import org.objectweb.asm.tree.ClassNode
 import org.objectweb.asm.tree.FieldInsnNode
@@ -9,11 +11,14 @@ import org.objectweb.asm.tree.FrameNode
 import org.objectweb.asm.tree.IincInsnNode
 import org.objectweb.asm.tree.IntInsnNode
 import org.objectweb.asm.tree.InvokeDynamicInsnNode
+import org.objectweb.asm.tree.LabelNode
 import org.objectweb.asm.tree.LdcInsnNode
 import org.objectweb.asm.tree.LineNumberNode
+import org.objectweb.asm.tree.LookupSwitchInsnNode
 import org.objectweb.asm.tree.MethodInsnNode
 import org.objectweb.asm.tree.MethodNode
 import org.objectweb.asm.tree.MultiANewArrayInsnNode
+import org.objectweb.asm.tree.TableSwitchInsnNode
 import org.objectweb.asm.tree.TypeInsnNode
 import java.io.File
 import java.security.MessageDigest
@@ -55,7 +60,7 @@ data class Scan(val classes: Map<String, ScannedClass>)
  * 扫描一个目录下的所有 `.class`，产出 [Scan]。
  *
  * 典型用法是分别扫 base（线上版本编译产物）和 head 两份 `build/tmp/kotlin-classes/release`，
- * 交给 [io.autopatch.core.diff] 求差集。
+ * 交给 [io.autopatch.core.diff] 求差集；多模块产物用 [scanDirs] 合并后同样走 diff。
  */
 object ClassScanner {
 
@@ -68,6 +73,30 @@ object ClassScanner {
                 val scanned = scanBytes(file.readBytes())
                 classes[scanned.internalName] = scanned
             }
+        return Scan(classes)
+    }
+
+    /**
+     * 扫描多个目录并合并成一个 [Scan]。
+     *
+     * 多目录用于把 `shared` 这类独立模块的编译产物一起纳入 diff —— 漏掉它们，
+     * 其改动会被误判成「没有方法变化」，运行时经父加载器拿到的还是宿主里的旧类。
+     * 同一内部名出现在两个目录时直接抛错：那意味着目录重叠或混入了同一模块的
+     * 旧产物，静默合并会让 diff 结果取决于目录遍历顺序。
+     */
+    fun scanDirs(dirs: List<File>): Scan {
+        val classes = LinkedHashMap<String, ScannedClass>()
+        val ownerOf = HashMap<String, File>()
+        for (dir in dirs) {
+            for ((internalName, scanned) in scanDir(dir).classes) {
+                val firstDir = ownerOf.put(internalName, dir)
+                require(firstDir == null) {
+                    "内部名 $internalName 同时出现在扫描目录 $firstDir 和 $dir，无法合并成一份扫描结果；" +
+                        "请检查目录是否重叠或混入了同一模块的旧产物"
+                }
+                classes[internalName] = scanned
+            }
+        }
         return Scan(classes)
     }
 
@@ -99,11 +128,27 @@ object ClassScanner {
     /**
      * 方法体指纹。
      *
-     * 只序列化「指令语义」：opcode + 关键操作数（字段/方法引用、常量、类型）。
+     * 只序列化「指令语义」：opcode + 关键操作数（字段/方法引用、常量、类型），
+     * 以及 indy 的 bootstrap 方法与参数、switch 的全部分支目标 —— 后两者恰是
+     * 「只改 lambda 捕获 / 只重排分支」时唯一变化的字节码部位，漏记就会漏检
+     * （补丁键不命中，静默走旧逻辑）。switch 目标用 LabelNode 的首次出现序号
+     * 引用；普通 LabelNode 本身不进指纹 —— 它随排版漂移，算进去会把「只是挪了
+     * 几行」误判成「方法改了」，触发无谓的整包判定。
      * 跳过 [LineNumberNode] 与 [FrameNode] —— 它们随排版和编译器心情变化，
-     * 算进去会把「只是挪了几行」误判成「方法改了」，触发无谓的整包判定。
+     * 算进去同样违背上面的设计。
      */
     private fun fingerprintOf(method: MethodNode): String {
+        // 先按首次出现顺序给所有 LabelNode 编号：switch 的分支目标就是 LabelNode，
+        // 序号是它跨两版字节码唯一稳定的引用方式。编号表只服务于 switch 目标的
+        // 序列化，普通 LabelNode 并不据此进指纹。
+        val labelIds = HashMap<LabelNode, Int>()
+        var cur: AbstractInsnNode? = method.instructions.first
+        var nextLabelId = 0
+        while (cur != null) {
+            if (cur is LabelNode) labelIds[cur] = nextLabelId++
+            cur = cur.next
+        }
+
         val sb = StringBuilder()
         sb.append(method.access).append('|').append(method.desc).append('\n')
         var insn: AbstractInsnNode? = method.instructions.first
@@ -114,7 +159,22 @@ object ClassScanner {
                     .append(insn.owner).append('.').append(insn.name).append(':').append(insn.desc)
                 is MethodInsnNode -> sb.append(insn.opcode).append(' ')
                     .append(insn.owner).append('.').append(insn.name).append(insn.desc)
-                is InvokeDynamicInsnNode -> sb.append("indy ").append(insn.name).append(insn.desc)
+                is InvokeDynamicInsnNode -> {
+                    // lambda 捕获列表的变化只体现在 bootstrap 方法与参数里。
+                    sb.append("indy ").append(insn.name).append(insn.desc)
+                        .append(" bsm=").append(handleText(insn.bsm))
+                    for (arg in insn.bsmArgs) sb.append(' ').append(constantText(arg))
+                }
+                is TableSwitchInsnNode -> {
+                    sb.append("tableswitch ").append(insn.min).append('..').append(insn.max)
+                        .append(" dflt=").append(labelId(labelIds, insn.dflt))
+                    for (target in insn.targets) sb.append(' ').append(labelId(labelIds, target))
+                }
+                is LookupSwitchInsnNode -> {
+                    sb.append("lookupswitch dflt=").append(labelId(labelIds, insn.dflt))
+                    for (key in insn.keys) sb.append(' ').append(key)
+                    for (target in insn.targets) sb.append(' ').append(labelId(labelIds, target))
+                }
                 is LdcInsnNode -> sb.append("ldc ").append(insn.cst)
                 is TypeInsnNode -> sb.append(insn.opcode).append(' ').append(insn.desc)
                 is IntInsnNode -> sb.append(insn.opcode).append(' ').append(insn.operand)
@@ -128,6 +188,21 @@ object ClassScanner {
         val digest = MessageDigest.getInstance("SHA-256").digest(sb.toString().toByteArray())
         return digest.joinToString("") { "%02x".format(it) }
     }
+
+    /** switch 目标标签的稳定序号；查不到说明指令表与 switch 操作数不一致，属于字节码结构异常。 */
+    private fun labelId(labelIds: Map<LabelNode, Int>, label: LabelNode): Int =
+        requireNotNull(labelIds[label]) { "switch 分支目标标签不在方法指令列表里（字节码结构异常）" }
+
+    /** bootstrap 常量序列化：Handle 展开成成员引用（含 itf，接口与否影响调用语义），Type 取 descriptor。 */
+    private fun constantText(value: Any?): String = when (value) {
+        null -> "null"
+        is Handle -> handleText(value)
+        is Type -> "type:${value.descriptor}"
+        else -> value.toString()
+    }
+
+    private fun handleText(handle: Handle): String =
+        "handle:${handle.owner}.${handle.name}${handle.desc}" + if (handle.itf) ";itf" else ""
 
     /**
      * 收集方法体里「结构上无法安全移植进补丁类」的指令事实（同一类事实只记一条）。

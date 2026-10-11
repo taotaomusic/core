@@ -6,27 +6,43 @@ import java.io.File
 import kotlin.system.exitProcess
 
 /**
+ * `--allow` 未传时的默认允许热修包范围。
+ *
+ * 必须与 build-logic 里 HotfixInstrumentationPlugin 的 includedPackages 保持一致：
+ * 插桩只落在 data / player / update 三个业务包，允许范围比它宽（或留空 = 不限制）
+ * 时，闸门会放行从未插桩包（如 ui 层）里改出的方法，生成加载即拒的死补丁。
+ * 两处是跨构建无法共享常量的重复定义，改一边必须同步另一边。
+ */
+private val DEFAULT_ALLOWED_PACKAGE_PREFIXES = listOf(
+    "com/taotao/music/data/",
+    "com/taotao/music/player/",
+    "com/taotao/music/update/",
+)
+
+/**
  * 命令行入口。
  *
  * 用法：
  * ```
- * autopatch --base <baseClassesDir> --head <headClassesDir> --out <outDir> \
- *           [--host com/taotao/music] [--allow com/taotao/music/data,com/taotao/music/player]
+ * autopatch --base <baseClassesDir[,baseClassesDir2...]> --head <headClassesDir[,headClassesDir2...]> \
+ *           --out <outDir> [--host com/taotao/music] [--allow com/taotao/music/data,com/taotao/music/player]
  * ```
- * base/head 是两份编译产物目录（release 变体的 kotlin-classes）。
- * 判定必须整包时以非零码退出并逐条打印原因；生成成功打印方法键与产物路径。
+ * base/head 是两份编译产物目录（release 变体的 kotlin-classes），支持逗号分隔多个
+ * 模块目录 —— androidApp 与 shared 各一份，shared 的类不传进来就进不了 diff；
+ * 同一内部名不允许出现在两个目录里（扫描合并时会抛错）。判定必须整包时以非零码
+ * 退出并逐条打印原因；生成成功打印方法键与产物路径。
  */
 fun main(rawArgs: Array<String>) {
     val args = parseArgs(rawArgs)
-    val base = File(args.required("base"))
-    val head = File(args.required("head"))
+    val baseDirs = args.requiredList("base").map(::File)
+    val headDirs = args.requiredList("head").map(::File)
     val out = File(args.required("out"))
     val hostPrefixes = args.list("host").ifEmpty { listOf("com/taotao/music") }
-    val allowPrefixes = args.list("allow")
+    val allowPrefixes = args.list("allow").ifEmpty { DEFAULT_ALLOWED_PACKAGE_PREFIXES }
 
     val request = CliRequest(
-        baseDir = base,
-        headDir = head,
+        baseDirs = baseDirs,
+        headDirs = headDirs,
         outDir = out,
         gateConfig = GateConfig(allowedPackagePrefixes = allowPrefixes),
         emitConfig = EmitConfig(hostPackagePrefixes = hostPrefixes),
@@ -54,6 +70,10 @@ fun main(rawArgs: Array<String>) {
 private class ParsedArgs(private val map: Map<String, List<String>>) {
     fun required(name: String): String =
         map[name]?.firstOrNull() ?: error("缺少必填参数 --$name")
+
+    /** 取逗号分隔（或重复旗标）的多值参数；一个值都没给时按缺参报错。 */
+    fun requiredList(name: String): List<String> =
+        list(name).ifEmpty { error("缺少必填参数 --$name") }
 
     fun list(name: String): List<String> =
         map[name]?.flatMap { it.split(",") }?.map { it.trim() }?.filter { it.isNotEmpty() } ?: emptyList()

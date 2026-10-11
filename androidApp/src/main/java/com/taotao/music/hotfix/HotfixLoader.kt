@@ -134,6 +134,8 @@ object HotfixLoader {
                 continue
             }
             field.isAccessible = true
+            // 字段在插桩侧声明为 volatile：对 volatile 字段的反射写保有 volatile 语义，
+            // 与插桩读端（GETSTATIC）之间建立 happens-before，写入后各线程立即可见补丁。
             field.set(null, dispatcher)
             applied++
         }
