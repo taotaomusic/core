@@ -18,10 +18,15 @@ import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.ResolvingDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.session.CommandButton
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import androidx.media3.session.SessionResult
+import com.google.common.collect.ImmutableList
+import com.taotao.music.R
+import com.taotao.music.TaotaoApplication
 import com.taotao.music.data.AuthSession
+import com.taotao.music.data.PlaybackStateStore
 import com.taotao.music.data.SongCodec
 import com.taotao.music.data.TencentMusicApi
 import com.taotao.music.model.Song
@@ -52,6 +57,9 @@ class PlaybackService : MediaSessionService() {
     private var sleepTimerRemainingMs = 0L
     private var sleepTimerLastTickMs = 0L
 
+    /** 媒体面板「继续播放」的队列重建在后台线程做，避免 Room 读取卡主线程。 */
+    private val resumptionExecutor = Executors.newSingleThreadExecutor()
+
     /** 「播完整首歌再停止」的开关，由界面经 SET / SET_FLAG 命令下发。 */
     private var sleepTimerWaitForSongEnd = false
 
@@ -63,7 +71,7 @@ class PlaybackService : MediaSessionService() {
         }
     }
 
-    /** Media3 自定义命令：设置、取消或查询定时播放。 */
+    /** Media3 自定义命令：定时播放与媒体通知「收藏」按钮。 */
     private val mediaSessionCallback = object : MediaSession.Callback {
         override fun onConnect(
             session: MediaSession,
@@ -72,6 +80,7 @@ class PlaybackService : MediaSessionService() {
             val commands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS
                 .buildUpon()
                 .add(SleepTimerContract.command)
+                .add(FavoriteContract.command)
                 .build()
             return MediaSession.ConnectionResult.accept(
                 commands,
@@ -85,14 +94,60 @@ class PlaybackService : MediaSessionService() {
             customCommand: androidx.media3.session.SessionCommand,
             args: Bundle,
         ): ListenableFuture<SessionResult> {
-            if (customCommand.customAction != SleepTimerContract.COMMAND) {
-                return Futures.immediateFuture(SessionResult(SessionResult.RESULT_ERROR_NOT_SUPPORTED))
+            return when (customCommand.customAction) {
+                SleepTimerContract.COMMAND -> handleOnMain { handleSleepTimerCommand(args) }
+                FavoriteContract.COMMAND -> handleOnMain {
+                    // 收藏走进程级 appState 单例：与界面同一份收藏库和账号同步链路
+                    // （本地即时生效，远端由 toggleFavorite 自己异步提交并处理失败回滚）。
+                    player?.currentMediaItem?.let { item ->
+                        SongCodec.decode(item.mediaMetadata.extras?.getString(EXTRA_SONG))?.let { song ->
+                            TaotaoApplication.appState.toggleFavorite(song)
+                        }
+                    }
+                    publishFavoriteLayout()
+                    SessionResult(SessionResult.RESULT_SUCCESS)
+                }
+                else -> Futures.immediateFuture(SessionResult(SessionResult.RESULT_ERROR_NOT_SUPPORTED))
             }
-            // Media3 当前会话回调通常已经在主线程，但显式切回可避免不同控制器实现
-            // 从 Binder 线程直接操作 ExoPlayer，且让定时器的读写始终串行。
+        }
+
+        /** 统一把命令处理切回主线程，结果经 SettableFuture 回传控制器。 */
+        private fun handleOnMain(handle: () -> SessionResult): ListenableFuture<SessionResult> {
             val result = SettableFuture.create<SessionResult>()
             mainHandler.post {
-                result.set(handleSleepTimerCommand(args))
+                result.set(runCatching { handle() }.getOrElse {
+                    Log.w(TAG, "媒体自定义命令处理失败", it)
+                    SessionResult(SessionResult.RESULT_ERROR_UNKNOWN)
+                })
+            }
+            return result
+        }
+
+        /**
+         * 媒体面板「继续播放」（进程被系统回收后点播放键 / 恢复卡片）：用落盘的
+         * 播放状态重建整条队列并定位到上次进度，交给 Media3 执行随后的播放指令。
+         *
+         * 队列重建走 [playbackMediaItemOf]（extras 带整首歌 JSON），界面重连后
+         * 才能从时间线反查出队列。落盘状态缺位（从未播过 / 被登出清理）时返回
+         * 失败 Future，Media3 会按无内容处理。
+         */
+        override fun onPlaybackResumption(
+            mediaSession: MediaSession,
+            controller: MediaSession.ControllerInfo,
+        ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
+            val result = SettableFuture.create<MediaSession.MediaItemsWithStartPosition>()
+            resumptionExecutor.execute {
+                runCatching {
+                    val saved = PlaybackStateStore(applicationContext).read()
+                        ?: throw IllegalStateException("没有可恢复的播放状态")
+                    val startIndex = saved.index.coerceIn(saved.queue.indices)
+                    MediaSession.MediaItemsWithStartPosition(
+                        saved.queue.map { playbackMediaItemOf(it) },
+                        startIndex,
+                        saved.positionMs.coerceAtLeast(0).toLong(),
+                    )
+                }.onSuccess { result.set(it) }
+                    .onFailure { result.setException(it) }
             }
             return result
         }
@@ -174,6 +229,8 @@ class PlaybackService : MediaSessionService() {
                         val needsNetwork = uri == "http" || uri == "https"
                         setWakeMode(if (needsNetwork) C.WAKE_MODE_NETWORK else C.WAKE_MODE_LOCAL)
                         publishOplusLyrics(mediaItem)
+                        // 切歌后收藏按钮的图标要跟上新歌的收藏状态。
+                        publishFavoriteLayout()
                         // 等本歌播完时，只有自然播到下一首（含单曲循环转圈）才算兑现；
                         // 用户手动切歌不算，等新歌自然播完再停。
                         if (
@@ -216,6 +273,10 @@ class PlaybackService : MediaSessionService() {
             .setCallback(mediaSessionCallback)
             .setSessionExtras(sleepTimerExtras())
             .build()
+        // 媒体通知的自定义「收藏」按钮：Android 13+ 媒体控件与各 ROM 媒体卡
+        // （含荣耀流体云）都渲染 session custom layout；图标随当前歌曲的收藏
+        // 状态切换，切歌与点按时刷新。
+        publishFavoriteLayout()
         // Android 12 起后台启动前台服务可能被拒绝，注册监听避免 Media3 内部异常无人处理。
         setListener(object : Listener {
             override fun onForegroundServiceStartNotAllowedException() {
@@ -227,14 +288,16 @@ class PlaybackService : MediaSessionService() {
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = mediaSession
 
-    /** 任务被划掉时若已暂停就结束服务，避免留下一个不再播放的常驻通知。 */
+    /** 任务被划掉时，只有队列也空了才结束服务；暂停态保留常驻媒体通知，点播放直接续播。 */
     override fun onTaskRemoved(rootIntent: Intent?) {
         val current = player
         // 等本歌播完也算未完成的事：哪怕用户此刻暂停了，划掉任务也不该悄悄把歌掐了。
+        // 暂停 + 有队列同样保留：媒体面板里的播放按钮要能一键续播（与其他音乐 App
+        // 的常驻媒体行为一致）；不想看到通知时划掉通知即可，Media3 会随之结束服务。
         if (
             sleepTimerRemainingMs <= 0L &&
             !sleepTimerWaitingSongEnd &&
-            (current == null || !current.playWhenReady || current.mediaItemCount == 0)
+            (current == null || current.mediaItemCount == 0)
         ) {
             stopSelf()
         }
@@ -248,6 +311,7 @@ class PlaybackService : MediaSessionService() {
         sleepTimerWaitForSongEnd = false
         sleepTimerWaitingSongEnd = false
         lyricExecutor.shutdownNow()
+        resumptionExecutor.shutdownNow()
         runCatching { mediaSession?.release() }
         runCatching { player?.release() }
         mediaSession = null
@@ -461,6 +525,28 @@ class PlaybackService : MediaSessionService() {
         mediaSession?.setSessionExtras(sleepTimerExtras())
     }
 
+    /** 当前歌曲的收藏状态：经进程级 appState 单例，与界面共用同一份收藏库。 */
+    private fun currentSongFavorited(): Boolean {
+        val song = player?.currentMediaItem?.let {
+            SongCodec.decode(it.mediaMetadata.extras?.getString(EXTRA_SONG))
+        } ?: return false
+        return TaotaoApplication.appState.favoritesStore.contains(song)
+    }
+
+    /** 把媒体通知自定义「收藏」按钮的图标刷成当前歌曲的收藏状态。 */
+    private fun publishFavoriteLayout() {
+        val session = mediaSession ?: return
+        val favoriteButton = CommandButton.Builder()
+            .setDisplayName("收藏")
+            .setIconResId(
+                if (currentSongFavorited()) R.drawable.ic_media_heart_filled
+                else R.drawable.ic_media_heart_border,
+            )
+            .setSessionCommand(FavoriteContract.command)
+            .build()
+        session.setCustomLayout(ImmutableList.of(favoriteButton))
+    }
+
     private fun fileText(uri: String?): String? = uri
         ?.let(Uri::parse)
         ?.path
@@ -470,7 +556,6 @@ class PlaybackService : MediaSessionService() {
 
     private companion object {
         const val TAG = "PlaybackService"
-        const val EXTRA_SONG = "com.taotao.music.SONG"
         const val SLEEP_TIMER_TICK_MS = 1_000L
     }
 }

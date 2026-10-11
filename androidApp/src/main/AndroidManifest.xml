@@ -44,6 +44,14 @@
                 <action android:name="android.intent.action.MEDIA_BUTTON" />
             </intent-filter>
         </service>
+        <!-- 媒体面板「继续播放」：进程被系统回收后，系统经此 receiver 投递播放键重启
+             播放服务，配合 PlaybackService.onPlaybackResumption 用落盘状态重建队列。
+             Media3 官方要求显式声明（MediaSessionService 自身只处理存活期的媒体按键）。 -->
+        <receiver android:name="androidx.media3.session.MediaButtonReceiver" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </receiver>
         <!-- Android 7 起不允许把 file:// 交给别的应用，安装包必须经 FileProvider 换成 content://。 -->
         <provider
             android:name="androidx.core.content.FileProvider"

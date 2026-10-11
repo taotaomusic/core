@@ -2,7 +2,6 @@ package com.taotao.music.player
 
 import android.content.ComponentName
 import android.content.Context
-import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -12,8 +11,6 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.media3.common.MediaItem
-import androidx.media3.common.MediaMetadata
-import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
@@ -22,7 +19,6 @@ import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.ListenableFuture
 import com.taotao.music.data.SongCodec
 import com.taotao.music.model.Song
-import java.io.File
 
 /**
  * Android 音频播放封装，页面只通过 play/pause/resume 使用它。
@@ -258,7 +254,7 @@ class AudioPlayer(context: Context) {
         val queueHasAllAudio = queue.isNotEmpty() && queue.all { !it.audioUri.isNullOrBlank() }
         val songs = if (queueHasAllAudio) queue else listOf(song)
         val startIndex = if (queueHasAllAudio) index else 0
-        val mediaItems = songs.map(::mediaItemOf)
+        val mediaItems = songs.map(::playbackMediaItemOf)
         if (newPlaybackCycle) playbackCycle += 1L
         submit { activeController ->
             failedQueueIndices.clear()
@@ -289,7 +285,7 @@ class AudioPlayer(context: Context) {
      */
     fun prepareQueueIfIdle(songs: List<Song>, index: Int, positionMs: Int) {
         if (songs.isEmpty()) return
-        val mediaItems = songs.map(::mediaItemOf)
+        val mediaItems = songs.map(::playbackMediaItemOf)
         submit { activeController ->
             if (activeController.mediaItemCount > 0) return@submit
             failedQueueIndices.clear()
@@ -383,7 +379,7 @@ class AudioPlayer(context: Context) {
     fun addNext(song: Song) = submit { activeController ->
         val insertIndex = (activeController.currentMediaItemIndex + 1)
             .coerceIn(0, activeController.mediaItemCount)
-        activeController.addMediaItem(insertIndex, mediaItemOf(song))
+        activeController.addMediaItem(insertIndex, playbackMediaItemOf(song))
     }
 
     fun seekTo(positionMs: Int) = submit { activeController ->
@@ -540,8 +536,6 @@ class AudioPlayer(context: Context) {
     }
 
     private companion object {
-        /** MediaMetadata extras 中存放整首歌 JSON 的键。 */
-        const val EXTRA_SONG = "com.taotao.music.SONG"
         const val PROGRESS_REFRESH_INTERVAL_MILLIS = 100L
     }
 
@@ -581,38 +575,5 @@ class AudioPlayer(context: Context) {
         }
         // 解码不完整说明队列不是本应用写入的，保留原队列避免界面被清空。
         return if (restored.size == count) restored else queue
-    }
-
-    private fun mediaItemOf(song: Song): MediaItem {
-        val metadata = MediaMetadata.Builder()
-            .setTitle(song.title)
-            .setArtist(song.artist)
-            .setAlbumTitle(song.album.takeIf { it.isNotBlank() })
-            .setArtworkUri(song.coverUri?.takeIf { it.isNotBlank() }?.let(Uri::parse))
-            // 队列需要能从播放器反查，把整首歌的字段一起带上。
-            .setExtras(Bundle().apply { putString(EXTRA_SONG, SongCodec.encode(song)) })
-            .build()
-        return MediaItem.Builder()
-            .setUri(song.audioUri)
-            .setMediaId(song.remoteId?.toString() ?: song.audioUri.orEmpty())
-            .setMimeType(mimeTypeOf(song.audioUri.orEmpty()))
-            .setMediaMetadata(metadata)
-            .build()
-    }
-
-    /** 离线文件可能下载中断，过小的文件直接跳过，避免播放器反复报错。 */
-    private fun isPlayableFile(uri: String): Boolean {
-        val localFile = Uri.parse(uri).path?.let(::File)
-        return localFile?.isFile == true && localFile.length() >= 4_096L
-    }
-
-    private fun mimeTypeOf(uri: String): String? = when (uri.substringBefore('?').substringAfterLast('.').lowercase()) {
-        "mp3" -> MimeTypes.AUDIO_MPEG
-        "m4a" -> MimeTypes.AUDIO_MP4
-        "aac" -> MimeTypes.AUDIO_AAC
-        "flac" -> MimeTypes.AUDIO_FLAC
-        "ogg" -> MimeTypes.AUDIO_OGG
-        "wav" -> MimeTypes.AUDIO_WAV
-        else -> null
     }
 }
