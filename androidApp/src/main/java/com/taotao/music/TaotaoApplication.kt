@@ -4,7 +4,9 @@ import android.app.Application
 import android.content.pm.PackageInfo
 import android.os.Build
 import com.taotao.music.data.CrashReporter
+import com.taotao.music.data.db.LocalDb
 import com.taotao.music.hotfix.HotfixLoader
+import kotlin.concurrent.thread
 
 /** 应用入口：只做进程级初始化，业务状态仍由页面和播放服务各自持有。 */
 class TaotaoApplication : Application() {
@@ -20,6 +22,12 @@ class TaotaoApplication : Application() {
         // 热修复必须尽早：晚于第一次业务调用就白打了。放在 onCreate 而不是
         // attachBaseContext，是为了让崩溃上报先装好 —— 补丁自己崩了也要有日志。
         activePatchVersion = HotfixLoader.apply(this, versionCode())
+        // 本地 Room 库首次打开要在后台完成旧 SharedPreferences 的一次性迁移（几十毫秒），
+        // 先在这里热身，避免首个交互方（收藏判断/播放恢复）在主线程等待建库与迁移。
+        thread(name = "local-db-warmup", isDaemon = true) {
+            runCatching { LocalDb.ready(applicationContext) }
+                .onFailure { android.util.Log.w("TaotaoApplication", "本地库预热失败", it) }
+        }
     }
 
     private fun versionCode(): Long {

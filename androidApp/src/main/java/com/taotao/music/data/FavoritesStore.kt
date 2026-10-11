@@ -1,11 +1,17 @@
 package com.taotao.music.data
 
 import android.content.Context
+import android.os.Looper
+import com.taotao.music.data.db.FavoriteIdRow
+import com.taotao.music.data.db.FavoriteSongRow
+import com.taotao.music.data.db.LocalDb
 import com.taotao.music.model.Song
 import java.util.Locale
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 
 /**
- * 收藏状态本地缓存。
+ * 收藏状态本地缓存，落在本地 Room 库的 favorite_ids / favorite_songs 两张表。
  *
  * 之所以要缓存：早先判断「这首歌收藏了吗」是**每首歌拉一次完整收藏列表**再线性查找，
  * 搜索页想显示心形就得发几十个请求。现在搜索结果直接带 `favorited`，
@@ -14,48 +20,54 @@ import java.util.Locale
  * 权威来源始终是服务端：[replaceAll] 用收藏列表或搜索结果覆盖本地，
  * 歌曲快照只用于收藏页首屏展示，不参与判断收藏关系；[set] 只做乐观更新，
  * 请求失败由调用方回滚。
+ *
+ * 读写模型：内存镜像 + 写后落盘。Compose 会在主线程频繁调 [contains]/[ids]，
+ * 所以读永远走内存；写先同步更新内存（界面立即正确），再把整份快照丢给串行后台线程
+ * 落库。收藏缓存可从服务端自愈（每次登录都会全量覆盖），崩溃丢掉最后一两笔落盘无害。
  */
 class FavoritesStore(context: Context) {
-    private val preferences = context.getSharedPreferences("favorites", Context.MODE_PRIVATE)
 
-    init {
-        // 1.0.75 曾把歌曲快照写进收藏缓存，升级后立即清掉，避免它继续与账号收藏接口分叉。
-        preferences.edit().remove(LEGACY_KEY_SONGS).apply()
-    }
+    /** 不可变快照：ids 与 songs 总是一起更新，避免读到半新半旧的状态。 */
+    private data class Snapshot(val ids: Set<String>, val songs: List<Song>)
 
-    /** 返回带来源前缀的稳定键；旧版本只存数字 ID，读取时按腾讯来源兼容。 */
-    fun ids(): Set<String> = preferences.getStringSet(KEY_IDS, emptySet()).orEmpty()
-        .map(::normalizeKey)
-        .toSet()
+    private val appContext = context.applicationContext
+    private val db by lazy { LocalDb.ready(appContext) }
 
-    fun contains(remoteId: Long?): Boolean = remoteId != null && ids().contains(key("tencent", remoteId.toString()))
+    @Volatile
+    private var snapshot: Snapshot = Snapshot(emptySet(), emptyList())
+
+    @Volatile
+    private var hydrated = false
+    private val hydrateLock = Any()
+
+    /** 返回带来源前缀的稳定键集合；旧版本只存数字 ID，读取时按腾讯来源兼容。 */
+    fun ids(): Set<String> = current().ids
+
+    fun contains(remoteId: Long?): Boolean = remoteId != null && current().ids.contains(key("tencent", remoteId.toString()))
 
     fun contains(song: Song): Boolean {
-        val favoriteIds = ids()
+        val favoriteIds = current().ids
         return song.favoriteKeys().any(favoriteIds::contains)
     }
 
     /**
      * 读取收藏页的本地展示缓存。
      *
-     * 收藏 ID 才是关系依据，所以即使缓存文件残留了旧歌曲，也只返回当前 ID 集合中的项。
+     * 收藏 ID 才是关系依据，所以即使缓存里残留了旧歌曲，也只返回当前 ID 集合中的项。
      */
     fun cachedSongs(): List<Song> {
-        val favoriteIds = ids()
-        return SongCodec.decodeList(preferences.getString(KEY_LIBRARY_CACHE, null))
+        val state = current()
+        val favoriteIds = state.ids
+        return state.songs
             .filter { song -> song.favoriteKeys().any(favoriteIds::contains) }
             .map { it.copy(favorited = true) }
     }
 
     /** 用服务端的全量收藏列表覆盖本地。 */
     fun replaceAll(remoteIds: Set<String>) {
-        // 存进 SharedPreferences 的 Set 不能原地改，取出来的实例是内部引用，必须传新集合。
         val normalizedIds = remoteIds.map(::normalizeKey).toSet()
-        val retainedSongs = cachedSongs().filter { song -> song.favoriteKeys().any(normalizedIds::contains) }
-        preferences.edit()
-            .putStringSet(KEY_IDS, normalizedIds)
-            .putString(KEY_LIBRARY_CACHE, SongCodec.encodeList(retainedSongs))
-            .apply()
+        val retainedSongs = current().songs.filter { song -> song.favoriteKeys().any(normalizedIds::contains) }
+        commit(Snapshot(normalizedIds, retainedSongs))
     }
 
     /** 云端全量同步成功后，同时刷新关系 ID 与下一次冷启动要展示的歌曲缓存。 */
@@ -64,10 +76,7 @@ class FavoritesStore(context: Context) {
         val cached = songs
             .filter { song -> song.favoriteKeys().any(normalizedIds::contains) }
             .map { it.copy(favorited = true) }
-        preferences.edit()
-            .putStringSet(KEY_IDS, normalizedIds)
-            .putString(KEY_LIBRARY_CACHE, SongCodec.encodeList(cached))
-            .apply()
+        commit(Snapshot(normalizedIds, cached))
     }
 
     /**
@@ -78,53 +87,88 @@ class FavoritesStore(context: Context) {
     fun merge(songs: List<Song>) {
         val seenSongs = songs.mapNotNull { song -> song.favoriteKey()?.let { it to song } }.toMap()
         val favoritedIds = seenSongs.filterValues { it.favorited }.keys
-        val merged = ids().toMutableSet()
+        val merged = current().ids.toMutableSet()
         merged.removeAll(seenSongs.keys)
         merged.addAll(favoritedIds)
-        val cachedById = cachedSongs().mapNotNull { song -> song.favoriteKey()?.let { it to song } }
+        val cachedById = current().songs.mapNotNull { song -> song.favoriteKey()?.let { it to song } }
             .toMap(linkedMapOf())
         seenSongs.forEach { (id, song) ->
             if (song.favorited) cachedById[id] = song.copy(favorited = true) else cachedById.remove(id)
         }
-        preferences.edit()
-            .putStringSet(KEY_IDS, merged)
-            .putString(KEY_LIBRARY_CACHE, SongCodec.encodeList(cachedById.values.toList()))
-            .apply()
+        commit(Snapshot(merged, cachedById.values.toList()))
     }
 
     fun set(remoteId: Long, favorite: Boolean, song: Song? = null) {
-        val updated = ids().toMutableSet()
+        val updated = current().ids.toMutableSet()
         val stableKey = key("tencent", remoteId.toString())
         if (favorite) updated.add(stableKey) else updated.remove(stableKey)
-        val cached = cachedSongs().filterNot { it.remoteId == remoteId }.toMutableList()
+        val cached = current().songs.filterNot { it.remoteId == remoteId }.toMutableList()
         if (favorite && song != null) cached.add(0, song.copy(favorited = true))
-        preferences.edit()
-            .putStringSet(KEY_IDS, updated)
-            .putString(KEY_LIBRARY_CACHE, SongCodec.encodeList(cached))
-            .apply()
+        commit(Snapshot(updated, cached))
     }
 
     /** 按歌曲稳定键乐观更新收藏；支持腾讯 mid-only 和未来其他来源。 */
     fun set(song: Song, favorite: Boolean) {
         val stableKey = song.favoriteKey() ?: return
-        val updated = ids().toMutableSet()
-        updated.removeAll(song.favoriteKeys())
-        if (favorite) updated.add(stableKey)
         val aliases = song.favoriteKeys()
-        val cached = cachedSongs().filterNot { cachedSong -> cachedSong.favoriteKeys().any(aliases::contains) }.toMutableList()
+        val updated = current().ids.toMutableSet()
+        updated.removeAll(aliases)
+        if (favorite) updated.add(stableKey)
+        val cached = current().songs.filterNot { cachedSong -> cachedSong.favoriteKeys().any(aliases::contains) }.toMutableList()
         if (favorite) cached.add(0, song.copy(favorited = true))
-        preferences.edit()
-            .putStringSet(KEY_IDS, updated)
-            .putString(KEY_LIBRARY_CACHE, SongCodec.encodeList(cached))
-            .apply()
+        commit(Snapshot(updated, cached))
     }
 
     /** 退出登录时清空：收藏是账号状态，换账号不能沿用上一个人的。 */
-    fun clear() = preferences.edit()
-        .remove(KEY_IDS)
-        .remove(KEY_LIBRARY_CACHE)
-        .remove(LEGACY_KEY_SONGS)
-        .apply()
+    fun clear() = commit(Snapshot(emptySet(), emptyList()))
+
+    /** 内存先落地，再整份快照串行落库（空快照即清表）。 */
+    private fun commit(next: Snapshot) {
+        snapshot = next
+        LocalDb.writeExecutor.execute {
+            runCatching {
+                val database = db
+                database.runInTransaction {
+                    val dao = database.favoritesDao()
+                    dao.deleteAllIds()
+                    dao.insertIds(next.ids.map(::FavoriteIdRow))
+                    dao.deleteAllSongs()
+                    dao.insertSongs(
+                        next.songs.mapIndexedNotNull { index, song ->
+                            song.favoriteKey()?.let { FavoriteSongRow(it, SongCodec.encode(song), index) }
+                        }
+                    )
+                }
+            }
+        }
+    }
+
+    private fun current(): Snapshot {
+        if (hydrated) return snapshot
+        return synchronized(hydrateLock) {
+            if (hydrated) return@synchronized snapshot
+            val loaded = if (Looper.myLooper() == Looper.getMainLooper()) {
+                // 首次 hydration 若撞上主线程，用 runBlocking 垫底（与旧 SharedPreferences
+                // 首次读盘同量级的一次性开销）；通常进程启动时已由后台预热完成。
+                runBlocking(Dispatchers.IO) { loadFromDb() }
+            } else {
+                loadFromDb()
+            }
+            snapshot = loaded
+            hydrated = true
+            loaded
+        }
+    }
+
+    private fun loadFromDb(): Snapshot {
+        val dao = db.favoritesDao()
+        val ids = dao.listIds().map { it.stableKey }.toSet()
+        val songs = dao.listSongs()
+            .mapNotNull { SongCodec.decode(it.songJson) }
+            .filter { song -> song.favoriteKeys().any(ids::contains) }
+            .map { it.copy(favorited = true) }
+        return Snapshot(ids, songs)
+    }
 
     private fun Song.favoriteKey(): String? {
         return favoriteKeys().firstOrNull()
@@ -150,10 +194,4 @@ class FavoritesStore(context: Context) {
 
     private fun key(source: String, identity: String): String =
         "${source.trim().lowercase(Locale.ROOT).ifBlank { "tencent" }}:$identity"
-
-    private companion object {
-        const val KEY_IDS = "favorite_ids"
-        const val KEY_LIBRARY_CACHE = "favorite_library_cache_v2"
-        const val LEGACY_KEY_SONGS = "favorite_songs"
-    }
 }

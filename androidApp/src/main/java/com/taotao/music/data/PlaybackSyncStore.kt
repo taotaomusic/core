@@ -1,25 +1,34 @@
 package com.taotao.music.data
 
 import android.content.Context
-import org.json.JSONArray
-import org.json.JSONObject
+import com.taotao.music.data.db.LocalDb
+import com.taotao.music.data.db.LocalDbMetaRow
+import com.taotao.music.data.db.PlaybackOutboxRow
 import java.util.UUID
 
 /**
- * 播放同步待办队列。
+ * 播放同步待办队列，落在本地 Room 库的 playback_outbox 表，账号级 revision/清空标记
+ * 等元数据在 local_db_meta 表（键名沿用旧的 account.<id>.<name>）。
  *
  * 队列按服务端用户 ID 分桶。ID 只来自已验证的认证响应或已签名令牌 payload，绝不把
  * access token 本身当作存储键；因此 A 账号离线产生的会话没有任何路径能被 B 账号上传。
  *
  * 每个会话只保留最新累计快照。写入时将 listenedMs 做单调最大合并、completed 做逻辑或，
  * 上传完成则以 [PendingPlaybackSnapshot.outboxVersion] compare-and-remove，避免网络请求期间
- * 新产生的时长被旧上传任务删掉。所有关键写入使用 commit，确保播放器刚落盘就被强杀时仍能补传。
+ * 新产生的时长被旧上传任务删掉。
+ *
+ * 崩溃安全沿用旧约定：关键写入必须同步落盘后才返回（SQLite 事务提交即持久，等价于旧
+ * SharedPreferences 的 commit），因此调用方必须在 IO 线程；主线程调用会被 Room 直接拒绝，
+ * 这正是想要的显式失败。
  */
-class PlaybackSyncStore(context: Context) {
-    private val preferences = context.applicationContext.getSharedPreferences("playback_sync", Context.MODE_PRIVATE)
+class PlaybackSyncStore(private val context: Context) {
+    private val lock = Any()
+    private val db by lazy { LocalDb.ready(context) }
 
     fun snapshots(accountId: Long?): List<PendingPlaybackSnapshot> = accountId.validAccountId()?.let { account ->
-        synchronized(LOCK) { readSnapshots(account) }
+        synchronized(lock) {
+            db.playbackOutboxDao().listByAccount(account).mapNotNull { it.toSnapshot() }
+        }
     }.orEmpty()
 
     /**
@@ -30,12 +39,15 @@ class PlaybackSyncStore(context: Context) {
         val account = accountId.validAccountId() ?: return snapshot
         // 入队账号与会话创建时冻结的归属必须一致；不一致宁可保留内存态，也绝不跨账号写入。
         if (snapshot.accountId != account) return snapshot
-        return synchronized(LOCK) {
-            val current = readSnapshots(account)
-            val existing = current.firstOrNull { it.sessionId == snapshot.sessionId }
-            val stored = PlaybackSnapshotPolicy.merge(existing, snapshot, nextOutboxVersion(account))
-            writeSnapshots(account, current.filterNot { it.sessionId == snapshot.sessionId } + stored)
-            stored
+        return synchronized(lock) {
+            db.runInTransaction {
+                val dao = db.playbackOutboxDao()
+                val existing = dao.getBySession(snapshot.sessionId)?.toSnapshot()
+                val stored = PlaybackSnapshotPolicy.merge(existing, snapshot, nextOutboxVersion(account))
+                dao.upsert(stored.toRow())
+                dao.trimByAccount(account, MAX_PENDING)
+                stored
+            }
         }
     }
 
@@ -44,18 +56,24 @@ class PlaybackSyncStore(context: Context) {
      */
     fun removeIfUnchanged(accountId: Long?, uploaded: PendingPlaybackSnapshot): Boolean {
         val account = accountId.validAccountId() ?: return false
-        return synchronized(LOCK) {
-            val current = readSnapshots(account)
-            val matched = current.firstOrNull { it.sessionId == uploaded.sessionId }
-            if (!PlaybackSnapshotPolicy.shouldRemoveAfterUpload(matched, uploaded)) return@synchronized false
-            writeSnapshots(account, current.filterNot { it.sessionId == uploaded.sessionId })
-            true
+        return synchronized(lock) {
+            db.runInTransaction {
+                val matched = db.playbackOutboxDao().getBySession(uploaded.sessionId)?.toSnapshot()
+                if (!PlaybackSnapshotPolicy.shouldRemoveAfterUpload(matched, uploaded)) {
+                    false
+                } else {
+                    db.playbackOutboxDao().deleteBySession(uploaded.sessionId)
+                    true
+                }
+            }
         }
     }
 
     /** 清空发生前尚未上传的会话不能在稍后把历史重新写回来。 */
     fun discardSnapshots(accountId: Long?) {
-        accountId.validAccountId()?.let { account -> synchronized(LOCK) { writeSnapshots(account, emptyList()) } }
+        accountId.validAccountId()?.let { account ->
+            synchronized(lock) { db.playbackOutboxDao().deleteByAccount(account) }
+        }
     }
 
     /**
@@ -64,34 +82,36 @@ class PlaybackSyncStore(context: Context) {
      */
     fun markClearPending(accountId: Long?): Long? {
         val account = accountId.validAccountId() ?: return null
-        return synchronized(LOCK) {
-            val alreadyPending = preferences.getBoolean(key(account, KEY_CLEAR_PENDING), false)
-            if (alreadyPending) return@synchronized readClearTargetRevision(account)
-            val targetRevision = (readHistoryRevision(account) + 1L).coerceAtLeast(1L)
-            preferences.edit()
-                .putLong(key(account, KEY_HISTORY_REVISION), targetRevision)
-                .putBoolean(key(account, KEY_CLEAR_PENDING), true)
-                .putLong(key(account, KEY_CLEAR_TARGET_REVISION), targetRevision)
+        return synchronized(lock) {
+            db.runInTransaction {
+                if (readMetaBool(account, KEY_CLEAR_PENDING)) {
+                    return@runInTransaction readClearTargetRevision(account)
+                }
+                val targetRevision = (readMetaLong(account, KEY_HISTORY_REVISION) + 1L).coerceAtLeast(1L)
+                writeMetaLong(account, KEY_HISTORY_REVISION, targetRevision)
+                writeMetaBool(account, KEY_CLEAR_PENDING, true)
+                writeMetaLong(account, KEY_CLEAR_TARGET_REVISION, targetRevision)
                 // 同一清空操作无论网络重试多少次都带同一个 marker，让服务端保持幂等。
-                .putString(key(account, KEY_CLEAR_MARKER), UUID.randomUUID().toString())
-                .putString(key(account, KEY_SNAPSHOTS), JSONArray().toString())
-                .commit()
-            targetRevision
+                writeMetaString(account, KEY_CLEAR_MARKER, UUID.randomUUID().toString())
+                // 清空即作废所有尚未上传的会话（旧实现同步把快照桶写成空数组）。
+                db.playbackOutboxDao().deleteByAccount(account)
+                targetRevision
+            }
         }
     }
 
     fun isClearPending(accountId: Long?): Boolean = accountId.validAccountId()?.let { account ->
-        synchronized(LOCK) { preferences.getBoolean(key(account, KEY_CLEAR_PENDING), false) }
+        synchronized(lock) { readMetaBool(account, KEY_CLEAR_PENDING) }
     } == true
 
     /** 当前待确认清空的稳定请求标识；历史版本升级前的损坏数据没有它时自动补一个。 */
     fun clearMarker(accountId: Long?): String? {
         val account = accountId.validAccountId() ?: return null
-        return synchronized(LOCK) {
-            if (!preferences.getBoolean(key(account, KEY_CLEAR_PENDING), false)) return@synchronized null
-            preferences.getString(key(account, KEY_CLEAR_MARKER), null)?.takeIf { it.isNotBlank() }
+        return synchronized(lock) {
+            if (!readMetaBool(account, KEY_CLEAR_PENDING)) return@synchronized null
+            readMetaString(account, KEY_CLEAR_MARKER)?.takeIf { it.isNotBlank() }
                 ?: UUID.randomUUID().toString().also { marker ->
-                    preferences.edit().putString(key(account, KEY_CLEAR_MARKER), marker).commit()
+                    writeMetaString(account, KEY_CLEAR_MARKER, marker)
                 }
         }
     }
@@ -101,7 +121,7 @@ class PlaybackSyncStore(context: Context) {
 
     /** 当前新会话应携带的 history revision；有本地清空待办时使用待确认的目标 revision。 */
     fun historyRevision(accountId: Long?): Long = accountId.validAccountId()?.let { account ->
-        synchronized(LOCK) { readHistoryRevision(account) }
+        synchronized(lock) { readMetaLong(account, KEY_HISTORY_REVISION) }
     } ?: 0L
 
     /**
@@ -112,11 +132,11 @@ class PlaybackSyncStore(context: Context) {
     fun normalizeClearTargetRevision(accountId: Long?, snapshot: PendingPlaybackSnapshot): PendingPlaybackSnapshot {
         val account = accountId.validAccountId() ?: return snapshot
         if (snapshot.accountId != account) return snapshot
-        return synchronized(LOCK) {
+        return synchronized(lock) {
             val marker = snapshot.clearMarker ?: return@synchronized snapshot
-            val confirmedMarker = preferences.getString(key(account, KEY_LAST_CONFIRMED_CLEAR_MARKER), null)
+            val confirmedMarker = readMetaString(account, KEY_LAST_CONFIRMED_CLEAR_MARKER)
             if (marker != confirmedMarker) return@synchronized snapshot
-            val confirmed = preferences.getLong(key(account, KEY_LAST_CONFIRMED_CLEAR_REVISION), snapshot.historyRevision)
+            val confirmed = readMetaLong(account, KEY_LAST_CONFIRMED_CLEAR_REVISION)
             snapshot.copy(historyRevision = confirmed, clearMarker = null)
         }
     }
@@ -128,17 +148,19 @@ class PlaybackSyncStore(context: Context) {
     fun acceptServerHistoryRevision(accountId: Long?, serverRevision: Long): Long {
         val account = accountId.validAccountId() ?: return 0L
         val safeServerRevision = serverRevision.coerceAtLeast(0L)
-        return synchronized(LOCK) {
-            if (!preferences.getBoolean(key(account, KEY_CLEAR_PENDING), false)) {
-                val currentRevision = readHistoryRevision(account)
-                val merged = maxOf(currentRevision, safeServerRevision)
-                if (merged != currentRevision) {
-                    preferences.edit().putLong(key(account, KEY_HISTORY_REVISION), merged).commit()
+        return synchronized(lock) {
+            if (!readMetaBool(account, KEY_CLEAR_PENDING)) {
+                db.runInTransaction {
+                    val currentRevision = readMetaLong(account, KEY_HISTORY_REVISION)
+                    val merged = maxOf(currentRevision, safeServerRevision)
+                    if (merged != currentRevision) {
+                        writeMetaLong(account, KEY_HISTORY_REVISION, merged)
+                    }
+                    merged
                 }
-                return@synchronized merged
+            } else {
+                readClearTargetRevision(account)
             }
-
-            readClearTargetRevision(account)
         }
     }
 
@@ -148,87 +170,100 @@ class PlaybackSyncStore(context: Context) {
      */
     fun confirmClear(accountId: Long?, serverRevision: Long): Long {
         val account = accountId.validAccountId() ?: return 0L
-        return synchronized(LOCK) {
-            val targetRevision = readClearTargetRevision(account)
-            val confirmedRevision = maxOf(targetRevision, serverRevision.coerceAtLeast(0L))
-            val marker = preferences.getString(key(account, KEY_CLEAR_MARKER), null)
-            val transformed = readSnapshots(account).map { snapshot ->
-                if (snapshot.clearMarker == marker && marker != null) snapshot.copy(
-                    historyRevision = confirmedRevision,
-                    clearMarker = null,
-                    outboxVersion = nextOutboxVersion(account),
-                ) else snapshot
-            }
-            preferences.edit()
-                .putLong(key(account, KEY_HISTORY_REVISION), confirmedRevision)
+        return synchronized(lock) {
+            db.runInTransaction {
+                val targetRevision = readClearTargetRevision(account)
+                val confirmedRevision = maxOf(targetRevision, serverRevision.coerceAtLeast(0L))
+                val marker = readMetaString(account, KEY_CLEAR_MARKER)
+                val dao = db.playbackOutboxDao()
+                val transformed = dao.listByAccount(account).mapNotNull { row ->
+                    val snapshot = row.toSnapshot() ?: return@mapNotNull null
+                    if (marker != null && snapshot.clearMarker == marker) {
+                        snapshot.copy(
+                            historyRevision = confirmedRevision,
+                            clearMarker = null,
+                            // 升级过的会话换新版本号，正在途中的旧上传不会把它误删。
+                            outboxVersion = nextOutboxVersion(account),
+                        )
+                    } else {
+                        snapshot
+                    }
+                }
+                dao.deleteByAccount(account)
+                transformed.forEach { dao.upsert(it.toRow()) }
+                writeMetaLong(account, KEY_HISTORY_REVISION, confirmedRevision)
                 // 只保留最近一次确认映射；旧会话没有同一个 marker，无法被误升级。
-                .putString(key(account, KEY_LAST_CONFIRMED_CLEAR_MARKER), marker)
-                .putLong(key(account, KEY_LAST_CONFIRMED_CLEAR_REVISION), confirmedRevision)
-                .remove(key(account, KEY_CLEAR_PENDING))
-                .remove(key(account, KEY_CLEAR_TARGET_REVISION))
-                .remove(key(account, KEY_CLEAR_MARKER))
-                .putString(key(account, KEY_SNAPSHOTS), encodeSnapshots(transformed))
-                .commit()
-            confirmedRevision
+                if (marker == null) {
+                    db.localDbMetaDao().delete(key(account, KEY_LAST_CONFIRMED_CLEAR_MARKER))
+                } else {
+                    writeMetaString(account, KEY_LAST_CONFIRMED_CLEAR_MARKER, marker)
+                }
+                writeMetaLong(account, KEY_LAST_CONFIRMED_CLEAR_REVISION, confirmedRevision)
+                db.localDbMetaDao().delete(key(account, KEY_CLEAR_PENDING))
+                db.localDbMetaDao().delete(key(account, KEY_CLEAR_TARGET_REVISION))
+                db.localDbMetaDao().delete(key(account, KEY_CLEAR_MARKER))
+                confirmedRevision
+            }
         }
     }
 
-    private fun readSnapshots(account: Long): List<PendingPlaybackSnapshot> = runCatching {
-        val values = JSONArray(preferences.getString(key(account, KEY_SNAPSHOTS), "[]"))
-        (0 until values.length()).mapNotNull { index -> values.optJSONObject(index)?.toSnapshot() }
-    }.getOrDefault(emptyList())
+    // ---- meta 读写（outbox 版本、revision、清空标记都走 local_db_meta 表） ----
 
-    private fun writeSnapshots(account: Long, items: List<PendingPlaybackSnapshot>) {
-        preferences.edit().putString(key(account, KEY_SNAPSHOTS), encodeSnapshots(items)).commit()
-    }
-
-    private fun encodeSnapshots(items: List<PendingPlaybackSnapshot>): String = JSONArray().apply {
-        PlaybackSnapshotPolicy.retainNewest(items, MAX_PENDING).forEach { put(it.toJson()) }
-    }.toString()
-
+    /**
+     * outbox 版本号 +1 并落盘。调用方必须在同一事务里紧跟着写快照本体——版本号与快照
+     * 一次性原子提交（旧实现是两次独立 commit，这里顺带合并了）。
+     */
     private fun nextOutboxVersion(account: Long): Long {
-        val versionKey = key(account, KEY_OUTBOX_VERSION)
-        val next = (preferences.getLong(versionKey, 0L) + 1L).coerceAtLeast(1L)
-        // 与快照本身同一把进程锁保护；真正的快照 write 会紧随其后 commit。
-        preferences.edit().putLong(versionKey, next).commit()
+        val next = (readMetaLong(account, KEY_OUTBOX_VERSION) + 1L).coerceAtLeast(1L)
+        writeMetaLong(account, KEY_OUTBOX_VERSION, next)
         return next
     }
 
-    private fun readHistoryRevision(account: Long): Long = preferences
-        .getLong(key(account, KEY_HISTORY_REVISION), 0L)
-        .coerceAtLeast(0L)
+    private fun readClearTargetRevision(account: Long): Long =
+        readMetaLong(account, KEY_CLEAR_TARGET_REVISION).takeIf { it >= 1L }
+            ?: (readMetaLong(account, KEY_HISTORY_REVISION) + 1L).coerceAtLeast(1L)
 
-    private fun readClearTargetRevision(account: Long): Long = preferences
-        .getLong(key(account, KEY_CLEAR_TARGET_REVISION), readHistoryRevision(account) + 1L)
-        .coerceAtLeast(1L)
+    private fun readMetaString(account: Long, name: String): String? =
+        db.localDbMetaDao().getValue(key(account, name))
+
+    private fun readMetaLong(account: Long, name: String): Long =
+        readMetaString(account, name)?.toLongOrNull() ?: 0L
+
+    private fun readMetaBool(account: Long, name: String): Boolean =
+        readMetaString(account, name) == "1"
+
+    private fun writeMetaString(account: Long, name: String, value: String) {
+        db.localDbMetaDao().upsert(LocalDbMetaRow(key(account, name), value))
+    }
+
+    private fun writeMetaLong(account: Long, name: String, value: Long) =
+        writeMetaString(account, name, value.toString())
+
+    private fun writeMetaBool(account: Long, name: String, value: Boolean) =
+        writeMetaString(account, name, if (value) "1" else "0")
 
     private fun key(account: Long, name: String): String = "account.$account.$name"
 
-    private fun Long?.validAccountId(): Long? = this?.takeIf { it > 0L }
+    // ---- 行与领域对象的互转 ----
 
-    private fun PendingPlaybackSnapshot.toJson() = JSONObject()
-        .put("sessionId", sessionId)
-        .put("accountId", accountId)
-        .put("source", source)
-        .put("songId", songId)
-        .put("startedAt", startedAt)
-        .put("lastPlayedAt", lastPlayedAt)
-        .put("listenedMs", listenedMs)
-        .put("durationSeconds", durationSeconds)
-        .put("completed", completed)
-        .put("historyRevision", historyRevision)
-        .put("clearMarker", clearMarker)
-        .put("outboxVersion", outboxVersion)
-        .put("playbackCycle", playbackCycle)
+    private fun PendingPlaybackSnapshot.toRow() = PlaybackOutboxRow(
+        sessionId = sessionId,
+        accountId = accountId,
+        source = source,
+        songId = songId,
+        startedAt = startedAt,
+        lastPlayedAt = lastPlayedAt,
+        listenedMs = listenedMs,
+        durationSeconds = durationSeconds,
+        completed = completed,
+        historyRevision = historyRevision,
+        clearMarker = clearMarker,
+        outboxVersion = outboxVersion,
+        playbackCycle = playbackCycle,
+    )
 
-    private fun JSONObject.toSnapshot(): PendingPlaybackSnapshot? {
-        val sessionId = optString("sessionId")
-        val accountId = optLong("accountId", 0L)
-        // 旧版本写入的是数字，JSONObject.optString 会自然兼容；新版本允许 mid。
-        val songId = optString("songId").trim()
-        val source = optString("source").trim().ifBlank { "tencent" }
-        val startedAt = optLong("startedAt", 0)
-        // v1.0.102 及以前的全局队列没有 accountId，不能安全迁移到任意账号，直接隔离丢弃。
+    private fun PlaybackOutboxRow.toSnapshot(): PendingPlaybackSnapshot? {
+        // 表里都是本类写入的完整行；防御性校验与旧 JSON 解析规则保持一致。
         if (sessionId.isBlank() || accountId <= 0L || songId.isBlank() || startedAt <= 0) return null
         return PendingPlaybackSnapshot(
             sessionId = sessionId,
@@ -236,19 +271,20 @@ class PlaybackSyncStore(context: Context) {
             source = source,
             songId = songId,
             startedAt = startedAt,
-            lastPlayedAt = optLong("lastPlayedAt", startedAt).coerceAtLeast(startedAt),
-            listenedMs = optLong("listenedMs", 0).coerceAtLeast(0),
-            durationSeconds = optInt("durationSeconds", 0).takeIf { it > 0 },
-            completed = optBoolean("completed"),
-            historyRevision = optLong("historyRevision", 0L).coerceAtLeast(0L),
-            clearMarker = optString("clearMarker").takeIf { it.isNotBlank() && it != "null" },
-            outboxVersion = optLong("outboxVersion", 0L).coerceAtLeast(0L),
-            playbackCycle = optLong("playbackCycle", 0L).coerceAtLeast(0L),
+            lastPlayedAt = lastPlayedAt.coerceAtLeast(startedAt),
+            listenedMs = listenedMs.coerceAtLeast(0L),
+            durationSeconds = durationSeconds,
+            completed = completed,
+            historyRevision = historyRevision.coerceAtLeast(0L),
+            clearMarker = clearMarker,
+            outboxVersion = outboxVersion.coerceAtLeast(0L),
+            playbackCycle = playbackCycle.coerceAtLeast(0L),
         )
     }
 
+    private fun Long?.validAccountId(): Long? = this?.takeIf { it > 0L }
+
     private companion object {
-        const val KEY_SNAPSHOTS = "snapshots"
         const val KEY_HISTORY_REVISION = "history_revision"
         const val KEY_CLEAR_PENDING = "clear_pending"
         const val KEY_CLEAR_TARGET_REVISION = "clear_target_revision"
@@ -256,8 +292,9 @@ class PlaybackSyncStore(context: Context) {
         const val KEY_LAST_CONFIRMED_CLEAR_MARKER = "last_confirmed_clear_marker"
         const val KEY_LAST_CONFIRMED_CLEAR_REVISION = "last_confirmed_clear_revision"
         const val KEY_OUTBOX_VERSION = "outbox_version"
+
+        /** 待上传会话上限；超出时按最后播放时间淘汰最旧的会话。 */
         const val MAX_PENDING = 500
-        val LOCK = Any()
     }
 }
 

@@ -21,6 +21,7 @@ import com.taotao.music.ui.common.playbackSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 
 /**
@@ -265,10 +266,17 @@ internal fun TaotaoAppSignedInEffects(state: TaotaoAppState) {
             if (event == Lifecycle.Event.ON_STOP || event == Lifecycle.Event.ON_DESTROY) {
                 val queue = latestPlaybackSongs.value
                 if (state.audioPlayer.hasMedia && queue.isNotEmpty()) {
-                    state.playbackStateStore.save(queue, latestSelectedIndex.value, state.audioPlayer.currentPositionMs())
+                    // 进度必须在主线程读（MediaController 有线程亲和）；写盘交给 IO 线程，
+                    // 与旧实现 apply() 一样是异步语义，退后台不卡主线程。
+                    val positionMs = state.audioPlayer.currentPositionMs()
+                    val index = latestSelectedIndex.value
+                    state.scope.launch(Dispatchers.IO) { state.playbackStateStore.save(queue, index, positionMs) }
                 }
                 state.playbackSession?.takeIf { it.listenedMs > 0 }?.let { snapshot ->
-                    val persisted = state.playbackSync.persistTerminalSnapshot(snapshot, completed = false)
+                    // outbox 必须同步落盘：进程被杀也能补传。单行事务只有几毫秒，短暂阻塞可接受。
+                    val persisted = runBlocking(Dispatchers.IO) {
+                        state.playbackSync.persistTerminalSnapshot(snapshot, completed = false)
+                    }
                     if (state.playbackSession?.sessionId == persisted.sessionId) state.playbackSession = persisted
                     state.scope.launch { runCatching { state.syncPendingPlayback() } }
                 }
