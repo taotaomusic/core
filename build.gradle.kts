@@ -9,4 +9,6 @@ plugins {
     kotlin("plugin.compose") version "2.2.0" apply false
     // 1.9.1：修复 wasm 高 DPR（手机屏）下指针/触摸输入完全失效的问题（1.8.0 大修 Web 输入处理）。
     id("org.jetbrains.compose") version "1.9.1" apply false
+    // Room 注解处理走 KSP2；版本号格式是 <Kotlin 版本>-<KSP 版本>，必须与上面的 Kotlin 2.2.0 配套。
+    id("com.google.devtools.ksp") version "2.2.0-2.0.2" apply false
 }

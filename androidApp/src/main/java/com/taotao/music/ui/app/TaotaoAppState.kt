@@ -677,13 +677,15 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
                 // 网络请求期间可能发生退出/换号；不能把 A 的远端结果写进 B 的界面或缓存桶。
                 if (authSession.accountId != historyAccountId) return@onSuccess
                 // recent/state 的 revision 是跨设备清空的唯一权威水位，不拿本机时间戳猜测。
-                playbackSyncStore.acceptServerHistoryRevision(historyAccountId, remoteHistory.revision)
-                val localHistoryRevision = playbackSync.historyRevision()
+                val localHistoryRevision = withContext(Dispatchers.IO) {
+                    playbackSyncStore.acceptServerHistoryRevision(historyAccountId, remoteHistory.revision)
+                    playbackSync.historyRevision()
+                }
                 // 本机清空还未送达服务端时，远端的旧 revision 不能把刚清空的 UI 又复活；
                 // 同样不再用设备时间与 clearedBefore 比较，跨设备冲突完全由 revision 决定。
                 val remoteEntries = if (remoteHistory.revision < localHistoryRevision) emptyList() else remoteHistory.entries
                 // 空数组同样是权威结果；只有 generation 未过期的待上传本地会话才应保留在 UI 中。
-                val pendingBySongId = playbackSync.pendingSnapshots()
+                val pendingBySongId = withContext(Dispatchers.IO) { playbackSync.pendingSnapshots() }
                     .groupBy { "${it.source}:${it.songId}" }
                     .mapValues { (_, snapshots) -> snapshots.maxByOrNull { it.lastPlayedAt } }
                 val localUnsynced = playbackHistory.filter { entry ->
@@ -704,12 +706,15 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
 
     /** 「最近播放」页的清空动作：先落清空标记，再清本地 UI 与存储，最后尽快同步。 */
     fun clearPlaybackHistory() {
-        playbackSync.markClearPending()
         playbackSession = null
         playbackHistoryClearEpoch += 1
-        playbackHistoryStore.clear(authSession.accountId)
         playbackHistory = emptyList()
-        scope.launch { runCatching { syncPendingPlayback() } }
+        // Room 拒绝主线程访问：标记、清缓存与补传整体串行到 IO，顺序仍保证 marker 先于补传。
+        scope.launch(Dispatchers.IO) {
+            playbackSync.markClearPending()
+            playbackHistoryStore.clear(authSession.accountId)
+            runCatching { syncPendingPlayback() }
+        }
     }
 
     /**
@@ -755,12 +760,14 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
             if (!audioPlayer.isPlaying) return
             // 新会话优先刷新服务端清空代际；请求慢或离线时 1.5 秒后使用本地已知值继续，
             // 不让统计同步阻塞真正的音频播放。服务端上报响应仍会再次校准 revision。
+            // 本地 revision 兜底走 Room，必须离开主线程读。
             val historyRevision = withTimeoutOrNull(1_500) {
                 runCatching { playbackSync.refreshHistoryRevision() }
-                    .getOrElse { playbackSync.historyRevision() }
-            } ?: playbackSync.historyRevision()
+                    .getOrElse { withContext(Dispatchers.IO) { playbackSync.historyRevision() } }
+            } ?: withContext(Dispatchers.IO) { playbackSync.historyRevision() }
             // 发起 revision 拉取期间可能已经退出或切换账号，禁止把旧请求的结果带入新账号会话。
             if (authSession.accountId != sessionAccountId) return
+            val clearMarker = withContext(Dispatchers.IO) { playbackSyncStore.pendingClearMarker(sessionAccountId) }
             PendingPlaybackSnapshot(
                 sessionId = UUID.randomUUID().toString(),
                 accountId = sessionAccountId,
@@ -772,7 +779,7 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
                 durationSeconds = audioPlayer.durationMs.takeIf { it > 0 }?.div(1_000),
                 completed = false,
                 historyRevision = historyRevision,
-                clearMarker = playbackSyncStore.pendingClearMarker(sessionAccountId),
+                clearMarker = clearMarker,
                 playbackCycle = playbackCycle,
             )
         }
@@ -785,7 +792,7 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
                 session.listenedMs > 0 &&
                 PlaybackSnapshotPolicy.shouldPersistAfterClear(sessionClearEpoch, playbackHistoryClearEpoch)
             ) {
-                session = playbackSync.persistTerminalSnapshot(session, completed = false)
+                session = withContext(Dispatchers.IO) { playbackSync.persistTerminalSnapshot(session, completed = false) }
                 if (playbackSession?.sessionId == session.sessionId) playbackSession = session
                 runCatching { syncPendingPlayback() }
             }
@@ -826,7 +833,7 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
                 }
                 val reachedPeriodicSync = session.listenedMs >= 15_000 && session.listenedMs % 15_000 < increment
                 if (reachedHistoryThreshold || reachedPeriodicSync) {
-                    session = playbackSync.persistTerminalSnapshot(session, completed = false)
+                    session = withContext(Dispatchers.IO) { playbackSync.persistTerminalSnapshot(session, completed = false) }
                     if (playbackSession?.sessionId == session.sessionId) playbackSession = session
                     runCatching { syncPendingPlayback() }
                 }
@@ -836,7 +843,7 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
                 session.listenedMs > 0 &&
                 PlaybackSnapshotPolicy.shouldPersistAfterClear(sessionClearEpoch, playbackHistoryClearEpoch)
             ) {
-                session = playbackSync.persistTerminalSnapshot(session, completed = session.completed)
+                session = withContext(Dispatchers.IO) { playbackSync.persistTerminalSnapshot(session, completed = session.completed) }
                 // 新一轮已经启动时，旧协程 finally 绝不能把内存中的新会话覆盖回去。
                 if (playbackSession?.sessionId == session.sessionId) playbackSession = session
                 runCatching { syncPendingPlayback() }

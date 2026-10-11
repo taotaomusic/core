@@ -5,6 +5,7 @@ plugins {
     kotlin("android")
     kotlin("plugin.compose")
     id("org.jetbrains.compose")
+    id("com.google.devtools.ksp")
     // 热修复插桩。只作用于 data / player / update 包，UI 层不碰 —— 见 build-logic 里的说明。
     id("com.taotao.hotfix")
 }
@@ -105,6 +106,10 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
     implementation("io.coil-kt:coil-compose:2.7.0")
+    // 本地结构化存储（SQLite/Room）：播放历史、播放统计 outbox、收藏缓存、AI 会话、播放队列
+    // 五个大 JSON 桶从 SharedPreferences 迁入；小键值（登录态/音质/外观等）仍留在 prefs。
+    implementation("androidx.room:room-runtime:2.8.4")
+    ksp("androidx.room:room-compiler:2.8.4")
     // 与部署中的悟空 IM v2.2.5 同日发布的 Android SDK，避免协议版本漂移。
     implementation("com.github.WuKongIM:WuKongIMAndroidSDK:1.5.2")
     debugImplementation("androidx.compose.ui:ui-tooling")
