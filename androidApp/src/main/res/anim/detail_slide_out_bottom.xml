@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 详情页降级关动画：向屏幕底部滑出。 -->
+<translate xmlns:android="http://schemas.android.com/apk/res/android"
+    android:fromYDelta="0"
+    android:toYDelta="100%p"
+    android:duration="250"
+    android:interpolator="@android:interpolator/accelerate_quad" />

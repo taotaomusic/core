@@ -132,5 +132,9 @@ dependencies {
     ksp("androidx.room:room-compiler:2.8.4")
     // 与部署中的悟空 IM v2.2.5 同日发布的 Android SDK，避免协议版本漂移。
     implementation("com.github.WuKongIM:WuKongIMAndroidSDK:1.5.2")
+    // 金标联盟「一镜到底」SharedViewKit（从联盟 Nexus nexus.itgsa.com 手动落盘的 1.0.0.4）。
+    // 11KB 纯 API 壳：动画实现全在荣耀/OPPO/vivo/小米 ROM 侧，isViewAnimationSupported()>0
+    // 才生效；aar 元数据无 compileSdk/AGP 要求，minSdk 26 由 Manifest overrideLibrary 压过。
+    implementation(files("libs/sharedview-kit-1.0.0.4.aar"))
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

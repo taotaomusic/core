@@ -1,7 +1,8 @@
 package com.taotao.music.ui.app
 
+import android.app.Activity
+import android.graphics.Rect
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.ExitTransition
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -19,19 +20,29 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import com.taotao.music.playerui.PlayerActions
 import com.taotao.music.playerui.PlayerUiState
 import com.taotao.music.playerui.SharedMiniPlayer
 import com.taotao.music.playerui.layout.SharedMainLayout
 import com.taotao.music.playerui.layout.SharedNavigationItem
+import com.taotao.music.playerui.theme.TaotaoShapes
 import com.taotao.music.playerui.theme.TaotaoSizes
 import com.taotao.music.playerui.theme.TaotaoSpacing
 import com.taotao.music.ui.common.AlbumArt
 import com.taotao.music.ui.common.TaotaoSnackbar
+import com.taotao.music.ui.player.launchPlayerDetail
 import com.taotao.music.ui.theme.LocalReduceMotion
 import com.taotao.music.ui.theme.TaotaoTheme
 import com.taotao.music.ui.theme.riseIn
@@ -39,6 +50,7 @@ import com.taotao.music.ui.theme.sinkOut
 import com.taotao.music.ui.update.OptionalUpdateDialog
 import com.taotao.music.update.UpdateStage
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 /**
  * 登录后的主骨架：主题、可选更新提示、底部导航、迷你播放器、全局 Snackbar 与页面分发。
@@ -48,6 +60,20 @@ import kotlinx.coroutines.launch
 internal fun TaotaoAppContent(state: TaotaoAppState, darkTheme: Boolean) {
     val imConnection by state.wukongImClient.connection.collectAsState()
     val updateStatus = state.updateManager.status
+
+    // 迷你播放器 → 详情 Activity 的转场素材：封面在窗口里的落位与圆角（px）。
+    // 主界面组合在详情打开期间冻结，封面坐标不漂移，返回动画可直接复用。
+    val activityContext = LocalContext.current
+    val composeView = LocalView.current
+    val density = LocalDensity.current
+    var miniCoverBounds by remember { mutableStateOf<Rect?>(null) }
+    // AlbumArt 默认形状规则：尺寸不大于 artworkRow 用 TaotaoShapes.artwork 圆角（20dp）。
+    val miniCoverRadiusPx = with(density) {
+        TaotaoShapes.artwork.topStart.toPx(
+            Size(TaotaoSizes.artworkRow.toPx(), TaotaoSizes.artworkRow.toPx()),
+            this,
+        )
+    }
 
     // 配色统一走 TaotaoTheme，避免和登录页各写一份 colorScheme 导致进入首页时突然换色。
     TaotaoTheme(darkTheme = darkTheme) {
@@ -83,10 +109,13 @@ internal fun TaotaoAppContent(state: TaotaoAppState, darkTheme: Boolean) {
                 reduceMotion = stateReduceMotion,
                 miniPlayerContent = {
                     val reduceMotion = LocalReduceMotion.current
+                    // 详情页拆成独立 Activity 后，迷你播放器不再随详情显隐：
+                    // 详情打开期间主界面组合冻结、封面保持原位，正好作为一镜到底
+                    // 的返回落位；旧sinkOut 仅在队列清空时仍有意义。
                     AnimatedVisibility(
-                        visible = !state.showPlayerDetail && state.playbackSongs.isNotEmpty(),
+                        visible = state.playbackSongs.isNotEmpty(),
                         enter = riseIn(reduceMotion),
-                        exit = if (state.showPlayerDetail) ExitTransition.None else sinkOut(reduceMotion),
+                        exit = sinkOut(reduceMotion),
                     ) {
                         val current = remember(state.playbackSongs, state.selectedIndex) {
                             state.playbackSongs.getOrNull(
@@ -103,10 +132,31 @@ internal fun TaotaoAppContent(state: TaotaoAppState, darkTheme: Boolean) {
                                     onSeek = {},
                                     onToggleRepeat = {}
                                 ),
-                                onClick = { state.showPlayerDetail = true },
+                                onClick = {
+                                    (activityContext as? Activity)?.let { host ->
+                                        launchPlayerDetail(
+                                            activity = host,
+                                            sourceView = composeView,
+                                            coverBoundsInWindow = miniCoverBounds,
+                                            coverRadiusPx = miniCoverRadiusPx,
+                                        )
+                                    }
+                                },
                                 modifier = Modifier.padding(horizontal = TaotaoSpacing.sm, vertical = TaotaoSpacing.xxs),
                                 artworkContent = {
-                                    AlbumArt(Color(current.color), TaotaoSizes.artworkRow, current.coverUri)
+                                    Box(
+                                        Modifier.onGloballyPositioned { coords ->
+                                            val bounds = coords.boundsInWindow()
+                                            miniCoverBounds = Rect(
+                                                bounds.left.roundToInt(),
+                                                bounds.top.roundToInt(),
+                                                bounds.right.roundToInt(),
+                                                bounds.bottom.roundToInt(),
+                                            )
+                                        },
+                                    ) {
+                                        AlbumArt(Color(current.color), TaotaoSizes.artworkRow, current.coverUri)
+                                    }
                                 }
                             )
                         }
@@ -139,9 +189,9 @@ internal fun TaotaoAppContent(state: TaotaoAppState, darkTheme: Boolean) {
     }
 }
 
-/** 全局提示统一走胶囊样式；任意页面都能看到下载、收藏和播放的反馈。 */
+/** 全局提示统一走胶囊样式；任意页面都能看到下载、收藏和播放的反馈。详情 Activity 复用同一实现。 */
 @Composable
-private fun SnackbarHostWithTheme(state: TaotaoAppState, modifier: Modifier = Modifier) {
+internal fun SnackbarHostWithTheme(state: TaotaoAppState, modifier: Modifier = Modifier) {
     val snackbarHostState = remember { SnackbarHostState() }
     LaunchedEffect(state.message) {
         state.message?.let {

@@ -1,6 +1,7 @@
 package com.taotao.music.ui.app
 
 import android.content.Context
+import android.graphics.Rect
 import android.os.SystemClock
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -11,6 +12,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.MutableSharedFlow
 import com.taotao.music.TaotaoApplication
 import com.taotao.music.data.AppearanceMode
 import com.taotao.music.data.AppearanceStore
@@ -176,10 +178,37 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
     // ---- 播放与导航 ----
     var playbackSongs by mutableStateOf(emptyList<Song>())
     var selectedIndex by mutableIntStateOf(0)
-    var showPlayerDetail by mutableStateOf(false)
-    // MV 播放页盖在详情页之上；非空即显示。只从详情页的 MV 按钮进入。
+    // MV 播放页盖在详情页之上；非空即显示。从详情页的 MV 按钮或搜索页的视频标签进入。
     var mvSong by mutableStateOf<Song?>(null)
     var showSearchPage by mutableStateOf(false)
+
+    // ---- 播放详情页独立 Activity 的跨 Activity 通道 ----
+
+    /**
+     * 详情 Activity 是否存活（Activity onCreate/onDestroy 维护）。
+     * 主界面用它划分渲染归属：详情在场时 MV 浮层只在详情组合里画，
+     * 状态消息由详情自己的 Snackbar 消费，避免写到看不见的主界面提示条上。
+     */
+    var playerDetailActive by mutableStateOf(false)
+
+    /**
+     * 状态层请求关详情的事件通道：[closePlayerDetail] 发，详情 Activity 收到后
+     * 走 Kit 回落动画 finish。replay=0 且无订阅者时事件直接丢弃——详情不在场
+     * （未打开/已关闭）时发出去的关闭请求自然落空，状态层无需判断。
+     */
+    val closeDetailEvents = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+
+    /** 打开详情时记录的迷你封面落位（窗口坐标）与圆角 px，供一镜到底的返回动画瞄定。主界面组合冻结期间坐标不会漂移。 */
+    var detailReturnBounds: Rect? = null
+    var detailReturnRadiusPx: Float = 0f
+
+    /**
+     * 状态层关详情：切底部标签、从详情头部跳歌手/专辑页之前调用。
+     * 详情页拆成独立 Activity 后不再是组合内的浮层，改为发事件让 Activity 自己 finish。
+     */
+    fun closePlayerDetail() {
+        closeDetailEvents.tryEmit(Unit)
+    }
     /** 排行榜整页开关；页内的目录 / 详情两视图由 rankingPage.selected 决定。 */
     var showRankingPage by mutableStateOf(false)
     var showSettingsPage by mutableStateOf(false)
@@ -921,7 +950,7 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
         // 离开聊天页立即取消活动会话，避免切页期间仍把新消息标成已读并发送回执。
         if (target != 2) wukongImClient.setActivePeer(null)
         bottomTab = target
-        showPlayerDetail = false
+        closePlayerDetail()
         showSearchPage = false
         showSettingsPage = false
         showProfilePage = false
@@ -997,10 +1026,11 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
      * 头像由歌手页自己拉资料。
      */
     fun openArtistPageFromSong(song: Song) {
-        // 播放详情页在页面分发 when 链里排第一：不先收起它，歌手页即使开了也
-        // 永远显示不出来（表现为「点了没反应」，2026-10-05 实测踩过）。
-        // 详情页关闭后播放由迷你播放器继续，与桌面端行为一致。
-        showPlayerDetail = false
+        // 详情页拆成独立 Activity 后：先发关闭事件让它回落（Kit 支持时一镜到底
+        // 回到迷你封面），再置歌手页目标 —— 详情 finish 后主界面恢复时歌手页已就位。
+        // 旧实现背景：详情页在页面分发 when 链里排第一，不先收起它歌手页永远
+        // 显示不出来（表现为「点了没反应」，2026-10-05 实测踩过）。
+        closePlayerDetail()
         song.artistId?.let { artistId ->
             openArtistPage(
                 ArtistSearchResult(
@@ -1022,8 +1052,8 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
      * 不会带出无效跳转。
      */
     fun openAlbumPageFromSong(song: Song) {
-        // 同 [openArtistPageFromSong]：详情页不分发出去就等于「点了没反应」。
-        showPlayerDetail = false
+        // 同 [openArtistPageFromSong]：先关详情 Activity，再置专辑页目标。
+        closePlayerDetail()
         song.albumId?.let { albumId ->
             openAlbumPage(
                 AlbumSearchResult(

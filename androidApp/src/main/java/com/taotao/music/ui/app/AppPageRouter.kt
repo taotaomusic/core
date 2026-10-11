@@ -46,7 +46,6 @@ import com.taotao.music.ui.library.PlaybackHistoryPage
 import com.taotao.music.ui.library.SongDiaryPage
 import com.taotao.music.ui.mine.MinePage
 import com.taotao.music.ui.player.MvPlayerPage
-import com.taotao.music.ui.player.PlayerDetailPage
 import com.taotao.music.ui.player.QualitySheetKind
 import com.taotao.music.ui.playlist.OnlinePlaylistPage
 import com.taotao.music.ui.playlist.PlaylistDetailPage
@@ -70,14 +69,16 @@ import kotlinx.coroutines.withContext
 /**
  * 页面分发：把 currentPage 映射到具体页面并把全局状态装配进去。
  *
- * 详情页是最顶层页面：从日记页点迷你播放器要能盖在日记之上进入详情，
- * 所以它必须排在 song-diary 前面，否则 diarySong 非空时详情永远显示不出来。
+ * 播放详情页已拆成独立 Activity（[com.taotao.music.ui.player.PlayerDetailActivity]，
+ * 承载金标一镜到底转场），不再参与本 when 链；迷你播放器点击经
+ * launchPlayerDetail 启动它。
  * 歌手 / 专辑 / 在线歌单主页是从搜索页或排行榜歌曲行菜单进入的下级页：必须排在
  * search 之前，否则搜索标志仍然为真时永远显示宿主页（互跳时同一时刻只会保留一个
  * 目标，见 [TaotaoAppState.openArtistPage] 与 [TaotaoAppState.openOnlinePlaylistPage]）。
  * 排行榜从首页进入，是与 search 同层的第 1 层下级页，排在所有底部标签之前。
- * MV 播放页不是页面分支，而是盖在详情之上的独立浮层（见 [MvPlayerOverlay]）：
- * 从详情进出 MV 只动浮层本身，详情页保持在组合中原位不动，返回时不重播升起动画。
+ * MV 播放页不是页面分支，而是盖在页面之上的独立浮层（见 [MvPlayerOverlay]）：
+ * 从详情 Activity 进出 MV 只动详情组合里的浮层；搜索页视频标签的 MV 在主界面
+ * 浮层显示（详情在场时主界面浮层让位，见调用处的门控）。
  */
 @Composable
 internal fun TaotaoAppPageRouter(
@@ -87,7 +88,6 @@ internal fun TaotaoAppPageRouter(
     innerPadding: PaddingValues,
 ) {
     val currentPage = when {
-        state.showPlayerDetail -> "detail"
         state.diarySong != null && state.showDiaryRecords -> "diary-records"
         state.diarySong != null -> "song-diary"
         state.showProfilePage -> "profile"
@@ -157,7 +157,6 @@ internal fun TaotaoAppPageRouter(
                         state.generateImage(model, prompt, ratio, imageSize, quality)
                     },
                 )
-                "detail" -> if (state.playbackSongs.isNotEmpty()) PlayerDetailPageRoute(state)
                 "search" -> SearchPageRoute(state)
                 "ranking" -> RankingPageRoute(state)
                 "artist" -> state.artistPage.selected?.let { target ->
@@ -295,7 +294,11 @@ internal fun TaotaoAppPageRouter(
         }
     }
     // MV 播放页浮层：组合顺序就是绘制层级，它画在 AnimatedContent 里的所有页面之上。
-    MvPlayerOverlay(state)
+    // 详情 Activity 在场时浮层归属详情组合（两个组合读同一份 mvSong，若都渲染会
+    // 出现两份音频暂停/恢复记账），主界面这边让位。
+    if (!state.playerDetailActive) {
+        MvPlayerOverlay(state)
+    }
 }
 
 /**
@@ -306,7 +309,7 @@ internal fun TaotaoAppPageRouter(
  * 画面到动画结束，否则会闪一帧浅色背景。
  */
 @Composable
-private fun MvPlayerOverlay(state: TaotaoAppState) {
+internal fun MvPlayerOverlay(state: TaotaoAppState) {
     val reduceMotion = LocalReduceMotion.current
     val lastSong = remember { mutableStateOf<Song?>(null) }
     state.mvSong?.let { lastSong.value = it }
@@ -377,7 +380,7 @@ private fun HomePage(state: TaotaoAppState) {
  * 重组不会重读；页面盖住详情页，期间歌曲不可能被切走。
  */
 @Composable
-private fun MvPlayerPageRoute(state: TaotaoAppState, song: Song) {
+internal fun MvPlayerPageRoute(state: TaotaoAppState, song: Song) {
     val wasPlaying = remember { state.audioPlayer.isPlaying }
     DisposableEffect(Unit) {
         state.audioPlayer.pause()
@@ -389,72 +392,6 @@ private fun MvPlayerPageRoute(state: TaotaoAppState, song: Song) {
         song = song,
         musicApi = state.musicApi,
         onBack = { state.mvSong = null },
-    )
-}
-
-/** 播放详情页装配：队列、收藏、下载、音质与定时关闭全部来自全局状态。 */
-@Composable
-private fun PlayerDetailPageRoute(state: TaotaoAppState) {    PlayerDetailPage(
-        song = state.playbackSongs[state.selectedIndex.coerceIn(state.playbackSongs.indices)],
-        audioPlayer = state.audioPlayer,
-        isPlaying = state.isPlaying,
-        onBack = { state.showPlayerDetail = false },
-        onDownload = {
-            // 先在主线程取定目标歌曲，避免后台任务期间 selectedIndex 变化导致下错歌或越界。
-            val target = state.playbackSongs.getOrNull(state.selectedIndex)
-            when {
-                target == null -> state.message = "没有正在播放的歌曲"
-                target.audioUri?.startsWith("file:") == true -> state.message = "这首歌已经下载过了"
-                // 下载前先选音质：下载只花一次流量，值得让用户自己定，
-                // 面板里会显示各档的实际体积。
-                else -> state.downloadTarget = target to state.selectedIndex
-            }
-        },
-        musicApi = state.musicApi,
-        onTogglePlaying = { state.togglePlayback() },
-        onPrevious = { state.playAdjacentSong(-1) },
-        onNext = { state.playAdjacentSong(1) },
-        repeatMode = state.audioPlayer.repeatMode,
-        onToggleRepeat = {
-            val nextMode = when (state.audioPlayer.repeatMode) {
-                androidx.media3.common.Player.REPEAT_MODE_OFF -> androidx.media3.common.Player.REPEAT_MODE_ALL
-                androidx.media3.common.Player.REPEAT_MODE_ALL -> androidx.media3.common.Player.REPEAT_MODE_ONE
-                else -> androidx.media3.common.Player.REPEAT_MODE_OFF
-            }
-            state.audioPlayer.updateRepeatMode(nextMode)
-        },
-        queue = state.playbackSongs,
-        queueIndex = state.selectedIndex,
-        onQueueItemClick = { index -> state.playSong(state.playbackSongs, index) },
-        onRemoveQueueItem = { index -> state.audioPlayer.removeQueueItem(index) },
-        onMoveQueueItem = { from, to -> state.moveQueueItem(from, to) },
-        onKeepOnlyCurrent = { state.audioPlayer.keepOnlyCurrent() },
-        history = state.playbackHistory,
-        localSongs = state.downloadedSongs,
-        onPlayHistory = { index -> state.playSong(state.playbackHistory.map { it.song }, index) },
-        onPlayLocal = { index -> state.playSong(state.downloadedSongs, index) },
-        onPlayNext = { song -> state.playNext(song) },
-        onAddToPlaylist = { song -> state.playlist.requestAddSong(song) },
-        onShare = { state.requestSongShare(state.playbackSongs[state.selectedIndex.coerceIn(state.playbackSongs.indices)]) },
-        isFavorite = { song -> state.favoritesStore.contains(song) },
-        onToggleSongFavorite = { song -> state.toggleFavorite(song) },
-        favorited = remember(state.selectedIndex, state.favoriteRevision, state.playbackSongs) {
-            state.playbackSongs.getOrNull(state.selectedIndex)?.let { state.favoritesStore.contains(it) } == true
-        },
-        onToggleFavorite = {
-            state.playbackSongs.getOrNull(state.selectedIndex)?.let { state.toggleFavorite(it) }
-        },
-        playbackQuality = state.playbackQuality.value,
-        onPickQuality = { state.qualitySheet = QualitySheetKind.CURRENT_SONG },
-        sleepTimerRemainingMs = state.audioPlayer.sleepTimerRemainingMs,
-        sleepTimerWaitingSongEnd = state.audioPlayer.sleepTimerWaitingSongEnd,
-        onOpenSleepTimer = { state.showSleepTimerDialog = true },
-        onRefrainResolved = { song, startMs, endMs -> state.applyResolvedRefrain(song, startMs, endMs) },
-        onOpenMv = { state.mvSong = it },
-        // 播放页头部「歌手 · 专辑」点击跳转：与搜索歌曲行菜单共用同一套
-        // 「从歌曲构造跳转目标」逻辑（见状态层 openArtistPageFromSong / openAlbumPageFromSong）。
-        onOpenArtist = { song -> state.openArtistPageFromSong(song) },
-        onOpenAlbum = { song -> state.openAlbumPageFromSong(song) },
     )
 }
 

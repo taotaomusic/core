@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    详情页转场里「保持静止」的一方（打开时的主界面、关闭时的主界面）。
+    windowAnimationStyle 没有「不动画」的写法，用零位移的 alpha 占位，
+    让升降动画只作用在详情窗口上，主界面纹丝不动 —— 与原 Compose 浮层观感一致。
+-->
+<alpha xmlns:android="http://schemas.android.com/apk/res/android"
+    android:fromAlpha="1.0"
+    android:toAlpha="1.0"
+    android:duration="300" />

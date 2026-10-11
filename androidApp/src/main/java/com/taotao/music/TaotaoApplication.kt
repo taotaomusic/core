@@ -31,7 +31,8 @@ class TaotaoApplication : Application() {
          * 组合作用域：组合作用域随 Activity 销毁而取消，会连带取消播放状态同步等
          * 本应活过页面切换的后台任务。
          */
-        val appState: com.taotao.music.ui.app.TaotaoAppState by lazy {
+        // internal：TaotaoAppState 是模块内类型，公共属性不能暴露它（Kotlin 可见性规则）。
+        internal val appState: com.taotao.music.ui.app.TaotaoAppState by lazy {
             val app = application
             com.taotao.music.ui.app.TaotaoAppState(
                 app.applicationContext,
