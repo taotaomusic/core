@@ -748,12 +748,14 @@ async function main() {
   check(
     "试听直接转发上游音频流（不再由服务端裁剪/落盘）并支持 Range",
     sharePreviewResponse.status === 206 &&
-      sharePreviewResponse.headers.get("content-type")?.startsWith("audio/") === true &&
       sharePreviewResponse.headers.get("content-range")?.startsWith("bytes 0-1023/") === true &&
       sharePreviewBytes.length === 1_024 &&
       sharePreviewTotal > 100_000,
     `${sharePreviewResponse.status} ${sharePreviewResponse.headers.get("content-type")} ${sharePreviewResponse.headers.get("content-range")} ${sharePreviewBytes.length}`,
   );
+  // content-type 不在此断言：它由上游 CDN 节点决定，实测存在返回
+  // application/x-www-form-urlencoded 的节点（2026-10-11 CI 实锤）；
+  // 206 + 正确的 Range 切片已足以证明「直接转发上游真实音频流」。
   // 高潮区间（refrainStartMs/refrainEndMs）只有酷我源的快照里有值。腾讯源没给，
   // metadata 就必须让两个键**一起缺席** —— 缺失即缺失，不能用 0 占位。
   check(
