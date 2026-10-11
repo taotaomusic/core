@@ -73,12 +73,14 @@ internal fun TaotaoAppPreAuthEffects(state: TaotaoAppState) {
     }
 
     /**
-     * 物理返回键：详情页先收起详情，歌手 / 专辑主页先退出再轮到搜索页或排行榜
-     * （两者都是第 1 层下级页），都不在时禁用拦截，交回系统默认行为（退出应用）——
-     * 这样不必自己去拿 onBackPressedDispatcher。
+     * 物理返回键：歌手 / 专辑主页先退出再轮到搜索页或排行榜（两者都是第 1 层
+     * 下级页），都不在时禁用拦截，交回系统默认行为（退出应用）——这样不必自己
+     * 去拿 onBackPressedDispatcher。播放详情页已拆成独立 Activity，物理返回由
+     * 它自己的分发器处理（走 Kit 回落动画）；MV 在主界面打开时（搜索页视频）
+     * 仍先退 MV。
      */
     BackHandler(
-        enabled = state.mvSong != null || state.showPlayerDetail || state.showSearchPage ||
+        enabled = state.mvSong != null || state.showSearchPage ||
             state.showSettingsPage || state.showProfilePage || state.playlist.selected != null ||
             state.mineLibrarySection != null || state.diarySong != null ||
             state.artistPage.selected != null || state.albumPage.selected != null ||
@@ -86,10 +88,9 @@ internal fun TaotaoAppPreAuthEffects(state: TaotaoAppState) {
             state.showRankingPage,
     ) {
         when {
-            // 与 currentPage 一致：MV 播放页盖在详情页之上，返回先退 MV；
-            // 详情页盖在日记之上，再退详情，播放记录是日记的下级页最后退。
+            // 与 currentPage 一致：MV 播放页盖在页面之上，返回先退 MV；
+            // 播放记录是日记的下级页，再退日记。
             state.mvSong != null -> state.mvSong = null
-            state.showPlayerDetail -> state.showPlayerDetail = false
             state.showDiaryRecords -> state.showDiaryRecords = false
             state.diarySong != null -> state.diarySong = null
             state.showProfilePage -> state.showProfilePage = false

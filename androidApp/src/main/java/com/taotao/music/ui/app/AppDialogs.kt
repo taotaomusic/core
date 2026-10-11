@@ -24,10 +24,16 @@ import kotlinx.coroutines.withContext
 /**
  * 全局弹窗与底部面板装配：公告、定时关闭、歌单三件套、删除确认与音质面板。
  * 显示状态全部来自全局状态容器；这里只负责把状态桥接到各弹窗组件。
+ *
+ * 详情页拆成独立 Activity 后同一套状态可能从两个组合访问，用 [inDetailActivity]
+ * 划分归属：触发源在详情（下载音质、当前歌曲音质）的只进详情组合，触发源在
+ * 主界面（公告、删除确认、设置页的默认音质）的只进主界面组合；定时关闭与
+ * 歌单三件套两侧都可能触发（详情队列菜单也能「加入歌单」），两边都装配——
+ * 未在前台的一方组合冻结不会真的弹窗，返回后状态已被消费不会残留。
  */
 @Composable
-internal fun TaotaoAppDialogs(state: TaotaoAppState) {
-    if (state.showAnnouncementDialog) {
+internal fun TaotaoAppDialogs(state: TaotaoAppState, inDetailActivity: Boolean = false) {
+    if (!inDetailActivity && state.showAnnouncementDialog) {
         AnnouncementDialog(announcements = state.announcements, onDismiss = { state.showAnnouncementDialog = false })
     }
     if (state.showSleepTimerDialog) {
@@ -106,6 +112,7 @@ internal fun TaotaoAppDialogs(state: TaotaoAppState) {
         )
     }
     state.pendingDelete?.let { target ->
+        if (inDetailActivity) return@let
         AlertDialog(
             onDismissRequest = { state.pendingDelete = null },
             title = { Text("删除下载") },
@@ -121,8 +128,9 @@ internal fun TaotaoAppDialogs(state: TaotaoAppState) {
     }
 
     // 下载前的音质面板：查一次 /song/info 拿到这首歌真实存在的档位与体积。
+    // 触发源只有详情页的下载按钮，归详情组合。
     val pendingDownload = state.downloadTarget
-    if (pendingDownload != null) {
+    if (inDetailActivity && pendingDownload != null) {
         LaunchedEffect(pendingDownload.first.remoteId) {
             state.qualitiesLoading = true
             state.songQualities = runCatching {
@@ -148,7 +156,8 @@ internal fun TaotaoAppDialogs(state: TaotaoAppState) {
     }
 
     when (state.qualitySheet) {
-        QualitySheetKind.CURRENT_SONG -> {
+        // 「只对这一首」音质面板只从详情页打开，归详情组合。
+        QualitySheetKind.CURRENT_SONG -> if (inDetailActivity) {
             val current = state.playbackSongs.getOrNull(state.selectedIndex)
             LaunchedEffect(current?.remoteId) {
                 if (current == null) return@LaunchedEffect
@@ -173,7 +182,8 @@ internal fun TaotaoAppDialogs(state: TaotaoAppState) {
                 onDismiss = { state.qualitySheet = null },
             )
         }
-        QualitySheetKind.PLAYBACK_DEFAULT -> QualitySheet(
+        // 下面两档默认音质只从设置页（主界面）打开，归主界面组合。
+        QualitySheetKind.PLAYBACK_DEFAULT -> if (!inDetailActivity) QualitySheet(
             title = "默认播放音质",
             choices = staticQualityChoices(),
             selected = state.playbackQuality.value,
@@ -185,7 +195,7 @@ internal fun TaotaoAppDialogs(state: TaotaoAppState) {
             },
             onDismiss = { state.qualitySheet = null },
         )
-        QualitySheetKind.DOWNLOAD_DEFAULT -> QualitySheet(
+        QualitySheetKind.DOWNLOAD_DEFAULT -> if (!inDetailActivity) QualitySheet(
             title = "默认下载音质",
             choices = staticQualityChoices(),
             selected = state.downloadQuality.value,

@@ -8,4 +8,25 @@
         <item name="android:colorAccent">#FF6B5F</item>
         <item name="android:windowBackground">@android:color/transparent</item>
     </style>
+
+    <!--
+        播放详情页（独立 Activity）降级主题：ROM 不支持金标一镜到底的设备，
+        开合走 windowAnimationStyle 的底部滑入/滑出（模拟原 Compose 内的升起动效，
+        主界面保持静止），Kit 生效时系统接管转场、这里的窗口动画不参与。
+        windowBackground 沿用 Theme.Taotao 的透明：滑入过程中主界面从内容上方透出。
+    -->
+    <style name="Theme.Taotao.PlayerDetail">
+        <item name="android:windowAnimationStyle">@style/WindowAnim.PlayerDetail</item>
+    </style>
+
+    <style name="WindowAnim.PlayerDetail" parent="@android:style/Animation.Activity">
+        <item name="android:activityOpenEnterAnimation">@anim/detail_slide_in_bottom</item>
+        <item name="android:activityOpenExitAnimation">@anim/detail_static</item>
+        <item name="android:activityCloseEnterAnimation">@anim/detail_static</item>
+        <item name="android:activityCloseExitAnimation">@anim/detail_slide_out_bottom</item>
+        <item name="android:taskOpenEnterAnimation">@anim/detail_slide_in_bottom</item>
+        <item name="android:taskOpenExitAnimation">@anim/detail_static</item>
+        <item name="android:taskCloseEnterAnimation">@anim/detail_static</item>
+        <item name="android:taskCloseExitAnimation">@anim/detail_slide_out_bottom</item>
+    </style>
 </resources>
