@@ -28,5 +28,5 @@ kotlin {
 
 android {
     namespace = "com.taotao.music.playerui"
-    compileSdk = 35
+    compileSdk = 36
 }

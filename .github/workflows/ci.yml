@@ -530,24 +530,33 @@ jobs:
       # root 未注册任务而失败，所以要借 :webApp 的构建图并临时排除锁校验；
       # Kotlin 2.2 起锁校验任务拆分为 kotlinWasmStorePackageLock（旧名
       # kotlinStorePackageLock 已不存在，--exclude-task 会因歧义直接报错）。
-      - name: 刷新 kotlin-js-store 锁文件（漂移时回写）
+      - name: 构建 Kotlin/Wasm 分享播放器（先实际化锁文件）
         run: |
-          # Kotlin 2.2 起锁文件由 kotlinWasmUpgradePackageLock 实际化（wasm 锁与 js 锁
-          # 分离管理，都在 kotlin-js-store/ 下）。升级依赖后锁必漂移，构建图里带上
-          # 该任务一并 actualize；storePackageLock 校验继续排除避免顺序问题。
+          # Kotlin 2.3 起 kotlinWasmStorePackageLock（校验）挂在 npmInstall 的
+          # pre/postInstall 依赖链上，-x 排不掉，且与 kotlinWasmUpgradePackageLock
+          # （写锁，mismatchReport=NONE、autoReplace=true，只写盘不校验）并行竞速：
+          # 锁漂移时校验可能抢在写盘前执行而失败，默认调度下失败会取消同图后续
+          # 任务，写锁永远轮不到执行。所以第一遍带 --continue 保证写锁必然跑完、
+          # || true 容忍校验噪音；第二遍磁盘锁已一致，正常构建。
+          # 注意 configureondemand=true 下根 npm 任务不能单独调（root 未注册任务，
+          # CI 首跑实证 "kotlinWasmUpgradePackageLock not found"），必须借 :webApp 的
+          # 构建图一并调用；-x 排不掉校验任务就不用排，交给 --continue + || true。
+          ./gradlew :webApp:wasmJsBrowserDistribution :kotlinWasmUpgradePackageLock --continue --build-cache --no-daemon || true
           for attempt in 1 2 3; do
-            if ./gradlew :webApp:wasmJsBrowserDistribution :kotlinWasmUpgradePackageLock -x :kotlinWasmStorePackageLock --build-cache --no-daemon; then break; fi
+            if ./gradlew :webApp:wasmJsBrowserDistribution --build-cache --no-daemon; then break; fi
             echo "::warning::wasm 构建第 ${attempt} 次失败（wasm-opt 偶发启动问题），重试"
             if [ "$attempt" = 3 ]; then exit 1; fi
             sleep 5
           done
+      - name: kotlin-js-store 锁文件漂移回写
+        run: |
           # 漂移检测走 git 层面（对 kotlin-js-store 整目录），不依赖锁文件的具体生成路径。
+          # PR 上只检测不落库：往 PR 分支推提交既打扰作者，fork PR 又没有写权限。
+          # 漂移会在合并进 main 后的那次 push 运行里自动回写。
           git add kotlin-js-store
           if git diff --cached --quiet; then
             echo "锁文件无漂移"
           else
-            # PR 上只刷新不落库：往 PR 分支推提交既打扰作者，fork PR 又没有写权限。
-            # 漂移会在合并进 main 后的那次 push 运行里自动回写。
             if [ "${{ github.event_name }}" != "push" ]; then
               git reset --hard >/dev/null
               echo "::warning::锁文件有漂移，PR 上不回写仓库；合并进 main 后由 push 运行自动刷新"
@@ -558,14 +567,6 @@ jobs:
               git push || echo "::warning::锁文件回写推送失败，下次运行重试"
             fi
           fi
-      - name: 构建 Kotlin/Wasm 分享播放器
-        run: |
-          for attempt in 1 2 3; do
-            if ./gradlew :webApp:wasmJsBrowserDistribution --build-cache --no-daemon; then exit 0; fi
-            echo "::warning::wasm 构建第 ${attempt} 次失败（wasm-opt 偶发启动问题），重试"
-            if [ "$attempt" = 3 ]; then exit 1; fi
-            sleep 5
-          done
       - name: 打包并发布 share-player-latest
         if: github.event_name == 'push'
         env:
