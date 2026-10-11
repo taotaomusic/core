@@ -11,6 +11,8 @@ data class MethodChange(
     val descriptor: String,
     /** head 侧是否可插桩（REMOVED 的方法取 base 侧口径）。 */
     val instrumentable: Boolean,
+    /** head 侧方法体的不可移植事实（REMOVED 的方法取 base 侧口径），空列表 = 可移植。 */
+    val portabilityIssues: List<String> = emptyList(),
 )
 
 /** 某个类的字段集合发生了增删（热修无法给已安装的类增删字段）。 */
@@ -61,14 +63,17 @@ fun diff(base: Scan, head: Scan): DiffResult {
             when {
                 b != null && h != null -> if (b.fingerprint != h.fingerprint) {
                     methodChanges += MethodChange(
-                        MethodChangeKind.CHANGED, key, internalName, h.name, h.descriptor, h.instrumentable,
+                        MethodChangeKind.CHANGED, key, internalName, h.name, h.descriptor,
+                        h.instrumentable, h.portabilityIssues,
                     )
                 }
                 b == null && h != null -> methodChanges += MethodChange(
-                    MethodChangeKind.ADDED, key, internalName, h.name, h.descriptor, h.instrumentable,
+                    MethodChangeKind.ADDED, key, internalName, h.name, h.descriptor,
+                    h.instrumentable, h.portabilityIssues,
                 )
                 b != null && h == null -> methodChanges += MethodChange(
-                    MethodChangeKind.REMOVED, key, internalName, b.name, b.descriptor, b.instrumentable,
+                    MethodChangeKind.REMOVED, key, internalName, b.name, b.descriptor,
+                    b.instrumentable, b.portabilityIssues,
                 )
             }
         }

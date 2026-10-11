@@ -24,9 +24,11 @@ import org.objectweb.asm.tree.TypeInsnNode
  *    原参数类型存进对应槽，这样移植过来的指令一个字节都不用改就能读到它们。
  * 3. **改写返回**：原方法的 `?RETURN` 一律改成「装箱后 ARETURN」；`void` 返回 null。
  *
- * ⚠️ 本轮是「直连」移植：方法体里对宿主成员的访问保持原样的 `getfield`/`invokevirtual`。
- * 对 public/internal 成员没问题（补丁类加载器以宿主为父，引用能链接到宿主那份类）；
- * 但访问**私有**成员会在运行时抛 `IllegalAccessError`。私有访问改写成反射是下一步。
+ * ⚠️ 方法体里对**宿主包**成员的访问（实例/静态字段的读写、方法调用）会被改写成调用
+ * `Refl` 的反射：补丁类与宿主类是两套 Class，直连访问**私有**成员会抛 `IllegalAccessError`，
+ * 统一走反射（不区分 public/private）最简单也总是正确。唯一不支持的是 `new` 宿主类型
+ * （NEW + INVOKESPECIAL &lt;init&gt;），遇到即抛 `UnsupportedOperationException` 兜底
+ * （上游闸门会把这类不可移植构造结构化拒绝）。
  */
 object MethodTransplanter {
 
@@ -98,8 +100,10 @@ object MethodTransplanter {
                 node is org.objectweb.asm.tree.FieldInsnNode && isHostOwner(node.owner) -> when (node.opcode) {
                     Opcodes.GETFIELD -> HostAccessRewriter.getField(out, node.owner, node.name, node.desc)
                     Opcodes.PUTFIELD -> HostAccessRewriter.putField(out, node.owner, node.name, node.desc, scratchBase)
+                    Opcodes.GETSTATIC -> HostAccessRewriter.getStatic(out, node.owner, node.name, node.desc)
+                    Opcodes.PUTSTATIC -> HostAccessRewriter.putStatic(out, node.owner, node.name, node.desc, scratchBase)
                     else -> throw UnsupportedOperationException(
-                        "暂不支持改写宿主静态字段访问：${node.owner}.${node.name}（GETSTATIC/PUTSTATIC）",
+                        "未支持的宿主字段访问指令：${node.owner}.${node.name}（opcode=${node.opcode}）",
                     )
                 }
 

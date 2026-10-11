@@ -62,13 +62,19 @@ object HotfixGate {
             reasons += "删除了类 ${diff.removedClasses}，需整包"
         }
 
-        // 4) 变化的方法必须都可插桩、且落在允许的包里。
+        // 4) 变化的方法必须都可插桩、方法体可移植、且落在允许的包里。
         val patchable = ArrayList<String>()
         for (m in diff.changedMethods) {
             if (!m.instrumentable) {
                 reasons += "方法 ${m.key} 不可插桩（构造器/合成/接口/抽象/native），无插桩点可接管"
                 continue
             }
+            // 方法体里有发射阶段救不回来的结构（super 调用、new 宿主类型等）：
+            // 硬生成会在运行时递归 / 加载失败，必须整包。
+            for (issue in m.portabilityIssues) {
+                reasons += "方法 ${m.key} 不可移植：$issue，需整包"
+            }
+            if (m.portabilityIssues.isNotEmpty()) continue
             if (config.allowedPackagePrefixes.isNotEmpty() &&
                 config.allowedPackagePrefixes.none { m.ownerInternalName.startsWith(it) }
             ) {

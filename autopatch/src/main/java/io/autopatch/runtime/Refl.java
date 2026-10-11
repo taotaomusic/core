@@ -3,12 +3,13 @@ package io.autopatch.runtime;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 
 /**
  * 补丁运行时的反射工具。
  *
- * 移植进补丁类的方法体里，对**宿主包成员**的 getfield/putfield/invoke 会被改写成调用
- * 这里的静态方法 —— 因为补丁类与宿主类是两套 Class，直连访问宿主的私有成员会抛
+ * 移植进补丁类的方法体里，对**宿主包成员**的 getfield/putfield/getstatic/putstatic/invoke
+ * 会被改写成调用这里的静态方法 —— 因为补丁类与宿主类是两套 Class，直连访问宿主的私有成员会抛
  * {@code IllegalAccessError}。走反射 + setAccessible 绕开访问控制。
  *
  * 这是一个**自包含**的类（不引用任何宿主类型），会被单独打进补丁 DEX 一起下发。
@@ -36,6 +37,30 @@ public final class Refl {
             f.set(target, value);
         } catch (Exception e) {
             throw new RuntimeException("热修反射写字段失败：" + ownerInternalName + "." + name, e);
+        }
+    }
+
+    /** 读静态字段（含私有）。owner 用本类加载器解析（父链含宿主），沿继承链向上找。 */
+    public static Object getStatic(String ownerInternalName, String name) {
+        try {
+            Class<?> owner = Refl.class.getClassLoader().loadClass(ownerInternalName.replace('/', '.'));
+            Field f = findStaticField(owner, name);
+            f.setAccessible(true);
+            return f.get(null);
+        } catch (Exception e) {
+            throw new RuntimeException("热修反射读静态字段失败：" + ownerInternalName + "." + name, e);
+        }
+    }
+
+    /** 写静态字段（含私有）。 */
+    public static void setStatic(String ownerInternalName, String name, Object value) {
+        try {
+            Class<?> owner = Refl.class.getClassLoader().loadClass(ownerInternalName.replace('/', '.'));
+            Field f = findStaticField(owner, name);
+            f.setAccessible(true);
+            f.set(null, value);
+        } catch (Exception e) {
+            throw new RuntimeException("热修反射写静态字段失败：" + ownerInternalName + "." + name, e);
         }
     }
 
@@ -88,6 +113,32 @@ public final class Refl {
                 return c.getDeclaredField(name);
             } catch (NoSuchFieldException ignored) {
                 // 继续往父类找
+            }
+        }
+        throw new NoSuchFieldException(name);
+    }
+
+    /**
+     * 沿继承链向上找静态字段。与 {@link #findField} 不同，接口也要搜：JVM 允许 getstatic
+     * 的 owner 是接口（Kotlin companion/顶层常量就编译成接口字段），只搜父类链会漏掉
+     * 声明在接口上的静态字段。查找顺序对齐 JVM 字段解析：本类 → 本类接口（递归）→ 父类。
+     */
+    private static Field findStaticField(Class<?> from, String name) throws NoSuchFieldException {
+        for (Class<?> c = from; c != null; c = c.getSuperclass()) {
+            try {
+                Field f = c.getDeclaredField(name);
+                if (Modifier.isStatic(f.getModifiers())) {
+                    return f;
+                }
+            } catch (NoSuchFieldException ignored) {
+                // 本类没有，继续往上找
+            }
+            for (Class<?> itf : c.getInterfaces()) {
+                try {
+                    return findStaticField(itf, name);
+                } catch (NoSuchFieldException ignored) {
+                    // 接口上没有，继续往上找
+                }
             }
         }
         throw new NoSuchFieldException(name);
