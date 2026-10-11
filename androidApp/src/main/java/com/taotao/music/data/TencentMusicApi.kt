@@ -36,9 +36,12 @@ import android.os.Build
  *    令牌、拿不到 PSK（authenticate / postJson / publicJson 与 companion 的 refreshTokens、
  *    revokeRefreshToken、revokeImSession 天然在此集合）。
  * 2. `POST /api/v1/auth/avatar` —— multipart 大文件（[authorizedMultipart] 保持明文）。
- * 3. `/api/v1/crypto/*` —— 加密体系自身（握手与 PSK 下发，[CryptoTransport] 内直连）。
- * 4. `/api/v1/app/*`、`/api/v1/admin/*`、`/api/v1/public/*`、`/api/v1/desktop/*`、
- *    `/api/v1/open/*`、`/api/v1/files/*` —— 本类不调用。
+ * 3. `/api/v1/crypto/` 下全部（psk、handshake）—— 加密体系自身（握手与 PSK 下发，
+ *    [CryptoTransport] 内直连）。
+ * 4. `/api/v1/app/`、`/api/v1/admin/`、`/api/v1/public/`、`/api/v1/desktop/`、
+ *    `/api/v1/open/`、`/api/v1/files/` 前缀下全部 —— 本类不调用。
+ *    （写法注意：KDoc 里不能出现「斜杠+星号」的通配符——Kotlin 块注释可嵌套，
+ *    每个「斜杠+星号」都会多开一层注释，整个文件后半会被吞掉。）
  * 5. `GET /api/v1/search` —— **裸 NDJSON 渐进流契约**（RELEASE.md），加密会被服务端
  *    整体缓冲破坏流式语义（[search] 走 [authorizedPlain] 保持逐行回调）。
  * 6. `/api/v1/songs/:id/play` —— 音频流，逐块 AEAD 得不偿失（播放器直连，不经本类通道）。
@@ -1658,8 +1661,8 @@ class TencentMusicApi(
     /**
      * 需要访问令牌的请求（字节读法）：强制加密集合内的路径走 [authorizedCrypto]，
      * 永不加密集合内的路径转 [authorizedPlain]（把响应字节包回给调用方）。
-     * 客户端侧永不加密只需特判 `/api/v1/search` 精确段——登录族、multipart、/crypto/*、
-     * 公开数据等本就不经本通道，完整集合见类 KDoc 的路径契约。
+     * 客户端侧永不加密只需特判 `/api/v1/search` 精确段——登录族、multipart、crypto
+     * 引导、公开数据等本就不经本通道，完整集合见类 KDoc 的路径契约。
      */
     private fun <T> authorized(path: String, method: String = "GET", read: (ByteArray) -> T): T =
         if (path.substringBefore('?') == NEVER_ENCRYPT_SEARCH_PATH) {

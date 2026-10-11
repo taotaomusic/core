@@ -2903,113 +2903,121 @@ async function main() {
   const onlinePlaylistRow = kuwoSearchPlaylistRows[0];
   const onlinePlaylistId = onlinePlaylistRow?.id;
   const onlinePlaylistMarker = onlinePlaylistRow?.sourceMarker;
-  const onlinePlaylistDetail = await (await fetch(
-    `${base}/api/v1/online-playlists/${onlinePlaylistId}?sourceMarker=${onlinePlaylistMarker}&source=kuwo`,
-    { headers: { authorization: `Bearer ${token}` } },
-  )).json();
-  check(
-    "在线歌单详情返回契约字段（playCount/trackCount/collectedCount 归一，用户维度字段丢弃）",
-    onlinePlaylistDetail.code === 0
-      && onlinePlaylistDetail.data?.playlist?.source === "kuwo"
-      && onlinePlaylistDetail.data.playlist.id === onlinePlaylistId
-      && typeof onlinePlaylistDetail.data.playlist.name === "string" && onlinePlaylistDetail.data.playlist.name.length > 0
-      && typeof onlinePlaylistDetail.data.playlist.pic === "string" && (onlinePlaylistDetail.data.playlist.pic === "" || onlinePlaylistDetail.data.playlist.pic.startsWith("https://"))
-      && typeof onlinePlaylistDetail.data.playlist.description === "string"
-      && typeof onlinePlaylistDetail.data.playlist.playCount === "number" && onlinePlaylistDetail.data.playlist.playCount > 0
-      && typeof onlinePlaylistDetail.data.playlist.trackCount === "number" && onlinePlaylistDetail.data.playlist.trackCount > 0
-      && typeof onlinePlaylistDetail.data.playlist.collectedCount === "number"
-      && typeof onlinePlaylistDetail.data.playlist.creatorId === "number"
-      && typeof onlinePlaylistDetail.data.playlist.creatorName === "string" && onlinePlaylistDetail.data.playlist.creatorName.length > 0
-      && typeof onlinePlaylistDetail.data.playlist.creatorIcon === "string" && (onlinePlaylistDetail.data.playlist.creatorIcon === "" || onlinePlaylistDetail.data.playlist.creatorIcon.startsWith("https://"))
-      && typeof onlinePlaylistDetail.data.playlist.isPrivate === "boolean"
-      && !("isFond" in onlinePlaylistDetail.data.playlist) && !("traceId" in onlinePlaylistDetail.data.playlist),
-    JSON.stringify(onlinePlaylistDetail).slice(0, 220),
-  );
+  // 实体取自上游歌单搜索的首行：上游不可达（CI 出不了外网）时没有 ID 可用，
+  // 本族断言（含夹在中间的拒绝矩阵）整体跳过，而不是级联成一串 4001/4xx 假失败。
+  const onlinePlaylistReachable = typeof onlinePlaylistId === "number" && onlinePlaylistId > 0;
+  if (onlinePlaylistReachable) {
+    const onlinePlaylistDetail = await (await fetch(
+      `${base}/api/v1/online-playlists/${onlinePlaylistId}?sourceMarker=${onlinePlaylistMarker}&source=kuwo`,
+      { headers: { authorization: `Bearer ${token}` } },
+    )).json();
+    check(
+      "在线歌单详情返回契约字段（playCount/trackCount/collectedCount 归一，用户维度字段丢弃）",
+      onlinePlaylistDetail.code === 0
+        && onlinePlaylistDetail.data?.playlist?.source === "kuwo"
+        && onlinePlaylistDetail.data.playlist.id === onlinePlaylistId
+        && typeof onlinePlaylistDetail.data.playlist.name === "string" && onlinePlaylistDetail.data.playlist.name.length > 0
+        && typeof onlinePlaylistDetail.data.playlist.pic === "string" && (onlinePlaylistDetail.data.playlist.pic === "" || onlinePlaylistDetail.data.playlist.pic.startsWith("https://"))
+        && typeof onlinePlaylistDetail.data.playlist.description === "string"
+        && typeof onlinePlaylistDetail.data.playlist.playCount === "number" && onlinePlaylistDetail.data.playlist.playCount > 0
+        && typeof onlinePlaylistDetail.data.playlist.trackCount === "number" && onlinePlaylistDetail.data.playlist.trackCount > 0
+        && typeof onlinePlaylistDetail.data.playlist.collectedCount === "number"
+        && typeof onlinePlaylistDetail.data.playlist.creatorId === "number"
+        && typeof onlinePlaylistDetail.data.playlist.creatorName === "string" && onlinePlaylistDetail.data.playlist.creatorName.length > 0
+        && typeof onlinePlaylistDetail.data.playlist.creatorIcon === "string" && (onlinePlaylistDetail.data.playlist.creatorIcon === "" || onlinePlaylistDetail.data.playlist.creatorIcon.startsWith("https://"))
+        && typeof onlinePlaylistDetail.data.playlist.isPrivate === "boolean"
+        && !("isFond" in onlinePlaylistDetail.data.playlist) && !("traceId" in onlinePlaylistDetail.data.playlist),
+      JSON.stringify(onlinePlaylistDetail).slice(0, 220),
+    );
 
-  const onlinePlaylistSongsRes = await fetch(
-    `${base}/api/v1/online-playlists/${onlinePlaylistId}/songs?page=1&num=30&sourceMarker=${onlinePlaylistMarker}&source=kuwo`,
-    { headers: { authorization: `Bearer ${token}` } },
-  );
-  const onlinePlaylistSongsBody = await onlinePlaylistSongsRes.json();
-  const onlinePlaylistSongs = onlinePlaylistSongsBody.data?.songs ?? [];
-  check(
-    "在线歌单歌曲列表返回 200 且 songs 与 search 的歌曲行同构",
-    onlinePlaylistSongsRes.status === 200
-      && onlinePlaylistSongsBody.code === 0
-      && onlinePlaylistSongs.length > 0 && onlinePlaylistSongs.length <= 30
-      && onlinePlaylistSongs.every(detailSongShape),
-    `${onlinePlaylistSongsRes.status} ${JSON.stringify(onlinePlaylistSongsBody).slice(0, 220)}`,
-  );
-  check(
-    "在线歌单歌曲列表的 meta 分页信封正确（total 数字、hasMore = page*num < total）",
-    detailMetaShape(onlinePlaylistSongsBody.data?.meta, 1, 30)
-      && onlinePlaylistSongsBody.data.meta.total > 0,
-    JSON.stringify(onlinePlaylistSongsBody.data?.meta),
-  );
+    const onlinePlaylistSongsRes = await fetch(
+      `${base}/api/v1/online-playlists/${onlinePlaylistId}/songs?page=1&num=30&sourceMarker=${onlinePlaylistMarker}&source=kuwo`,
+      { headers: { authorization: `Bearer ${token}` } },
+    );
+    const onlinePlaylistSongsBody = await onlinePlaylistSongsRes.json();
+    const onlinePlaylistSongs = onlinePlaylistSongsBody.data?.songs ?? [];
+    check(
+      "在线歌单歌曲列表返回 200 且 songs 与 search 的歌曲行同构",
+      onlinePlaylistSongsRes.status === 200
+        && onlinePlaylistSongsBody.code === 0
+        && onlinePlaylistSongs.length > 0 && onlinePlaylistSongs.length <= 30
+        && onlinePlaylistSongs.every(detailSongShape),
+      `${onlinePlaylistSongsRes.status} ${JSON.stringify(onlinePlaylistSongsBody).slice(0, 220)}`,
+    );
+    check(
+      "在线歌单歌曲列表的 meta 分页信封正确（total 数字、hasMore = page*num < total）",
+      detailMetaShape(onlinePlaylistSongsBody.data?.meta, 1, 30)
+        && onlinePlaylistSongsBody.data.meta.total > 0,
+      JSON.stringify(onlinePlaylistSongsBody.data?.meta),
+    );
 
-  // pn 1 基的语义对 musicList 同样适用：page=2 的首条不在 page=1 的 id 集合里。
-  // 歌单整表可能不足两页（trackCount ≤ 30），此时上游 page=2 返回空列表，
-  // 断言退化为「不越界返回空页」而不是「前进」。
-  const onlinePlaylistSongsPage2 = await (await fetch(
-    `${base}/api/v1/online-playlists/${onlinePlaylistId}/songs?page=2&num=30&sourceMarker=${onlinePlaylistMarker}&source=kuwo`,
-    { headers: { authorization: `Bearer ${token}` } },
-  )).json();
-  const onlinePlaylistSongsPage1Ids = onlinePlaylistSongs.map((song) => song.id);
-  check(
-    "在线歌单歌曲翻页前进（pn 1 基：page=2 不与 page=1 交叠，不足两页时空页）",
-    onlinePlaylistSongsPage2.code === 0
-      && (onlinePlaylistSongsPage2.data?.songs ?? []).every((song) => !onlinePlaylistSongsPage1Ids.includes(song?.id))
-      && (onlinePlaylistSongsBody.data?.meta?.total <= 30 || onlinePlaylistSongsPage2.data.songs.length > 0),
-    JSON.stringify({
-      "p1 首条": onlinePlaylistSongs[0]?.id,
-      "p2 首条": onlinePlaylistSongsPage2.data?.songs?.[0]?.id,
-      total: onlinePlaylistSongsBody.data?.meta?.total,
-    }),
-  );
+    // pn 1 基的语义对 musicList 同样适用：page=2 的首条不在 page=1 的 id 集合里。
+    // 歌单整表可能不足两页（trackCount ≤ 30），此时上游 page=2 返回空列表，
+    // 断言退化为「不越界返回空页」而不是「前进」。
+    const onlinePlaylistSongsPage2 = await (await fetch(
+      `${base}/api/v1/online-playlists/${onlinePlaylistId}/songs?page=2&num=30&sourceMarker=${onlinePlaylistMarker}&source=kuwo`,
+      { headers: { authorization: `Bearer ${token}` } },
+    )).json();
+    const onlinePlaylistSongsPage1Ids = onlinePlaylistSongs.map((song) => song.id);
+    check(
+      "在线歌单歌曲翻页前进（pn 1 基：page=2 不与 page=1 交叠，不足两页时空页）",
+      onlinePlaylistSongsPage2.code === 0
+        && (onlinePlaylistSongsPage2.data?.songs ?? []).every((song) => !onlinePlaylistSongsPage1Ids.includes(song?.id))
+        && (onlinePlaylistSongsBody.data?.meta?.total <= 30 || onlinePlaylistSongsPage2.data.songs.length > 0),
+      JSON.stringify({
+        "p1 首条": onlinePlaylistSongs[0]?.id,
+        "p2 首条": onlinePlaylistSongsPage2.data?.songs?.[0]?.id,
+        total: onlinePlaylistSongsBody.data?.meta?.total,
+      }),
+    );
 
-  // 缺省 sourceMarker（不带 query）也能取到详情：缺省 4 是搜索条目的实测常数，
-  // 只服务于不带标记的直连调用；客户端应始终显式携带。
-  const onlinePlaylistDetailNoMarker = await (await fetch(
-    `${base}/api/v1/online-playlists/${onlinePlaylistId}?source=kuwo`,
-    { headers: { authorization: `Bearer ${token}` } },
-  )).json();
-  check(
-    "在线歌单详情缺省 sourceMarker 也能取到（缺省 4）",
-    onlinePlaylistDetailNoMarker.code === 0
-      && onlinePlaylistDetailNoMarker.data?.playlist?.id === onlinePlaylistId,
-    JSON.stringify(onlinePlaylistDetailNoMarker).slice(0, 160),
-  );
+    // 缺省 sourceMarker（不带 query）也能取到详情：缺省 4 是搜索条目的实测常数，
+    // 只服务于不带标记的直连调用；客户端应始终显式携带。
+    const onlinePlaylistDetailNoMarker = await (await fetch(
+      `${base}/api/v1/online-playlists/${onlinePlaylistId}?source=kuwo`,
+      { headers: { authorization: `Bearer ${token}` } },
+    )).json();
+    check(
+      "在线歌单详情缺省 sourceMarker 也能取到（缺省 4）",
+      onlinePlaylistDetailNoMarker.code === 0
+        && onlinePlaylistDetailNoMarker.data?.playlist?.id === onlinePlaylistId,
+      JSON.stringify(onlinePlaylistDetailNoMarker).slice(0, 160),
+    );
 
-  // 详情族通用拒绝契约对本族同样生效：ID 非正整数 4001、source=all 4001、
-  // 未实现该能力的音源 4007。三条都不打上游 —— 形状错误在进入适配器之前就被拦下。
-  const onlinePlaylistBadId = await fetch(`${base}/api/v1/online-playlists/abc?source=kuwo`, {
-    headers: { authorization: `Bearer ${token}` },
-  });
-  const onlinePlaylistBadIdBody = await onlinePlaylistBadId.json();
-  check(
-    "在线歌单详情路径 ID 非正整数被拒 400 且 code 4001",
-    onlinePlaylistBadId.status === 400 && onlinePlaylistBadIdBody.code === 4001,
-    `${onlinePlaylistBadId.status} ${JSON.stringify(onlinePlaylistBadIdBody).slice(0, 160)}`,
-  );
-  const onlinePlaylistAllSource = await fetch(`${base}/api/v1/online-playlists/${onlinePlaylistId}?source=all`, {
-    headers: { authorization: `Bearer ${token}` },
-  });
-  const onlinePlaylistAllSourceBody = await onlinePlaylistAllSource.json();
-  check(
-    "在线歌单详情 source=all 被拒 400 且 code 4001",
-    onlinePlaylistAllSource.status === 400 && onlinePlaylistAllSourceBody.code === 4001,
-    `${onlinePlaylistAllSource.status} ${JSON.stringify(onlinePlaylistAllSourceBody).slice(0, 160)}`,
-  );
-  const tencentOnlinePlaylistDetail = await fetch(
-    `${base}/api/v1/online-playlists/${onlinePlaylistId}?sourceMarker=4&source=tencent`,
-    { headers: { authorization: `Bearer ${token}` } },
-  );
-  const tencentOnlinePlaylistDetailBody = await tencentOnlinePlaylistDetail.json();
-  check(
-    "腾讯源没有在线歌单详情能力，被拒 400 且 code 4007",
-    tencentOnlinePlaylistDetail.status === 400 && tencentOnlinePlaylistDetailBody.code === 4007,
-    `${tencentOnlinePlaylistDetail.status} ${JSON.stringify(tencentOnlinePlaylistDetailBody).slice(0, 160)}`,
-  );
+    // 详情族通用拒绝契约对本族同样生效：ID 非正整数 4001、source=all 4001、
+    // 未实现该能力的音源 4007。三条都不打上游 —— 形状错误在进入适配器之前就被拦下。
+    const onlinePlaylistBadId = await fetch(`${base}/api/v1/online-playlists/abc?source=kuwo`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const onlinePlaylistBadIdBody = await onlinePlaylistBadId.json();
+    check(
+      "在线歌单详情路径 ID 非正整数被拒 400 且 code 4001",
+      onlinePlaylistBadId.status === 400 && onlinePlaylistBadIdBody.code === 4001,
+      `${onlinePlaylistBadId.status} ${JSON.stringify(onlinePlaylistBadIdBody).slice(0, 160)}`,
+    );
+    const onlinePlaylistAllSource = await fetch(`${base}/api/v1/online-playlists/${onlinePlaylistId}?source=all`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const onlinePlaylistAllSourceBody = await onlinePlaylistAllSource.json();
+    check(
+      "在线歌单详情 source=all 被拒 400 且 code 4001",
+      onlinePlaylistAllSource.status === 400 && onlinePlaylistAllSourceBody.code === 4001,
+      `${onlinePlaylistAllSource.status} ${JSON.stringify(onlinePlaylistAllSourceBody).slice(0, 160)}`,
+    );
+    const tencentOnlinePlaylistDetail = await fetch(
+      `${base}/api/v1/online-playlists/${onlinePlaylistId}?sourceMarker=4&source=tencent`,
+      { headers: { authorization: `Bearer ${token}` } },
+    );
+    const tencentOnlinePlaylistDetailBody = await tencentOnlinePlaylistDetail.json();
+    check(
+      "腾讯源没有在线歌单详情能力，被拒 400 且 code 4007",
+      tencentOnlinePlaylistDetail.status === 400 && tencentOnlinePlaylistDetailBody.code === 4007,
+      `${tencentOnlinePlaylistDetail.status} ${JSON.stringify(tencentOnlinePlaylistDetailBody).slice(0, 160)}`,
+    );
+  } else {
+    skip("在线歌单详情/歌曲族断言（上游歌单搜索不可达，无实体可断言）");
+  }
+
 
   const kuwoSearchVideosRes = await fetch(
     `${base}/api/v1/search/videos?keyword=${encodeURIComponent("周杰伦")}&page=1&num=10&source=kuwo`,
