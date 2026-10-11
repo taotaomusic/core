@@ -2,7 +2,7 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-10-03
+最后更新:2026-10-11
 
 本篇讲 Kotlin/Wasm 分享播放器:定位与入口、技术栈、播放链路与 60 秒试听、与后端的契约、构建分发链路、CI 与浏览器侧限制。分享短链的后端契约见 [35-api-shares.md](35-api-shares.md),复用的组件库与模型见 [93-player-ui.md](93-player-ui.md) 与 [94-shared-module.md](94-shared-module.md);与桌面端(Tauri webview)的网络层差异对比见 [91-client-desktop.md](91-client-desktop.md),云端构建与版本号见 [62-ci-cloud-build.md](62-ci-cloud-build.md)。分享创建侧的客户端 UI 不在本篇:安卓在 `ui/common/Share.kt`(90 篇),桌面在 `api.createSongShare`(91 篇)。
 
@@ -20,11 +20,11 @@
 ## 2. 技术栈与模块结构
 
 - Kotlin/Wasm(`binaries.executable()`)+ Compose Multiplatform(Material3 + material-icons-extended),见 `webApp/build.gradle.kts`;`wasmJs` 是唯一浏览器目标。
-- 版本定义在根 `build.gradle.kts`:Kotlin 2.0.21 + Compose 1.7.1。**升级 Kotlin 时 binaryen 内置版本会跟着变**,见第 10 节的坑。
+- 版本定义在根 `build.gradle.kts`:Kotlin 2.4.21 + Compose Multiplatform 1.12.1(2026-10 构建链两连跳,Miuix 的 KLIB ABI 倒逼全链升级,见 93 篇)。
 - **复用 `:shared` 与 `:player-ui`**(与桌面端相反,桌面端是完全独立的 React 实现):模型 `Song` 来自 shared,页面骨架用 player-ui 的 `PlayerCompactLayout` / `PlayerArtworkSlot` / `SharedContentState` 与 `TaotaoPlayerTheme`。
-- wasmJsMain 其余依赖:compose runtime/foundation、`kotlinx-coroutines-core` 1.9.0 与 `kotlinx-serialization-json` 1.7.3。
+- wasmJsMain 其余依赖:compose runtime/foundation、`kotlinx-coroutines-core` 1.10.2 与 `kotlinx-serialization-json` 1.9.0。
 - 产物是两个**固定名**入口文件:`taotao-share-player.js`(`outputFileName` 配置的 JS 胶水)与 `TaotaoMusic-webApp-wasm-js.wasm`(应用 wasm);JS 必须提供 wasm 要 import 的那批 `js_code` 实现,两者严格同批(第 6 节的坑源于此)。skiko、字体等相对引用靠 `<base>` 跟着版本化路径走。
-- `binaryen` 锁 `npm("binaryen", "118.0.0")` 且 `download = false`:`BinaryenRootExtension` 把 wasm-opt `command` 指到 `build/js/node_modules/.bin` 里的本地副本(Windows 取 `wasm-opt.cmd`、其余取 `wasm-opt`,路径在 gradle 脚本里按 `os.name` 选),与 Kotlin 2.0.21 内置版本一致,生产构建不直连 GitHub Release。
+- wasm-opt(binaryen)用 **KGP 2.2+ 的默认方式**:按 Kotlin 版本从 GitHub Release 下载(CI 为海外 runner,直连稳定)。旧的「禁下载 + npm 锁号 + `BinaryenRootExtension` 指本地副本」方案已废弃——`BinaryenRootExtension` 在 Kotlin 2.2 被移除,替代类型 `BinaryenEnvSpec` 是内部 API、无法在 `.kts` 里引用;本地构建本就被禁用,不再为 Windows 本机保留绕行配置。
 - 内置中文字体的第三方声明在 `webApp/THIRD_PARTY_NOTICES.md`:Noto Sans SC,依 SIL OFL 1.1 使用。
 - webApp 自身没有测试源集;与分享页相关的可测点在服务端纯函数(版本化改写,第 6 节)。
 - 源码只有三个 Kotlin 文件(`webApp/src/wasmJsMain/kotlin/com/taotao/music/web/`):
@@ -146,7 +146,7 @@ CI 里两处 gradle 调用统一带 `--build-cache --no-daemon`,与本地 `build
 - **别给分享页塞 Authorization**:它只调公开接口,带令牌没有意义;以后若接入需登录的能力,另起页面而不是复用短链宿主。
 - **字体覆盖是全量 or 无**:新增文本样式若绕过 `TaotaoTypography` 直接写 `fontSize`,会拿不到内置字体家族,Web 端字号与系统字体观感漂移。
 - **元数据里的地址是现拼的**:`previewUrl` / `appDownloadUrl` 按请求的 public base 生成,别在客户端持久化或改写它们——短链是长期的,地址随部署环境走;分享页每次打开都重新拉元数据。
-- **换 Kotlin 版本时核对 binaryen**:内置版本变了要同步改 `npm("binaryen", ...)` 的锁号,否则要么构建直连 GitHub 下载,要么 wasm-opt 行为漂移。
+- **换 Kotlin 版本时核对 binaryen**:KGP 2.2+ 默认按 Kotlin 版本从 GitHub Release 下载 wasm-opt,内置版本随 Kotlin 变——产物会被新版 wasm-opt 重新处理;CI 上偶发 wasm-opt 进程启动失败,重跑即愈(见 §7 固定 ubuntu runner)。
 - **改 `outputFileName` 是三处联动**:gradle 脚本的 `outputFileName`、服务端 `ENTRY_FILES` 指纹常量、以及排障文档里的一切引用——单改一处,指纹算不出来或改写认不出。
-- **后端 dist 里的分享页可能不是最新**:server job 暂从旧 music 仓库拉产物(第 5 节),验证分享页行为时先确认部署实例里 `dist/share-player` 的实际内容,别默认它等于本仓 HEAD。
+- **后端 dist 里的分享页可能不是最新**:server job 从本仓 Release `share-player-latest` 拉产物(2026-10-05 起已切离旧 music 仓库),但部署实例跑的还是上次发布时解包的 dist——验证分享页行为时先确认部署实例里 `dist/share-player` 的实际内容,别默认它等于本仓 HEAD。
 - **纯前端调试用 `demoShareSong` 演示卡**:无 token 时它兜底渲染,但 `previewUrl` 为空串,验证不了播放链路——验证试听必须用真短链。

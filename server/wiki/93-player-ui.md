@@ -2,13 +2,13 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-10-02
+最后更新:2026-10-11
 
 本篇讲 `player-ui/` 模块:定位与实际消费方、主题体系、核心组件清单、各端接入点,以及插槽注入的设计约定。安卓端怎么用这些组件见 [90-client-android.md](90-client-android.md),模型层(`Song` 等)见 [94-shared-module.md](94-shared-module.md)。本篇不讲页面业务逻辑,也不讲后端接口。
 
 ## 1. 定位与实际消费方
 
-- Kotlin Multiplatform 库(`player-ui/build.gradle.kts`),目标平台只有 **Android + wasmJs 浏览器**;依赖 `:shared` 与 Compose Multiplatform(M3 + material-icons-extended),不依赖任何平台图片库、持久化或播放引擎。
+- Kotlin Multiplatform 库(`player-ui/build.gradle.kts`),目标平台只有 **Android + wasmJs 浏览器**;依赖 `:shared`、Compose Multiplatform(M3 + material-icons-extended)与 **Miuix 组件库**(`top.yukonga.miuix.kmp:miuix-ui` / `miuix-preference` 0.9.4,2026-10 接入;上游以 Kotlin 2.4.20 + CMP foundation 1.12.0-alpha03 编译,消费环境被倒逼抬到 Kotlin 2.4.21 + CMP 1.12.1——KLIB ABI 2.4 无小版本容忍,wasm 侧全链升级),不依赖任何平台图片库、持久化或播放引擎。
 - 代码分三个包:`com.taotao.music.playerui`(组件与状态模型)、`...playerui.theme`(token 与苹果风格控件)、`...playerui.layout`(主骨架);Gradle namespace 为 `com.taotao.music.playerui`。commonMain 合计约 2000 行 Kotlin,体量小到可以通读——改组件前先把目标文件完整读一遍是最低成本。
 - 装的是「播放主题、歌曲行、迷你播放器、布局骨架」这一层视觉与交互骨架:三样东西进来(状态、回调、插槽),其余一切平台差异留在外面。
 - **当前消费方是 `androidApp` 与 `webApp` 两端**。桌面端(`desktop/`,Tauri 2 + React + TypeScript)不复用 Kotlin 组件,有独立的 React UI——这与根目录 `MUSIC_CROSS_PLATFORM.md` 的描述一致。player-ui 部分源码注释里残留的「三端 / Windows」是历史措辞,**以构建脚本的实际 target 为准**;`PlayerWideLayout` 就是为宽屏端预留的,目前两端都没有调用方。
@@ -32,6 +32,7 @@
 | `theme/TaotaoSpacing.kt` / `TaotaoSizes.kt` / `TaotaoElevation.kt` | 间距、尺寸(含封面三档)、海拔与阴影色刻度 |
 | `theme/AppleStyleComponents.kt` | 苹果风格的滑杆与播放按钮(播放详情的控制件) |
 | `theme/AppleStyleTheme.kt` | **已废弃**的圆角兼容别名,只作迁移期过渡 |
+| `theme/MiuixBridge.kt` | Miuix 主题桥 `TaotaoMiuixTheme`:把 `MaterialTheme.colorScheme` **单向翻译**成 Miuix 的 `Colors`(只翻品牌与语义字段,`disabled*` 长尾保留 Miuix 工厂默认),见第 3 节 |
 
 测试在 `src/commonTest/`:`PlayerActionsTest`(动作出口与进度换算)、`SharedComponentsTest`、`theme/TaotaoTokensTest`(token 刻度)。与其他 KMP 模块一样走 `allTests` 聚合任务:
 
@@ -61,6 +62,11 @@ token 刻度速查(改组件时对号入座,不要自创新档):
 | `TaotaoSizes`(图标) | 16 / 18 / 24 / 30 dp,`iconButton` 36dp |
 | `TaotaoSizes`(封面) | `artworkRow` 48 / `artworkGrid` 112 / `artworkHero` 132;`artworkBrand` 88、`avatar` 64 |
 | `TaotaoElevation` | 海拔与阴影色随亮暗主题走(`taotaoShadowColors`),不写死黑色半透明 |
+
+**Miuix 主题桥(2026-10 接入)**:Miuix 组件读自己的 `MiuixTheme`(LocalColors),与 MaterialTheme 的 colorScheme 互不相通——不包桥接直接用 Miuix 组件会拿到 HyperOS 默认灰蓝配色,与全应用的珊瑚色系割裂。约定:
+
+- 只用 `TaotaoMiuixTheme { ... }` 包裹**使用了 Miuix 组件的子树**(通常在页面根部),**不要全局替换** `TaotaoPlayerTheme`——MiuixTheme 会覆盖 `LocalIndication` / `LocalOverscrollFactory`,全局包会让所有 Material3 组件的按压反馈与过滚效果一起变成 Miuix 的。
+- 映射是**单向、字段级**:首版只翻品牌与语义字段(主色/次色族、容器族、背景/表面族、分割线、滑条),`disabled*` 长尾保留 Miuix 工厂默认(M3 没有 variant 概念,`primaryVariant`/`secondaryVariant` 用主值顶位,组件内只做微差色);等页面实际采用 Miuix 后再按观感收敛。
 
 ## 4. 核心组件与数据流
 
@@ -101,6 +107,7 @@ token 刻度速查(改组件时对号入座,不要自创新档):
 | --- | --- | --- |
 | androidApp | `ui/theme/Theme.kt` | `TaotaoPlayerTheme` 作为全局主题的底座 |
 | androidApp | `ui/app/AppContent.kt` | `SharedMainLayout`(底部导航四个标签 + 迷你播放器插槽)+ `SharedMiniPlayer` |
+| androidApp | `ui/player/PlayerDetailActivity.kt` | 详情页独立 Activity 也挂 `SharedMainLayout` + 共享的 `taotaoNavigationItems`——详情页内底部应用标签栏常驻(PR#28);金标 SharedViewKit 一镜到底的宿主拆分见 90 篇第 4 节 |
 | androidApp | `ui/common/components.kt` | `SongRow` 包装 `SharedSongRow`,平台侧补封面(`AlbumArt`)、拖把与更多菜单、`AlbumArt` 也复用 token 判尺寸 |
 | androidApp | `ui/player/PlayerDetailPage.kt` | `PlayerCompactLayout` + `PlayerArtworkSlot`(内容走 `ui/player/skin/` 的皮肤模板 `CoverSkin`，默认黑胶唱片机 `VinylSkin`，可切 CD/磁带/光晕/卡片)，快捷操作、顶栏、控制条走插槽 |
 | androidApp | 其余页面 | `SharedCard`、`SharedContentState`、`SharedBackButton`、`SharedSectionHeader` 与各 token 散用(搜索页、设置页、资料弹窗、库页都在用) |
@@ -147,3 +154,5 @@ androidApp / webApp   ← 业务、平台能力(令牌、播放引擎、下载�
 - **改公共组件要过两端调用点**:androidApp 与 webApp 的用法都要看一眼;`PlayerWideLayout` 目前无人调用,动它不影响现网,但也不要顺手删(宽屏端预留)。
 - **分区标题别再手写字号**:`SharedSectionHeader` 出现前,页面里散着五种手写的区块标题字号(21/18/17sp…),只有一种落在字号刻度上;现在收敛为 `SharedSectionLevel` 三档,新页面直接取档。
 - **封面尺寸同理**:列表封面历史上分档过细,肉眼「说不出哪里不对但就是不整齐」,已收敛为 `artworkRow` 一档给列表用;`artworkGrid` / `artworkHero` 留给网格与大图场景。
+- **Miuix 的 KLIB ABI 墙**:Miuix 0.9.4 以 Kotlin 2.4.x 编译,而 KLIB **没有小版本容忍**——消费端工具链低于 2.4(如 2.3.x)时 wasm 目标直接链接失败。这就是 2026-10 构建链两连跳(Kotlin 2.4.21 + CMP 1.12.1)的根因;升级 Miuix 版本前先看上游 release 的编译档位,与本项目 Kotlin 版本对齐后再动。
+- **`TaotaoMiuixTheme` 只包 Miuix 子树**:见第 3 节;全局替换 `TaotaoPlayerTheme` 属于影响面失控的写法,评审要拦。

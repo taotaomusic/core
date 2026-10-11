@@ -2,7 +2,7 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-10-04
+最后更新:2026-10-11
 
 本文记录从波点 Android APK（5.9.1，versionCode 476）反编译得到的接口，以及使用已登录账号对官方 `bd-api.kuwo.cn` 的只读实网验证结果。
 
@@ -228,6 +228,12 @@ GET /service/playlist/<playlistId>/musicList?source=<sourceType>&pn=1&rn=20
 #### 波波排行榜（moduleId=5）
 
 `type=2`，响应为 `bangList`。每个榜单含 `id`、`name`、`pic`、`pub`、`musics`，`musics` 内是歌曲对象。
+
+**排行榜独立端点（2026-10-07 实测，服务端 `/rankings` 一族走这里）**：
+
+- **目录**：`GET service/home/bangNew`，无业务参数。`data` 是**数组**（不是对象），每项 `{moduleName, bangList}`；`bangList` 条目带 `{id, name, pic, pubStr, musics:[前 5 首歌曲预览]}`。**目录里的 `pic` 是 12 个榜单共用的运营占位图**——客户端封面一律改为「第 1 名专辑封面优先、pic 兜底」，全球榜固定 logo。
+- **H5 榜单（`bangType=qq`：腾讯音乐榜/巅峰潮流榜）没有数字 id**，详情端点无法寻址；目录响应里为它们自带完整歌曲列表（实测各 2 首），标记 `external: true` 下发、客户端直接用预览进详情、不发详情请求。其中**巅峰潮流榜另有独立原生接口**：`GET service/bang/popular/day`（与 `/popular/week?year&week`），歌曲行带 `rank`（1 基排名），全量 300 首一次返回；`kwSongID` 映射为酷我 id 后可直接点播。腾讯音乐榜无原生接口（App 内跳 webview），不下发详情数据。
+- **榜单歌曲**：`GET service/bang/{id}/musics?pn&rn`——**pn 是 1 基**（实测 `pn=0` 上游直接 500），`rn` 实测上限 100，`total` 字段是真实条数（主流榜单恒 100）。**「无分页」是误判**，两次实测确认按上述参数真分页；服务端 `/rankings/:id/songs` 的 `page` 1 基直传、`num` 缺省 30 上限 100。部分歌手榜 `musics` 为空数组——照常返回空列表。
 
 #### 轮播图（moduleId=6）
 

@@ -135,3 +135,5 @@ curl.exe -X POST "https://你的域名/api/v1/app/admin/min-version" `
 ## 7. 热修复补丁
 
 补丁登记走 `/app/admin/patches` 与 `/app/admin/patch-rollout`,语义与 APK 灰度一致但目标锁定宿主 `targetVersionCode`。路由清单见 [00-code-index.md](00-code-index.md);完整流程见 [RELEASE.md](../../RELEASE.md)。
+
+客户端侧自 2026-10 起**强制校验补丁下载地址必须是 https**(`HotfixInstaller` 对非 https 直接拒绝下载——sha256 防得住字节篡改,防不了清单同源链路上的中间人替换);登记 `patch_url` 外链时别指望用 http 绕过,客户端不会下。

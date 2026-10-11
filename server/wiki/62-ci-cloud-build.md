@@ -2,7 +2,7 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-10-02
+最后更新:2026-10-11
 
 正式构建在 GitHub 侧由**单仓 [taotaomusic/core](https://github.com/taotaomusic/core)** 的统一工作流承担:根目录 `.github/workflows/ci.yml` 用 `dorny/paths-filter` 按改动路径只构建相关部分,一处改动不重跑无关 job。本文讲与后端直接相关的部分;三仓快照的旧机制已废弃,末尾保留一段备查。
 
@@ -31,7 +31,7 @@
 | --- | --- | --- | --- |
 | `crypto` | ubuntu | crypto 或 server 或 client 有改动 | Android `.so` + Node `.node`(同 run artifact + Release `crypto-latest`;源码未变时复用缓存) |
 | `server` | ubuntu | server 或 crypto 有改动 | `server-dist-latest` Release + ghcr 镜像 |
-| `client-android` | **windows** | client 或 crypto 有改动 | APK(artifact,由 `client-publish` 发布) |
+| `client-android` | **ubuntu**(2026-10-05 起从 Windows 迁来) | client 或 crypto 有改动 | APK + 两份 kotlin-classes(artifact,APK 由 `client-publish` 发布) |
 | `client-web` | ubuntu | client 有改动 | Release `share-player-latest` |
 | `client-publish` | ubuntu | `client-android` 成功 | Release `latest`(滚动,APK) |
 | `desktop` | windows | desktop 或 crypto 有改动 | Release `desktop-latest`(Tauri) |
@@ -71,9 +71,9 @@ ghcr.io/taotaomusic/music-server
 
 ## 4. 客户端与桌面 job
 
-- `client-android`(Windows runner,`incrementVersion` 依赖 PowerShell):还原签名 Secrets(见 [61-release-android.md](61-release-android.md))后跑 `:androidApp:assembleRelease`,未配 Secrets 自动退回 `:androidApp:assembleDebug`;版本号读 `output-metadata.json`,APK 以 artifact 交给 `client-publish` 重命名为 `TaotaoMusic-<版本>-<release|debug>.apk` 发布到滚动 Release **`latest`**(每次覆盖,免登录可下载)。
+- `client-android`(**ubuntu runner**,2026-10-05 迁移):Windows 上有两个实打实的坑——`setup-java` 的 Gradle 缓存打包 `~/.gradle` 时撞 `modules-2.lock` 文件锁必然失败(缓存从未落盘,天天冷构建)、IO/CPU 更慢;旧 music 仓必须 Windows 的唯一理由(`incrementVersion` 走 PowerShell)在 core 里已不存在,签名还原与版本号生成均已用 bash/node 重写。缓存改用**官方 Gradle action** 缓存 `~/.gradle`(依赖仓库 + `--build-cache` 任务输出,主键带 gradle 脚本哈希、restore-keys 兜底),Gradle 堆 `org.gradle.jvmargs=-Xmx4g`(根 `gradle.properties`);迁移后安卓 job 从约 445s 降到约 132s。流程不变:还原签名 Secrets(见 [61-release-android.md](61-release-android.md))后跑 `:androidApp:assembleRelease`,未配 Secrets 自动退回 `:androidApp:assembleDebug`;版本号读 `output-metadata.json`,APK 以 artifact 交给 `client-publish` 重命名为 `TaotaoMusic-<版本>-<release|debug>.apk` 发布到滚动 Release **`latest`**(每次覆盖,免登录可下载)。**另归档两份 kotlin-classes**(androidApp + shared 的 release 变体,artifact `kotlin-classes-release`,保留 30 天)——autopatch 生成补丁需要「线上那个版本」的产物做 base 侧 diff 输入,而该目录会被下一次构建覆盖(见 [63-ci-autopatch.md](63-ci-autopatch.md) §4)。
 - `client-web`:构建 `:webApp:wasmJsBrowserDistribution`,打包发布到滚动 Release **`share-player-latest`**(后端 server job 与本地 `build:web-player` 之外的分发渠道)。
-- `desktop`:Tauri + Rust,版本号同样是根 `VERSION` + 构建号;未配 `TAURI_SIGNING_PRIVATE_KEY` 时出无签名安装包、不产更新清单(不让 desktop 构建变红),配好后自动更新(`latest.json`)生效。产物发滚动 Release **`desktop-latest`**,旧资产按版本清理、只留本次与 `latest.json`。
+- `desktop`:Tauri + Rust,版本号同样是根 `VERSION` + 构建号;未配 `TAURI_SIGNING_PRIVATE_KEY` 时出无签名安装包、不产更新清单(不让 desktop 构建变红),配好后自动更新(`latest.json`)生效。产物发滚动 Release **`desktop-latest`**,旧资产按版本清理、只留本次与 `latest.json`。`desktop/src-tauri/Cargo.lock` 已入库(2026-10 起,Rust 依赖树锁定,防止每次构建全量重编),升级 Rust 依赖要连 lock 一起提交。
 
 ## 5. 发版分发:构件上云 + webhook + 代理直链(2026-10-01 起)
 

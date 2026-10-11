@@ -2,7 +2,7 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-09-30
+最后更新:2026-10-11
 
 后端认证链路见 80–82 各篇;本文讲 `src/frontend/` 的 Vue 管理后台、CSP 安全响应头,以及契约脚本对管理后台的断言。
 
@@ -22,6 +22,7 @@
 | `IpWhitelistManager.vue` | 白名单编辑。**当前没有任何页面引用它,是孤儿组件**;白名单实际通过 `GET/POST /admin/auth/ip-whitelist/:adminId` 接口维护 |
 | `ReleaseManager.vue` / `PatchManager.vue` / `AnnouncementManager.vue` / `UserManager.vue` / `MusicSourceManager.vue` / `OpenApiKeyManager.vue` / `SupporterKeyManager.vue` | 业务管理页,各自调用对应 `/app/admin/**` 路径 |
 | `SystemSettings.vue` | 「系统设置」页:查看当前强制更新下限与可作下限的版本,抬高/取消下限(顺序约束同 `min-version` 接口,409/4091 兜底) |
+| `TotpDialog.vue` | 两步验证(TOTP)开启/关闭弹窗(2026-10-06 补全,PR#10):顶栏盾形按钮入口,开启后图标转绿,**对观察者等全部角色开放**;未开启走「验密码 → 扫码 → 输动态码确认」三步,开启成功态由 `changed` 事件先行置位、避免成功页被「已开启」视图顶掉;关闭需再验动态码。API 对应 `totp-enable` / `totp-confirm` / `totp-disable`(见 [80-admin-auth-login.md](80-admin-auth-login.md)) |
 
 `App.vue` 的页签按角色收敛:观察者看不到「用户与统计」「审计日志」;「音源账号」仅 `PRIVILEGED_READ_ROLES` 可见;「管理员」仅 `super_admin` 可见。改后端路由时必须同步对应组件,否则页面表现为 404/4040。改 `PRIVILEGED_READ_ROLES` 接口时要同步 `App.vue` 的页签可见性(观察者不该点进只会报错的页签,见 [81-admin-roles-audit.md](81-admin-roles-audit.md))。
 

@@ -2,18 +2,19 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-10-01
+最后更新:2026-10-11
 
 本篇讲 Windows 桌面客户端:技术栈与目录、状态与数据流、网络层铁律(CORS 与能力白名单)、传输加密现状、自动更新、构建调试与功能清单。桌面端 UI 是**独立的 React 实现,不复用 Kotlin 的 player-ui / shared**(这两个 Kotlin 模块见 [93-player-ui.md](93-player-ui.md) 与 [94-shared-module.md](94-shared-module.md));安卓端整体见 [90-client-android.md](90-client-android.md),加密协议见 [37-api-crypto.md](37-api-crypto.md),云端构建见 [62-ci-cloud-build.md](62-ci-cloud-build.md)。
 
 ## 1. 技术栈与模块定位
 
 - 前端:React 18 + TypeScript + Vite 5(`desktop/package.json`);构建脚本 `npm run build` = `tsc && vite build`,先过 TypeScript 类型检查;构建目标 `chrome110`,dev 端口固定 5183,产物进 `desktop/dist/`(`vite.config.ts`)。Rust 侧 edition 2021(`rust-version 1.82`),`publish = false`。
-- 壳:Tauri 2(`desktop/src-tauri/`),主窗口 1100×720,`identifier com.taotao.music.desktop`;业务插件只有两个——`tauri-plugin-http`(前端 fetch 由 Rust 直连)与 `tauri-plugin-updater`(自动更新),都在 `src-tauri/src/lib.rs` 的 `run()` 注册。
+- 壳:Tauri 2(`desktop/src-tauri/`),主窗口 1100×720,`identifier com.taotao.music.desktop`;业务插件三个——`tauri-plugin-http`(前端 fetch 由 Rust 直连)、`tauri-plugin-updater`(自动更新)、`tauri-plugin-single-instance`(单实例,二次启动唤起已有窗口后新进程退出),都在 `src-tauri/src/lib.rs` 的 `run()` 注册;托盘用 Tauri 核心的 `tray-icon` feature(非插件)。
 - Rust 侧另依赖**同仓加密核心** `taotao-crypto-core`(path 依赖 `../../crypto-src/core`,直接编译进二进制——**不走 JNI,也不加载 .node/.dll 产物**)、`winreg`(读设备号)与 `ureq`(握手用轻量 HTTP)。
-- 后端客户端唯一入口是 `desktop/src/api.ts`(约 600 行):`ENDPOINT` 常量、信封解包、401 刷新并重放一次、NDJSON 搜索、收藏/歌单/最近播放/播放上报全封装在此;页面不直接拼请求。
-- UI 分层:左侧导航四个页面(搜索/歌单/最近播放/我的收藏)+ 底部播放条 `PlayerBar` + 全屏详情 `PlayerDetail`;样式按页拆 CSS(`App.css`、`main/search.css` / `player.css` / `playlists.css` / `recent.css` / `lyrics.css`);播放控制图标统一用内置 SVG 集 `main/icons.tsx`。
+- 后端客户端唯一入口是 `desktop/src/api.ts`(约 1500 行):`ENDPOINT` 常量、信封解包、401 刷新并重放一次、NDJSON 搜索、收藏/歌单/最近播放/播放上报/排行榜/歌手/专辑全封装在此;页面不直接拼请求。
+- UI 分层:左侧导航五个页面(搜索/排行榜/歌单/最近播放/我的收藏)+ 歌手页/专辑页两个下级页 + 底部播放条 `PlayerBar` + 全屏详情 `PlayerDetail`;样式按页拆 CSS(`App.css`、`main/search.css` / `player.css` / `playlists.css` / `recent.css` / `lyrics.css`);播放控制图标统一用内置 SVG 集 `main/icons.tsx`。
 - 判断成功的唯一依据是响应信封 `code === 0`(`unwrap` 对 `!resp.ok` 或非 0 码统一抛错,文案取 `message` 或 HTTP 状态);401/403 语义不做任何「宽容」处理,与安卓口径一致。新增调用方不要绕过 `unwrap` 自己解析。
+- **窗口生命周期**(PR#15):`tauri-plugin-single-instance` 保证单实例——二次启动时回调在新进程里执行,经 app 句柄把已有实例的主窗口唤到前台,回调返回后新进程自动退出,避免同机多开造成重复上报/抢占音频。主窗口点 **X 不是退出**:`CloseRequested` 被拦截、窗口隐藏到**系统托盘**继续播放(后台播放);托盘左键单击唤起主窗口,右键菜单「显示主窗口 / 退出」,真正退出只走托盘菜单(标准 `app.exit(0)`,不走 CloseRequested,所以隐藏逻辑拦不住它)。托盘图标用应用图标,极端环境建不起来时降级为仅菜单行为、不影响主功能。
 
 ## 2. 目录结构
 
@@ -27,11 +28,13 @@
 | `desktop/src/state/AppState.tsx` | 全局状态 Provider:播放队列、音质、定时关闭、收藏、歌单、播放上报 outbox |
 | `desktop/src/main/` | 页面与组件,见第 8 节功能清单;`searchHistory.ts` 单独管搜索历史存取 |
 | `desktop/src/main/img.ts` | `hideOnError`:封面加载失败隐藏 `<img>`,避免碎图标 |
-| `desktop/src-tauri/src/lib.rs` | Rust 侧:插件注册、启动静默检查更新、`crypto_handshake_demo` 握手自检命令 |
+| `desktop/src/main/playerWasm.ts` | Kotlin/Wasm 播放逻辑门面(`:shared` 的 `PlayerFacade`)的 TS 包装层:懒加载 `../wasm/taotao-shared-wasm`,歌词解析/行定位/音质标签优先走 wasm,**失败(模块缺失)退回同目录 `lyrics.ts` 的纯 TS 实现**,调用方无感 |
+| `desktop/src/wasm/taotao-shared-wasm.d.ts` | wasm 模块的手写 TS 声明(**模块本体 .mjs/.wasm 不在仓库**,见第 9 节坑) |
+| `desktop/src-tauri/src/lib.rs` | Rust 侧:插件注册、**系统托盘(显示主窗口/退出)**、**单实例**、**关窗隐藏到托盘**、启动静默检查更新、`crypto_handshake_demo` 握手自检命令 |
 | `desktop/src-tauri/src/main.rs` | 入口:Release 下隐藏控制台窗口(`windows_subsystem = "windows"`) |
 | `desktop/src-tauri/build.rs` | `tauri-build` 常规构建脚本 |
 | `desktop/src-tauri/tauri.conf.json` | 窗口/打包(`msi` + `nsis`)/updater 配置:更新端点清单(第 6 节)与签名**公钥**内嵌于此 |
-| `desktop/src-tauri/Cargo.toml` | Rust 依赖清单:`taotao-crypto-core` path 依赖、`winreg`、`ureq`;Release profile 压体积(opt-level "s" + thin LTO) |
+| `desktop/src-tauri/Cargo.toml` | Rust 依赖清单:`taotao-crypto-core` path 依赖、`winreg`、`ureq`;`tauri` 开 `tray-icon` feature、`tauri-plugin-single-instance`;Release profile 压体积(opt-level "s" + thin LTO) |
 | `desktop/src-tauri/capabilities/default.json` | `http:default` 域名白名单(见第 4 节) |
 | `desktop/updater.key` / `updater.key.pub` | 更新签名密钥对,已被 `desktop/.gitignore` 排除,**绝不入库** |
 
@@ -39,7 +42,8 @@
 
 - 单向数据流:页面组件只调 `useApp()` 暴露的操作(`playList` / `playAt` / `togglePlay` / `moveQueueItem` 等),队列的权威副本在 `AppState`;底部 `PlayerBar` 与全屏 `PlayerDetail` 都从同一状态渲染。
 - 播放状态的事实源是**音频元素事件**:`AppState` 渲染唯一的 `<audio>`(hidden),`isPlaying`、进度、时长全部由 `play` / `pause` / `timeupdate` / `loadedmetadata` 事件写回,UI 不自行推算;播放出错只写 `playError` 并 toast,轻提示 2600ms 自动消失。音频元素自身加载失败(直链失效)只在确有音源时写「音频加载失败,请尝试重新播放」,避免空元素噪声。
-- 闭包防旧值:队列、下标、音质、播放态、定时器标记都有**镜像 ref**(`queueRef` / `indexRef` / `preferredQualityRef` / `isPlayingRef` 等),`ended` 回调与 interval 里一律读 ref,不读 state。
+- 闭包防旧值:队列、下标、音质、播放态、定时器标记都有**镜像 ref**(`queueRef` / `indexRef` / `preferredQualityRef` / `isPlayingRef` 等),`ended` 回调与 interval 里一律读 ref,不读 state。音量刻意**不进 ref**:它只由 UI 滑杆驱动,不存在异步闭包读旧值的场景。
+- 音量(`volume` / `setVolume`,0–1 直接映射 `<audio>.volume`):挂载时从 `localStorage` 恢复并统一施加到音频元素;底部播放条的喇叭按钮做**静音切换**,静音前记忆原音量、取消静音恢复它(恢复值过低回退 30%),悬浮弹出滑杆微调。
 - 快速切歌用**播放请求代数**(`playGenRef`):每次 `playAt` / `reresolveCurrent` 先自增,`resolveLink` 返回后代数不符直接丢弃——并发请求只有最后一次生效,不会旧直链盖掉新直链。
 - 播放会话生命周期(与安卓 `shouldReuseSession` 对齐):暂停/恢复、seek、音质换源**复用**同一会话;换歌、自然播完(含单曲循环重播)、对当前曲再点播放(显式重播意图)**终结并另起新会话**;无远端身份(`songId` 为空)的会话整体跳过不上报。
 - outbox 语义:同一 `sessionId` 只保留最新快照(服务端按 sessionId 幂等 upsert),容量上限 200 条、超出丢最旧;上传成功按**内容比对**删除,上传期间同会话入队的新快照因内容必然变化而保留,不会误删。
@@ -56,6 +60,7 @@
 | `taotao.deviceId` | 播放上报设备号(`crypto.randomUUID` 生成一次) |
 | `taotao.playbackOutbox` | 播放上报 outbox,先落盘、服务端确认后删除 |
 | `taotao.quality` | 偏好音质档(仅接受 0–18 整数,缺省 4) |
+| `taotao.volume` | 播放音量(0–1 的数字串,非法值回退 1;音量只由 UI 滑杆驱动) |
 | `taotao.sleepWaitSongEnd` | 「播完整首歌再停止播放」标记("1"/"0") |
 | `taotao.searchHistory` / `taotao.searchHistoryPaused` | 搜索历史(上限 20 条、大小写不敏感去重)与暂停记录标记 |
 
@@ -114,8 +119,10 @@ npm run tauri dev
 | 搜索 | `main/SearchPage.tsx` | NDJSON 逐行解析(`type:"song"` / `end.meta` 携带总数与翻页);联想 250ms 防抖 + 过期结果丢弃;热搜;搜索历史(`searchHistory.ts`:可暂停记录/单删/清空);默认 `source=kuwo` 写在 `api.ts` |
 | 歌曲行 | `main/SongList.tsx` + `SongRowMenu.tsx` | 「⋯」菜单:下一首播放(本地插播)/加入歌单;收藏/歌单/最近播放各页共用 `SongList` 渲染 |
 | 播放与队列 | `state/AppState.tsx` + `PlayerDetail.tsx` | 唯一 `<audio>`;播放队列面板支持拖动排序/删除(行带封面缩略图;播放中曲不可删,下标跟随算法保证 current 不漂移),宽窗默认并排展示、窄窗(≤980px)以浮层弹出;插播 `playNext`(同 key 旧位置先移除、当前曲除外);循环 off/all/one |
-| 底部播放条 | `main/PlayerBar.tsx` | 封面/歌名(点击打开详情)+ 细进度条 + 传输/循环/收藏/队列控制;零 props 全走 `useApp`,无当前歌曲时置灰「未在播放」 |
-| 逐字歌词 | `main/lyrics.ts` + `LyricsPane.tsx` | YRC 字级卡拉OK渐变、LRC 行级、纯文本回退(shared `LyricParser` 的 TS 语义移植);换行由 `timeupdate`(约 4Hz)直接重判,逐字动画 rAF 驱动并按 timeupdate 校正漂移(漂移自愈);自动滚动居中,滚轮后 2.5 秒暂停跟随 |
+| 底部播放条 | `main/PlayerBar.tsx` | 封面/歌名(点击打开详情)+ 细进度条 + 传输/循环/收藏/**音量(静音切换+悬浮滑杆)**/队列控制;零 props 全走 `useApp`,无当前歌曲时置灰「未在播放」(音量是设备侧属性,空态下仍可用) |
+| 排行榜 | `main/RankingPage.tsx`(`api.rankings` 一族) | 侧边导航平级页:目录(模块分组榜单卡)+ 榜单详情两个视图页内切换;详情**真分页**(`pn` 1 基、页大小上限 100,滚动翻页)+ 行首排名序号 + 「全部播放」穿透;external 榜(腾讯音乐榜/巅峰潮流榜)按目录下发的 `detailKey` 走 `/rankings/external/:key`;封面策略:全球榜固定 logo、其余第 1 名专辑封面优先 |
+| 歌手 / 专辑页 | `main/ArtistPage.tsx` / `AlbumPage.tsx` + `PagedSongSection.tsx` | 从搜索结果与歌曲行「查看歌手/查看专辑」菜单进入(歌曲缺 `artistId`/`albumId` 时菜单项不出现);头部信息 + 歌曲 Tab 走 `PagedSongSection`:滚动近底部自动翻页,`resetKey` 变化清空重拉第一页 |
+| 逐字歌词 | `main/lyrics.ts` + `playerWasm.ts` + `LyricsPane.tsx` | 歌词解析/行定位/逐字进度走**自适应门面** `parseLyricAdaptive`:wasm 模块(Kotlin `PlayerFacade`,与安卓同源语义)可用则用 wasm,否则退回 TS 移植实现(`lyrics.ts`),调用方无感;YRC 字级卡拉OK渐变、LRC 行级、纯文本回退;换行由 `timeupdate`(约 4Hz)直接重判,逐字动画 rAF 驱动并按 timeupdate 校正漂移(漂移自愈);自动滚动居中,滚轮后 2.5 秒暂停跟随 |
 | 音质选择 | `PlayerDetail.tsx` + `api.fetchQualityTiers` | 档位来自 `/songs/:id/info` 的 `qualities`;换档立即重取直链续播(恢复进度);服务端降级时 toast 实际档位(`labelOfQuality` 与 shared 同口径);偏好落 `localStorage` |
 | 定时关闭 | `AppState` + `PlayerDetail` 弹窗 | 截止时间戳算剩余秒数防漂移;「播完整首再停」等待态**跨手动切歌存活**(与安卓一致);等待态优先于单曲循环 |
 | 收藏 | `AppState.toggleFavorite` + `main/FavoritesPage.tsx` | 乐观更新、失败回滚;收藏库经 `batch-info` 按 id/mid 双键分批补全 |
@@ -147,4 +154,6 @@ npm run tauri dev
 - **歌词换行别挪出 timeupdate 路径**:逐字动画的 rAF 在窗口失焦/被节流时会暂停,换行判定必须留在 timeupdate(约 4Hz)里,否则暂停期间卡行不跟进。
 - **加密接入是「半程」状态**:Rust 侧握手链路已通、业务明文;接入加密时别把 `crypto_handshake_demo` 当业务路径,按 37 篇的失败语义(409/4091 重握手重放、426/4007 禁降级)在 `httpFetch` 层实现。
 - **队列「播放中不可删」是刻意口径**:`removeQueueItem` 与插播的去重逻辑都豁免当前曲;放开它会让播放中的曲目被移除后下标错位。`moveQueueItem` 的下标跟随(移当前曲随到 to、前删左移、前插右移)同样别动。
-- **工具链升级先看 npm 侧 `package-lock.json`**(正常提交):升级 React/Vite/Tauri 任一大件后本地跑一次 `npm run build`(含 tsc 类型检查)再推;Rust 依赖没有锁文件入库,以 `Cargo.toml` 的语义化版本约束为准。
+- **工具链升级先看 npm 侧 `package-lock.json`**(正常提交):升级 React/Vite/Tauri 任一大件后本地跑一次 `npm run build`(含 tsc 类型检查)再推;Rust 依赖没有锁文件入库,以 `Cargo.toml` 的语义化版本约束为准。`Cargo.lock` 已入库(2026-10 起锁定了 Rust 依赖树,防止 CI 每次全量重编),升级 Rust 依赖要连 lock 一起提交。
+- **wasm 门面的产物链当前没接完**:`desktop/src/wasm/` 只有手写的 `.d.ts` 声明,模块本体(`.mjs`/`.wasm`)既不在仓库、CI 也没有构建 `:shared` wasmJs 并拷贝的步骤(.d.ts 头注释里说的「client-web job 拷贝」目前不存在)——所以**运行时 wasm 加载总是失败、歌词解析一直走 TS 回退**。`import("../wasm/taotao-shared-wasm")` 是字面量动态导入,vite 构建能过但产物里这个 import 运行时 404,靠 try/catch 单会话记住失败退回 TS。要真正启用:补一条「`:shared:compileKotlinWasmJs` 产物拷进 `desktop/src/wasm/`」的 CI 步骤,同时注意 KGP 升级会改 wasm 产物文件名。
+- **`npm run tauri dev` 时点 X 窗口只是隐藏**:关窗隐藏到托盘在 dev 同样生效,改完代码想彻底重来要从托盘菜单「退出」或直接停掉进程,别以为窗口没了进程也没了。
