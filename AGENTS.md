@@ -115,7 +115,7 @@ GitHub 侧三个仓库（music / music-server / tools）都是**正式仓库**�
 ## 源码可读性
 
 - 生产源码不得压缩、混淆或以单行形式提交；必须保持正常缩进、换行、命名和必要注释。
-- Release 构建当前保持 `isMinifyEnabled = false`，确保交付版本可调试、可追踪。
+- Release 构建启用 R8 收缩 + 资源收缩（`isMinifyEnabled = true`），并与热修复插桩共存：规则见 `androidApp/proguard-rules.pro`——不混淆、关闭优化（R8 无 per 规则禁内联，`-dontoptimize` 连带覆盖）、插桩三包（data/player/update）整包 keep，堆栈保持可读，自研逻辑不收缩，库树照常裁剪。
 - 使用 Kotlin 官方风格：四个空格缩进，类型和 Composable 使用 `UpperCamelCase`，函数和属性使用 `lowerCamelCase`。
 - 公共组件、共享模型和非直观的状态转换必须添加简体中文说明。
 - 修改后使用 Android Studio Kotlin formatter 格式化代码。

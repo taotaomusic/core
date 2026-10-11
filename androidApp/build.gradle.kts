@@ -48,7 +48,16 @@ android { namespace = "com.taotao.music"; compileSdk = 35
             keyPassword = localSigningProperties.getProperty("TAOTAO_KEY_PASSWORD")
         }
     }
-    buildTypes { release { isMinifyEnabled = false; signingConfig = signingConfigs.getByName("release") } }
+    buildTypes {
+        release {
+            // R8 收缩+优化+资源收缩，与热修复插桩共存的边界见 proguard-rules.pro
+            // 首注（不混淆、不内联、插桩三包 keep）——自研逻辑不收缩，库树照常裁剪。
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            signingConfig = signingConfigs.getByName("release")
+        }
+    }
 
     // 传输加密 native 库（`plans/009`）。产物由 tools 仓库云端交叉编译，经
     // tools/fetch-crypto.ps1 落到 crypto/dist/android/<abi>/libtaotao_crypto.so。
