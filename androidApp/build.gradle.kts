@@ -1,3 +1,5 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 import java.util.Properties
 
 plugins {
@@ -38,7 +40,6 @@ android { namespace = "com.taotao.music"; compileSdk = 35
         ndk { abiFilters += "arm64-v8a" }
     }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_21; targetCompatibility = JavaVersion.VERSION_21 }
-    kotlinOptions { jvmTarget = "21" }
     signingConfigs {
         create("release") {
             storeFile = file(rootProject.file("taotao-release.jks"))
@@ -58,6 +59,14 @@ android { namespace = "com.taotao.music"; compileSdk = 35
 
 tasks.matching { it.name == "assembleDebug" || it.name == "assembleRelease" }.configureEach {
     finalizedBy("incrementVersion")
+}
+
+// kotlinOptions DSL 已废弃（Kotlin 2.2 起编译告警）：jvmTarget 迁到任务级 compilerOptions，
+// 与 patch 模块已有的写法一致。
+tasks.withType<KotlinCompile>().configureEach {
+    compilerOptions {
+        jvmTarget.set(JvmTarget.JVM_21)
+    }
 }
 
 tasks.register("incrementVersion") {
