@@ -154,6 +154,8 @@ export interface UpstreamRankingBrief {
   preview: UpstreamSong[];
   /** H5 榜单（腾讯音乐榜/巅峰潮流榜）：无数字 id、无详情端点，歌曲由目录自带。 */
   external: boolean;
+  /** external 榜的原生详情寻址键（当前仅巅峰潮流榜 = popular-day）；空表示无原生接口。 */
+  detailKey: string;
   /** H5 榜单的完整榜单页面地址（仅记录，客户端暂不内嵌 webview）。 */
   h5Url: string;
 }

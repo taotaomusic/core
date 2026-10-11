@@ -57,8 +57,6 @@ internal class RankingState(
 
     /** 当前打开的榜单；null 表示在目录视图。详情到达前头部先用它兜底渲染。 */
     var selected by mutableStateOf<RankingBrief?>(null)
-    /** H5 榜单（external）的 webview 加载地址；非空即显示 webview 视图。 */
-    var webUrl by mutableStateOf<String?>(null)
     /** 榜单详情头资料；到达前头部用 [selected]，到达后以它为准（封面 / 日期可能被运营更新）。 */
     var detail by mutableStateOf<RankingInfo?>(null)
 
@@ -131,12 +129,31 @@ internal class RankingState(
         selected = brief
         detail = null
         resetSongsForReload()
-        // H5 榜单（腾讯音乐榜/巅峰潮流榜，external）没有原生详情：上游无歌曲列表接口
-        //（App 侧点击跳 webview 打开 h5Url，service/bang/null/musics 实测 400）。
-        // 视图层据 [selected.external] 显示 webview 加载 [RankingBrief.h5Url]。
+        // external 榜（腾讯音乐榜/巅峰潮流榜，无数字 id）：有 detailKey 的走原生详情
+        // 接口（当前仅巅峰潮流榜 = popular-day，300 首全量一次返回）；无 detailKey 的
+        // （腾讯音乐榜，上游无原生接口，App 内跳 webview）不再装载歌曲，界面提示。
         if (brief.external || brief.id <= 0L) {
-            webUrl = brief.h5Url.ifBlank { null }
-            songsLoading = false
+            val key = brief.detailKey
+            if (key.isBlank()) {
+                songsError = "该榜单暂不支持在线查看"
+                songsLoading = false
+                return
+            }
+            scope.launch {
+                val result = runCatching {
+                    withContext(Dispatchers.IO) {
+                        musicApi.rankingExternalDetail(key, qualityStore.playbackQuality().value)
+                    }
+                }
+                if (currentEpoch != epoch) return@launch
+                result
+                    .onSuccess { loaded ->
+                        detail = loaded.ranking
+                        applyFirstSongPage(loaded)
+                    }
+                    .onFailure { songsError = it.message ?: "榜单歌曲加载失败" }
+                songsLoading = false
+            }
             return
         }
         scope.launch {
@@ -208,7 +225,6 @@ internal class RankingState(
         epoch += 1
         selected = null
         detail = null
-        webUrl = null
         clearSongs()
     }
 
@@ -217,7 +233,6 @@ internal class RankingState(
         epoch += 1
         selected = null
         detail = null
-        webUrl = null
         clearSongs()
         groups = emptyList()
         catalogLoading = false

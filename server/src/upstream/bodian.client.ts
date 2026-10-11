@@ -205,6 +205,8 @@ export interface RankingBrief {
   preview: Song[];
   /** H5 榜单（腾讯音乐榜/巅峰潮流榜）：无数字 id、无详情端点，歌曲由目录自带。 */
   external: boolean;
+  /** external 榜的原生详情寻址键（当前仅巅峰潮流榜 = popular-day）；空表示无原生接口。 */
+  detailKey: string;
   /** H5 榜单的完整榜单页面地址（仅记录，客户端暂不内嵌 webview）。 */
   h5Url: string;
 }
@@ -1499,10 +1501,18 @@ export class BodianClient {
         // 客户端直接用目录里的歌曲进详情，不发详情请求（App 侧同场景跳 webview）。
         const id = Number(bang?.id);
         const external = !Number.isInteger(id) || id <= 0;
+        // external 榜的详情寻址键：上游 name 固定的才接（当前只有巅峰潮流榜有原生
+        // 接口 popular/day）；腾讯音乐榜无原生接口，客户端点击提示。
+        const detailKey = external
+          ? String(bang?.name ?? "") === "巅峰潮流榜"
+            ? "popular-day"
+            : ""
+          : "";
         bangs.push({
           groupName: moduleName,
           id: external ? 0 : id,
           external,
+          detailKey,
           h5Url: external ? String(bang?.h5Url ?? "") : "",
           name: String(bang?.name ?? ""),
           pic: this.httpsImage(bang?.pic),

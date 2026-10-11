@@ -801,6 +801,7 @@ export class KuwoClient implements MusicSourceClient, MusicSourceCredentialManag
       bangs: group.bangs.map((bang) => ({
         ...bang,
         groupName: group.moduleName,
+        detailKey: bang.detailKey,
         preview: bang.preview.map((song) => this.toUpstreamSong(song)),
       })),
     }));

@@ -2001,6 +2001,35 @@ class TencentMusicApi(
         }
     }
 
+    /**
+     * external 榜（无数字 id 的 qq 榜）的原生详情：`GET /rankings/external/:key`。
+     * 当前只有巅峰潮流榜（popular-day，300 首全量、歌曲行带 rank 排名）。
+     * [detailKey] 来自目录 [RankingBrief.detailKey]，服务端按 key 分派上游接口。
+     */
+    fun rankingExternalDetail(detailKey: String, quality: Int = AudioQuality.Default.value): RankingDetail {
+        val key = encode(detailKey)
+        return authorized("/api/v1/rankings/external/$key?quality=${quality.coerceIn(0, MAX_QUALITY)}&source=${encode(SEARCH_SOURCE_KUWO)}") { connection ->
+            val root = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+            check(root.optInt("code") == 0) { root.optString("message", "无法获取榜单歌曲") }
+            val data = root.optJSONObject("data") ?: JSONObject()
+            val ranking = data.optJSONObject("ranking") ?: JSONObject()
+            RankingDetail(
+                ranking = RankingInfo(
+                    id = ranking.optLong("id"),
+                    name = ranking.optString("name"),
+                    pic = ranking.optString("pic").ifBlank { null },
+                    pub = ranking.optString("pub"),
+                    total = ranking.optLong("total"),
+                ),
+                songs = (data.optJSONArray("songs") ?: JSONArray()).let { rows ->
+                    (0 until rows.length()).mapNotNull { index ->
+                        rows.optJSONObject(index)?.toSong(quality)
+                    }
+                },
+            )
+        }
+    }
+
     /** 解析排行榜目录的一个模块分组。 */
     private fun JSONObject.toRankingGroup(): RankingGroup {
         // 先取局部变量：内层 RankingBrief 的 groupName 引用外层命名实参会被
@@ -2018,6 +2047,7 @@ class TencentMusicApi(
                         pic = nullableString("pic") ?: bang.optString("pic").ifBlank { null },
                         pubStr = bang.optString("pubStr"),
                         external = bang.optString("bangType") == "qq" || !bang.has("id") || bang.isNull("id"),
+                        detailKey = bang.optString("detailKey"),
                         h5Url = bang.optString("h5Url"),
                         preview = (bang.optJSONArray("preview") ?: JSONArray()).let { songs ->
                             (0 until songs.length()).mapNotNull { songIndex ->
@@ -2381,9 +2411,11 @@ data class RankingBrief(
     /** 更新时间展示串（如「10-05更新」）。可能为空串。 */
     val pubStr: String,
     val preview: List<Song>,
-    /** H5 榜单标记：true 表示无详情端点，歌曲由 [preview] 自带。 */
+    /** H5 榜单标记：true 表示无数字 id。 */
     val external: Boolean = false,
-    /** H5 榜单的完整榜单页面地址（仅记录，客户端暂不内嵌 webview）。 */
+    /** external 榜的原生详情寻址键（当前仅巅峰潮流榜 = popular-day）；空表示无原生接口。 */
+    val detailKey: String = "",
+    /** H5 榜单的完整榜单页面地址（仅记录）。 */
     val h5Url: String = "",
 )
 
