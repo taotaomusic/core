@@ -2,7 +2,7 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-09-30(路由/表清单核对日:2026-09-30)
+最后更新:2026-10-11(路由清单核对日:2026-10-11;表清单核对日:2026-09-30)
 
 本页是后端源码、接口和数据库文档的导航基准。路由清单中的路径是 Controller 相对路径,除 `/health` 外实际都要加全局前缀 `/api/v1`;文件/节点/路由的具体数量以 `codegraph status` 与 `codegraph query` 实测为准,不要引用本文历史快照的数字。
 
@@ -14,7 +14,7 @@ CodeGraph 数据库是本机生成物,不应提交 `codegraph.db`。源码变化
 codegraph index server
 codegraph status server --json
 
-# 查看所有路由(输出 120+ 条,数量变化意味着需要同步本页)
+# 查看所有路由(输出 140+ 条,数量变化意味着需要同步本页)
 codegraph query --path server --kind route --limit 200 --json ""
 ```
 
@@ -37,7 +37,7 @@ codegraph query --path server --kind route --limit 200 --json ""
 | `src/files/`(`FilesModule`) | 用户文件公开下载:头像存取与匿名只读端点 | `user_avatars`、`AvatarStoreService` |
 | `src/playback/` | 播放会话幂等、最近播放、听歌统计和清空代际 | 4 张 playback 表 |
 | `src/playlists/` | 云端歌单、快照、排序和完整替换 | `playlists`、`playlist_songs` |
-| `src/music/` | 搜索、歌曲信息、直链、音频代理、歌词 | 上游 Client、`favorites` |
+| `src/music/` | 搜索(裸 NDJSON + 分域标签)、歌手/专辑、排行榜、在线歌单、歌曲信息与 MV、直链、音频代理、歌词 | 上游 Client、`favorites` |
 | `src/open-api/`(`OpenApiModule`) | 开放搜歌 API Key 鉴权与第三方搜歌端点:`open-api.module.ts`、`open-api-key.repository.ts`、`open-api-key.service.ts`(`OpenApiKeyService`)、`open-api-key.guard.ts`(`ApiKeyGuard`)、`open-api.controller.ts`(`OpenApiController`)、`open-api-key-admin.controller.ts`(管理端 key CRUD) | `open_api_key` 表(只存 `sha256(key)`),imports `MusicModule` + `UpstreamModule` + `AdminAuthModule` |
 | `src/upstream/` | 多音源协议适配和错误收敛:腾讯/网易/酷我客户端、波点(Bodian)客户端与 KPK 签名复刻、`music-source-account.repository.ts` 音源账号凭据、`music-source.registry.ts` 注册表分派、`music-source-admin.controller.ts` 音源账号后台管理 | 外部音乐 API、`music_source_account` |
 | `src/shares/` | 歌曲短链、公开元数据、试听转发 | `song_share`、`StreamService` |
@@ -79,7 +79,7 @@ codegraph query --path server --kind route --limit 200 --json ""
   → NestFactory.create({ bodyParser: false })
   → 挂载传输加密中间件(带 X-Taotao-Crypto 头的请求先做 AEAD 解密;必须先于 body parser,
     否则拿到的是密文;无加密头请求完全透明。排除 /api/v1 之外的静态路径、RAW_BODY_PATHS
-    与 */play 音频流;强制加密白名单内的接口拒绝明文降级,见下)
+    与 */play 音频流;强制加密集合内的接口拒绝明文降级,见下)
   → 挂载按路由分流的 JSON parser(普通 16KB、原始上传跳过)
   → 挂载 /admin 与 /share 静态资源(CSP 中间件在 expressStatic 之前)
   → /api/v1 全局前缀(/health 例外)
@@ -96,7 +96,7 @@ codegraph query --path server --kind route --limit 200 --json ""
 
 完整时序与三个启动时间点的区别见 [13-startup-lifecycle.md](13-startup-lifecycle.md);守卫/拦截器的执行顺序见 [12-request-pipeline.md](12-request-pipeline.md)。
 
-加密中间件带一份**强制加密白名单**:链路已启用时,命中白名单且未带加密头的明文请求被拒绝(HTTP 426/4007,提示升级客户端),防止降级攻击。当前白名单只有 `GET /api/v1/favorites`。`CRYPTO_REQUEST_LOG`(默认开,设 `off` 关闭)会为每个 `/api/v1` 请求打一行「明文/加密」日志。
+**强制加密已全量覆盖**(2026-10 起):链路已启用时,`/api/v1/**` 下除「永不加密集合」外的所有接口——含 `/api/v1` 下的未知路径(默认安全,新增路由自动受保护)——收到无加密头的明文请求一律拒绝(HTTP 426/4007,提示升级客户端),防止降级攻击;永不加密集合与失败语义见 [37-api-crypto.md](37-api-crypto.md)。`CRYPTO_REQUEST_LOG`(默认开,设 `off` 关闭)会为每个 `/api/v1` 请求打一行「明文/加密」日志。
 
 当前原始请求体例外路径:
 
@@ -115,7 +115,7 @@ POST /api/v1/app/admin/patches
 
 ## 4. 完整路由索引
 
-以下路径均省略 `/api/v1` 前缀;`/health` 是唯一例外。总数以 CodeGraph 实测为准(2026-10-01 手工逐 Controller 核对 120 条),不要引用历史快照数字。各域接口的字段与语义细节见 30–37 各篇。
+以下路径均省略 `/api/v1` 前缀;`/health` 是唯一例外。总数以 CodeGraph 实测为准(2026-10-11 手工逐 Controller 重核 23 个控制器共 140 条;10-01 的 120 条快照已过期,主要是音乐域新增了分域搜索/歌手/专辑/排行榜/在线歌单/MV),不要引用历史快照数字。各域接口的字段与语义细节见 30–37 各篇。
 
 ### 公开公告(1)
 
@@ -165,15 +165,14 @@ POST /api/v1/app/admin/patches
 - `GET /admin/auth/audit-log`:操作审计查询。
 - `GET /admin/auth/ip-whitelist/:adminId`、`POST /admin/auth/ip-whitelist/:adminId`:IP 白名单读写,仅 `super_admin`。
 
-### 音乐与图片(10)
+### 音乐与图片(27)
 
-- `GET /search`:裸 NDJSON 搜索。
-- `GET /search/suggestions`:搜索联想词(默认酷我源)。
-- `GET /search/hot`:热搜词(默认酷我源)。
-- `GET /songs/:id/link`、`GET /songs/:id/info`、`GET /songs/batch-info`:直链、音质和批量信息。
-- `GET /songs/:id/play`:Range 音频代理。
-- `GET /songs/:id/lyrics`:纯文本或 `format=json` 歌词。
-- `POST /draw/completions`、`GET /draw/result/:taskId`:图片任务创建/轮询。
+- 搜索:`GET /search`(裸 NDJSON)、`GET /search/suggestions`(联想)、`GET /search/hot`(热搜),以及分域标签搜索 `GET /search/artists`、`GET /search/albums`、`GET /search/playlists`、`GET /search/videos`、`GET /search/lyrics`(歌手/专辑/歌单/视频/歌词,默认酷我源)。
+- 歌手 / 专辑:`GET /artists/:id`、`GET /artists/:id/songs`、`GET /artists/:id/albums`、`GET /artists/:id/similar`、`GET /albums/:id`、`GET /albums/:id/songs`。
+- 排行榜:`GET /rankings`(目录:模块分组 + 榜单简述 + 前 5 预览)、`GET /rankings/:id/songs`(真分页,`num` 缺省 30、上限 100)、`GET /rankings/external/:key`(无数字 id 的 external 榜原生详情,当前仅巅峰潮流榜 `popular-day` / `popular-week`)。
+- 在线歌单(音源侧公开歌单,与账号云端歌单是两套东西):`GET /online-playlists/:id`、`GET /online-playlists/:id/songs`。
+- 歌曲:`GET /songs/:id/link`、`GET /songs/:id/info`、`GET /songs/batch-info`、`GET /songs/:id/mv`、`GET /songs/:id/play`(Range 音频代理)、`GET /songs/:id/lyrics`(纯文本或 `format=json`)。
+- 图片任务:`POST /draw/completions`、`GET /draw/result/:taskId`。
 
 契约见 [32-api-search-music.md](32-api-search-music.md) 与 [50-feature-image-generation.md](50-feature-image-generation.md)。
 

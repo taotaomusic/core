@@ -2,7 +2,7 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-10-05
+最后更新:2026-10-11
 
 本文覆盖搜索联想、热搜、NDJSON 搜索、歌手 / 专辑 / 歌单 / 视频 / 歌词分页搜索、播放地址、播放代理、歌词和 MV 信息。上游协议适配的内部结构见 [11-architecture-modules.md](11-architecture-modules.md) 的 `upstream/` 一节;音源账号对播放链路的影响见 [53-feature-music-sources.md](53-feature-music-sources.md)。排障见 [72-troubleshooting-music.md](72-troubleshooting-music.md)。
 
@@ -344,4 +344,4 @@ Authorization: Bearer <accessToken>
 - 目录端点 `service/home/bangNew`,歌曲端点 `service/bang/{id}/musics` 分页参数 `pn`/`rn` —— **`pn` 是 1 基**(榜单详情族与搜索族相反,`pn=0` 实测 500),`rn` 上限实测 100。
 - 主流榜单 `total` 恒 100 且是**真实条数**(`pn=4&rn=30` 收尾 10 首实测过);部分榜单(歌手最热榜 19/20/21 等)`musics` 为空数组,照常返回空列表;H5 榜单(腾讯音乐榜/巅峰潮流榜,`bangType=qq`)没有数字 `id`,下发 `external:true` + `h5Url`,`id` 为 0 —— 其完整歌曲(上游各 2 首)带在目录的 `preview` 里,客户端直接进详情、不发详情请求。
 - **封面图源**:上游 `pic` 大多为多榜单共用的运营占位图(热力榜/特色榜 12 榜共用一张),客户端目录卡与详情头部应以**第 1 名歌曲的专辑封面**优先、`pic` 兜底。
-- **巅峰潮流榜(external)**:`GET /api/v1/rankings/external/popular-day` / `popular-week?year&week`,歌曲行带 `rank`(1 基排名),全量 300 首一次返回(无分页);每行 `kwSongID` 已映射为酷我 id,可直接点播。腾讯音乐榜无原生接口(App 跳 webview),目录里 `external:true` 且无详情数据。
+- **巅峰潮流榜(external)**:`GET /api/v1/rankings/external/popular-day` / `popular-week?year&week`,歌曲行带 `rank`(1 基排名),全量 300 首一次返回(无分页);每行 `kwSongID` 已映射为酷我 id,可直接点播。腾讯音乐榜无原生接口(App 跳 webview),目录里 `external:true` 且无详情数据。目录对 external 榜另下发 **`detailKey`**(2026-10-11 起):有原生接口的榜填寻址键(当前仅巅峰潮流榜 = `popular-day`),没有的为空串——客户端按「有 `detailKey` 才走原生详情、否则提示不支持」分派,不要自己按榜单名字硬编码。

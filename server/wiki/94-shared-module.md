@@ -2,16 +2,18 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-10-01
+最后更新:2026-10-11
 
 本篇讲 `shared/` 模块:跨端共享的数据模型、歌词(LRC/YRC)解析与音质规则,以及这些字段与后端接口响应的对应关系。组件层见 [93-player-ui.md](93-player-ui.md),安卓端整体见 [90-client-android.md](90-client-android.md)。本篇不讲网络层——`TencentMusicApi` 等请求实现属于 androidApp,不在这里。
 
 ## 1. 定位与边界
 
-- 纯 Kotlin Multiplatform 模块,代码全部在 `shared/src/commonMain/kotlin/com/taotao/music/model/`,包名 `com.taotao.music.model`(Gradle namespace 是 `com.taotao.music.shared`,别混淆)。
+- 纯 Kotlin Multiplatform 模块,主代码在 `shared/src/commonMain/kotlin/com/taotao/music/model/`(包名 `com.taotao.music.model`;Gradle namespace 是 `com.taotao.music.shared`,别混淆),另有 **wasmJs 专属门面** `wasmJsMain/kotlin/com/taotao/music/shared/wasm/`(见下)。
 - 目标平台:Android + wasmJs 浏览器(见 `shared/build.gradle.kts`)。**共享层不引入浏览器 API,也不引入 Android API**——Web 分享页只复用纯模型和业务规则,这是写进构建脚本注释的约束。
-- 模块刻意保持小:三个源文件就覆盖了「歌是什么、歌词怎么解析、有哪些音质」三件事。小不是缺陷——每一行都在两个平台编译、被三端消费,膨胀的代价是双倍的。
+- 模块刻意保持小:commonMain 三个源文件就覆盖了「歌是什么、歌词怎么解析、有哪些音质」三件事。小不是缺陷——每一行都在两个平台编译、被三端消费,膨胀的代价是双倍的。
 - 共享三类东西:`Song` 数据模型、歌词解析、音质档位规则。歌单、播放记录等业务模型**不在** shared,由 androidApp 的 `TencentMusicApi` 内部持有(见第 6 节)。
+
+**wasm 门面(`wasmJsMain/PlayerFacade.kt`,2026-10 新增)**:把 commonMain 的播放逻辑(歌词解析/行定位/逐字进度、音质标签)以 **顶层 `@JsExport` 函数**的形态导出给桌面端(Tauri + React + TS)——消除「Android 一份 Kotlin、桌面一份手工 TS 移植」的双份维护(桌面 `lyrics.ts` 就是 LyricParser 的移植副本)。约束:`@JsExport` 不允许标注 standalone object,所以用「顶层函数 + 私有状态对象」形态;**有状态缓存**(`loadLyric` 解析并缓存,随后的逐帧查询零 JSON 往返,JS 单线程换歌重调即替换);**Long 不出边界**(wasm↔JS 大整数有精度坑,时间字段一律 Int 毫秒)。TS 侧包装层在 `desktop/src/main/playerWasm.ts`(wasm 不可用时退回 TS 实现,见 [91-client-desktop.md](91-client-desktop.md));测试 `PlayerFacadeTest` 在 commonTest(与 Kotlin 实现同测)。
 
 ## 2. 目录结构
 
@@ -21,9 +23,15 @@ shared/src/commonMain/kotlin/com/taotao/music/model/
 ├── Lyric.kt          # LyricWord / LyricLine / Lyric + LyricParser(LRC、YRC)
 └── AudioQuality.kt   # AudioQuality 枚举 + labelOfQuality(上游全档位展示名)
 
+shared/src/wasmJsMain/kotlin/com/taotao/music/shared/wasm/
+└── PlayerFacade.kt   # 播放逻辑 wasm 门面(顶层 @JsExport 函数,供桌面端消费)
+
 shared/src/commonTest/kotlin/com/taotao/music/model/
 ├── LyricParserTest.kt
 └── AudioQualityTest.kt
+
+shared/src/commonTest/kotlin/com/taotao/music/shared/wasm/
+└── PlayerFacadeTest.kt
 ```
 
 ## 3. `Song` 数据模型
@@ -115,6 +123,7 @@ shared 与端上网络层的分工线:**shared 只回答「一首歌长什么样
 | androidApp | 全部 UI 与数据层:`Song` 贯穿搜索、队列、歌单、收藏、下载;歌词面板直接消费 `Lyric`;音质选择与降级提示消费 `AudioQuality`/`labelOfQuality` |
 | player-ui | `SharedSongRow` / `PlayerUiState` 直接依赖 `Song`;进度条、迷你播放器展示的时长字段也来自它 |
 | webApp | `ShareModels.kt` 的 `parseShareSong` 把分享元数据解析成 `Song`(兼容信封与裸对象两种响应),分享页 UI 用它渲染;分享场景字段不全,靠默认值兜底 |
+| desktop(Tauri) | 不复用 Kotlin UI,但经 **wasm 门面**(`PlayerFacade` 的产物 + `desktop/src/main/playerWasm.ts` 包装)复用 commonMain 的歌词解析/行定位/逐字进度与音质标签逻辑,wasm 不可用退回 TS 移植实现 |
 
 三端看到的「同一首歌」就是 shared `Song` 里的同一组字段——这是跨端视觉与行为一致的底线,字段含义改了三端一起变。
 
@@ -124,7 +133,8 @@ shared 与端上网络层的分工线:**shared 只回答「一首歌长什么样
 
 - 共享逻辑的测试放 `shared/src/commonTest/`,命名 `*Test.kt`;歌词解析、音质规则这类纯函数改动必须补用例。提交前先跑一遍全量共享测试再接线到端上。现有覆盖:
   - `LyricParserTest`(约 220 行):LRC/YRC 解析、offset 平移、多时间戳、脏数据边界;
-  - `AudioQualityTest`:档位与上游取值对应、按值反查、未知取值回退、无损标记、展示名覆盖全部 19 档。
+  - `AudioQualityTest`:档位与上游取值对应、按值反查、未知取值回退、无损标记、展示名覆盖全部 19 档;
+  - `PlayerFacadeTest`:wasm 门面加载/查询时序与 JSON 边界(Int 毫秒、标准转义),commonTest 里与 Kotlin 实现同测。
 - 测试名可以直接用中文反引号命名(如 `fun `未知取值退回默认档`()`),便于表达业务语义。
 - 运行:
 
