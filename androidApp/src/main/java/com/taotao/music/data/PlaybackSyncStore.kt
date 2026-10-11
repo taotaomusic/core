@@ -5,6 +5,7 @@ import com.taotao.music.data.db.LocalDb
 import com.taotao.music.data.db.LocalDbMetaRow
 import com.taotao.music.data.db.PlaybackOutboxRow
 import java.util.UUID
+import java.util.concurrent.Callable
 
 /**
  * 播放同步待办队列，落在本地 Room 库的 playback_outbox 表，账号级 revision/清空标记
@@ -25,6 +26,13 @@ class PlaybackSyncStore(private val context: Context) {
     private val lock = Any()
     private val db by lazy { LocalDb.ready(context) }
 
+    /**
+     * 带返回值的事务。Room 的 runInTransaction 有 Runnable 与 Callable 两个重载，Kotlin
+     * 会把带返回值的 lambda 解析到 Runnable（要求 lambda 返回 Unit）导致编译失败，
+     * 必须显式走 Callable；纯 Unit 的写事务不受影响，可直接用 runInTransaction。
+     */
+    private fun <T> inTransaction(body: () -> T): T = db.runInTransaction(Callable(body))
+
     fun snapshots(accountId: Long?): List<PendingPlaybackSnapshot> = accountId.validAccountId()?.let { account ->
         synchronized(lock) {
             db.playbackOutboxDao().listByAccount(account).mapNotNull { it.toSnapshot() }
@@ -40,7 +48,7 @@ class PlaybackSyncStore(private val context: Context) {
         // 入队账号与会话创建时冻结的归属必须一致；不一致宁可保留内存态，也绝不跨账号写入。
         if (snapshot.accountId != account) return snapshot
         return synchronized(lock) {
-            db.runInTransaction {
+            inTransaction {
                 val dao = db.playbackOutboxDao()
                 val existing = dao.getBySession(snapshot.sessionId)?.toSnapshot()
                 val stored = PlaybackSnapshotPolicy.merge(existing, snapshot, nextOutboxVersion(account))
@@ -57,7 +65,7 @@ class PlaybackSyncStore(private val context: Context) {
     fun removeIfUnchanged(accountId: Long?, uploaded: PendingPlaybackSnapshot): Boolean {
         val account = accountId.validAccountId() ?: return false
         return synchronized(lock) {
-            db.runInTransaction {
+            inTransaction {
                 val matched = db.playbackOutboxDao().getBySession(uploaded.sessionId)?.toSnapshot()
                 if (!PlaybackSnapshotPolicy.shouldRemoveAfterUpload(matched, uploaded)) {
                     false
@@ -83,9 +91,9 @@ class PlaybackSyncStore(private val context: Context) {
     fun markClearPending(accountId: Long?): Long? {
         val account = accountId.validAccountId() ?: return null
         return synchronized(lock) {
-            db.runInTransaction {
+            inTransaction {
                 if (readMetaBool(account, KEY_CLEAR_PENDING)) {
-                    return@runInTransaction readClearTargetRevision(account)
+                    return@inTransaction readClearTargetRevision(account)
                 }
                 val targetRevision = (readMetaLong(account, KEY_HISTORY_REVISION) + 1L).coerceAtLeast(1L)
                 writeMetaLong(account, KEY_HISTORY_REVISION, targetRevision)
@@ -150,7 +158,7 @@ class PlaybackSyncStore(private val context: Context) {
         val safeServerRevision = serverRevision.coerceAtLeast(0L)
         return synchronized(lock) {
             if (!readMetaBool(account, KEY_CLEAR_PENDING)) {
-                db.runInTransaction {
+                inTransaction {
                     val currentRevision = readMetaLong(account, KEY_HISTORY_REVISION)
                     val merged = maxOf(currentRevision, safeServerRevision)
                     if (merged != currentRevision) {
@@ -171,7 +179,7 @@ class PlaybackSyncStore(private val context: Context) {
     fun confirmClear(accountId: Long?, serverRevision: Long): Long {
         val account = accountId.validAccountId() ?: return 0L
         return synchronized(lock) {
-            db.runInTransaction {
+            inTransaction {
                 val targetRevision = readClearTargetRevision(account)
                 val confirmedRevision = maxOf(targetRevision, serverRevision.coerceAtLeast(0L))
                 val marker = readMetaString(account, KEY_CLEAR_MARKER)
