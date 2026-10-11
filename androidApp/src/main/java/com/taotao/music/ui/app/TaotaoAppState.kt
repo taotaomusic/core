@@ -77,8 +77,9 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
     val authSession = AuthSession(context)
     val audioPlayer = AudioPlayer(context)
     /**
-     * 传输加密封装（`plans/009`）：设备号取硬件 ANDROID_ID，内嵌 PSK 在 `.so` 里。
-     * 灰度总开关默认关闭，接线就绪后改 `cryptoEnabled = true` 即可启用收藏列表加密。
+     * 传输加密封装（`plans/009`）：设备号取硬件 ANDROID_ID，PSK 由后端经登录令牌动态下发。
+     * 全部需登录 JSON 接口强制加密；native 库缺失或握手失败会直接报错、不静默回退明文，
+     * cryptoEnabled = false 才整体回退（需后端同步关闭强制白名单）。
      */
     private val cryptoTransport = CryptoTransport(
         endpoint = TencentMusicApi.ENDPOINT,
@@ -89,9 +90,9 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
         authSession,
         context.packageManager.getPackageInfo(context.packageName, 0).longVersionCode,
         cryptoTransport = cryptoTransport,
-        // 灰度打开传输加密：目前只对白名单接口（收藏列表 /api/v1/favorites）生效，
-        // 其余接口仍明文。服务端未配 PSK / 未加载 .node 时 CryptoTransport.enabled=false，
-        // 客户端自动回退明文，不影响功能。
+        // 打开传输加密：覆盖全部需登录 JSON 接口（永不加密集合见 TencentMusicApi 类
+        // KDoc 的路径契约，如裸 NDJSON 的 /search、登录族、multipart 头像上传），
+        // seal/open 失败直接报错、不回退明文。
         cryptoEnabled = true,
     )
     val downloadManager = OfflineDownloadManager(context, authSession)

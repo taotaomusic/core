@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 
 export const ENDPOINT = "https://music.xydaigua.cn";
@@ -110,6 +111,302 @@ export async function restoreToken(): Promise<string | null> {
   return refreshAccess();
 }
 
+// ---- 传输加密通道（plans/009，与服务端 crypto.middleware.ts / 安卓端同契约） ----
+
+/**
+ * 分层说明：Rust 侧（crypto_bridge，taotao-crypto-core）只做密码学，HTTP 仍走
+ * 上面的 httpFetch 直连后端。除「永不加密集合」外，authedRequest 的业务请求统一
+ * 走 cryptoFetch：请求体在 Rust seal 成二进制帧发送（X-Taotao-Crypto 头携带
+ * 会话与序号，AAD = method + pathAndQuery 含 query），响应帧 crypto_open 解开，
+ * 再重建 Response 交给 unwrap 等既有解析，调用方无感。
+ *
+ * 错误语义（与中间件逐条对应）：
+ * - 带加密头的请求，响应体（含控制器层 4xx）为整帧密文；中间件自产的
+ *   400/4006、409/4091、426/4007 是明文 JSON；
+ * - 409/4091 会话失效 → 丢弃本地会话重新握手后重放一次（仅一次）；
+ * - 401 令牌过期 → 走既有 refreshAccess 后重放一次（仅一次）；重放必须重新
+ *   seal——旧帧序号已消费，原样重放会被服务端按重放攻击拒收；
+ * - 加密失败一律抛错，不回退明文（服务端对强制加密路径回 426/4007 防降级）。
+ */
+
+/** Rust crypto_seal 的返回。字段名与 Rust 侧 serde 默认一致（snake_case），两端勿单方面改名。 */
+type SealedFrame = { header: string; frame_b64: string };
+
+/**
+ * 永不加密的路径前缀（与服务端 main.ts isPlaintextOnlyPath 镜像，三端同步改）：
+ * crypto（引导自身）、app/admin/public/desktop/open（其它客户端与管理面）、
+ * files（匿名图片）。auth 族是**精确路径**而非前缀——/auth/profile 与
+ * /auth/email/bind-* 是强制加密路径，只豁免登录前拿不到 PSK 的那六条。
+ */
+const CRYPTO_NEVER_PREFIXES = [
+  "/api/v1/crypto/",
+  "/api/v1/app/",
+  "/api/v1/admin/",
+  "/api/v1/public/",
+  "/api/v1/desktop/",
+  "/api/v1/open/",
+  "/api/v1/files/",
+];
+
+/** auth 族精确豁免：调用时还没有访问令牌（拿不到 PSK）或属 multipart 大缓冲。 */
+const CRYPTO_NEVER_EXACT = new Set([
+  "/api/v1/auth/login",
+  "/api/v1/auth/register",
+  "/api/v1/auth/refresh",
+  "/api/v1/auth/logout",
+  "/api/v1/auth/email-verification",
+  "/api/v1/auth/avatar",
+]);
+
+/** 判定一条请求路径（可含 query）是否永不加密。 */
+function isNeverEncryptedPath(path: string): boolean {
+  const q = path.indexOf("?");
+  const pathname = q >= 0 ? path.slice(0, q) : path;
+  // /api/v1/search 是「精确段」：裸 NDJSON 流式契约保持明文；/search/suggestions
+  // 等子路径不在其列，仍走加密。
+  if (pathname === "/api/v1/search") return true;
+  if (pathname === "/api/v1/announcements" || pathname.startsWith("/api/v1/announcements/")) return true;
+  // 音频流代理：逐块 AEAD 得不偿失（core 的「明确不做的事」），与服务端排除表一致。
+  if (/^\/api\/v1\/songs\/[^/]+\/play$/.test(pathname)) return true;
+  if (CRYPTO_NEVER_EXACT.has(pathname)) return true;
+  return CRYPTO_NEVER_PREFIXES.some((p) => pathname.startsWith(p));
+}
+
+/** 是否运行在 Tauri 环境（纯浏览器 #mock dev 模式没有 __TAURI_INTERNALS__）。 */
+function isTauriRuntime(): boolean {
+  return "__TAURI_INTERNALS__" in window;
+}
+
+let warnedCryptoBypass = false;
+
+/** 纯浏览器 dev 模式退回明文时提示一次，不刷屏。 */
+function warnCryptoBypassOnce(): void {
+  if (warnedCryptoBypass) return;
+  warnedCryptoBypass = true;
+  console.warn("[api] 非 Tauri 环境（浏览器 dev/#mock），传输加密不可用，全部按明文请求");
+}
+
+/** bytes → base64。btoa 只吃 latin1 串，按 32K 分块拼接避免超长参数撑爆调用栈。 */
+function bytesToB64(bytes: Uint8Array): string {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(binary);
+}
+
+/** base64 → bytes（Rust 命令以 base64 字符串过桥，invoke 的 JSON 通道不走二进制）。 */
+function b64ToBytes(b64: string): Uint8Array {
+  const binary = atob(b64);
+  const out = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
+  return out;
+}
+
+/**
+ * 握手用设备 id：与 AppState 的播放上报共用 localStorage 键 taotao.deviceId
+ * （同键同算法，保证同一台机器的播放上报与握手设备绑定是同一个 id）。
+ */
+function ensureCryptoDeviceId(): string {
+  try {
+    const existing = localStorage.getItem("taotao.deviceId");
+    if (existing) return existing;
+    const id = crypto.randomUUID();
+    localStorage.setItem("taotao.deviceId", id);
+    return id;
+  } catch {
+    // localStorage 不可用时退化为进程内一次性 id，仅影响设备绑定不影响可用性
+    return crypto.randomUUID();
+  }
+}
+
+/**
+ * 加密会话引导：取 PSK（Bearer）→ Rust 建引擎 → ClientHello → 握手（公开路由）→
+ * ServerHello 回填 finish。并发去重：同一时刻只跑一次引导；结束（无论成败）即
+ * 清空——**成功也不缓存**，会话随时可能失效，REKEY_REQUIRED 必须真的重新握手。
+ */
+let cryptoBootstrap: Promise<void> | null = null;
+
+function bootstrapCrypto(): Promise<void> {
+  if (!cryptoBootstrap) {
+    cryptoBootstrap = ensureCryptoSession().finally(() => {
+      cryptoBootstrap = null;
+    });
+  }
+  return cryptoBootstrap;
+}
+
+async function ensureCryptoSession(): Promise<void> {
+  const deviceId = ensureCryptoDeviceId();
+
+  // a. 取 PSK：GET /crypto/psk 需 Bearer；401 时复用既有刷新逻辑重试一次。
+  const fetchPsk = async (tok: string | null): Promise<any> => {
+    const resp = await httpFetch(`${ENDPOINT}/api/v1/crypto/psk`, {
+      headers: { Accept: "application/json", Authorization: `Bearer ${tok ?? ""}` },
+    });
+    if (resp.status === 401) return null; // 交给外层走刷新重试
+    return unwrap(resp);
+  };
+  let psk = await fetchPsk(accessToken);
+  if (psk === null) {
+    const t = await refreshAccess();
+    if (!t) throw new SessionExpired();
+    psk = await fetchPsk(t);
+    if (psk === null) throw new SessionExpired();
+  }
+  const pskId = String(psk?.pskId ?? "");
+  const pskHex = String(psk?.pskHex ?? "");
+  if (!pskId || !pskHex) throw new Error("取 PSK 失败：响应缺少 pskId/pskHex");
+
+  // b. Rust 建引擎（rekey 时整体替换，旧会话一并作废）。
+  await invoke("crypto_session_new", { pskId, pskHex, deviceId });
+
+  // c. 握手：ClientHello → POST /crypto/handshake（公开路由，无 Authorization）→ finish。
+  const clientHello = await invoke<string>("crypto_client_hello", { nowMs: Date.now() });
+  const handshakeResp = await httpFetch(`${ENDPOINT}/api/v1/crypto/handshake`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ clientHello, deviceId }),
+  });
+  const data = await unwrap(handshakeResp);
+  const serverHello = String(data?.serverHello ?? "");
+  if (!serverHello) throw new Error("握手失败：响应缺少 serverHello");
+  await invoke("crypto_finish", { serverHelloB64: serverHello, nowMs: Date.now() });
+}
+
+/** invoke 对 Rust Err(String) 的 reject 就是那个字符串本身。 */
+function isRekeyRequired(e: unknown): boolean {
+  return String(e).includes("REKEY_REQUIRED");
+}
+
+/**
+ * 封帧：Rust seal 出密文帧与 X-Taotao-Crypto 头。无会话/需重键（REKEY_REQUIRED）
+ * 时先引导会话再 seal 一次；仍失败原样抛——加密是强制的，不回退明文。
+ */
+async function sealFrame(method: string, path: string, bodyText: string | null): Promise<SealedFrame> {
+  const doSeal = () =>
+    invoke<SealedFrame>("crypto_seal", {
+      method,
+      path,
+      bodyB64: bytesToB64(new TextEncoder().encode(bodyText ?? "")),
+      nowMs: Date.now(),
+    });
+  try {
+    return await doSeal();
+  } catch (e) {
+    if (!isRekeyRequired(e)) throw e;
+    await bootstrapCrypto();
+    return doSeal();
+  }
+}
+
+/** raw 是否为明文 JSON 信封（中间件自产错误的形状：{code: number, ...}）。 */
+function isPlaintextJsonEnvelope(raw: Uint8Array): boolean {
+  try {
+    const obj = JSON.parse(new TextDecoder().decode(raw));
+    return !!obj && typeof obj === "object" && typeof obj.code === "number";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 解密响应并重建 Response（状态码/JSON content-type 保留），让 unwrap 等
+ * 既有解析无感。open 失败按明文容错（例如服务端加密链路降级时收到明文）。
+ */
+async function decryptResponse(resp: Response, method: string, path: string): Promise<Response> {
+  const status = resp.status;
+  const raw = new Uint8Array(await resp.arrayBuffer());
+  // 204/205/304 不允许 Response 带体，构造器会抛 RangeError
+  const canHaveBody = status !== 204 && status !== 205 && status !== 304;
+
+  // 中间件自产错误（400/4006、409/4091、426/4007）不加密，是明文 JSON；
+  // 其余状态码（含控制器层 4xx）为整帧密文。
+  let plain: Uint8Array | null = null;
+  if (status === 400 || status === 409 || status === 426) {
+    if (isPlaintextJsonEnvelope(raw)) plain = raw;
+  }
+  if (plain === null && raw.length > 0) {
+    try {
+      const plainB64 = await invoke<string>("crypto_open", {
+        method,
+        path,
+        frameB64: bytesToB64(raw),
+        nowMs: Date.now(),
+      });
+      plain = b64ToBytes(plainB64);
+    } catch {
+      plain = raw; // 容错：响应未被加密时按明文交给上层解析
+    }
+  }
+
+  const headers: Record<string, string> = {};
+  const contentType = resp.headers.get("content-type");
+  if (contentType) {
+    // 密文帧沿用了下游 JSON 的 content-type（服务端只改写 content-length），
+    // 明文重建时把它归一回 application/json。
+    headers["content-type"] = /json/i.test(contentType) ? "application/json" : contentType;
+  }
+  // DOM 的 BodyInit 类型不收 Uint8Array<ArrayBufferLike>，运行时（reqwest/webview）
+  // 接受字节体——此处按 BodyInit 断言，字节内容不受影响。
+  const body = canHaveBody && plain && plain.length > 0 ? (plain as unknown as BodyInit) : null;
+  return new Response(body, { status, headers });
+}
+
+/**
+ * 加密请求通道：seal → 发帧 → 解帧。401 与 409 各自最多重放一次（每次重放都
+ * 重新 seal），重放后的 401/409 原样返回给上层按错误处理。
+ */
+async function cryptoFetch(
+  path: string,
+  method: string,
+  baseHeaders: Record<string, string>,
+  bodyText: string | null,
+): Promise<Response> {
+  let refreshed = false; // 401 令牌刷新重放，仅一次
+  let rekeyed = false; // 409 会话失效重握手重放，仅一次
+  for (;;) {
+    let sealed: SealedFrame;
+    try {
+      sealed = await sealFrame(method, path, bodyText);
+    } catch (e) {
+      // SessionExpired 必须原样上抛：上层大量使用 instanceof 判断决定登出
+      if (e instanceof SessionExpired) throw e;
+      throw new Error(`加密请求失败：${e instanceof Error ? e.message : String(e)}`);
+    }
+
+    // GET/HEAD 不能带 body（webview 的 Request 构造器对 GET+body 直接抛
+    // TypeError）；服务端对空请求体有显式容忍（frame.length === 0 按空明文
+    // 处理），请求身份由 X-Taotao-Crypto 头承载。
+    const attachBody = method !== "GET" && method !== "HEAD";
+    const resp = await httpFetch(`${ENDPOINT}${path}`, {
+      method,
+      headers: {
+        ...baseHeaders,
+        Authorization: `Bearer ${accessToken ?? ""}`,
+        "X-Taotao-Crypto": sealed.header,
+        "Content-Type": "application/octet-stream",
+      },
+      body: attachBody ? (b64ToBytes(sealed.frame_b64) as unknown as BodyInit) : undefined,
+    });
+
+    if (resp.status === 409 && !rekeyed) {
+      // 加密会话失效（明文 JSON {code:4091}）：丢弃引擎重新握手后重放一次。
+      rekeyed = true;
+      await invoke("crypto_reset");
+      await bootstrapCrypto();
+      continue;
+    }
+    if (resp.status === 401 && !refreshed) {
+      refreshed = true;
+      const t = await refreshAccess();
+      if (!t) throw new SessionExpired();
+      continue;
+    }
+    return decryptResponse(resp, method, path);
+  }
+}
+
 /** 把 HeadersInit 统一展开成普通记录，便于追加 Authorization 头。 */
 function headerRecordOf(headers: HeadersInit | undefined): Record<string, string> {
   const rec: Record<string, string> = {};
@@ -127,24 +424,40 @@ function headerRecordOf(headers: HeadersInit | undefined): Record<string, string
 }
 
 /**
- * 带令牌的通用请求：遇 401 自动刷新并重放一次，刷新失败或重放仍 401
- * 抛 SessionExpired。其余方法/头/体由调用方通过 init 自定义。
+ * 带令牌的通用请求：命中「永不加密集合」或运行在纯浏览器 dev 模式时，维持
+ * 原有明文逻辑（401 自动刷新并重放一次，刷新失败或重放仍 401 抛 SessionExpired）；
+ * 其余走 cryptoFetch 加密通道，401 语义与明文分支一致。其余方法/头/体由调用方
+ * 通过 init 自定义；加密通道的 body 仅支持字符串或无体（现有调用点全部如此）。
  */
 export async function authedRequest(path: string, init?: RequestInit): Promise<Response> {
   const baseHeaders = headerRecordOf(init?.headers);
-  const doFetch = (tok: string | null) =>
-    httpFetch(`${ENDPOINT}${path}`, {
-      ...init,
-      headers: { ...baseHeaders, Authorization: `Bearer ${tok ?? ""}` },
-    });
-  let resp = await doFetch(accessToken);
-  if (resp.status === 401) {
-    const t = await refreshAccess();
-    if (!t) throw new SessionExpired();
-    resp = await doFetch(t);
-    if (resp.status === 401) throw new SessionExpired();
+
+  const neverEncrypted = isNeverEncryptedPath(path);
+  if (neverEncrypted || !isTauriRuntime()) {
+    if (!neverEncrypted) warnCryptoBypassOnce();
+    const doFetch = (tok: string | null) =>
+      httpFetch(`${ENDPOINT}${path}`, {
+        ...init,
+        headers: { ...baseHeaders, Authorization: `Bearer ${tok ?? ""}` },
+      });
+    let resp = await doFetch(accessToken);
+    if (resp.status === 401) {
+      const t = await refreshAccess();
+      if (!t) throw new SessionExpired();
+      resp = await doFetch(t);
+      if (resp.status === 401) throw new SessionExpired();
+    }
+    return resp;
   }
-  return resp;
+
+  let bodyText: string | null = null;
+  if (init?.body != null) {
+    if (typeof init.body !== "string") {
+      throw new Error(`加密通道不支持 ${typeof init.body} 类型的请求体（仅支持字符串或无体）`);
+    }
+    bodyText = init.body;
+  }
+  return cryptoFetch(path, (init?.method ?? "GET").toUpperCase(), baseHeaders, bodyText);
 }
 
 /** 带令牌的 GET 快捷方式（保留原有 Accept 参数形态）。 */

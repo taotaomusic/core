@@ -20,16 +20,42 @@ import java.util.Locale
 import android.net.Uri
 import android.os.Build
 
-/** 桃桃音乐后端客户端：移动端不直接请求第三方音乐接口。 */
+/**
+ * 桃桃音乐后端客户端：移动端不直接请求第三方音乐接口。
+ *
+ * ## 传输加密路径契约（与三端共享，对应服务端 `main.ts` 的 isMandatoryEncrypted 与排除表）
+ *
+ * **强制加密集合** = 除「永不加密集合」外全部 `/api/v1/` 接口（favorites、playlists、
+ * playback、im、draw、shares/songs、auth/profile 族、music 模块的
+ * suggestions/hot/artists/albums/rankings/online-playlists/songs link|info|mv|batch-info|lyrics
+ * 等）。服务端对无加密头的明文请求返回 426/{code:4007}，客户端把这些接口全部走
+ * [authorizedCrypto] 强制加密。
+ *
+ * **永不加密集合**（客户端必须走明文通道）与理由：
+ * 1. `POST /api/v1/auth/login|register|refresh|logout|email-verification` —— 登录前无访问
+ *    令牌、拿不到 PSK（authenticate / postJson / publicJson 与 companion 的 refreshTokens、
+ *    revokeRefreshToken、revokeImSession 天然在此集合）。
+ * 2. `POST /api/v1/auth/avatar` —— multipart 大文件（[authorizedMultipart] 保持明文）。
+ * 3. `/api/v1/crypto/*` —— 加密体系自身（握手与 PSK 下发，[CryptoTransport] 内直连）。
+ * 4. `/api/v1/app/*`、`/api/v1/admin/*`、`/api/v1/public/*`、`/api/v1/desktop/*`、
+ *    `/api/v1/open/*`、`/api/v1/files/*` —— 本类不调用。
+ * 5. `GET /api/v1/search` —— **裸 NDJSON 渐进流契约**（RELEASE.md），加密会被服务端
+ *    整体缓冲破坏流式语义（[search] 走 [authorizedPlain] 保持逐行回调）。
+ * 6. `/api/v1/songs/:id/play` —— 音频流，逐块 AEAD 得不偿失（播放器直连，不经本类通道）。
+ * 7. `GET /api/v1/announcements` —— 公开数据未登录可读（[publicGet] 保持明文）。
+ */
 class TencentMusicApi(
     private val tokenProvider: TokenProvider,
     private val appVersionCode: Long = 0L,
     /**
      * 传输加密封装（`plans/009`）。为 null 或 [cryptoEnabled] 为 false 时全程走明文。
-     * 本轮仅对灰度白名单内的接口（收藏列表）生效。
+     * 强制加密覆盖全部需登录 JSON 接口，永不加密集合见类 KDoc 的路径契约。
      */
     private val cryptoTransport: CryptoTransport? = null,
-    /** 加密灰度总开关。默认关闭——打开前需确认后端已配 PSK 且产物为协议 v2。 */
+    /**
+     * 加密总开关，保留为紧急降级开关：false 时全量回退明文，仅在后端同步关闭强制
+     * 白名单时可用，否则强制加密接口会被服务端以 426/{code:4007} 拒绝。
+     */
     private val cryptoEnabled: Boolean = false,
 ) {
     /** 波点搜索首页热词；点击时 [keyword] 可直接进入普通搜索。 */
@@ -257,7 +283,7 @@ class TencentMusicApi(
      * 搜索歌曲。
      *
      * [onProgress] 在解析过程中被反复调用，每次传入**当前累积的完整列表**而不是新增的一首。
-     * 这样设计是因为 [authorized] 在令牌被拒时会重放整个请求、把 NDJSON 从头再读一遍：
+     * 这样设计是因为 [authorizedPlain] 在令牌被拒时会重放整个请求、把 NDJSON 从头再读一遍：
      * 若回调语义是「追加一首」，重放就会产出重复条目；传累积快照时累积列表是下面这个
      * lambda 的局部变量，重放自然从空开始，界面直接整体赋值即可。
      *
@@ -288,7 +314,9 @@ class TencentMusicApi(
             "&page=$page&num=${num.coerceIn(1, 60)}" +
             "&quality=${quality.coerceIn(0, MAX_QUALITY)}" +
             "&source=${encode(source.ifBlank { SEARCH_SOURCE_KUWO })}"
-        return authorized("/api/v1/search$query") { connection ->
+        // 裸 NDJSON 渐进流契约：这是永不加密集合里唯一经由 authorized 通道的请求，
+        // 必须走明文逐行读，不能进加密通道（见类 KDoc 的路径契约第 5 条）。
+        return authorizedPlain("/api/v1/search$query") { connection ->
             val songs = mutableListOf<Song>()
             val artists = mutableListOf<ArtistSearchResult>()
             val albums = mutableListOf<AlbumSearchResult>()
@@ -358,8 +386,8 @@ class TencentMusicApi(
         val query = "?keyword=${encode(keyword.trim())}" +
             "&page=${page.coerceAtLeast(1)}&num=${num.coerceIn(1, MAX_CATALOG_PAGE_NUM)}" +
             "&source=${encode(SEARCH_SOURCE_KUWO)}"
-        return authorized("/api/v1/search/artists$query") { connection ->
-            val root = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+        return authorized("/api/v1/search/artists$query") { bytes ->
+            val root = JSONObject(String(bytes, Charsets.UTF_8))
             check(root.optInt("code") == 0) { root.optString("message", "无法搜索歌手") }
             val data = root.optJSONObject("data") ?: JSONObject()
             data.toPagedList(arrayName = "artists", parse = { row -> row.toArtistSearchResult() })
@@ -375,8 +403,8 @@ class TencentMusicApi(
         val query = "?keyword=${encode(keyword.trim())}" +
             "&page=${page.coerceAtLeast(1)}&num=${num.coerceIn(1, MAX_CATALOG_PAGE_NUM)}" +
             "&source=${encode(SEARCH_SOURCE_KUWO)}"
-        return authorized("/api/v1/search/albums$query") { connection ->
-            val root = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+        return authorized("/api/v1/search/albums$query") { bytes ->
+            val root = JSONObject(String(bytes, Charsets.UTF_8))
             check(root.optInt("code") == 0) { root.optString("message", "无法搜索专辑") }
             val data = root.optJSONObject("data") ?: JSONObject()
             data.toPagedList(arrayName = "albums", parse = { row -> row.toAlbumSearchResult() })
@@ -392,8 +420,8 @@ class TencentMusicApi(
         val query = "?keyword=${encode(keyword.trim())}" +
             "&page=${page.coerceAtLeast(1)}&num=${num.coerceIn(1, MAX_CATALOG_PAGE_NUM)}" +
             "&source=${encode(SEARCH_SOURCE_KUWO)}"
-        return authorized("/api/v1/search/playlists$query") { connection ->
-            val root = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+        return authorized("/api/v1/search/playlists$query") { bytes ->
+            val root = JSONObject(String(bytes, Charsets.UTF_8))
             check(root.optInt("code") == 0) { root.optString("message", "无法搜索歌单") }
             val data = root.optJSONObject("data") ?: JSONObject()
             data.toPagedList(arrayName = "playlists", parse = { row -> row.toPlaylistSearchResult() })
@@ -416,8 +444,8 @@ class TencentMusicApi(
             "&page=${page.coerceAtLeast(1)}&num=${num.coerceIn(1, MAX_CATALOG_PAGE_NUM)}" +
             "&quality=${quality.coerceIn(0, MAX_QUALITY)}" +
             "&source=${encode(SEARCH_SOURCE_KUWO)}"
-        return authorized("/api/v1/search/videos$query") { connection ->
-            val root = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+        return authorized("/api/v1/search/videos$query") { bytes ->
+            val root = JSONObject(String(bytes, Charsets.UTF_8))
             check(root.optInt("code") == 0) { root.optString("message", "无法搜索视频") }
             val data = root.optJSONObject("data") ?: JSONObject()
             data.toPagedList(arrayName = "videos", parse = { row -> row.toVideoSearchResult() })
@@ -440,8 +468,8 @@ class TencentMusicApi(
             "&page=${page.coerceAtLeast(1)}&num=${num.coerceIn(1, MAX_CATALOG_PAGE_NUM)}" +
             "&quality=${quality.coerceIn(0, MAX_QUALITY)}" +
             "&source=${encode(SEARCH_SOURCE_KUWO)}"
-        return authorized("/api/v1/search/lyrics$query") { connection ->
-            val root = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+        return authorized("/api/v1/search/lyrics$query") { bytes ->
+            val root = JSONObject(String(bytes, Charsets.UTF_8))
             check(root.optInt("code") == 0) { root.optString("message", "无法搜索歌词") }
             val data = root.optJSONObject("data") ?: JSONObject()
             data.toPagedList(
@@ -460,8 +488,8 @@ class TencentMusicApi(
         if (keyword.isBlank()) return emptyList()
         return authorized(
             "/api/v1/search/suggestions?keyword=${encode(keyword.trim())}&limit=${limit.coerceIn(1, 20)}&source=kuwo",
-        ) { connection ->
-            val root = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+        ) { bytes ->
+            val root = JSONObject(String(bytes, Charsets.UTF_8))
             check(root.optInt("code") == 0) { root.optString("message", "无法获取搜索联想") }
             val data = root.optJSONArray("data") ?: JSONArray()
             buildList {
@@ -475,8 +503,8 @@ class TencentMusicApi(
     /** 波点官方搜索首页热词。 */
     fun hotSearch(limit: Int = 20): List<HotSearchItem> = authorized(
         "/api/v1/search/hot?limit=${limit.coerceIn(1, 20)}&source=kuwo",
-    ) { connection ->
-        val root = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+    ) { bytes ->
+        val root = JSONObject(String(bytes, Charsets.UTF_8))
         check(root.optInt("code") == 0) { root.optString("message", "无法获取热搜") }
         val data = root.optJSONArray("data") ?: JSONArray()
         buildList {
@@ -513,8 +541,8 @@ class TencentMusicApi(
      */
     fun artistDetail(artistId: Long, source: String = SEARCH_SOURCE_KUWO): ArtistDetail {
         val id = artistId.requireCatalogId("歌手")
-        return authorized("/api/v1/artists/$id?source=${encode(source.ifBlank { SEARCH_SOURCE_KUWO })}") { connection ->
-            val root = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+        return authorized("/api/v1/artists/$id?source=${encode(source.ifBlank { SEARCH_SOURCE_KUWO })}") { bytes ->
+            val root = JSONObject(String(bytes, Charsets.UTF_8))
             check(root.optInt("code") == 0) { root.optString("message", "无法获取歌手资料") }
             root.optJSONObject("data")?.optJSONObject("artist")?.toArtistDetail() ?: error("歌手资料缺失")
         }
@@ -537,8 +565,8 @@ class TencentMusicApi(
         val query = "?page=${page.coerceAtLeast(1)}&num=${num.coerceIn(1, MAX_CATALOG_PAGE_NUM)}" +
             "&quality=${quality.coerceIn(0, MAX_QUALITY)}" +
             "&source=${encode(source.ifBlank { SEARCH_SOURCE_KUWO })}"
-        return authorized("/api/v1/artists/$id/songs$query") { connection ->
-            val root = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+        return authorized("/api/v1/artists/$id/songs$query") { bytes ->
+            val root = JSONObject(String(bytes, Charsets.UTF_8))
             check(root.optInt("code") == 0) { root.optString("message", "无法获取歌手歌曲") }
             val data = root.optJSONObject("data") ?: JSONObject()
             data.toPagedList(arrayName = "songs", parse = { row -> row.toSong(quality) })
@@ -557,8 +585,8 @@ class TencentMusicApi(
         val id = artistId.requireCatalogId("歌手")
         val query = "?page=${page.coerceAtLeast(1)}&num=${num.coerceIn(1, MAX_CATALOG_PAGE_NUM)}" +
             "&source=${encode(source.ifBlank { SEARCH_SOURCE_KUWO })}"
-        return authorized("/api/v1/artists/$id/albums$query") { connection ->
-            val root = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+        return authorized("/api/v1/artists/$id/albums$query") { bytes ->
+            val root = JSONObject(String(bytes, Charsets.UTF_8))
             check(root.optInt("code") == 0) { root.optString("message", "无法获取歌手专辑") }
             val data = root.optJSONObject("data") ?: JSONObject()
             data.toPagedList(arrayName = "albums", parse = { row -> row.toAlbumSearchResult() })
@@ -568,8 +596,8 @@ class TencentMusicApi(
     /** 相似歌手。服务端一次返回全部，没有分页元数据。 */
     fun similarArtists(artistId: Long, source: String = SEARCH_SOURCE_KUWO): List<ArtistSearchResult> {
         val id = artistId.requireCatalogId("歌手")
-        return authorized("/api/v1/artists/$id/similar?source=${encode(source.ifBlank { SEARCH_SOURCE_KUWO })}") { connection ->
-            val root = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+        return authorized("/api/v1/artists/$id/similar?source=${encode(source.ifBlank { SEARCH_SOURCE_KUWO })}") { bytes ->
+            val root = JSONObject(String(bytes, Charsets.UTF_8))
             check(root.optInt("code") == 0) { root.optString("message", "无法获取相似歌手") }
             val rows = root.optJSONObject("data")?.optJSONArray("artists") ?: JSONArray()
             (0 until rows.length()).mapNotNull { index -> rows.optJSONObject(index)?.toArtistSearchResult() }
@@ -579,8 +607,8 @@ class TencentMusicApi(
     /** 专辑页资料（含长简介 [AlbumDetail.desc]，可能为空串）。 */
     fun albumDetail(albumId: Long, source: String = SEARCH_SOURCE_KUWO): AlbumDetail {
         val id = albumId.requireCatalogId("专辑")
-        return authorized("/api/v1/albums/$id?source=${encode(source.ifBlank { SEARCH_SOURCE_KUWO })}") { connection ->
-            val root = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+        return authorized("/api/v1/albums/$id?source=${encode(source.ifBlank { SEARCH_SOURCE_KUWO })}") { bytes ->
+            val root = JSONObject(String(bytes, Charsets.UTF_8))
             check(root.optInt("code") == 0) { root.optString("message", "无法获取专辑资料") }
             root.optJSONObject("data")?.optJSONObject("album")?.toAlbumDetail() ?: error("专辑资料缺失")
         }
@@ -598,8 +626,8 @@ class TencentMusicApi(
         val query = "?page=${page.coerceAtLeast(1)}&num=${num.coerceIn(1, MAX_CATALOG_PAGE_NUM)}" +
             "&quality=${quality.coerceIn(0, MAX_QUALITY)}" +
             "&source=${encode(source.ifBlank { SEARCH_SOURCE_KUWO })}"
-        return authorized("/api/v1/albums/$id/songs$query") { connection ->
-            val root = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+        return authorized("/api/v1/albums/$id/songs$query") { bytes ->
+            val root = JSONObject(String(bytes, Charsets.UTF_8))
             check(root.optInt("code") == 0) { root.optString("message", "无法获取专辑歌曲") }
             val data = root.optJSONObject("data") ?: JSONObject()
             data.toPagedList(arrayName = "songs", parse = { row -> row.toSong(quality) })
@@ -628,8 +656,8 @@ class TencentMusicApi(
         val playlistId = id.requireCatalogId("歌单")
         val query = "?source=${encode(source.ifBlank { SEARCH_SOURCE_KUWO })}" +
             "&sourceMarker=${sourceMarker.coerceAtLeast(0L)}"
-        authorized("/api/v1/online-playlists/$playlistId$query") { connection ->
-            val root = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+        authorized("/api/v1/online-playlists/$playlistId$query") { bytes ->
+            val root = JSONObject(String(bytes, Charsets.UTF_8))
             check(root.optInt("code") == 0) { root.optString("message", "无法获取歌单资料") }
             root.optJSONObject("data")?.optJSONObject("playlist")?.toOnlinePlaylistDetail()
                 ?: error("歌单资料缺失")
@@ -657,8 +685,8 @@ class TencentMusicApi(
             "&sourceMarker=${sourceMarker.coerceAtLeast(0L)}" +
             "&page=${page.coerceAtLeast(1)}&num=${num.coerceIn(1, MAX_CATALOG_PAGE_NUM)}" +
             "&quality=${quality.coerceIn(0, MAX_QUALITY)}"
-        authorized("/api/v1/online-playlists/$playlistId/songs$query") { connection ->
-            val root = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+        authorized("/api/v1/online-playlists/$playlistId/songs$query") { bytes ->
+            val root = JSONObject(String(bytes, Charsets.UTF_8))
             check(root.optInt("code") == 0) { root.optString("message", "无法获取歌单歌曲") }
             val data = root.optJSONObject("data") ?: JSONObject()
             data.toPagedList(arrayName = "songs", parse = { row -> row.toSong(quality) })
@@ -726,8 +754,8 @@ class TencentMusicApi(
     fun requestMv(song: Song): MvInfo {
         val id = song.remoteId?.takeIf { it > 0L } ?: throw IllegalArgumentException("MV 需要歌曲 ID")
         val source = encode(song.source.ifBlank { DEFAULT_SOURCE })
-        return authorized("/api/v1/songs/$id/mv?source=$source") { connection ->
-            val root = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+        return authorized("/api/v1/songs/$id/mv?source=$source") { bytes ->
+            val root = JSONObject(String(bytes, Charsets.UTF_8))
             check(root.optInt("code") == 0) { root.optString("message", "获取 MV 失败") }
             val data = root.optJSONObject("data") ?: error("暂无 MV")
             MvInfo(
@@ -763,8 +791,8 @@ class TencentMusicApi(
             song.type?.let { append("&type=$it") }
             append("&source=${encode(song.source.ifBlank { DEFAULT_SOURCE })}")
         }
-        return authorized("/api/v1/songs/$id/link$query") { connection ->
-            val result = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+        return authorized("/api/v1/songs/$id/link$query") { bytes ->
+            val result = JSONObject(String(bytes, Charsets.UTF_8))
             check(result.optInt("code") == 0) { result.optString("message", "无法获取播放地址") }
             val data = result.getJSONObject("data")
             ResolvedLink(
@@ -790,8 +818,8 @@ class TencentMusicApi(
             placeholder.type?.let { append("&type=$it") }
             append("&source=${encode(placeholder.source.ifBlank { DEFAULT_SOURCE })}")
         }
-        return authorized("/api/v1/songs/$id/link$query") { connection ->
-            val result = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+        return authorized("/api/v1/songs/$id/link$query") { bytes ->
+            val result = JSONObject(String(bytes, Charsets.UTF_8))
             check(result.optInt("code") == 0) { result.optString("message", "无法获取播放地址") }
             result.getJSONObject("data").getString("url")
         }
@@ -805,8 +833,8 @@ class TencentMusicApi(
             append("?source=${encode(song.source.ifBlank { DEFAULT_SOURCE })}")
             song.mid?.takeIf { it.isNotBlank() }?.let { append("&mid=${encode(it)}") }
         }
-        return authorized("/api/v1/songs/$id/info$query") { connection ->
-            val result = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+        return authorized("/api/v1/songs/$id/info$query") { bytes ->
+            val result = JSONObject(String(bytes, Charsets.UTF_8))
             check(result.optInt("code") == 0) { result.optString("message", "无法获取音质列表") }
             val list = result.getJSONObject("data").optJSONArray("qualities") ?: return@authorized emptyList()
             (0 until list.length()).mapNotNull { index ->
@@ -875,9 +903,9 @@ class TencentMusicApi(
         song.mid?.trim()?.takeIf { it.isNotBlank() }?.let { add("$source:$it") }
     }
 
-    private fun favoriteSongIds(): List<String> = authorizedRaw("/api/v1/favorites") { bytes ->
+    private fun favoriteSongIds(): List<String> = authorized("/api/v1/favorites") { bytes ->
         val result = JSONObject(String(bytes, Charsets.UTF_8))
-        val favorites = result.optJSONArray("data") ?: return@authorizedRaw emptyList()
+        val favorites = result.optJSONArray("data") ?: return@authorized emptyList()
         (0 until favorites.length()).mapNotNull { index ->
             val item = favorites.optJSONObject(index) ?: return@mapNotNull null
                 item.optString("songId").takeIf { it.isNotBlank() }?.let {
@@ -994,8 +1022,8 @@ class TencentMusicApi(
     fun clearRecentPlayback(marker: String?): PlaybackHistoryState = authorized(
         "/api/v1/playback/recent" + marker?.takeIf { it.isNotBlank() }?.let { "?marker=${encode(it)}" }.orEmpty(),
         "DELETE",
-    ) { connection ->
-        val body = connection.inputStream.bufferedReader().use { it.readText() }
+    ) { bytes ->
+        val body = String(bytes, Charsets.UTF_8)
         if (body.isBlank()) PlaybackHistoryState(0L, 0L, null) else {
             val envelope = JSONObject(body)
             (envelope.optJSONObject("data") ?: JSONObject()).toPlaybackHistoryState()
@@ -1003,13 +1031,13 @@ class TencentMusicApi(
     }
 
     /** 读取跨设备清空水位。缺失新端点时调用方可保留已经缓存的 revision。 */
-    fun playbackHistoryState(): PlaybackHistoryState = authorized("/api/v1/playback/recent/state") { connection ->
-        val envelope = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+    fun playbackHistoryState(): PlaybackHistoryState = authorized("/api/v1/playback/recent/state") { bytes ->
+        val envelope = JSONObject(String(bytes, Charsets.UTF_8))
         (envelope.optJSONObject("data") ?: JSONObject()).toPlaybackHistoryState()
     }
 
-    private fun recentPlaybackPage(): RecentPlaybackPage = authorized("/api/v1/playback/recent?limit=500") { connection ->
-        val result = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+    private fun recentPlaybackPage(): RecentPlaybackPage = authorized("/api/v1/playback/recent?limit=500") { bytes ->
+        val result = JSONObject(String(bytes, Charsets.UTF_8))
         val data = result.opt("data")
         val records = when (data) {
             is JSONArray -> data // 兼容尚未部署新契约的服务端。
@@ -1038,8 +1066,8 @@ class TencentMusicApi(
         )
         // recent 保持裸数组以兼容已发布客户端；新状态端点缺失时仍可正常读取历史。
         runCatching {
-            authorized("/api/v1/playback/recent/state") { stateConnection ->
-                val envelope = JSONObject(stateConnection.inputStream.bufferedReader().use { it.readText() })
+            authorized("/api/v1/playback/recent/state") { stateBytes ->
+                val envelope = JSONObject(String(stateBytes, Charsets.UTF_8))
                 val state = envelope.optJSONObject("data") ?: return@authorized legacyCompatiblePage
                 legacyCompatiblePage.copy(
                     clearedBeforeMillis = state.clearedAtMillis(),
@@ -1070,8 +1098,8 @@ class TencentMusicApi(
 
     fun songDiary(source: String, songId: String): SongDiary = authorized(
         "/api/v1/playback/diary?source=${encode(source.ifBlank { DEFAULT_SOURCE })}&songId=${encode(songId)}",
-    ) { connection ->
-        val result = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+    ) { bytes ->
+        val result = JSONObject(String(bytes, Charsets.UTF_8))
         check(result.optInt("code") == 0) { result.optString("message", "无法获取单曲日记") }
         result.getJSONObject("data").toSongDiary(source, songId)
     }
@@ -1131,8 +1159,8 @@ class TencentMusicApi(
             authorized(
                 "/api/v1/songs/batch-info?ids=${remoteIds.joinToString(",")}" +
                     "&source=${encode(normalizedSource)}",
-            ) { connection ->
-                val result = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+            ) { bytes ->
+                val result = JSONObject(String(bytes, Charsets.UTF_8))
                 val songs = result.optJSONObject("data")?.optJSONArray("songs") ?: JSONArray()
                 (0 until songs.length()).mapNotNull { index ->
                     songs.optJSONObject(index)?.let { item ->
@@ -1156,8 +1184,8 @@ class TencentMusicApi(
         source: String = DEFAULT_SOURCE,
     ): Song = runCatching {
         val normalizedSource = source.ifBlank { DEFAULT_SOURCE }
-        authorized("/api/v1/songs/$remoteId/info?source=${encode(normalizedSource)}") { connection ->
-            val result = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+        authorized("/api/v1/songs/$remoteId/info?source=${encode(normalizedSource)}") { bytes ->
+            val result = JSONObject(String(bytes, Charsets.UTF_8))
             check(result.optInt("code") == 0) { result.optString("message", "无法获取收藏歌曲") }
             val data = result.getJSONObject("data")
             songFromInfo(data, remoteId, quality, favorited, normalizedSource)
@@ -1253,17 +1281,16 @@ class TencentMusicApi(
             ?: song.mid?.trim()?.takeIf { it.isNotBlank() }
             ?: throw IllegalArgumentException("网络歌曲缺少歌曲 ID 或 mid")
         val source = encode(song.source.ifBlank { DEFAULT_SOURCE })
-        authorized("/api/v1/favorites/$source/$id", if (favorite) "POST" else "DELETE") { connection ->
-            connection.inputStream.close()
-        }
+        // 收藏结果只看状态码；响应体（可能为空的信封）已由加密通道统一读取解密。
+        authorized("/api/v1/favorites/$source/$id", if (favorite) "POST" else "DELETE") { _ -> }
     }
 
     fun requestLyric(song: Song): String {
         val id = song.remoteId?.takeIf { it > 0L } ?: 0L
         require(id > 0L || !song.mid.isNullOrBlank()) { "网络歌曲缺少歌曲 ID 或 mid" }
         val mid = song.mid?.takeIf { it.isNotBlank() }?.let { "&mid=${encode(it)}" }.orEmpty()
-        return authorized("/api/v1/songs/$id/lyrics?source=${encode(song.source.ifBlank { DEFAULT_SOURCE })}$mid") { connection ->
-            connection.inputStream.bufferedReader().use { it.readText() }
+        return authorized("/api/v1/songs/$id/lyrics?source=${encode(song.source.ifBlank { DEFAULT_SOURCE })}$mid") { bytes ->
+            String(bytes, Charsets.UTF_8)
         }
     }
 
@@ -1276,8 +1303,8 @@ class TencentMusicApi(
         require(id > 0L || !song.mid.isNullOrBlank()) { "网络歌曲缺少歌曲 ID 或 mid" }
         val source = encode(song.source.ifBlank { DEFAULT_SOURCE })
         val mid = song.mid?.takeIf { it.isNotBlank() }?.let { "&mid=${encode(it)}" }.orEmpty()
-        return authorized("/api/v1/songs/$id/lyrics?format=json&source=$source$mid") { connection ->
-            val body = connection.inputStream.bufferedReader().use { it.readText() }
+        return authorized("/api/v1/songs/$id/lyrics?format=json&source=$source$mid") { bytes ->
+            val body = String(bytes, Charsets.UTF_8)
             // 服务端若还没部署 format=json，旧版本会忽略该参数直接返回纯 LRC 文本。
             // 这里把解析失败的响应体当作 LRC 使用，避免客户端先发版时所有歌词都变成「暂无歌词」。
             val result = runCatching { JSONObject(body) }.getOrNull()
@@ -1295,8 +1322,8 @@ class TencentMusicApi(
     /** 注册前发送邮箱验证码；接口成功时返回 204，没有响应体。 */
     fun sendRegistrationVerification(email: String) = publicJson("/api/v1/auth/email-verification", "POST", JSONObject().put("email", email))
 
-    fun profile(): UserProfile = authorized("/api/v1/auth/profile") { connection ->
-        connection.inputStream.bufferedReader().use { JSONObject(it.readText()) }.getJSONObject("data").toProfile()
+    fun profile(): UserProfile = authorized("/api/v1/auth/profile") { bytes ->
+        JSONObject(String(bytes, Charsets.UTF_8)).getJSONObject("data").toProfile()
     }
 
     fun createImageTask(model: String, prompt: String, aspectRatio: String, imageSize: String, quality: String): ImageTask =
@@ -1319,8 +1346,8 @@ class TencentMusicApi(
             )
         }
 
-    fun requestImageTask(taskId: String): ImageTask = authorized("/api/v1/draw/result/${encode(taskId)}") { connection ->
-        val body = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+    fun requestImageTask(taskId: String): ImageTask = authorized("/api/v1/draw/result/${encode(taskId)}") { bytes ->
+        val body = JSONObject(String(bytes, Charsets.UTF_8))
         val data = body.optJSONObject("data") ?: JSONObject()
         ImageTask(
             taskId = data.optString("taskId"),
@@ -1395,8 +1422,8 @@ class TencentMusicApi(
     fun imContacts(uids: List<String>): List<ImContact> {
         if (uids.isEmpty()) return emptyList()
         val encoded = java.net.URLEncoder.encode(uids.joinToString(","), "UTF-8")
-        return authorized("/api/v1/im/contacts?uids=$encoded") { connection ->
-            val rows = connection.inputStream.bufferedReader().use { JSONObject(it.readText()) }.optJSONArray("data") ?: JSONArray()
+        return authorized("/api/v1/im/contacts?uids=$encoded") { bytes ->
+            val rows = JSONObject(String(bytes, Charsets.UTF_8)).optJSONArray("data") ?: JSONArray()
             List(rows.length()) { index -> rows.optJSONObject(index) }.mapNotNull { row ->
                 row?.optString("uid")?.takeIf { it.isNotBlank() }?.let { uid ->
                     ImContact(uid, row.optString("nickname").ifBlank { "加载昵称…" }, row.nullableString("avatarUrl"))
@@ -1455,8 +1482,8 @@ class TencentMusicApi(
     // ---------------------------------------------------------------------
 
     /** 读取当前账号的歌单元数据。服务端只返回当前账号所属的记录。 */
-    fun listPlaylists(): List<Playlist> = authorized("/api/v1/playlists") { connection ->
-        val envelope = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+    fun listPlaylists(): List<Playlist> = authorized("/api/v1/playlists") { bytes ->
+        val envelope = JSONObject(String(bytes, Charsets.UTF_8))
         val data = envelope.optJSONArray("data")
             ?: envelope.optJSONObject("data")?.optJSONArray("playlists")
             ?: JSONArray()
@@ -1464,8 +1491,8 @@ class TencentMusicApi(
     }
 
     /** 读取一个歌单的完整详情（含按 position 排序的歌曲）。 */
-    fun getPlaylist(playlistId: Long): Playlist = authorized("/api/v1/playlists/${playlistId.requirePlaylistId()}") { connection ->
-        val envelope = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+    fun getPlaylist(playlistId: Long): Playlist = authorized("/api/v1/playlists/${playlistId.requirePlaylistId()}") { bytes ->
+        val envelope = JSONObject(String(bytes, Charsets.UTF_8))
         (envelope.optJSONObject("data") ?: envelope).toPlaylist()
     }
 
@@ -1602,10 +1629,13 @@ class TencentMusicApi(
         ?: throw IllegalArgumentException("${kind} ID 不合法")
 
     /**
-     * 发起需要访问令牌的请求：令牌被服务端拒绝时自动续期并重放一次。
+     * 明文通道：发起需要访问令牌的请求，令牌被服务端拒绝时自动续期并重放一次。
      * 续期失败说明刷新令牌同样失效，抛出 [SessionExpiredException] 让界面回到登录页。
+     *
+     * 仅 [search]（裸 NDJSON 渐进流契约，见类 KDoc 的路径契约第 5 条）与加密降级路径
+     * （[authorizedCrypto] 的紧急降级分支）使用；其余请求一律走加密通道。
      */
-    private fun <T> authorized(path: String, method: String = "GET", read: (HttpURLConnection) -> T): T {
+    private fun <T> authorizedPlain(path: String, method: String = "GET", read: (HttpURLConnection) -> T): T {
         var token = tokenProvider.validToken() ?: throw SessionExpiredException()
         repeat(MAX_AUTH_ATTEMPTS) { attempt ->
             val connection = open(path, method, token)
@@ -1626,33 +1656,65 @@ class TencentMusicApi(
     }
 
     /**
-     * 与 [authorized] 同样带令牌续期，但**响应体以字节返回**并按需解密。
-     *
-     * 仅当 [cryptoEnabled] 且注入了 [cryptoTransport] 时启用加密：给请求加
-     * `X-Taotao-Crypto` 头（GET 无体，只带头），响应读原始帧后 `openResponse` 解密。
-     *
-     * **强制加密**：一旦 [cryptoEnabled]，白名单接口**不再静默回退明文**——加密不可用
-     * 或握手失败会直接抛错（服务端也对这些接口拒绝明文降级）。未启用时才走明文。
-     *
-     * 服务端返回 409（会话失效，code 4091）时作废本地会话并重握手重放一次。
+     * 需要访问令牌的请求（字节读法）：强制加密集合内的路径走 [authorizedCrypto]，
+     * 永不加密集合内的路径转 [authorizedPlain]（把响应字节包回给调用方）。
+     * 客户端侧永不加密只需特判 `/api/v1/search` 精确段——登录族、multipart、/crypto/*、
+     * 公开数据等本就不经本通道，完整集合见类 KDoc 的路径契约。
      */
-    private fun <T> authorizedRaw(path: String, method: String = "GET", read: (ByteArray) -> T): T {
-        val transport = cryptoTransport
-        val useCrypto = cryptoEnabled && transport != null
-        if (!useCrypto) {
-            return authorized(path, method) { connection -> read(connection.inputStream.readBytes()) }
+    private fun <T> authorized(path: String, method: String = "GET", read: (ByteArray) -> T): T =
+        if (path.substringBefore('?') == NEVER_ENCRYPT_SEARCH_PATH) {
+            authorizedPlain(path, method) { connection -> read(connection.inputStream.readBytes()) }
+        } else {
+            authorizedCrypto(path, method, requestBody = null, read = read)
         }
 
+    /**
+     * 泛化的加密通道：强制加密集合内的请求都经此收发（字节进、字节出）。
+     *
+     * 仅当 [cryptoEnabled] 且注入了 [cryptoTransport] 时启用加密：请求体 [requestBody]
+     * （null / 空数组视为无体）seal 成密文帧后写出并带 `X-Taotao-Crypto` 头；GET 等
+     * 无体请求只带头——把帧作为 GET 的体会被 HttpURLConnection 转成 POST。带体请求的
+     * Content-Type 仍写 application/json：服务端中间件解出明文回填请求体后，下游的
+     * express.json 靠这个头解析。响应读原始帧后 `openResponse` 解密。
+     *
+     * **强制加密**：一旦启用，seal/open 失败直接抛错，绝不静默回退明文——服务端对
+     * 强制加密集合也拒绝明文降级（426/{code:4007}）。[cryptoEnabled] 为 false 时才
+     * 整体回退明文（紧急降级，需后端同步关闭强制白名单）。
+     *
+     * 401 → renewToken 重放（与 [authorizedPlain] 同一套 MAX_AUTH_ATTEMPTS 逻辑）；
+     * 409（code 4091 加密会话失效）→ 作废本地会话，重握手后重放一次。
+     * 非 2xx 的错误响应体**也是密文帧**（Nest 异常过滤器写出的 JSON 同样被拦加密封帧），
+     * 由 [cryptoErrorMessage] 解密取 message；解不开时按明文解析——中间件自身产生的
+     * 400/409/426 就是明文 JSON。
+     */
+    private fun <T> authorizedCrypto(
+        path: String,
+        method: String = "GET",
+        requestBody: ByteArray? = null,
+        read: (ByteArray) -> T,
+    ): T {
+        val transport = cryptoTransport
+        if (!cryptoEnabled || transport == null) {
+            // 紧急降级开关：后端同步关闭强制白名单时，客户端可整体回退明文。
+            return authorizedPlain(path, method) { connection -> read(connection.inputStream.readBytes()) }
+        }
+
+        val body = requestBody?.takeIf { it.isNotEmpty() }
         var token = tokenProvider.validToken() ?: throw SessionExpiredException()
         var rehandshaked = false
         // 额外一次余量给 409 重握手：401 续期 + 409 重握手最多各一次。
         repeat(MAX_AUTH_ATTEMPTS + 1) {
             // 强制加密：封帧失败不回退明文，直接抛错（服务端也会拒绝明文）。
-            val sealed = transport!!.seal(method, path, ByteArray(0))
+            val sealed = transport.seal(method, path, body ?: ByteArray(0))
                 ?: throw IllegalStateException("加密不可用，且该接口已启用强制加密")
 
             val connection = open(path, method, token).apply {
                 setRequestProperty(CRYPTO_HEADER, sealed.header)
+            }
+            if (body != null) {
+                connection.doOutput = true
+                connection.setRequestProperty("Content-Type", "application/json")
+                connection.outputStream.use { it.write(sealed.frame) }
             }
             val code = connection.responseCode
             when {
@@ -1669,14 +1731,40 @@ class TencentMusicApi(
                 code in 200..299 -> {
                     noteLatestVersion(connection)
                     val frame = connection.inputStream.readBytes()
-                    val plaintext = transport.openResponse(method, path, frame)
-                        ?: throw IllegalStateException("响应解密失败")
+                    // 204 / 无返回值端点的响应体为空（HTTP 语义禁止 204 带体，服务端想
+                    // 封帧也发不出去），明文就是空字节，不能再送去解密。
+                    val plaintext = if (frame.isEmpty()) ByteArray(0) else {
+                        transport.openResponse(method, path, frame)
+                            ?: throw IllegalStateException("响应解密失败")
+                    }
                     return read(plaintext)
                 }
-                else -> error(messageOf(connection, "请求失败：HTTP $code"))
+                else -> error(cryptoErrorMessage(transport, connection, method, path, "请求失败：HTTP $code"))
             }
         }
         throw SessionExpiredException()
+    }
+
+    /**
+     * 提取加密通道的错误提示：错误响应体通常也是密文帧，先解开取信封里的 message；
+     * 解不开（中间件自身的 400/409/426 是明文 JSON）就按明文解析。都取不到时退回
+     * [fallback]，与 [messageOf] 的兜底文案风格一致。
+     */
+    private fun cryptoErrorMessage(
+        transport: CryptoTransport,
+        connection: HttpURLConnection,
+        method: String,
+        path: String,
+        fallback: String,
+    ): String {
+        val frame = runCatching { connection.errorStream?.readBytes() }.getOrNull()
+        if (frame != null && frame.isNotEmpty()) {
+            val body = transport.openResponse(method, path, frame)?.let { String(it, Charsets.UTF_8) }
+                ?: String(frame, Charsets.UTF_8)
+            val message = runCatching { JSONObject(body).optString("message") }.getOrNull()
+            if (!message.isNullOrBlank()) return message
+        }
+        return fallback
     }
 
     /** 把响应头里的最新版本号交给观察者。解析失败或没有这个头时什么都不做。 */
@@ -1693,31 +1781,19 @@ class TencentMusicApi(
             verificationCode?.let { put("verificationCode", it) }
         }, "认证失败")
 
-    /** 带访问令牌的 JSON 写请求；认证过期时复用与普通读取一致的续期逻辑。 */
-    private fun <T> authorizedJson(path: String, method: String, body: JSONObject, read: (JSONObject) -> T): T {
-        var token = tokenProvider.validToken() ?: throw SessionExpiredException()
-        repeat(MAX_AUTH_ATTEMPTS) { attempt ->
-            val connection = open(path, method, token).apply {
-                doOutput = true
-                setRequestProperty("Content-Type", "application/json")
+    /**
+     * 带访问令牌的 JSON 写请求：请求体 seal 后经 [authorizedCrypto] 发送，响应解密后取
+     * `data` 层；认证过期续期、409 重握手与错误提示都由加密通道统一处理。
+     * 204 / 无返回值端点的空响应体给空 [JSONObject]。
+     */
+    private fun <T> authorizedJson(path: String, method: String, body: JSONObject, read: (JSONObject) -> T): T =
+        authorizedCrypto(path, method, body.toString().toByteArray()) { bytes ->
+            val plaintext = String(bytes, Charsets.UTF_8)
+            val data = if (plaintext.isBlank()) JSONObject() else {
+                JSONObject(plaintext).optJSONObject("data") ?: JSONObject()
             }
-            connection.outputStream.use { it.write(body.toString().toByteArray()) }
-            val code = connection.responseCode
-            if (code in 200..299) {
-                noteLatestVersion(connection)
-                val data = if (code == HttpURLConnection.HTTP_NO_CONTENT) JSONObject() else {
-                    connection.inputStream.bufferedReader().use { JSONObject(it.readText()) }.optJSONObject("data") ?: JSONObject()
-                }
-                return read(data)
-            }
-            if (code != HttpURLConnection.HTTP_UNAUTHORIZED || attempt == MAX_AUTH_ATTEMPTS - 1) {
-                throw IllegalStateException(messageOf(connection, "请求失败：HTTP $code"))
-            }
-            runCatching { connection.errorStream?.close() }
-            token = tokenProvider.renewToken(token) ?: throw SessionExpiredException()
+            read(data)
         }
-        throw SessionExpiredException()
-    }
 
     private fun <T> authorizedMultipart(
         path: String,
@@ -1756,37 +1832,18 @@ class TencentMusicApi(
      * 兼容两代 IM 代理：旧服务将悟空原始数组放在 data，新服务固定放在 data.conversations。
      * 保持兼容能避免服务灰度期间客户端把有效离线消息误判为空。
      */
-    private fun authorizedConversationSync(path: String, body: JSONObject): ImConversationSync {
-        var token = tokenProvider.validToken() ?: throw SessionExpiredException()
-        repeat(MAX_AUTH_ATTEMPTS) { attempt ->
-            val connection = open(path, "POST", token).apply {
-                doOutput = true
-                setRequestProperty("Content-Type", "application/json")
+    private fun authorizedConversationSync(path: String, body: JSONObject): ImConversationSync =
+        authorizedCrypto(path, "POST", body.toString().toByteArray()) { bytes ->
+            val data = JSONObject(String(bytes, Charsets.UTF_8)).opt("data")
+            when (data) {
+                is JSONArray -> ImConversationSync(uid = null, conversations = data)
+                is JSONObject -> ImConversationSync(
+                    uid = data.optString("uid").takeIf { it.isNotBlank() },
+                    conversations = data.optJSONArray("conversations") ?: JSONArray(),
+                )
+                else -> ImConversationSync(uid = null, conversations = JSONArray())
             }
-            connection.outputStream.use { it.write(body.toString().toByteArray()) }
-            val code = connection.responseCode
-            if (code in 200..299) {
-                noteLatestVersion(connection)
-                return connection.inputStream.bufferedReader().use {
-                    val data = JSONObject(it.readText()).opt("data")
-                    when (data) {
-                        is JSONArray -> ImConversationSync(uid = null, conversations = data)
-                        is JSONObject -> ImConversationSync(
-                            uid = data.optString("uid").takeIf { it.isNotBlank() },
-                            conversations = data.optJSONArray("conversations") ?: JSONArray(),
-                        )
-                        else -> ImConversationSync(uid = null, conversations = JSONArray())
-                    }
-                }
-            }
-            if (code != HttpURLConnection.HTTP_UNAUTHORIZED || attempt == MAX_AUTH_ATTEMPTS - 1) {
-                throw IllegalStateException(messageOf(connection, "请求失败：HTTP $code"))
-            }
-            runCatching { connection.errorStream?.close() }
-            token = tokenProvider.renewToken(token) ?: throw SessionExpiredException()
         }
-        throw SessionExpiredException()
-    }
 
     private fun publicJson(path: String, method: String, body: JSONObject) {
         val connection = open(path, method, null).apply {
@@ -1943,8 +2000,8 @@ class TencentMusicApi(
      * 直接复用 [toSong] 解析（占位地址按默认音质生成，目录预览不用于播放）。
      */
     fun rankings(source: String = SEARCH_SOURCE_KUWO): List<RankingGroup> {
-        return authorized("/api/v1/rankings?source=${encode(source.ifBlank { SEARCH_SOURCE_KUWO })}") { connection ->
-            val root = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+        return authorized("/api/v1/rankings?source=${encode(source.ifBlank { SEARCH_SOURCE_KUWO })}") { bytes ->
+            val root = JSONObject(String(bytes, Charsets.UTF_8))
             check(root.optInt("code") == 0) { root.optString("message", "无法获取排行榜") }
             val groups = root.optJSONObject("data")?.optJSONArray("groups") ?: JSONArray()
             (0 until groups.length()).mapNotNull { index ->
@@ -1976,8 +2033,8 @@ class TencentMusicApi(
         val query = "?page=${page.coerceAtLeast(1)}&num=${num.coerceIn(1, MAX_RANKING_PAGE_NUM)}" +
             "&quality=${quality.coerceIn(0, MAX_QUALITY)}" +
             "&source=${encode(SEARCH_SOURCE_KUWO)}"
-        return authorized("/api/v1/rankings/$rankingId/songs$query") { connection ->
-            val root = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+        return authorized("/api/v1/rankings/$rankingId/songs$query") { bytes ->
+            val root = JSONObject(String(bytes, Charsets.UTF_8))
             check(root.optInt("code") == 0) { root.optString("message", "无法获取榜单歌曲") }
             val data = root.optJSONObject("data") ?: JSONObject()
             val ranking = data.optJSONObject("ranking") ?: JSONObject()
@@ -2008,8 +2065,8 @@ class TencentMusicApi(
      */
     fun rankingExternalDetail(detailKey: String, quality: Int = AudioQuality.Default.value): RankingDetail {
         val key = encode(detailKey)
-        return authorized("/api/v1/rankings/external/$key?quality=${quality.coerceIn(0, MAX_QUALITY)}&source=${encode(SEARCH_SOURCE_KUWO)}") { connection ->
-            val root = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
+        return authorized("/api/v1/rankings/external/$key?quality=${quality.coerceIn(0, MAX_QUALITY)}&source=${encode(SEARCH_SOURCE_KUWO)}") { bytes ->
+            val root = JSONObject(String(bytes, Charsets.UTF_8))
             check(root.optInt("code") == 0) { root.optString("message", "无法获取榜单歌曲") }
             val data = root.optJSONObject("data") ?: JSONObject()
             val ranking = data.optJSONObject("ranking") ?: JSONObject()
@@ -2072,6 +2129,13 @@ class TencentMusicApi(
         const val ENDPOINT = "https://music.xydaigua.cn"
         /** 传输加密头名（`plans/009`）。带此头的请求才走加密路径。 */
         private const val CRYPTO_HEADER = "X-Taotao-Crypto"
+
+        /**
+         * 永不加密特判路径：`GET /api/v1/search` 的裸 NDJSON 渐进流契约（RELEASE.md），
+         * 加密会被服务端整体缓冲破坏流式语义。其余永不加密集合见类 KDoc 的路径契约。
+         */
+        private const val NEVER_ENCRYPT_SEARCH_PATH = "/api/v1/search"
+
         private const val MAX_AUTH_ATTEMPTS = 2
         private const val FAVORITE_INFO_CONCURRENCY = 4
         private const val BATCH_INFO_SIZE = 60

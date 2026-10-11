@@ -1,19 +1,15 @@
 //! 桃桃音乐桌面（Tauri）Rust 侧。
 //!
-//! 传输加密直接调用同仓 `taotao-crypto-core`（不走 JNI/.dll）。PSK 由后端**动态下发**，
-//! 与安卓客户端同一套模型：取 `/crypto/psk` → 用设备号做设备绑定握手 → seal/open。
-//! 这里先提供一个握手自检命令，业务 UI（React）在其上迭代。
+//! 传输加密（plans/009）采用「Rust 只做密码学、HTTP 留在 JS」的分层：
+//! `crypto_bridge` 持有同仓 `taotao-crypto-core` 的 `ClientEngine`（与安卓/
+//! 服务端同一份协议实现），通过 `crypto_seal` / `crypto_open` 等命令为前端
+//! 加解密；取 PSK、握手上报与业务请求仍由前端经 `tauri-plugin-http` 直连后端。
+//! 契约：AAD = method + pathAndQuery（含 query）；会话失效 409/4091、
+//! 强制加密路径明文请求 426/4007；rekey = 重新建引擎 + 握手，无独立 API。
 
-use base64::Engine as _;
-use serde::Serialize;
-use std::time::{SystemTime, UNIX_EPOCH};
-use taotao_crypto_core::ClientEngine;
+use std::sync::Mutex;
 
-const B64: base64::engine::general_purpose::GeneralPurpose = base64::engine::general_purpose::STANDARD;
-
-fn now_ms() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
-}
+mod crypto_bridge;
 
 /// 设备号：Windows 取注册表 MachineGuid；其它平台退回占位。折进握手密钥做设备绑定。
 fn device_id() -> String {
@@ -41,65 +37,6 @@ fn device_id() -> String {
     }
 }
 
-/// 从信封响应 `{code,message,data}` 里取 data 层（兼容无信封）。
-fn envelope_data(body: &str) -> Result<serde_json::Value, String> {
-    let v: serde_json::Value = serde_json::from_str(body).map_err(|e| e.to_string())?;
-    Ok(v.get("data").cloned().unwrap_or(v))
-}
-
-fn fetch_psk(endpoint: &str, bearer: &str) -> Result<(String, String), String> {
-    let url = format!("{endpoint}/api/v1/crypto/psk");
-    let resp = ureq::get(&url)
-        .set("Authorization", &format!("Bearer {bearer}"))
-        .set("Accept", "application/json")
-        .call()
-        .map_err(|e| format!("取 PSK 失败：{e}"))?;
-    let body = resp.into_string().map_err(|e| e.to_string())?;
-    let data = envelope_data(&body)?;
-    let psk_id = data.get("pskId").and_then(|x| x.as_str()).unwrap_or("").to_string();
-    let psk_hex = data.get("pskHex").and_then(|x| x.as_str()).unwrap_or("").to_string();
-    if psk_id.is_empty() || psk_hex.is_empty() {
-        return Err("PSK 响应缺少字段".into());
-    }
-    Ok((psk_id, psk_hex))
-}
-
-#[derive(Serialize)]
-struct HandshakeBody {
-    #[serde(rename = "clientHello")]
-    client_hello: String,
-    #[serde(rename = "deviceId")]
-    device_id: String,
-}
-
-/// 握手自检：取 PSK → 设备绑定握手 → 返回会话 ID（十六进制）。
-#[tauri::command]
-fn crypto_handshake_demo(endpoint: String, bearer: String) -> Result<String, String> {
-    let endpoint = endpoint.trim_end_matches('/').to_string();
-    let dev = device_id();
-    let (psk_id, psk_hex) = fetch_psk(&endpoint, &bearer)?;
-
-    let mut client = ClientEngine::new(&psk_id, &psk_hex, &dev).map_err(|e| e.to_string())?;
-    let now = now_ms();
-    let hello = client.handshake(now).map_err(|e| e.to_string())?;
-
-    let body = HandshakeBody { client_hello: B64.encode(&hello), device_id: dev };
-    let resp = ureq::post(&format!("{endpoint}/api/v1/crypto/handshake"))
-        .set("Content-Type", "application/json")
-        .set("Accept", "application/json")
-        .send_json(&body)
-        .map_err(|e| format!("握手请求失败：{e}"))?;
-    let rbody = resp.into_string().map_err(|e| e.to_string())?;
-    let data = envelope_data(&rbody)?;
-    let server_hello_b64 = data.get("serverHello").and_then(|x| x.as_str()).unwrap_or("");
-    if server_hello_b64.is_empty() {
-        return Err("握手响应缺少 serverHello".into());
-    }
-    let server_hello = B64.decode(server_hello_b64).map_err(|e| e.to_string())?;
-    client.finish(&server_hello, now_ms()).map_err(|e| e.to_string())?;
-    Ok(client.session_id_hex())
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -110,6 +47,8 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             show_main(app);
         }))
+        // 传输加密引擎的全局状态：由 crypto_bridge 的各命令维护（建/用/弃）。
+        .manage(Mutex::new(crypto_bridge::CryptoState::empty()))
         .setup(|app| {
             // 系统托盘：图标用应用图标；左键单击唤起主窗口，右键菜单提供
             // 「显示主窗口 / 退出」。图标缺失时降级为仅菜单行为，不影响主功能。
@@ -162,7 +101,15 @@ pub fn run() {
                 }
             }
         })
-        .invoke_handler(tauri::generate_handler![crypto_handshake_demo])
+        .invoke_handler(tauri::generate_handler![
+            crypto_bridge::crypto_session_new,
+            crypto_bridge::crypto_client_hello,
+            crypto_bridge::crypto_finish,
+            crypto_bridge::crypto_seal,
+            crypto_bridge::crypto_open,
+            crypto_bridge::crypto_reset,
+            crypto_bridge::crypto_device_id,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

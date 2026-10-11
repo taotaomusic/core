@@ -50,22 +50,23 @@ PSK **不存在「未配置即关闭加密」的状态**:`CRYPTO_PSK_HEX` 留空
 
 - AAD 绑定 `method + path + query`,**改路由形状会直接导致解密失败**(400/4006)。
 - `RAW_BODY_PATHS` 白名单(`app/admin/releases`、`app/admin/patches` 上传)与 `*/play` 音频流不参与解密。
-- **强制加密白名单**:命中且链路已启用时,无加密头的明文请求被拒 426/4007(防降级攻击)。当前只有 `GET /api/v1/favorites`,随客户端逐个接入再扩;白名单外的接口仍对明文透明,不影响 Web / 旧客户端 / 未接入的接口。
+- **强制加密(2026-10 全量接入)**:`/api/v1/**` 下除「永不加密集合」外全部强制——命中且链路已启用时,无加密头的明文请求被拒 426/4007(防降级攻击)。`/api/v1` 下的未知路径同样按强制加密处理(默认安全,新增路由自动受保护)。
+- **永不加密集合**(定义在 `main.ts` 的 `isPlaintextOnlyPath`,安卓 `TencentMusicApi`、桌面 `api.ts` 各有一份镜像,三端必须同步改):登录族(无令牌拿不到 PSK)、`/auth/avatar`(multipart)、`/crypto/*`(体系自身)、`/app/*`(bootstrap/apk/patch 旧版客户端 + 管理后台)、`/admin/*`(管理后台)、`/public/shares/*`(Wasm 分享页)、`/desktop/*`(tauri updater)、`/open/*`(第三方 API key)、`/files/*`(匿名图片)、`GET /search`(裸 NDJSON 渐进流,加密会被整体缓冲)、`GET /announcements`(公开数据)。这些路径连解密都不做:带了加密头的请求按密文原样穿透。
+- 带**加密头**的请求走解密拦截:请求体解密回填(支持带体 POST/PUT/PATCH/DELETE),响应整体缓冲后封帧——含控制器层 4xx;`@RawResponse` 路由的 `writeHead` 会被捕获推迟到封帧后一并发。
 - 对 `/api/v1/**` 请求默认打一行「明文 / 加密」可观测日志(带明文头 `X-Taotao-Device` 上报的机型);设 `CRYPTO_REQUEST_LOG=off` 关闭。
 - 解密中间件必须挂载在 body parser **之前**,否则拿到的是密文(挂载顺序见 [11-architecture-modules.md](11-architecture-modules.md))。
 - 服务端会话在内存中管理,每分钟清理过期会话;**重启后客户端需重新握手**(409/4091 引导),多实例部署时各实例会话独立。
 
 ## 4. 配置与产物
 
-- 配置:`CRYPTO_PSK_ID`(留空回落 `prod-v1`)与 `CRYPTO_PSK_HEX`(留空时**随机生成一把**,加密仍启用)。两者只在需要与外部工具联调时才必须手工对齐,客户端一律以 `/crypto/psk` 下发的为准。完整说明见 [21-configuration.md](21-configuration.md)。
+- 配置:`CRYPTO_PSK_ID`(留空回落 `prod-v1`)与 `CRYPTO_PSK_HEX`(留空时**随机生成一把**,加密仍启用)。两者只在需要与外部工具联调时才必须手工对齐,客户端一律以 `/crypto/psk` 下发的为准。完整说明见 [21-configuration.md](21-configuration.md)。**生产必须显式配置 `CRYPTO_PSK_HEX`**:随机 PSK 在重启后变化,客户端缓存的旧 PSK 握手会一直失败。
+- 运维总开关:`CRYPTO_ENABLED=off` 显式关闭传输加密(不加载产物,服务整体明文,强制加密集合随之失效)。用于生产暂缓启用或紧急止损;正常部署不需要设置。
 - 产物:`crypto/dist/` 只放四端编译产物;本地**不需要** Rust / Android NDK / wasm-bindgen 交叉编译环境。在项目根目录执行 `powershell tools/fetch-crypto.ps1`,按 [README.md](README.md) 的仓库架构从 GitHub Release 拉取对应平台产物到 `crypto/dist/node/<platform>/taotao_crypto.node`(带 SHA256 校验)。
-- 产物缺失时服务只是启动 WARN 并按明文链路运行,不阻断启动;强制加密白名单在链路未启用时也不生效(明文照常放行)。
+- 产物缺失时服务只是启动 WARN 并按明文链路运行,不阻断启动;强制加密集合在链路未启用时也不生效(明文照常放行)。
 - 改加密协议去 `crypto-src/` 改(由 core 单仓根 CI 的 `crypto-src/**` 路径过滤触发交叉编译),不要动 `crypto/dist/` 里的产物。
 
-## 5. 本地验证加密链路
+## 5. 契约验证脚本如何跑加密
 
-配置好产物后,`POST /api/v1/crypto/handshake` 应返回 `serverHello`,已登录客户端调 `GET /api/v1/crypto/psk` 应返回 `{pskId, pskHex}`;产物缺失的实例,两者固定 503/5031,可用于证明明文链路健在。
-
-开启 `CRYPTO_REQUEST_LOG`(`CRYPTO_REQUEST_LOG` 未设为 `off` 时默认开启)后,日志里每个 `/api/v1` 请求都会标注「明文」或「加密」,可用来确认客户端真的走了加密链路。
+`server/tools/verify-contract.mjs` 与真实客户端同权:脚本直接 require `taotao_crypto.node` 构造客户端引擎,用登录令牌完成 psk + 握手,再通过包装的 `globalThis.fetch` 把强制加密集合的请求透明加解密——既有断言零改动跑在密文通道上。「无令牌 401」的门禁契约由此保留(加密无令牌请求在守卫层照样 401/4010);明文降级路径由显式断言固定为 426/4007。脚本找不到产物时进入明文模式并跳过加密相关检查(此时服务端也必须没有产物,否则强制路径会以 426 如实报失败)。环境性失败(上游音源不可达,502/5020)单独计数、不影响退出码,供 CI 出不了外网时保持绿灯。
 
 排障:握手 503/5031、400/4013、请求 400/4006、409/4091、426/4007 的定位路径见 [72-troubleshooting-music.md](72-troubleshooting-music.md) 的传输加密一节。

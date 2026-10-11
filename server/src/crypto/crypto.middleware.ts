@@ -1,5 +1,6 @@
 import { Logger } from "@nestjs/common";
 import type { NextFunction, Request, Response } from "express";
+import { PassThrough } from "stream";
 import { CryptoTransportService } from "./crypto-transport.service";
 
 /** 携带加密头且路径受保护时，把解出的明文挂到这里供后续 body parser 读取。 */
@@ -109,18 +110,33 @@ function collectRawBody(request: Request): Promise<Buffer> {
 
 /** 用明文字节重建请求的可读流，让后续 `express.json()` 能正常解析。 */
 function replaceRequestBody(request: Request, plaintext: Buffer): void {
+    // 原 IncomingMessage 已被 collectRawBody 读到 end（readableEnded=true），对已结束
+    // 的流 push/unshift 都不会再吐数据——此前用 _read 覆盖的写法对带体的 POST 全部
+    // 失效（下游拿到空 body）。做法是造一条装好明文的 PassThrough，把**读侧**方法
+    // 以 own property 遮到请求对象上；headers/method/url/socket 保持原样，
+    // 守卫、限流、审计日志读到的请求上下文不受影响。
+    const body = new PassThrough();
+    body.end(plaintext);
+    for (const name of [
+        "on", "once", "off", "removeListener", "removeAllListeners",
+        "read", "pause", "resume", "pipe", "unpipe",
+    ] as const) {
+        Object.defineProperty(request, name, {
+            value: (body as unknown as Record<string, (...args: unknown[]) => unknown>)[name].bind(body),
+            configurable: true,
+        });
+    }
+    for (const [prop, getter] of [
+        ["readable", (): boolean => body.readable],
+        ["readableEnded", (): boolean => body.readableEnded],
+        ["readableFlowing", (): boolean | null => body.readableFlowing],
+        ["readableLength", (): number => body.readableLength],
+    ] as const) {
+        Object.defineProperty(request, prop, { get: getter, configurable: true });
+    }
     // 移除加密头，避免下游误判仍是密文；补正 content-length。
     delete request.headers[CRYPTO_HEADER];
     request.headers["content-length"] = String(plaintext.length);
-    let emitted = false;
-    // 覆盖流读取：一次性吐出明文再 end。
-    (request as unknown as { _read: () => void })._read = function read(): void {
-        if (!emitted) {
-            emitted = true;
-            (request as unknown as { push: (chunk: Buffer | null) => void }).push(plaintext);
-            (request as unknown as { push: (chunk: Buffer | null) => void }).push(null);
-        }
-    };
 }
 
 /** 包装响应：把下游写出的明文 body `seal()` 成密文帧再发出。 */
@@ -132,8 +148,27 @@ function interceptResponse(
     logger: Logger,
 ): void {
     const chunks: Buffer[] = [];
+    // @RawResponse 路由可能用 writeHead 直接发头（歌词接口就是这么写的）：只记录
+    // 不发送，真实头推迟到 end() 封帧后一起出，否则 content-length 先按明文发出去，
+    // 封帧后再改就是「Cannot set headers after they are sent」。
+    let pendingStatus: number | undefined;
+    let pendingStatusMessage: string | undefined;
+    let pendingHeaders: Record<string, string> | undefined;
     const originalWrite = response.write.bind(response);
     const originalEnd = response.end.bind(response);
+    const originalWriteHead = response.writeHead.bind(response);
+
+    (response as unknown as { writeHead: (...args: unknown[]) => unknown }).writeHead = (
+        ...args: unknown[]
+    ): unknown => {
+        const [status, second, third] = args as [number, unknown, unknown];
+        pendingStatus = status;
+        if (typeof second === "string") pendingStatusMessage = second;
+        pendingHeaders = (typeof second === "object" && second !== null ? second : third) as
+            | Record<string, string>
+            | undefined;
+        return response;
+    };
 
     (response as unknown as { write: (chunk: unknown) => boolean }).write = (chunk: unknown): boolean => {
         if (chunk) chunks.push(Buffer.from(chunk as Buffer));
@@ -142,6 +177,20 @@ function interceptResponse(
     (response as unknown as { end: (chunk?: unknown) => void }).end = (chunk?: unknown): void => {
         if (chunk) chunks.push(Buffer.from(chunk as Buffer));
         const plaintext = Buffer.concat(chunks);
+        // 摘掉影子方法再落盘：originalWrite/originalEnd 内部会经 this.writeHead /
+        // this.write 重新派发，影子不摘会把状态行和封好的帧再次吞进缓冲，
+        // socket 上就只剩没有状态行的裸帧字节。
+        const shadows = response as unknown as Record<string, unknown>;
+        delete shadows.writeHead;
+        delete shadows.write;
+        delete shadows.end;
+        if (response.headersSent) {
+            // 头已经出去了（flushHeaders 之类的旁路）：封帧已不可能，退回明文保住响应。
+            logger.warn("响应头在封帧前已被发出，回退明文");
+            originalWrite(plaintext);
+            originalEnd();
+            return;
+        }
         const sealed = transport.seal(sessionId, aad, plaintext);
         if (sealed === null) {
             logger.error("响应加密失败，回退明文");
@@ -150,7 +199,17 @@ function interceptResponse(
             return;
         }
         const framed = Buffer.from(sealed);
-        response.setHeader("content-length", String(framed.length));
+        const contentLength = String(framed.length);
+        if (pendingStatus !== undefined) {
+            const headers = { ...(pendingHeaders ?? {}), "content-length": contentLength };
+            if (pendingStatusMessage !== undefined) {
+                originalWriteHead(pendingStatus, pendingStatusMessage, headers);
+            } else {
+                originalWriteHead(pendingStatus, headers);
+            }
+        } else {
+            response.setHeader("content-length", contentLength);
+        }
         originalWrite(framed);
         originalEnd();
     };
