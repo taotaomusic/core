@@ -51,6 +51,13 @@ export interface NativeCrypto {
  * 后端照常起（加密链路自动降级为明文，见 CryptoTransportService）。
  */
 export function loadNativeCrypto(logger: Logger): NativeCrypto | null {
+    // 运维总开关：设 CRYPTO_ENABLED=off 显式关闭传输加密（加载器直接不找产物），
+    // 服务端整体降级明文——强制加密集合（main.ts isPlaintextOnlyPath 之外的路径）随之失效。
+    // 用于生产上暂缓启用或紧急止损，正常部署不需要设置；产物缺位的静默降级不受它影响。
+    if (process.env.CRYPTO_ENABLED === "off") {
+        logger.warn("CRYPTO_ENABLED=off，传输加密已显式关闭，强制加密白名单一并失效（明文服务）");
+        return null;
+    }
     const platformDir = resolvePlatformDir();
     if (!platformDir) {
         logger.warn(`当前平台 ${process.platform}-${process.arch} 无对应加密产物，传输加密降级为明文`);

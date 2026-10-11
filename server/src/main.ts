@@ -29,6 +29,51 @@ const RAW_BODY_PATHS = new Set([
 ]);
 
 /**
+ * 「永不加密集合」：这些路径完全绕开加密中间件——明文请求照常放行（绝不 426），
+ * 带了加密头的也按密文原样穿透（客户端就不该往这里发加密头）。每条路径的存在都由
+ * 一个没有加密能力的消费者决定，删任何一条之前先确认那个消费者已经消失。
+ * 安卓/桌面客户端把同一张表镜像在 `TencentMusicApi`（androidApp）与 `api.ts`
+ * （desktop）里，三端必须同步改。
+ */
+function isPlaintextOnlyPath(request: Request): boolean {
+  const path = request.path;
+  // 登录族：调用时还没有访问令牌，拿不到 /crypto/psk 下发的 PSK，强制加密是死锁。
+  // 传输安全由 TLS 承担（含 refreshToken、验证码）。
+  if (
+    path === "/api/v1/auth/login" ||
+    path === "/api/v1/auth/register" ||
+    path === "/api/v1/auth/refresh" ||
+    path === "/api/v1/auth/logout" ||
+    path === "/api/v1/auth/email-verification"
+  ) return true;
+  // 头像上传：multipart 大缓冲（5MB 图片整块加密再解），收益配不上内存峰值。
+  if (path === "/api/v1/auth/avatar") return true;
+  // 加密体系自身的引导：握手是明文 JSON + base64（@Public），psk 要登录令牌但此时
+  // 还没有任何会话——两个都在加密建立之前被调用。
+  if (path === "/api/v1/crypto/psk" || path === "/api/v1/crypto/handshake") return true;
+  // 客户端引导与更新分发：/app/bootstrap 旧版 APK 未登录就要调（绝不能 426），
+  // /app/apk、/app/patch 是 @Public 大文件下载；/app/admin/* 管理后台（Web SPA 无加密栈，
+  // 其中 releases/patches 本就在 RAW_BODY_PATHS）；github-webhook 要 HMAC 原始字节。
+  if (path.startsWith("/api/v1/app/")) return true;
+  // 管理后台认证（Web SPA，Bearer 会话）。
+  if (path.startsWith("/api/v1/admin/")) return true;
+  // 分享播放器：metadata + preview 音频流由 Kotlin/Wasm 分享页在浏览器里匿名消费。
+  if (path.startsWith("/api/v1/public/")) return true;
+  // Windows 自动更新：tauri-plugin-updater 在 Rust 侧直连 latest.json，无加密能力。
+  if (path.startsWith("/api/v1/desktop/")) return true;
+  // 开放 API：第三方凭 x-api-key 调用，协议里没有加密头。
+  if (path.startsWith("/api/v1/open/")) return true;
+  // 头像图片：安卓 Coil 与管理后台的 <img> 匿名直读。
+  if (path.startsWith("/api/v1/files/")) return true;
+  // 歌曲搜索：裸 NDJSON 渐进流契约（RELEASE.md），加密会把响应整体缓冲到 end，
+  // 破坏逐行下发语义。注意 /search/suggestions 等子资源是普通 JSON，仍走强制加密。
+  if (path === "/api/v1/search") return true;
+  // 公告：公开数据，未登录可读（读它时拿不出 PSK）。
+  if (path === "/api/v1/announcements") return true;
+  return false;
+}
+
+/**
  * 管理后台的构建产物目录。
  *
  * 固定产在 `dist/public`（见 vite.config.ts 的 outDir），但 `__dirname` 随运行方式变：
@@ -141,11 +186,17 @@ async function bootstrap(): Promise<void> {
     if (RAW_BODY_PATHS.has(request.path)) return true;
     // 音频流走 /songs/:id/play，逐块 AEAD 得不偿失，明确排除。
     if (/^\/api\/v1\/.*\/play$/.test(request.path)) return true;
+    // 永不加密集合：连解密都不做——带头请求按密文原样穿透（下游解析必然 400），
+    // 客户端就不该往这些路径发加密头；/search 若走解密拦截会被整体缓冲，破坏
+    // 裸 NDJSON 的渐进流语义。
+    if (isPlaintextOnlyPath(request)) return true;
     return false;
   }, (request) => {
-    // 强制加密白名单：已接入加密的接口拒绝明文降级。目前只有收藏列表读取
-    // （客户端 GET /api/v1/favorites 走加密）。随客户端逐个接入再往这里加。
-    return request.method === "GET" && request.path === "/api/v1/favorites";
+    // 强制加密（plans/009 全量接入）：/api/v1 下除「永不加密集合」外全部拒绝明文降级
+    // （426/{code:4007}），安卓与桌面客户端已对强制集合全量走加密通道。
+    // 部署顺序：先发客户端、再上服务端白名单——旧版 APK 对这里的路径会收到
+    // 426「请升级客户端」，属设计内的强升机制。
+    return !isPlaintextOnlyPath(request);
   }));
 
   app.use((request: Request, response: Response, next: NextFunction) => {

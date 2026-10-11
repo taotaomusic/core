@@ -57,7 +57,7 @@
 | [34-api-playback.md](34-api-playback.md) | 播放会话上报、最近播放、听歌统计、清空代际、单曲倒带日记 | 改播放记录链路、处理 409 因果冲突时 |
 | [35-api-shares.md](35-api-shares.md) | 歌曲分享短链、公开元数据、试听转发 | 改分享页链路、排查试听 502 时 |
 | [36-api-open.md](36-api-open.md) | 开放搜歌 API、API Key 管理、401/4014 语义 | 第三方接入、维护开放 Key 时 |
-| [37-api-crypto.md](37-api-crypto.md) | 传输加密握手、AEAD 中间件、PSK 配置、失败语义与降级 | 配置或排查加密链路时 |
+| [37-api-crypto.md](37-api-crypto.md) | 传输加密握手、AEAD 中间件、全量强制加密与永不加密集合、PSK 配置、失败语义 | 配置或排查加密链路时 |
 
 ### 数据库(40–44)
 
