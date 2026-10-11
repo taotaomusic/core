@@ -20,7 +20,9 @@ class ImPeerStore(context: Context) {
     private val mirror = object : MirroredPreference<ImPeersSnapshot>(context, "im_peers") {
         override fun default() = ImPeersSnapshot(emptyMap())
         override fun load(db: TaotaoLocalDatabase) = ImPeersSnapshot(
-            buckets = db.imDao().listAllPeers().groupBy({ it.accountId }, { it.uid }),
+            buckets = db.imDao().listAllPeers()
+                .groupBy({ it.accountId }, { it.uid })
+                .mapValues { (_, uids) -> uids.toSet() },
         )
         override fun persist(db: TaotaoLocalDatabase, value: ImPeersSnapshot) {
             val dao = db.imDao()
