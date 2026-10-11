@@ -141,8 +141,8 @@ jobs:
 
       - name: 契约验证
         # set -o pipefail：tee 会吞掉脚本的退出码（此前强制加密 426 让 8 项检查失败，
-#        却被这里掩成绿灯）。环境性失败已由脚本自身分类，不再需要这里兜底。
-run: set -o pipefail && node tools/verify-contract.mjs http://127.0.0.1:4720 2>&1 | tee verify.log
+        # 却被这里掩成绿灯）。环境性失败已由脚本自身分类，不再需要这里兜底。
+        run: set -o pipefail && node tools/verify-contract.mjs http://127.0.0.1:4720 2>&1 | tee verify.log
 
       - name: 发布 dist 到 Release server-dist-latest
         env:
