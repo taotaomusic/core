@@ -46,7 +46,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.ClipEntry
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
@@ -92,7 +93,7 @@ internal fun MinePage(
     onOpenAccount: () -> Unit,
 ) {
     val context = LocalContext.current
-    val clipboard = LocalClipboardManager.current
+    val clipboard = LocalClipboard.current
     val crashReporter = remember { CrashReporter(context) }
     var crashLogs by remember { mutableStateOf(emptyList<CrashLog>()) }
     var showCrashLogs by remember { mutableStateOf(false) }
@@ -272,7 +273,13 @@ internal fun MinePage(
             },
             dismissButton = {
                 Row {
-                    TextButton(onClick = { clipboard.setText(androidx.compose.ui.text.AnnotatedString(allLogs)) }) {
+                    TextButton(onClick = {
+                        scope.launch {
+                            clipboard.setClipEntry(
+                                ClipEntry(android.content.ClipData.newPlainText("崩溃日志", allLogs))
+                            )
+                        }
+                    }) {
                         Text("复制")
                     }
                     TextButton(onClick = {

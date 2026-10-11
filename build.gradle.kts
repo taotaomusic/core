@@ -1,6 +1,8 @@
 plugins {
-    id("com.android.application") version "8.7.3" apply false
-    id("com.android.library") version "8.7.3" apply false
+    // 8.13.2：内置 lint 以 Kotlin 2.2.10 构建，能读取 Kotlin 2.2 编译产物的 metadata，
+    // 修复 lintVitalAnalyzeRelease 上成批的 "metadata 2.2.0, expected 2.0.0" 噪音。
+    id("com.android.application") version "8.13.2" apply false
+    id("com.android.library") version "8.13.2" apply false
     // Kotlin 2.2.0：与 Compose Multiplatform 1.9.x 的要求对齐（1.8 起 web klib 需要 Kotlin 2.1+）。
     kotlin("android") version "2.2.0" apply false
     kotlin("multiplatform") version "2.2.0" apply false

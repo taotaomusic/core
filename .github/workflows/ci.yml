@@ -467,10 +467,11 @@ jobs:
         env:
           SIGNED: ${{ steps.signing.outputs.signed }}
         run: |
+          # --warning-mode all：临时开启，采集 Gradle 9 弃用明细，清单处理完后移除。
           if [ "$SIGNED" = "true" ]; then
-            ./gradlew :androidApp:assembleRelease --build-cache --console=plain
+            ./gradlew :androidApp:assembleRelease --build-cache --console=plain --warning-mode all
           else
-            ./gradlew :androidApp:assembleDebug --build-cache --console=plain
+            ./gradlew :androidApp:assembleDebug --build-cache --console=plain --warning-mode all
           fi
       - name: 整理版本号
         id: prep
