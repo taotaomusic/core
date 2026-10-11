@@ -16,7 +16,8 @@ import androidx.room.Upsert
  */
 @Entity(
     tableName = "playback_outbox",
-    indices = [Index("accountId")],
+    // 按账号列桶、按最后播放时间淘汰：复合索引同时覆盖两者的过滤与排序。
+    indices = [Index("accountId", "lastPlayedAt")],
 )
 data class PlaybackOutboxRow(
     @PrimaryKey val sessionId: String,

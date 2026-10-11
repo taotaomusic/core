@@ -1,6 +1,10 @@
 package com.taotao.music.data
 
 import android.content.Context
+import com.taotao.music.data.db.MirroredPreference
+import com.taotao.music.data.db.PREFERENCE_ROW_ID
+import com.taotao.music.data.db.QualityRow
+import com.taotao.music.data.db.TaotaoLocalDatabase
 import com.taotao.music.model.AudioQuality
 
 /**
@@ -10,21 +14,19 @@ import com.taotao.music.model.AudioQuality
  * 无损一首约 55MB,默认播放档位刻意不选它。
  */
 class QualityStore(context: Context) {
-    private val preferences = context.getSharedPreferences("playback_quality", Context.MODE_PRIVATE)
-
-    fun playbackQuality(): AudioQuality = AudioQuality.of(preferences.getInt(KEY_PLAYBACK, AudioQuality.Default.value))
-
-    fun setPlaybackQuality(quality: AudioQuality) =
-        preferences.edit().putInt(KEY_PLAYBACK, quality.value).apply()
-
-    fun downloadQuality(): AudioQuality =
-        AudioQuality.of(preferences.getInt(KEY_DOWNLOAD, AudioQuality.LOSSLESS.value))
-
-    fun setDownloadQuality(quality: AudioQuality) =
-        preferences.edit().putInt(KEY_DOWNLOAD, quality.value).apply()
-
-    private companion object {
-        const val KEY_PLAYBACK = "playback"
-        const val KEY_DOWNLOAD = "download"
+    private val mirror = object : MirroredPreference<QualityRow>(context, "quality") {
+        override fun default() = QualityRow(PREFERENCE_ROW_ID, AudioQuality.Default.value, AudioQuality.LOSSLESS.value)
+        override fun load(db: TaotaoLocalDatabase) = db.preferenceDao().getQuality()
+        override fun persist(db: TaotaoLocalDatabase, value: QualityRow) {
+            db.preferenceDao().upsertQuality(value)
+        }
     }
+
+    fun playbackQuality(): AudioQuality = AudioQuality.of(mirror.current().playback)
+
+    fun setPlaybackQuality(quality: AudioQuality) = mirror.commit(mirror.current().copy(playback = quality.value))
+
+    fun downloadQuality(): AudioQuality = AudioQuality.of(mirror.current().download)
+
+    fun setDownloadQuality(quality: AudioQuality) = mirror.commit(mirror.current().copy(download = quality.value))
 }

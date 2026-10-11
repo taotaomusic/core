@@ -1,6 +1,10 @@
 package com.taotao.music.data
 
 import android.content.Context
+import com.taotao.music.data.db.MirroredPreference
+import com.taotao.music.data.db.PREFERENCE_ROW_ID
+import com.taotao.music.data.db.SleepTimerRow
+import com.taotao.music.data.db.TaotaoLocalDatabase
 
 /**
  * 定时关闭面板的记忆项：上次使用的时长与「播完整首歌再停止」勾选。
@@ -9,24 +13,28 @@ import android.content.Context
  * 让「上次定时」开关在下次打开应用时仍然可用。
  */
 class SleepTimerStore(context: Context) {
-    private val preferences = context.getSharedPreferences("sleep_timer", Context.MODE_PRIVATE)
-
-    /** 上次设置的时长（分钟）；从未设置过时用 45 分钟兜底，与快捷键一致。 */
-    fun lastMinutes(): Int = preferences.getInt(KEY_LAST_MINUTES, DEFAULT_LAST_MINUTES)
-
-    fun setLastMinutes(minutes: Int) {
-        preferences.edit().putInt(KEY_LAST_MINUTES, minutes.coerceIn(1, MAX_MINUTES)).apply()
+    private val mirror = object : MirroredPreference<SleepTimerRow>(context, "sleep_timer") {
+        override fun default() = SleepTimerRow(PREFERENCE_ROW_ID, DEFAULT_LAST_MINUTES, false)
+        override fun load(db: TaotaoLocalDatabase) = db.preferenceDao().getSleepTimer()
+        override fun persist(db: TaotaoLocalDatabase, value: SleepTimerRow) {
+            db.preferenceDao().upsertSleepTimer(value)
+        }
     }
 
-    fun waitForSongEnd(): Boolean = preferences.getBoolean(KEY_WAIT_FOR_SONG_END, false)
+    /** 上次设置的时长（分钟）；从未设置过时用 45 分钟兜底，与快捷键一致。 */
+    fun lastMinutes(): Int = mirror.current().lastMinutes
+
+    fun setLastMinutes(minutes: Int) {
+        mirror.commit(mirror.current().copy(lastMinutes = minutes.coerceIn(1, MAX_MINUTES)))
+    }
+
+    fun waitForSongEnd(): Boolean = mirror.current().waitForSongEnd
 
     fun setWaitForSongEnd(waitForSongEnd: Boolean) {
-        preferences.edit().putBoolean(KEY_WAIT_FOR_SONG_END, waitForSongEnd).apply()
+        mirror.commit(mirror.current().copy(waitForSongEnd = waitForSongEnd))
     }
 
     private companion object {
-        const val KEY_LAST_MINUTES = "last_minutes"
-        const val KEY_WAIT_FOR_SONG_END = "wait_for_song_end"
         const val DEFAULT_LAST_MINUTES = 45
         const val MAX_MINUTES = 1_440
     }

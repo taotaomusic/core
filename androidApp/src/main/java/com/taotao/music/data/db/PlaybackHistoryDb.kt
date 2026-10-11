@@ -2,6 +2,7 @@ package com.taotao.music.data.db
 
 import androidx.room.Dao
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.Insert
 import androidx.room.Query
 import androidx.room.Upsert
@@ -12,7 +13,12 @@ import androidx.room.Upsert
  * 歌曲本体仍以 [songJson]（SongCodec 编码）原文存储：单行损坏只丢一首，
  * 不再像旧的整串 JSON 那样一处解析失败就丢整份历史。
  */
-@Entity(tableName = "playback_history", primaryKeys = ["accountId", "songKey"])
+@Entity(
+    tableName = "playback_history",
+    primaryKeys = ["accountId", "songKey"],
+    // 列表读取与淘汰都按 (账号, 播放时间) 排序，复合索引让 ORDER BY 走索引而非全表排序。
+    indices = [Index("accountId", "playedAt")],
+)
 data class PlaybackHistoryRow(
     /** 已认证的服务端用户 ID，账号分桶与旧存储一致。 */
     val accountId: Long,

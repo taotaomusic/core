@@ -2,6 +2,7 @@ package com.taotao.music.data.db
 
 import androidx.room.Dao
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.Insert
 import androidx.room.PrimaryKey
 import androidx.room.Query
@@ -19,7 +20,7 @@ data class FavoriteIdRow(
  * 收藏页首屏展示的歌曲快照。一个歌曲可能同时有数字 ID 与 mid 两个别名键，
  * 快照行以其主别名键为主键；[position] 维持旧存储的「新收藏在最前」顺序。
  */
-@Entity(tableName = "favorite_songs")
+@Entity(tableName = "favorite_songs", indices = [Index("position")])
 data class FavoriteSongRow(
     @PrimaryKey val stableKey: String,
     val songJson: String,
