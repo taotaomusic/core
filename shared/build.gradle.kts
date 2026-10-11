@@ -16,4 +16,4 @@ kotlin {
     }
 }
 
-android { namespace = "com.taotao.music.shared"; compileSdk = 35 }
+android { namespace = "com.taotao.music.shared"; compileSdk = 36 }
