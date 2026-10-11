@@ -129,7 +129,12 @@ class HotfixInstaller(context: Context) {
     fun forgetFailure() = store.forgetFailure()
 
     private fun download(url: String, target: File) {
-        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
+        // 补丁是动态加载执行的代码，传输通道必须加密。sha256 只保证「下载内容与清单一致」，
+        // 清单与文件同源时防不了篡改清单的中间人 —— 唯一的门槛就是通道本身，所以协议
+        // 不是 https 一律拒绝（防 bootstrap 响应被改成 http:// 后补丁明文落地）。
+        val parsed = URL(url)
+        check(parsed.protocol == "https") { "补丁下载地址必须是 https，实际是 ${parsed.protocol}，已拒绝明文下载" }
+        val connection = (parsed.openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 15_000
             readTimeout = 30_000

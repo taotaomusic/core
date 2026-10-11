@@ -21,6 +21,8 @@ import org.gradle.api.Project
 class HotfixInstrumentationPlugin : Plugin<Project> {
     override fun apply(project: Project) {
         val extension = project.extensions.create("hotfix", HotfixExtension::class.java).apply {
+            // 这份白名单与 autopatch 生成器的 --allow 是同一条热修边界：
+            // autopatch 的 --allow 默认值与此处保持一致，改一边必须同步另一边。
             includedPackages.convention(
                 listOf(
                     "com/taotao/music/data/",
