@@ -135,6 +135,19 @@ class AudioPlayer(context: Context) {
             }
         }
 
+        /**
+         * 任何来源的暂停（系统状态栏/通知、音频焦点、拔耳机、服务侧定时停止……）
+         * 都让「转场后继续播」的意图立即失效。
+         *
+         * 通知栏的暂停直达 MediaSession，不经过 [pause]，此前只能等 isPlaying 变
+         * true 才清标志：在自动转场后的缓冲窗口里按下暂停，会被 [onEvents] 的自动
+         * 续播立刻撤回，表现为「暂停失败、再按一次才成功」。Media3 对同一批事件先
+         * 逐个回调再回调 [onEvents]，因此标志清空必然先于续播判断。
+         */
+        override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+            if (!playWhenReady) resumeAfterTransition = false
+        }
+
         /** 自动切到歌单下一项时保持原来的播放意图，避免短暂缓冲把队列停住。 */
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
             val activeController = controller ?: return
@@ -445,6 +458,8 @@ class AudioPlayer(context: Context) {
         controllerFuture?.let(MediaController::releaseFuture)
         controllerFuture = null
         mainHandler.removeCallbacks(progressTicker)
+        // 断连后标志不再有事件来源清空；残留的 true 会在重连后把暂停态误判成转场意图。
+        resumeAfterTransition = false
         isPlaying = false
         hasMedia = false
         durationMs = 0
