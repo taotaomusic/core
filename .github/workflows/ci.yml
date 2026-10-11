@@ -532,13 +532,16 @@ jobs:
       # kotlinStorePackageLock 已不存在，--exclude-task 会因歧义直接报错）。
       - name: 构建 Kotlin/Wasm 分享播放器（先实际化锁文件）
         run: |
-          # Kotlin 2.3 起 storePackageLock 校验任务挂在 npmInstall 的 pre/postInstall
-          # 依赖链上，-x 排不掉，且与 upgradePackageLock（写锁）并行竞速：锁漂移时
-          # store 可能抢在写盘前执行而失败，默认调度下它失败会取消同图后续任务，
-          # 写锁永远轮不到执行。所以拆两遍：第一遍 --continue 只为让 upgradeLock
-          # 写盘（它 mismatchReport=NONE、autoReplace=true，必然写成功）；第二遍
-          # 磁盘锁已一致，正常构建。升级依赖后锁必漂移，锁文件都在 kotlin-js-store/ 下。
-          ./gradlew :kotlinWasmUpgradePackageLock --continue --build-cache --no-daemon || true
+          # Kotlin 2.3 起 kotlinWasmStorePackageLock（校验）挂在 npmInstall 的
+          # pre/postInstall 依赖链上，-x 排不掉，且与 kotlinWasmUpgradePackageLock
+          # （写锁，mismatchReport=NONE、autoReplace=true，只写盘不校验）并行竞速：
+          # 锁漂移时校验可能抢在写盘前执行而失败，默认调度下失败会取消同图后续
+          # 任务，写锁永远轮不到执行。所以第一遍带 --continue 保证写锁必然跑完、
+          # || true 容忍校验噪音；第二遍磁盘锁已一致，正常构建。
+          # 注意 configureondemand=true 下根 npm 任务不能单独调（root 未注册任务，
+          # CI 首跑实证 "kotlinWasmUpgradePackageLock not found"），必须借 :webApp 的
+          # 构建图一并调用；-x 排不掉校验任务就不用排，交给 --continue + || true。
+          ./gradlew :webApp:wasmJsBrowserDistribution :kotlinWasmUpgradePackageLock --continue --build-cache --no-daemon || true
           for attempt in 1 2 3; do
             if ./gradlew :webApp:wasmJsBrowserDistribution --build-cache --no-daemon; then break; fi
             echo "::warning::wasm 构建第 ${attempt} 次失败（wasm-opt 偶发启动问题），重试"
