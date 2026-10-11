@@ -53,6 +53,17 @@ import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 /**
+ * 底部应用标签栏的四个标签：主界面与播放详情 Activity 共用同一套
+ * （详情 Activity 也是「主骨架里的一页」，底部标签栏必须一直在）。
+ */
+internal val taotaoNavigationItems = listOf(
+    SharedNavigationItem(0, "音乐", Icons.Default.MusicNote),
+    SharedNavigationItem(1, "AI", Icons.Default.AutoAwesome, "AI 工作台"),
+    SharedNavigationItem(2, "聊天", Icons.Default.ChatBubbleOutline),
+    SharedNavigationItem(3, "我的", Icons.Default.Person),
+)
+
+/**
  * 登录后的主骨架：主题、可选更新提示、底部导航、迷你播放器、全局 Snackbar 与页面分发。
  * 页面级装配在 [TaotaoAppPageRouter]，弹窗与底部面板在 [TaotaoAppDialogs]。
  */
@@ -95,14 +106,7 @@ internal fun TaotaoAppContent(state: TaotaoAppState, darkTheme: Boolean) {
         Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize()) {
             SharedMainLayout(
                 selectedNavigationId = state.bottomTab,
-                navigationItems = remember {
-                    listOf(
-                        SharedNavigationItem(0, "音乐", Icons.Default.MusicNote),
-                        SharedNavigationItem(1, "AI", Icons.Default.AutoAwesome, "AI 工作台"),
-                        SharedNavigationItem(2, "聊天", Icons.Default.ChatBubbleOutline),
-                        SharedNavigationItem(3, "我的", Icons.Default.Person),
-                    )
-                },
+                navigationItems = taotaoNavigationItems,
                 onNavigationSelected = { target -> state.switchTab(target) },
                 // MV 播放页是全屏沉浸页，迷你播放器和底部导航一起让位。
                 hideBottomBar = state.mvSong != null,
