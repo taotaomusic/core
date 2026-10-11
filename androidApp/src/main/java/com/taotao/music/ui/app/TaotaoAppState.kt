@@ -1083,10 +1083,14 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
     var mineLibrarySection by mutableStateOf<MineLibrarySection?>(null)
 }
 
-/** 创建并记住全局状态容器；组合销毁重建时由 remember 保持实例稳定。 */
+/**
+ * 返回进程级全局状态容器（见 [com.taotao.music.TaotaoApplication.Companion.appState]）。
+ *
+ * 详情页拆成独立 Activity 后，主界面与详情 Activity 必须共享同一份状态：
+ * 容器挂在 Application 上惰性创建，本函数只是组合层的取用点，首次访问触发创建。
+ * 主界面重建（配置变更、被系统回收后重进）时容器不重建，播放与下载状态天然延续。
+ */
 @Composable
 internal fun rememberTaotaoAppState(): TaotaoAppState {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    return remember { TaotaoAppState(context, scope) }
+    return com.taotao.music.TaotaoApplication.appState
 }
