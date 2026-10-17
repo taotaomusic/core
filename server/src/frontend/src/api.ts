@@ -21,6 +21,8 @@ export interface AdminIdentity {
   must_change_password?: boolean;
   /** 本人是否已开启 TOTP 两步验证。 */
   totp_enabled?: boolean;
+  /** 本人当前绑定的 GitHub 登录名，未绑定为 null。 */
+  github_login?: string | null;
 }
 
 interface Envelope<T> {
@@ -227,6 +229,37 @@ export async function adminTotpConfirm(token: string, code: string) {
 /** 管理员认证 —— 关闭两步验证（需再次校验登录密码，204 无响应体）。 */
 export async function adminTotpDisable(token: string, password: string) {
   const response = await fetch(`${BASE}/admin/auth/totp-disable`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "authorization": `Bearer ${token}` },
+    body: JSON.stringify({ password }),
+  });
+  if (response.status === 204) return;
+  await unwrap<unknown>(response);
+}
+
+/** 管理员认证 —— 查询 GitHub 登录是否已在服务端启用（公开接口）。 */
+export function adminGithubStatus(): Promise<{ enabled: boolean }> {
+  return apiGetPublic<{ enabled: boolean }>("/admin/auth/github/status");
+}
+
+/**
+ * 管理员认证 —— 发起绑定 GitHub。
+ *
+ * 服务端校验本人登录密码后返回 GitHub 授权 URL，前端 `location.href` 跳过去；
+ * 真正的落库在 GitHub 回调里完成（那一步已没有 Bearer 会话，身份靠 state 携带）。
+ */
+export async function adminGithubBind(token: string, password: string) {
+  const response = await fetch(`${BASE}/admin/auth/github/bind`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "authorization": `Bearer ${token}` },
+    body: JSON.stringify({ password }),
+  });
+  return unwrap<{ authorize_url: string }>(response);
+}
+
+/** 管理员认证 —— 解绑 GitHub（需再次校验登录密码，204 无响应体）。 */
+export async function adminGithubUnbind(token: string, password: string) {
+  const response = await fetch(`${BASE}/admin/auth/github/unbind`, {
     method: "POST",
     headers: { "content-type": "application/json", "authorization": `Bearer ${token}` },
     body: JSON.stringify({ password }),

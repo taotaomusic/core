@@ -8,6 +8,7 @@ export type AdminUserRecord = {
   role: string; totp_enabled: number; ip_whitelist: string | null;
   last_login_at: number | null; last_login_ip: string | null;
   disabled_at: number | null; must_change_password: number; auth_source: string;
+  github_id: string | null; github_login: string | null; github_bound_at: number | null;
   created_at: string; created_by: number | null;
 };
 
@@ -23,7 +24,7 @@ export class AdminUsersRepository {
     return this.database.first<AdminCredentials>(
       `SELECT id, username, password_hash, password_salt, display_name, email, role,
               totp_secret, totp_enabled, ip_whitelist, last_login_at, last_login_ip,
-              disabled_at, must_change_password, auth_source,
+              disabled_at, must_change_password, auth_source, github_id, github_login, github_bound_at,
               to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS created_at,
               created_by
        FROM admin_users WHERE username = $1 AND disabled_at IS NULL`,
@@ -41,7 +42,7 @@ export class AdminUsersRepository {
     return this.database.first<AdminCredentials>(
       `SELECT id, username, password_hash, password_salt, display_name, email, role,
               totp_secret, totp_enabled, ip_whitelist, last_login_at, last_login_ip,
-              disabled_at, must_change_password, auth_source,
+              disabled_at, must_change_password, auth_source, github_id, github_login, github_bound_at,
               to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS created_at,
               created_by
        FROM admin_users WHERE username = $1`,
@@ -60,7 +61,7 @@ export class AdminUsersRepository {
   findById(id: number): Promise<AdminUserRecord | undefined> {
     return this.database.first<AdminUserRecord>(
       `SELECT id, username, display_name, email, role, totp_enabled, ip_whitelist,
-              last_login_at, last_login_ip, disabled_at, must_change_password, auth_source,
+              last_login_at, last_login_ip, disabled_at, must_change_password, auth_source, github_id, github_login, github_bound_at,
               to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS created_at,
               created_by
        FROM admin_users WHERE id = $1`,
@@ -79,7 +80,7 @@ export class AdminUsersRepository {
     return this.database.first<AdminCredentials>(
       `SELECT id, username, password_hash, password_salt, display_name, email, role,
               totp_secret, totp_enabled, ip_whitelist, last_login_at, last_login_ip,
-              disabled_at, must_change_password, auth_source,
+              disabled_at, must_change_password, auth_source, github_id, github_login, github_bound_at,
               to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS created_at,
               created_by
        FROM admin_users WHERE id = $1`,
@@ -104,7 +105,7 @@ export class AdminUsersRepository {
             must_change_password, auth_source)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          RETURNING id, username, display_name, email, role, totp_enabled, ip_whitelist,
-                   last_login_at, last_login_ip, disabled_at, must_change_password, auth_source,
+                   last_login_at, last_login_ip, disabled_at, must_change_password, auth_source, github_id, github_login, github_bound_at,
                    to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS created_at, created_by`,
         [
           username, passwordHash, passwordSalt, displayName, role, createdBy, email,
@@ -127,6 +128,53 @@ export class AdminUsersRepository {
     await this.database.run(
       `UPDATE admin_users SET auth_source = $2 WHERE id = $1 AND auth_source <> $2`,
       [id, authSource],
+    );
+  }
+
+  /**
+   * 按 GitHub 账号的稳定数字 ID 取完整凭据。
+   *
+   * **不过滤 `disabled_at`**：登录服务需要能区分「没绑定」与「绑定的账号已禁用」
+   * 两种情况，前者引导去绑定/找管理员，后者直接拒绝登录。
+   */
+  findByGithubId(githubId: string): Promise<AdminCredentials | undefined> {
+    return this.database.first<AdminCredentials>(
+      `SELECT id, username, password_hash, password_salt, display_name, email, role,
+              totp_secret, totp_enabled, ip_whitelist, last_login_at, last_login_ip,
+              disabled_at, must_change_password, auth_source, github_id, github_login, github_bound_at,
+              to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS created_at,
+              created_by
+       FROM admin_users WHERE github_id = $1`,
+      [githubId],
+    );
+  }
+
+  /**
+   * 把当前登录的管理员绑定到某个 GitHub 账号。
+   *
+   * 唯一部分索引保证一个 GitHub 账号最多绑定一个管理员；并发下撞唯一约束时
+   * 转成业务冲突码，而不是把 23505 直接抛给调用方。
+   */
+  async bindGithub(id: number, githubId: string, githubLogin: string): Promise<void> {
+    try {
+      await this.database.run(
+        `UPDATE admin_users
+            SET github_id = $2, github_login = $3, github_bound_at = $4
+          WHERE id = $1`,
+        [id, githubId, githubLogin, Date.now()],
+      );
+    } catch (error) {
+      if (isUniqueViolation(error)) {
+        throw ApiErrors.conflict(4091, "该 GitHub 账号已绑定其他管理员");
+      }
+      throw error;
+    }
+  }
+
+  async unbindGithub(id: number): Promise<void> {
+    await this.database.run(
+      `UPDATE admin_users SET github_id = NULL, github_login = NULL, github_bound_at = NULL WHERE id = $1`,
+      [id],
     );
   }
 
@@ -218,7 +266,7 @@ export class AdminUsersRepository {
   async list(): Promise<AdminUserRecord[]> {
     return this.database.all<AdminUserRecord>(
       `SELECT id, username, display_name, email, role, totp_enabled, ip_whitelist,
-              last_login_at, last_login_ip, disabled_at, must_change_password, auth_source,
+              last_login_at, last_login_ip, disabled_at, must_change_password, auth_source, github_id, github_login, github_bound_at,
               to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS created_at, created_by
        FROM admin_users ORDER BY id`,
     );

@@ -5,6 +5,7 @@ import { generateTotpSecret, verifyTotpCode } from "./totp";
 import { AdminUsersRepository } from "./admin-users.repository";
 import { AdminSessionsRepository } from "./admin-sessions.repository";
 import { AuditLogRepository } from "./audit-log.repository";
+import { ApiErrors } from "../common/api.exception";
 import type { AdminActor } from "../common/request.types";
 
 const SESSION_LIFETIME_MS = 24 * 60 * 60 * 1000; // 24小时
@@ -85,6 +86,20 @@ export class AdminAuthService {
   verifyAgainstNothing(password: string): false {
     this.scrypt(password, TIMING_DECOY_SALT);
     return false;
+  }
+
+  /**
+   * IP 白名单为空表示不限制；否则必须命中，不命中直接 403。
+   *
+   * 本地口令登录、TOTP 第二步与 GitHub 登录三条路径共用同一道闸，
+   * 抽到这里避免各处各自实现出「口径不一致」的漏洞。
+   */
+  async assertIpAllowed(adminId: number, ip: string): Promise<void> {
+    const admin = await this.adminUsers.findById(adminId);
+    if (!admin?.ip_whitelist) return;
+    const allowed = admin.ip_whitelist.split(",").map((item) => item.trim()).filter(Boolean);
+    if (allowed.length === 0 || allowed.includes(ip)) return;
+    throw ApiErrors.forbidden(4030, "当前 IP 不在白名单中");
   }
 
   async createSession(adminId: number, ip: string, userAgent: string): Promise<string> {
