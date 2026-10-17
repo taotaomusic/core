@@ -56,7 +56,7 @@
       <el-table-column label="发布时间" width="170">
         <template #default="{ row }">{{ formatTime(row.published_at) }}</template>
       </el-table-column>
-      <el-table-column label="操作" width="252" fixed="right">
+      <el-table-column label="操作" width="312" fixed="right">
         <template #default="{ row }">
           <el-button size="small" @click="openEdit(row)">编辑</el-button>
           <el-button size="small" @click="openRollout(row)">调放量</el-button>
@@ -68,6 +68,7 @@
           >
             {{ row.enabled === 1 ? "停用" : "启用" }}
           </el-button>
+          <el-button size="small" type="danger" plain @click="remove(row)">删除</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -193,7 +194,8 @@
 <script setup lang="ts">
 import { ref, onMounted } from "vue";
 import { Upload, Refresh } from "@element-plus/icons-vue";
-import { formatSize, formatTime, sha256Of, apiGet, apiPostJson, apiPostBytes } from "../api";
+import { ElMessageBox } from "element-plus";
+import { formatSize, formatTime, sha256Of, apiGet, apiPostJson, apiPostBytes, apiDelete } from "../api";
 
 /** 服务端原样返回数据库行，所以字段是下划线命名。 */
 interface Release {
@@ -438,6 +440,26 @@ async function toggleEnabled(row: Release) {
     await fetchReleases();
   } catch (error) {
     ElMessage.error(`操作失败：${(error as Error).message}`);
+  }
+}
+
+/** 删除一条发布记录，并连同清理本机落盘的安装包。删除是不可逆操作，必须二次确认。 */
+async function remove(row: Release) {
+  try {
+    await ElMessageBox.confirm(
+      `确定要删除版本 ${row.version_code}（${row.version_name}）吗？该操作会一并删除本机安装包且不可恢复。`,
+      "删除发布版本",
+      { type: "warning", confirmButtonText: "删除", cancelButtonText: "取消" },
+    );
+  } catch {
+    return;
+  }
+  try {
+    await apiDelete(`/app/admin/releases/${row.version_code}`, props.adminToken);
+    ElMessage.success("已删除");
+    await fetchReleases();
+  } catch (error) {
+    ElMessage.error(`删除失败：${(error as Error).message}`);
   }
 }
 </script>

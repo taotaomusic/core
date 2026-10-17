@@ -380,6 +380,7 @@ async function main() {
     // app/admin —— 发布管理
     ["GET", "/api/v1/app/admin/releases"],
     ["POST", "/api/v1/app/admin/releases"],
+    ["DELETE", "/api/v1/app/admin/releases/999003"],
     ["POST", "/api/v1/app/admin/rollout"],
     ["POST", "/api/v1/app/admin/min-version"],
     ["GET", "/api/v1/app/admin/config"],
@@ -1574,6 +1575,71 @@ async function main() {
     JSON.stringify(rowAfterEdit).slice(0, 160),
   );
 
+  // ⑩ 删除发布：登记一个临时版本，DELETE 后必须从发布列表消失。删除是写操作，
+  //     审计要落库；这里只验证「删掉后列表里读不到」，端到端删除链路交给其它断言。
+  const delVersionCode = 999020;
+  await fetch(
+    `${base}/api/v1/app/admin/releases?versionCode=${delVersionCode}&versionName=9.9.20&rollout=0`,
+    { method: "POST", headers: { authorization: `Bearer ${adminSession}` }, body: placeholderApk },
+  );
+  const beforeDelete = await (await fetch(`${base}/api/v1/app/admin/releases`, { headers: { authorization: `Bearer ${adminSession}` } })).json();
+  const rowBeforeDelete = beforeDelete.data?.find?.((item) => item.version_code === delVersionCode);
+  const deleted = await fetch(`${base}/api/v1/app/admin/releases/${delVersionCode}`, {
+    method: "DELETE", headers: { authorization: `Bearer ${adminSession}` },
+  });
+  check("删除发布成功（204）", deleted.status === 204, `实际 ${deleted.status}`);
+  const afterDelete = await (await fetch(`${base}/api/v1/app/admin/releases`, { headers: { authorization: `Bearer ${adminSession}` } })).json();
+  const rowAfterDelete = afterDelete.data?.find?.((item) => item.version_code === delVersionCode);
+  check(
+    "删除后该版本在发布列表消失",
+    !!rowBeforeDelete && !rowAfterDelete,
+    `before=${!!rowBeforeDelete} after=${!!rowAfterDelete}`,
+  );
+  // 删除不存在的版本应 404。
+  const deleteMissing = await fetch(`${base}/api/v1/app/admin/releases/999099`, {
+    method: "DELETE", headers: { authorization: `Bearer ${adminSession}` },
+  });
+  check("删除不存在的版本返回 404/4041", deleteMissing.status === 404 && (await deleteMissing.json()).code === 4041, `实际 ${deleteMissing.status}`);
+
+  // ⑪ 更新说明清理规则：webhook 把 GitHub Release body（被 release-log.sh 灌成
+  //     `- vX.Y.Z — 日期` 版本索引）原样搬进 release_note，UI 会被这种版本号墙淹没。
+  //     服务端登记时摘掉这类索引行。这里用与 GithubWebhookController.extractReleaseNote
+  //     完全一致的规则验证样例，锁住行为（改正则不得破坏这些样例）。
+  const stripIndexLines = (raw) =>
+    raw.split(/\r?\n/)
+      .filter((line) => !/^\s*-\s*v\d+(\.\d+)*\s+[-—]\s+\d{4}-\d{2}-\d{2}\s*$/.test(line))
+      .join("\n")
+      .split(/\n{2,}/)
+      .map((block) => block.trim())
+      .filter((block) => block.length > 0)
+      .join("\n\n")
+      .trim();
+  check(
+    "更新说明：纯版本索引被清空",
+    stripIndexLines("- v1.0.628 — 2026-10-11\n- v1.0.626 — 2026-10-11") === "",
+    stripIndexLines("- v1.0.628 — 2026-10-11\n- v1.0.626 — 2026-10-11"),
+  );
+  check(
+    "更新说明：保留手写说明、只摘索引",
+    stripIndexLines("修复播放卡顿\n\n- v1.0.628 — 2026-10-11") === "修复播放卡顿",
+    stripIndexLines("修复播放卡顿\n\n- v1.0.628 — 2026-10-11"),
+  );
+  check(
+    "更新说明：不以「版本号 — 日期」结尾的 - v 行保留",
+    stripIndexLines("- v2 接口已支持") === "- v2 接口已支持",
+    stripIndexLines("- v2 接口已支持"),
+  );
+  check(
+    "更新说明：新格式当前版本行（无前导 -）保留",
+    stripIndexLines("v1.0.628 — 2026-10-11") === "v1.0.628 — 2026-10-11",
+    stripIndexLines("v1.0.628 — 2026-10-11"),
+  );
+  check(
+    "更新说明：当前版本行 + 手写说明都保留",
+    stripIndexLines("v1.0.628 — 2026-10-11\n\n修复播放卡顿") === "v1.0.628 — 2026-10-11\n\n修复播放卡顿",
+    stripIndexLines("v1.0.628 — 2026-10-11\n\n修复播放卡顿"),
+  );
+
   // ⑧ 创建「外链版本」：不上传包字节，直接登记外部下载地址（与 webhook 登记同形状）。
   //    形状错误在进适配器前被拦：URL 非 http(s)、sha256 非 64 位十六进制都 400。
   const badLinkUrl = await fetch(`${base}/api/v1/app/admin/releases/link`, {
@@ -1977,15 +2043,19 @@ async function main() {
   const writeProbes = [
     { name: "发布放量", path: "/api/v1/app/admin/rollout", body: { versionCode: 1, percent: 100 } },
     { name: "编辑发布", path: "/api/v1/app/admin/release-edit", body: { versionCode: 999003, releaseNote: "越权编辑" } },
+    { name: "删除发布", path: "/api/v1/app/admin/releases/999003", method: "DELETE" },
     { name: "禁用用户", path: "/api/v1/app/admin/users/1/disabled", body: { disabled: true } },
     { name: "创建用户", path: "/api/v1/app/admin/users", body: { username: "viewer_blocked", password: "pass123456" } },
     { name: "发布公告", path: "/api/v1/app/admin/announcements", body: { title: "越权公告", content: "越权公告" } },
     { name: "导入图片 Key", path: "/api/v1/app/admin/image-keys", body: { key: "viewer-should-not-write-this-key", quota: 1 } },
   ];
   for (const probe of writeProbes) {
-    const response = await fetch(`${base}${probe.path}`, {
-      method: "POST", headers: bearer(viewerSession), body: JSON.stringify(probe.body),
-    });
+    const method = probe.method ?? "POST";
+    const init = { method, headers: bearer(viewerSession) };
+    if (probe.body !== undefined) {
+      init.body = JSON.stringify(probe.body);
+    }
+    const response = await fetch(`${base}${probe.path}`, init);
     const responseBody = await response.json();
     check(
       `viewer 写「${probe.name}」被拒 403 且 code 4030`,

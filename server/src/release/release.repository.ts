@@ -129,6 +129,36 @@ export class ReleaseRepository {
     );
   }
 
+  /**
+   * 只取某条发布的本地安装包文件名，供删除前定位要清理的磁盘文件。
+   *
+   * 外链版本（`apk_file` 为空）下删除只需摘库，不需要碰磁盘 —— 调用方据返回值
+   * 判空即可，绝不对 `undefined`/`null` 调 `rmSync`。列只取 `apk_file` 一处，
+   * 不把整行（含 sha256、说明）无谓地拉回来。
+   */
+  findReleaseFile(channel: string, versionCode: number): Promise<{ apk_file: string } | undefined> {
+    return this.database.first<{ apk_file: string }>(
+      "SELECT apk_file FROM app_release WHERE channel = $1 AND version_code = $2",
+      [channel, versionCode],
+    );
+  }
+
+  /**
+   * 删除一条发布记录并失效「当前全量版本」缓存。
+   *
+   * 删掉一个全量版本会改变响应头里广告的最高版本号，所以必须 `invalidate()`，
+   * 否则客户端会拿到一个已经不存在的「可更新版本」、点进去却下载失败。
+   * 返回是否真的删到了行：删除不存在的版本是空操作，由调用方决定要不要报 404。
+   */
+  async deleteRelease(channel: string, versionCode: number): Promise<boolean> {
+    const affected = await this.database.run(
+      "DELETE FROM app_release WHERE channel = $1 AND version_code = $2",
+      [channel, versionCode],
+    );
+    if (affected > 0) this.latestVersion.invalidate();
+    return affected > 0;
+  }
+
   listReleases(channel: string): Promise<ReleaseRecord[]> {
     return this.database.all<ReleaseRecord>(
       "SELECT * FROM app_release WHERE channel = $1 ORDER BY version_code DESC",
