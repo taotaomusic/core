@@ -1,4 +1,6 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Post, Query, Req } from "@nestjs/common";
+import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Post, Query, Req } from "@nestjs/common";
+import { rmSync } from "node:fs";
+import { basename, resolve } from "node:path";
 import { ApiErrors } from "../common/api.exception";
 import { Public } from "../common/decorators/public.decorator";
 import { RateLimit } from "../common/decorators/rate-limit.decorator";
@@ -257,6 +259,46 @@ export class ReleaseAdminController {
       apkUrl: body.apkUrl,
     });
     return updated;
+  }
+
+  /**
+   * 删除一条发布记录。
+   *
+   * 与「停用」（改 `enabled`）不同：停用只是不让它下发，记录还在，方便回滚；
+   * 删除是彻底移除整行，并清掉它在本机落盘的安装包文件。外链版本（`apk_file`
+   * 为空）只摘库、不碰磁盘。删除后仍落在 `APK_DIR` 内的同名文件才允许删，
+   * 文件名经 `basename` 归一，杜绝任何路径穿越 —— 与下发时同一处防御。
+   *
+   * 关联的 `app_patch` 不级联删除：补丁按宿主版本独立管理，删除版本后其补丁
+   * 自然失效（bootstrap 不会再匹配到已下线版本），但保留记录便于排查灰度问题。
+   */
+  @AdminGuarded()
+  @Delete("releases/:versionCode")
+  @RequireRole(...WRITE_ROLES)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async deleteRelease(
+    @Req() request: AdminAuthenticatedRequest,
+    @Param("versionCode") versionCodeParam: string,
+  ): Promise<void> {
+    const versionCode = Number(versionCodeParam);
+    if (!Number.isInteger(versionCode) || versionCode <= 0) {
+      throw ApiErrors.badRequest(4005, "versionCode 不合法");
+    }
+    const channel = this.config.defaultChannel;
+    if (!(await this.releases.findRelease(channel, versionCode))) {
+      throw ApiErrors.notFound(4041, "版本不存在");
+    }
+    const file = await this.releases.findReleaseFile(channel, versionCode);
+    await this.releases.deleteRelease(channel, versionCode);
+    // 只删本仓库 APK 目录内的同名文件，basename 已经去掉任何目录前缀。
+    if (file && file.apk_file) {
+      rmSync(resolve(this.config.apkDirectory, basename(file.apk_file)), { force: true });
+    }
+    await this.audit.record(request, "release.delete", "release", `${channel}#${versionCode}`, {
+      channel,
+      versionCode,
+      apkFile: file?.apk_file ?? null,
+    });
   }
 
   @AdminGuarded()

@@ -105,7 +105,10 @@ export class GithubWebhookController {
       apk_url: apkAsset.browser_download_url,
       apk_size: meta.size || apkAsset.size,
       apk_sha256: meta.sha256.toLowerCase(),
-      release_note: (meta.notes ?? release.body ?? "").trim(),
+      // release body 被 release-log.sh 当成「版本历史」索引（每行 `- vX.Y.Z — 日期`），
+      // 那是给人翻 GitHub Release 页看的，不是给客户端的更新说明。登记时摘掉这些
+      // 索引行，只保留维护者手写的真实说明（没有就留空，不要塞一堆版本号当噪音）。
+      release_note: this.extractReleaseNote(meta.notes ?? release.body ?? ""),
       // 新版本默认不放量（upsert 的 ON CONFLICT 刻意不覆盖已有 rollout，不会打断在途灰度）。
       rollout_percent: 0,
       min_sdk: 24,
@@ -121,6 +124,31 @@ export class GithubWebhookController {
     );
     this.logger.log(`webhook 登记安卓版本 ${meta.versionName}(${meta.versionCode})`);
     return `android:registered:${meta.versionCode}`;
+  }
+
+  /**
+   * 从 GitHub Release 说明里提取客户端真正要展示的「更新说明」。
+   *
+   * `tools/release-log.sh` 会把每次发版追加成一行版本索引（`- v1.0.628 — 2026-10-11`），
+   * 几十年累积下来整段 body 都是这种噪音，UI 的「更新说明」列会被它淹没。
+   * 这种索引行只是给在 GitHub 页面上翻版本历史的人看的，客户端完全用不到，
+   * 所以登记时一律摘掉。判断依据是「行首 `- v`、且后面紧跟 `版本号 — 日期」的约定形状」：
+   * 既匹配 `release-log.sh` 当下的输出，也不会误伤维护者手写的以 `- v` 开头的正经条目
+   * （后者后面不是 `版本号 — 日期`，例如 `- v2 接口已支持` 会保留）。
+   * 摘完之后把空行压掉、首尾去空白；整段都是索引则得到空串。
+   */
+  private extractReleaseNote(raw: string): string {
+    // 字符类必须是 `[-—]`（连字符打头才是字面量），写成 `[—-]` 会被当成从 em-dash
+    // 到连字符的**降序区间**而在 JS / PostgreSQL 两边都报语法错。
+    const kept = raw
+      .split(/\r?\n/)
+      .filter((line) => !/^\s*-\s*v\d+(\.\d+)*\s+[-—]\s+\d{4}-\d{2}-\d{2}\s*$/.test(line))
+      .join("\n")
+      .split(/\n{2,}/)
+      .map((block) => block.trim())
+      .filter((block) => block.length > 0)
+      .join("\n\n");
+    return kept.trim();
   }
 
   private async fetchMetadata(url: string): Promise<AndroidMetadata> {
