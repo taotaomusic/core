@@ -3,7 +3,11 @@ package com.taotao.music
 import android.app.Application
 import android.content.pm.PackageInfo
 import android.os.Build
+import com.taotao.music.crypto.CryptoTransport
+import com.taotao.music.data.AuthSession
 import com.taotao.music.data.CrashReporter
+import com.taotao.music.data.TencentMusicApi
+import com.taotao.music.data.crypto.HardwareDeviceId
 import com.taotao.music.data.db.LocalDb
 import com.taotao.music.hotfix.HotfixLoader
 import kotlinx.coroutines.CoroutineScope
@@ -40,6 +44,44 @@ class TaotaoApplication : Application() {
             )
         }
 
+        /**
+         * **进程级唯一**的传输加密封装，界面层与播放服务共用同一份。
+         *
+         * 绝不能各自 new：传输加密是**有状态**的（本地引擎句柄 + 后端下发的 PSK +
+         * 服务端会话），两份实例意味着两条互不相干的加密会话。此前播放服务自己
+         * `TencentMusicApi(authSession, versionCode)` 建实例、压根没传 [cryptoTransport]，
+         * 于是取流时解析直链的 `GET /api/v1/songs/:id/link` 走明文，被服务端的强制加密
+         * 白名单以 426/{4007} 拒绝 —— 现象是能下载、能播本地文件，**唯独在线播放不响**，
+         * 而队列里那个占位地址看着完全正常（真正的直链要到取流那一刻才解析）。
+         *
+         * [CryptoTransport] 内部用锁串行化握手与封帧，多线程共用是安全的；共用一份还能
+         * 让两处复用同一次握手的 PSK 与会话，少一次网络往返。
+         *
+         * 惰性求值：只在真正发起加密请求时才会握手，不拖慢冷启动。
+         */
+        internal val cryptoTransport: CryptoTransport by lazy {
+            val app = application
+            CryptoTransport(
+                endpoint = TencentMusicApi.ENDPOINT,
+                deviceIdProvider = { HardwareDeviceId(app.contentResolver).deviceId() },
+                tokenProvider = { AuthSession(app).validToken() },
+            )
+        }
+
+        /**
+         * 构造一个**已接入加密通道**的音乐接口客户端。
+         *
+         * 供播放服务等非组合层的组件使用：服务端对 `/api/v1` 下绝大多数接口强制加密，
+         * 漏传 [CryptoTransport] 会让请求静默降级成明文并被 426 拒绝。统一走这个工厂，
+         * 避免将来新增调用方时又漏配一次。
+         */
+        internal fun createMusicApi(): TencentMusicApi = TencentMusicApi(
+            tokenProvider = AuthSession(application),
+            appVersionCode = application.versionCode(),
+            cryptoTransport = cryptoTransport,
+            cryptoEnabled = true,
+        )
+
         /** onCreate 时赋值；lazy 求值只会发生在首个组合里，必然晚于 onCreate。 */
         private lateinit var application: TaotaoApplication
     }
@@ -60,7 +102,8 @@ class TaotaoApplication : Application() {
         }
     }
 
-    private fun versionCode(): Long {
+    /** 应用版本号；0 表示取不到（服务端据此头识别陈旧客户端，取不到不影响功能）。 */
+    internal fun versionCode(): Long {
         val info: PackageInfo = runCatching { packageManager.getPackageInfo(packageName, 0) }.getOrNull() ?: return 0L
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             info.longVersionCode

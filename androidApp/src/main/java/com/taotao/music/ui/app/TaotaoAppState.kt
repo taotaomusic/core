@@ -19,8 +19,6 @@ import com.taotao.music.data.AppearanceStore
 import com.taotao.music.data.ArtistSearchResult
 import com.taotao.music.data.AlbumSearchResult
 import com.taotao.music.data.AuthSession
-import com.taotao.music.data.crypto.HardwareDeviceId
-import com.taotao.music.crypto.CryptoTransport
 import com.taotao.music.data.DeviceIdStore
 import com.taotao.music.data.DownloadNotifier
 import com.taotao.music.data.FavoritesStore
@@ -79,24 +77,18 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
     val authSession = AuthSession(context)
     val audioPlayer = AudioPlayer(context)
     /**
-     * 传输加密封装（`plans/009`）：设备号取硬件 ANDROID_ID，PSK 由后端经登录令牌动态下发。
-     * 全部需登录 JSON 接口强制加密；native 库缺失或握手失败会直接报错、不静默回退明文，
-     * cryptoEnabled = false 才整体回退（需后端同步关闭强制白名单）。
+     * 音乐接口客户端，与播放服务用同一个工厂产出。
+     *
+     * 工厂内部带的是 [TaotaoApplication.cryptoTransport] 这份**进程级唯一**的传输加密封装
+     * （设备号取硬件 ANDROID_ID，PSK 由后端经登录令牌动态下发）：传输加密是有状态的
+     * （引擎句柄 + PSK + 服务端会话），各自 new 会得到两条互不相干的加密会话。
+     *
+     * 刻意不在这里手写 `TencentMusicApi(...)`：加密参数漏传会**静默**降级成明文并被服务端
+     * 426/{4007} 拒绝，编译器毫无提示 —— 播放服务此前就是这么坏掉的（能下载、能放本地，
+     * 唯独在线播放不响）。收敛到 [TaotaoApplication.createMusicApi] 一处构造，
+     * 让「新增调用方时又漏配一次」不再可能。
      */
-    private val cryptoTransport = CryptoTransport(
-        endpoint = TencentMusicApi.ENDPOINT,
-        deviceIdProvider = { HardwareDeviceId(context.contentResolver).deviceId() },
-        tokenProvider = { authSession.validToken() },
-    )
-    val musicApi = TencentMusicApi(
-        authSession,
-        context.packageManager.getPackageInfo(context.packageName, 0).longVersionCode,
-        cryptoTransport = cryptoTransport,
-        // 打开传输加密：覆盖全部需登录 JSON 接口（永不加密集合见 TencentMusicApi 类
-        // KDoc 的路径契约，如裸 NDJSON 的 /search、登录族、multipart 头像上传），
-        // seal/open 失败直接报错、不回退明文。
-        cryptoEnabled = true,
-    )
+    val musicApi = TaotaoApplication.createMusicApi()
     val downloadManager = OfflineDownloadManager(context, authSession)
     val playbackStateStore = PlaybackStateStore(context)
     val playbackHistoryStore = PlaybackHistoryStore(context)
