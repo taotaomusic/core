@@ -7,6 +7,8 @@ import { AdminUsersRepository } from "./admin-users.repository";
 import { AdminSessionsRepository } from "./admin-sessions.repository";
 import { AuditLogRepository } from "./audit-log.repository";
 import { RolesGuard } from "./roles.guard";
+import { GithubOauthController } from "./github-oauth.controller";
+import { GithubOauthService } from "./github-oauth.service";
 import { LdapModule } from "../ldap/ldap.module";
 
 /**
@@ -17,7 +19,7 @@ import { LdapModule } from "../ldap/ldap.module";
  */
 @Module({
   imports: [forwardRef(() => LdapModule)],
-  controllers: [AdminAuthController],
+  controllers: [AdminAuthController, GithubOauthController],
   providers: [
     AdminAuthService,
     AdminAuditService,
@@ -25,6 +27,7 @@ import { LdapModule } from "../ldap/ldap.module";
     AdminUsersRepository,
     AdminSessionsRepository,
     AuditLogRepository,
+    GithubOauthService,
     // RolesGuard 依赖 Reflector（Nest 核心提供），这里登记即可。
     RolesGuard,
   ],

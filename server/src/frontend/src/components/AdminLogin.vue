@@ -31,6 +31,23 @@
           @click="handleLogin" class="submit-btn">
           登录
         </el-button>
+
+        <!-- GitHub 登录入口：只有服务端配好了 GitHub OAuth 才显示，否则用户点进去只会吃 503 -->
+        <template v-if="githubEnabled">
+          <div class="oauth-divider"><span>或</span></div>
+          <el-button size="large" class="github-btn" @click="goGithubLogin">
+            <svg class="github-mark" viewBox="0 0 16 16" width="18" height="18" aria-hidden="true">
+              <path fill="currentColor" fill-rule="evenodd"
+                d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38
+                   0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01
+                   1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95
+                   0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09
+                   2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87
+                   3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z" />
+            </svg>
+            使用 GitHub 登录
+          </el-button>
+        </template>
       </el-form>
 
       <!-- 步骤2: 2FA 验证 -->
@@ -56,9 +73,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from "vue";
+import { onMounted, ref } from "vue";
 import { User, Lock, WarningFilled } from "@element-plus/icons-vue";
-import { adminLogin, adminTotpVerify } from "../api";
+import { adminLogin, adminTotpVerify, adminGithubStatus } from "../api";
+
+const props = defineProps<{
+  /** GitHub 回调失败时由 App.vue 传入的初始错误文案，只在挂载时取一次。 */
+  initialError?: string;
+}>();
 
 const emit = defineEmits<{
   (e: "login", data: { token: string; admin: { id: number; username: string; role: string; display_name: string } }): void;
@@ -69,9 +91,26 @@ const username = ref("");
 const password = ref("");
 const totpCode = ref("");
 const loading = ref(false);
-const error = ref("");
+const error = ref(props.initialError ?? "");
 // 第二步要带上第一步签发的挑战票据，服务端靠它确认密码已经验过。
 const tempToken = ref("");
+// GitHub 登录入口是否显示：只有服务端配好了 OAuth 才渲染，否则点进去只会吃 503。
+const githubEnabled = ref(false);
+
+onMounted(async () => {
+  try {
+    const status = await adminGithubStatus();
+    githubEnabled.value = status.enabled;
+  } catch {
+    // 查询失败就当没启用：不显示入口，总好过让用户点进去被 503 拦下来。
+    githubEnabled.value = false;
+  }
+});
+
+/** 跳转到 GitHub 授权页；登录成功后由回调把会话令牌带回后台。 */
+function goGithubLogin() {
+  window.location.href = "/api/v1/admin/auth/github/login";
+}
 
 async function handleLogin() {
   if (!username.value || !password.value) return;
@@ -230,6 +269,47 @@ async function handleTotp() {
   height: 44px;
   font-size: 15px;
   letter-spacing: 0.5px;
+}
+
+/* ---------- GitHub 登录入口 ---------- */
+
+.oauth-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 20px 0 14px;
+  color: var(--el-text-color-placeholder);
+  font-size: 12px;
+}
+
+.oauth-divider::before,
+.oauth-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border-color);
+}
+
+.github-btn {
+  width: 100%;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: var(--card-bg);
+  border: 1px solid var(--border-strong);
+  color: var(--el-text-color-primary);
+  font-weight: 500;
+}
+
+.github-btn:hover {
+  border-color: var(--el-text-color-primary);
+  background: var(--hint-bg);
+}
+
+.github-mark {
+  flex: none;
 }
 
 .totp-hint {

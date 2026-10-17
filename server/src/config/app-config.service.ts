@@ -103,6 +103,22 @@ export class AppConfigService {
    */
   readonly adminInitialPassword: string;
 
+  /**
+   * GitHub OAuth 登录（可选）。
+   *
+   * `clientId` + `clientSecret` + `redirectUri` 三者齐备才算启用；未启用时
+   * 登录页不显示入口、接口返回 5030。换后端域名时这里与 GitHub App 的
+   * Authorization callback URL 必须同步改，两边不一致会走到回调后静默失败。
+   */
+  readonly githubOauthClientId: string;
+  readonly githubOauthClientSecret: string;
+  readonly githubOauthRedirectUri: string;
+  /**
+   * 允许登录的 GitHub 组织名（login）列表，逗号分隔。留空表示不限制组织，
+   * 只要 GitHub 账号本人即可。命中任一组织的活跃成员即放行。
+   */
+  readonly githubOauthOrganizations: string[];
+
   /** LDAP/SSO 配置（可选） */
   readonly ldapUrl: string;
   readonly ldapBindDn: string;
@@ -207,6 +223,10 @@ export class AppConfigService {
     this.cryptoPskHex = String(config.get("CRYPTO_PSK_HEX") ?? "");
     this.totpIssuer = String(config.get("TOTP_ISSUER") ?? "桃桃音乐管理后台");
     this.adminInitialPassword = String(config.get("ADMIN_INITIAL_PASSWORD") ?? "");
+    this.githubOauthClientId = String(config.get("GITHUB_OAUTH_CLIENT_ID") ?? "").trim();
+    this.githubOauthClientSecret = String(config.get("GITHUB_OAUTH_CLIENT_SECRET") ?? "").trim();
+    this.githubOauthRedirectUri = String(config.get("GITHUB_OAUTH_REDIRECT_URI") ?? "").trim();
+    this.githubOauthOrganizations = splitCommaList(config.get("GITHUB_OAUTH_ORGANIZATIONS"));
     this.ldapUrl = String(config.get("LDAP_URL") ?? "");
     this.ldapBindDn = String(config.get("LDAP_BIND_DN") ?? "");
     this.ldapBindPassword = String(config.get("LDAP_BIND_PASSWORD") ?? "");
@@ -248,6 +268,11 @@ export class AppConfigService {
   /** LDAP 是否配置了最小必填字段（地址、绑定 DN、用户搜索基）。 */
   get isLdapConfigured(): boolean {
     return !!this.ldapUrl && !!this.ldapBindDn && !!this.ldapUserSearchBase;
+  }
+
+  /** GitHub OAuth 是否配置了最小必填字段。 */
+  get isGithubOauthConfigured(): boolean {
+    return !!this.githubOauthClientId && !!this.githubOauthClientSecret && !!this.githubOauthRedirectUri;
   }
 
   /** 发信配置必须完整，避免错误部署时静默跳过邮箱验证。 */

@@ -511,6 +511,17 @@ export async function runMigrations(pool: Pool): Promise<void> {
         ADD COLUMN IF NOT EXISTS auth_source text NOT NULL DEFAULT 'local'
           CHECK (auth_source IN ('local', 'ldap'));
 
+      -- GitHub 授权登录绑定。auth_source 保持不变（仍为 local/ldap）：
+      -- GitHub 只是「多一种登录方式」，角色与口令策略仍由本地账号决定，
+      -- 不因绑定改变账号的认证来源语义。github_id 存 GitHub 数据库的稳定
+      -- 数字 ID 的字符串形式（只做等值匹配，用 text 避开 int8→字符串的类型
+      -- 解析坑），配合部分唯一索引保证一个 GitHub 账号最多绑定一个管理员。
+      ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS github_id text;
+      ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS github_login text;
+      ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS github_bound_at bigint;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_admin_users_github_id_unique
+        ON admin_users (github_id) WHERE github_id IS NOT NULL;
+
       -- 管理员会话
       CREATE TABLE IF NOT EXISTS admin_sessions (
         id            integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

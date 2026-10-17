@@ -8,8 +8,8 @@
       @logout="forgetToken"
     />
 
-    <!-- 未登录：显示登录页 -->
-    <AdminLogin v-else-if="askToken" @login="onLogin" />
+    <!-- 未登录：显示登录页（GitHub 回调失败时把服务端带回的错误文案交给登录页展示） -->
+    <AdminLogin v-else-if="askToken" :initial-error="githubLoginError" @login="onLogin" />
 
     <!--
       本地有令牌、但身份（角色）还没确认：先停在加载态。
@@ -59,6 +59,25 @@
             @click="totpDialogOpen = true"
           >
             <el-icon><Lock /></el-icon>
+          </el-button>
+          <!-- GitHub 账号绑定：入口对全部角色开放，绑定/解绑只操作本人账号 -->
+          <el-button
+            class="github-toggle"
+            circle
+            text
+            :type="adminInfo?.github_login ? 'success' : 'info'"
+            :title="adminInfo?.github_login ? `已绑定 GitHub：${adminInfo.github_login}` : '绑定 GitHub 登录'"
+            @click="githubDialogOpen = true"
+          >
+            <svg class="topbar-github-mark" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+              <path fill="currentColor" fill-rule="evenodd"
+                d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38
+                   0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01
+                   1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95
+                   0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09
+                   2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.15.16 1.97.08 2.17.51.56.82 1.27.82 2.15 0 3.07-1.87
+                   3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z" />
+            </svg>
           </el-button>
           <span v-if="!isMobile" class="identity">
             <span class="identity-avatar">{{ identityInitial }}</span>
@@ -144,6 +163,10 @@
       <!-- 两步验证对话框：v-if 挂在组件上，首次点击才拉取对应 chunk（含 qrcode 库） -->
       <TotpDialog v-if="totpDialogOpen" v-model="totpDialogOpen"
         :token="token" :totp-enabled="adminInfo?.totp_enabled === true" @changed="onTotpChanged" />
+
+      <!-- GitHub 绑定 / 解绑对话框：首次点击才拉取对应 chunk -->
+      <GithubBindDialog v-if="githubDialogOpen" v-model="githubDialogOpen"
+        :token="token" :github-login="adminInfo?.github_login ?? null" @changed="onGithubChanged" />
     </div>
   </el-config-provider>
 </template>
@@ -159,6 +182,8 @@ import { adminLogout, adminMe, type AdminIdentity } from "./api";
 
 // 两步验证对话框与页签组件同样按需加载，不在首屏主包里。
 const TotpDialog = defineAsyncComponent(() => import("./components/TotpDialog.vue"));
+// GitHub 绑定/解绑对话框同样按需加载。
+const GithubBindDialog = defineAsyncComponent(() => import("./components/GithubBindDialog.vue"));
 
 // 标签页使用异步组件：用户未打开的管理模块不进入首屏主包。
 // 加载器单独抽出来，既喂给 defineAsyncComponent，也能在启动加载动画期间
@@ -217,6 +242,12 @@ const mustChangePassword = ref(false);
 /** 两步验证对话框的显隐；组件本身 v-if 挂载，关闭即卸载。 */
 const totpDialogOpen = ref(false);
 
+/** GitHub 绑定/解绑对话框的显隐；组件本身 v-if 挂载，关闭即卸载。 */
+const githubDialogOpen = ref(false);
+
+/** GitHub 回调失败时回落到登录页要展示的一次性错误文案。 */
+const githubLoginError = ref("");
+
 /**
  * 正在用本地令牌确认身份。
  *
@@ -269,33 +300,86 @@ function checkMobile() {
   isMobile.value = window.innerWidth <= 768;
 }
 
+/**
+ * 采纳一份会话令牌并确认身份。
+ *
+ * 普通登录、刷新页面读 localStorage、以及 GitHub 回调登录三条路都走到这里。
+ * `announceBind` 用于 GitHub 绑定回调跳回后提示绑定结果——此时本地会话仍在，
+ * 只是 `github_login` 刚在服务端被写入，需要重拉 `me` 才能看到。
+ */
+function adoptToken(t: string, announceBind = false) {
+  token.value = t;
+  localStorage.setItem(STORAGE_KEY, t);
+  // 先停在加载态：角色要等 adminMe 回来才知道，此时渲染管理界面会让页签画两遍。
+  booting.value = true;
+  adminMe(t).then(info => {
+    adminInfo.value = info;
+    mustChangePassword.value = info.must_change_password === true;
+    if (announceBind) {
+      ElMessage.success(info.github_login ? `已绑定 GitHub：${info.github_login}` : "GitHub 账号绑定成功");
+    }
+  }).catch(() => {
+    // token 无效，清除并显示登录页
+    localStorage.removeItem(STORAGE_KEY);
+    token.value = "";
+    adminInfo.value = null;
+    askToken.value = true;
+  }).finally(() => {
+    // 成功或失败都要收尾，否则校验失败时会卡在加载页上。
+    booting.value = false;
+  });
+}
+
+/**
+ * 从 URL 片段消费 GitHub OAuth 回调结果，并立即清除片段防止刷新重放。
+ *
+ * 回调约定（见 GitHub OAuth 控制器）：登录成功 `#github_token=`、绑定成功
+ * `#github_bind=ok`、失败 `#github_error=`。片段不会随请求发给服务器，
+ * 会话令牌因此不会出现在访问日志里。
+ */
+function consumeGithubCallback(): { token?: string; bindOk?: boolean; error?: string } {
+  const hash = window.location.hash;
+  if (!hash || !hash.startsWith("#github_")) return {};
+  const params = new URLSearchParams(hash.slice(1));
+  const token = params.get("github_token");
+  const bindOk = params.get("github_bind") === "ok";
+  const error = params.get("github_error");
+  history.replaceState(null, "", window.location.pathname + window.location.search);
+  return { token: token ?? undefined, bindOk: bindOk || undefined, error: error ?? undefined };
+}
+
 onMounted(() => {
   // 启动即预取所有页签 chunk：无论走加载态还是登录页，等界面出来时 JS 都已就绪。
   preloadPanels();
+  checkMobile();
+  window.addEventListener('resize', checkMobile);
+
+  const github = consumeGithubCallback();
+
+  // GitHub 登录成功：回调把会话令牌带在片段里，直接采纳并确认身份。
+  if (github.token) {
+    adoptToken(github.token);
+    return;
+  }
+
+  // GitHub 登录失败：清掉可能残留的旧会话，回登录页展示服务端带回的错误。
+  if (github.error) {
+    localStorage.removeItem(STORAGE_KEY);
+    token.value = "";
+    adminInfo.value = null;
+    mustChangePassword.value = false;
+    askToken.value = true;
+    githubLoginError.value = github.error;
+    return;
+  }
+
   const stored = localStorage.getItem(STORAGE_KEY);
   if (stored) {
-    token.value = stored;
-    // 先停在加载态：角色要等 adminMe 回来才知道，此时渲染管理界面会让页签画两遍。
-    booting.value = true;
-    // 尝试验证 token 有效性；同时取出强制改密标记，刷新页面后仍能停在改密页。
-    adminMe(stored).then(info => {
-      adminInfo.value = info;
-      mustChangePassword.value = info.must_change_password === true;
-    }).catch(() => {
-      // token 无效，清除并显示登录页
-      localStorage.removeItem(STORAGE_KEY);
-      token.value = "";
-      askToken.value = true;
-    }).finally(() => {
-      // 成功或失败都要收尾，否则校验失败时会卡在加载页上。
-      booting.value = false;
-    });
+    // GitHub 绑定回调跳回（绑定成功）时顺带提示；本地会话仍在。
+    adoptToken(stored, github.bindOk === true);
   } else {
     askToken.value = true;
   }
-
-  checkMobile();
-  window.addEventListener('resize', checkMobile);
 });
 
 onUnmounted(() => {
@@ -308,6 +392,7 @@ function onLogin(data: { token: string; admin: AdminIdentity }) {
   mustChangePassword.value = data.admin.must_change_password === true;
   localStorage.setItem(STORAGE_KEY, data.token);
   askToken.value = false;
+  githubLoginError.value = "";
   // 页签可见性随角色变化（用户与统计、管理员、审计日志）。上一个会话停在这些页签上时，
   // 换个低权限账号登录会落在一个不渲染的页签上，看到一片空白 —— 一律回到首个页签。
   tab.value = "releases";
@@ -340,6 +425,19 @@ async function onTotpChanged() {
     adminInfo.value = await adminMe(token.value);
   } catch {
     // 会话失效：退回登录页重新来一次。
+    await forgetToken();
+  }
+}
+
+/**
+ * GitHub 绑定/解绑成功后的身份刷新。
+ *
+ * 同样不猜本地字段值：`/me` 是唯一权威来源，顺带确认会话仍然有效。
+ */
+async function onGithubChanged() {
+  try {
+    adminInfo.value = await adminMe(token.value);
+  } catch {
     await forgetToken();
   }
 }
@@ -880,6 +978,15 @@ body {
   color: var(--primary-color);
   background: var(--primary-soft);
   transform: rotate(-18deg);
+}
+
+/* GitHub 绑定按钮：无需旋转动效，保证内联 SVG 垂直居中即可 */
+.github-toggle {
+  color: var(--el-text-color-regular);
+}
+
+.topbar-github-mark {
+  display: block;
 }
 
 /* 身份区：头像色块 + 双行文字，比一个绿色 el-tag 更像「账号」而不是「状态」 */

@@ -41,6 +41,17 @@ export function validateEnvironment(config: Record<string, unknown>): Record<str
   if (adminInitialPassword && adminInitialPassword.length < 12) {
     throw new Error("ADMIN_INITIAL_PASSWORD 至少需要 12 个字符，留空则自动随机生成");
   }
+
+  // GitHub OAuth 登录（可选）：Client ID 与 Secret 必须成对提供，只配一半等于没配却以为自己开了。
+  const githubClientId = String(config.GITHUB_OAUTH_CLIENT_ID ?? "").trim();
+  const githubClientSecret = String(config.GITHUB_OAUTH_CLIENT_SECRET ?? "").trim();
+  if (Boolean(githubClientId) !== Boolean(githubClientSecret)) {
+    throw new Error("GITHUB_OAUTH_CLIENT_ID 与 GITHUB_OAUTH_CLIENT_SECRET 必须同时配置");
+  }
+  const githubRedirect = String(config.GITHUB_OAUTH_REDIRECT_URI ?? "").trim();
+  if (githubRedirect) {
+    validateUrl("GITHUB_OAUTH_REDIRECT_URI", githubRedirect, ["http:", "https:"]);
+  }
   const imEnabled = String(config.IM_ENABLED ?? "false").toLowerCase() === "true";
   if (imEnabled) {
     validateUrl("IM_INTERNAL_API_BASE_URL", String(config.IM_INTERNAL_API_BASE_URL ?? "http://127.0.0.1:5001"), ["http:", "https:"]);

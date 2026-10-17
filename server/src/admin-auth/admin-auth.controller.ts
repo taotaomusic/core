@@ -111,7 +111,7 @@ export class AdminAuthController {
     // 口令已验证通过，清掉该账号的失败计数，避免正常用户被历史失败拖累。
     this.auth.clearAdminLoginFailures(username);
 
-    await this.assertIpAllowed(admin.id, ip);
+    await this.auth.assertIpAllowed(admin.id, ip);
 
     // 2FA：本地账号开了 TOTP 就只发挑战票据，正式会话留给 totp-verify。
     // LDAP 目录已经承担了第二因子的职责，不再叠加本地 TOTP。
@@ -174,7 +174,7 @@ export class AdminAuthController {
       throw ApiErrors.unauthorized(4011, "动态码错误");
     }
 
-    await this.assertIpAllowed(admin.id, ip);
+    await this.auth.assertIpAllowed(admin.id, ip);
 
     const sessionToken = await this.auth.createSession(admin.id, ip, userAgent);
     await this.adminUsers.updateLastLogin(admin.id, ip);
@@ -202,7 +202,10 @@ export class AdminAuthController {
   @AdminGuarded()
   @Get("me")
   async me(@Req() req: AdminAuthenticatedRequest) {
-    return this.publicAdmin(this.requireActor(req));
+    const actor = this.requireActor(req);
+    // 额外带出本人当前绑定的 GitHub 登录名，供绑定对话框区分「已绑定」与「未绑定」。
+    const record = await this.adminUsers.findById(actor.id);
+    return { ...this.publicAdmin(actor), github_login: record?.github_login ?? null };
   }
 
   // ==================== 本人密码与 2FA ====================
@@ -497,15 +500,6 @@ export class AdminAuthController {
     if (await this.adminUsers.countActiveSuperAdmins() <= 1) {
       throw ApiErrors.badRequest(4000, `不能${action}最后一个超级管理员`);
     }
-  }
-
-  /** IP 白名单为空表示不限制；否则必须命中，不命中直接 403。 */
-  private async assertIpAllowed(adminId: number, ip: string): Promise<void> {
-    const admin = await this.adminUsers.findById(adminId);
-    if (!admin?.ip_whitelist) return;
-    const allowed = admin.ip_whitelist.split(",").map((item) => item.trim()).filter(Boolean);
-    if (allowed.length === 0 || allowed.includes(ip)) return;
-    throw ApiErrors.forbidden(4030, "当前 IP 不在白名单中");
   }
 
   /**
