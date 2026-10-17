@@ -5,7 +5,6 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.os.Build
 import android.os.SystemClock
 import android.util.Log
 import androidx.media3.common.AudioAttributes
@@ -156,13 +155,12 @@ class PlaybackService : MediaSessionService() {
     override fun onCreate() {
         super.onCreate()
         val authSession = AuthSession(this)
-        val packageInfo = packageManager.getPackageInfo(packageName, 0)
-        val versionCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            packageInfo.longVersionCode
-        } else {
-            @Suppress("DEPRECATION") packageInfo.versionCode.toLong()
-        }
-        musicApi = TencentMusicApi(authSession, versionCode)
+        // 必须走 Application 的工厂：它带上进程级唯一的 CryptoTransport 与加密开关。
+        // 此前这里直接 `TencentMusicApi(authSession, versionCode)`，两个加密参数都吃默认值
+        // （null / false），于是取流时解析直链的 /api/v1/songs/:id/link 走明文，
+        // 被服务端强制加密白名单以 426/{4007} 拒绝 —— 表现为能下载、能放本地文件，
+        // 唯独在线播放不响，而队列里的占位地址看着完全正常。
+        musicApi = TaotaoApplication.createMusicApi()
         val upstreamFactory = DefaultDataSource.Factory(
             this,
             DefaultHttpDataSource.Factory().setAllowCrossProtocolRedirects(true),

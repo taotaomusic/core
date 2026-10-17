@@ -165,9 +165,13 @@ function isNeverEncryptedPath(path: string): boolean {
   // /api/v1/search 是「精确段」：裸 NDJSON 流式契约保持明文；/search/suggestions
   // 等子路径不在其列，仍走加密。
   if (pathname === "/api/v1/search") return true;
-  if (pathname === "/api/v1/announcements" || pathname.startsWith("/api/v1/announcements/")) return true;
+  // 公告只豁免精确路径：服务端用的是 `===`，/announcements/xxx 子资源仍是强制加密，
+  // 这里跟着收窄——客户端偏宽会走明文去撞服务端的 426。
+  if (pathname === "/api/v1/announcements") return true;
   // 音频流代理：逐块 AEAD 得不偿失（core 的「明确不做的事」），与服务端排除表一致。
-  if (/^\/api\/v1\/songs\/[^/]+\/play$/.test(pathname)) return true;
+  // 正则与 server/src/main.ts 的排除表逐字对齐（`.*` 而非写死 `songs` 段）：
+  // 三端镜像表必须同步，任一侧收窄都会让某条 /play 代理静默撞 400。
+  if (/^\/api\/v1\/.*\/play$/.test(pathname)) return true;
   if (CRYPTO_NEVER_EXACT.has(pathname)) return true;
   return CRYPTO_NEVER_PREFIXES.some((p) => pathname.startsWith(p));
 }
