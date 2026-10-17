@@ -320,12 +320,13 @@ export async function runMigrations(pool: Pool): Promise<void> {
       ALTER TABLE app_release ALTER COLUMN apk_file DROP NOT NULL;
 
       -- 清理历史说明里的「版本历史」噪音：release-log.sh 把每次发版追成一行
-      -- `- vX.Y.Z — 日期` 索引塞进 GitHub Release body，再被 webhook 原样搬进
+      -- 形如「- vX.Y.Z — 日期」的索引塞进 GitHub Release body，再被 webhook 原样搬进
       -- release_note，UI 的「更新说明」列就被这种版本号墙淹没。webhook 已改为登记时
       -- 摘掉这类索引行，这里把迁移前的存量记录同样清一遍（幂等：纯说明的行不会命中
       -- 正则、保持原样）。REGEXP_REPLACE 按行匹配，整体去尾空白。
-      -- 字符类用 `[-—]`（连字符打头是字面量）；`[—-]` 会被 PostgreSQL 当成降序区间而报错。
-      -- 第一个正则用 `gm`：m 让 `^`/`$` 逐行匹配（否则只删得掉整段末尾那一行的噪音），
+      -- 字符类用连字符打头的 [-—]（连字符打头才是字面量）；写成 [—-] 会被 PostgreSQL
+      -- 当成从 em-dash 到连字符的降序区间而报错。
+      -- 第一个正则带 gm 标志：m 让 ^/$ 逐行匹配（否则只删得掉整段末尾那一行的噪音），
       -- g 让一行内多次、以及多行噪音都被清掉。
       UPDATE app_release
       SET release_note = trim(regexp_replace(
