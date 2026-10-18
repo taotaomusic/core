@@ -2,7 +2,7 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-09-30
+最后更新:2026-10-18
 
 本页是**全部环境变量的唯一完整出处**。其它文档提到配置时一律链接到这里,不要再复制配置表(历史上 02 与 00 各维护一份导致过漂移)。新增环境变量时:改 `.env.example`(若它也参与) → 改本页 → 改后端 README。注意仓库里的 `.env.example` 目前是 **docker-compose 部署模板**,只收录部署最小集,应用读取的全部变量以本页为准。
 
@@ -19,6 +19,7 @@
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
+| `DATABASE_REPLICA_URL` | 空 | **多地区部署(可选)**:本机只读副本连接串,必须以 `postgres://` 或 `postgresql://` 开头。配置后读请求走副本、写与一致性敏感查询走主库;留空 = 全部走主库,与单机部署行为完全一致。路由规则、熔断与切换手册见 [64-multi-region-deployment.md](64-multi-region-deployment.md) |
 | `PORT` | `4500` | HTTP 监听端口,必须是 1–65535 的整数 |
 | `ENV_FILE` | `.env` | 指定其它 dotenv 文件路径;系统环境变量始终优先于文件 |
 | `NODE_ENV` | 空 | 设 `test` 时 `EMAIL_VERIFICATION_TEST_CODE` 才生效;其余取值不影响校验行为 |
@@ -121,6 +122,8 @@ ApiSweet API Key 存在 PostgreSQL `api_key` 表,**不使用环境变量**;`.env
 POSTGRES_USER=taotao
 POSTGRES_PASSWORD=换成强密码
 POSTGRES_DB=music
+# 多地区部署（可选）：本机只读副本连接串；单机部署留空或整行删除
+# DATABASE_REPLICA_URL=postgres://taotao:密码@127.0.0.1:5432/music
 
 # --- 应用 ---
 AUTH_SECRET=换成至少32字符的随机串

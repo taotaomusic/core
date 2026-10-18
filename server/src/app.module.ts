@@ -13,6 +13,7 @@ import { RateLimitService } from "./common/rate-limit/rate-limit.service";
 import { AppConfigModule } from "./config/config.module";
 import { AdminSettingModule } from "./admin-setting/admin-setting.module";
 import { DatabaseModule } from "./database/database.module";
+import { DbWriteMarkerInterceptor } from "./database/db-write-marker.interceptor";
 import { FilesModule } from "./files/files.module";
 import { FavoritesModule } from "./favorites/favorites.module";
 import { HealthController } from "./health/health.controller";
@@ -71,6 +72,9 @@ import { CryptoModule } from "./crypto/crypto.module";
     { provide: APP_INTERCEPTOR, useClass: SecurityHeadersInterceptor },
     { provide: APP_INTERCEPTOR, useClass: LatestVersionHeaderInterceptor },
     { provide: APP_INTERCEPTOR, useClass: EnvelopeInterceptor },
+    // 放在末位：注册越晚越靠近处理函数，写请求成功返回时它最先看到，
+    // 用于开启「写后立读」窗口（见 DbWriteActivityTracker）。
+    { provide: APP_INTERCEPTOR, useClass: DbWriteMarkerInterceptor },
     { provide: APP_FILTER, useClass: AllExceptionsFilter },
   ],
 })

@@ -195,6 +195,7 @@ npm run dev:frontend      # 独立开发服务器（5173），API 代理到本�
 | `PORT` | 监听端口，默认 `4500` |
 | `NODE_ENV` | 运行环境：`development` / `production` / `test`。`production` 目前只是语义标记，服务端没有基于它的额外强制校验；`EMAIL_VERIFICATION_TEST_CODE` 只允许在 `test` 下使用 |
 | `DATABASE_URL` | PostgreSQL 连接串，如 `postgres://postgres:密码@localhost:5432/music`。**没有默认值**，缺失或不是 `postgres://` 开头会启动即失败 |
+| `DATABASE_REPLICA_URL` | 可选：本机只读副本连接串（多地区部署）。配置后读请求走副本、写与一致性敏感查询走主库；未配置时全部走主库，与单机部署行为一致。见 [server/wiki/64-multi-region-deployment.md](wiki/64-multi-region-deployment.md) |
 | `AUTH_SECRET` | 访问令牌签名密钥，生产环境必须为至少 32 位随机值（启动时校验） |
 | `CRYPTO_PSK_ID` / `CRYPTO_PSK_HEX` | 传输加密 PSK 的标识与 32 字节 hex 原始密钥（可选）。二者缺一时握手全部失败，链路保持明文，不影响其它功能 |
 | `ADMIN_INITIAL_PASSWORD` | 默认超级管理员的初始口令。留空则启动时随机生成并只打印一次；设置时至少 12 字符。两种情况下该账号首次登录都必须改密 |

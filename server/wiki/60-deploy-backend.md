@@ -2,7 +2,7 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-09-30
+最后更新:2026-10-18
 
 本篇是后端上服务器的操作手册。版本号与热更新的最终规则以 [项目 RELEASE.md](../../RELEASE.md) 为准;APK 发布见 [61-release-android.md](61-release-android.md),云端构建见 [62-ci-cloud-build.md](62-ci-cloud-build.md)。
 
@@ -59,6 +59,7 @@ node dist/main.js
 | 配置 | 要求 |
 | --- | --- |
 | `DATABASE_URL` | 明确指向正式 PostgreSQL,不能使用验证库 |
+| `DATABASE_REPLICA_URL` | 可选;多地区部署时指本机只读副本(读走副本、写走主库),单机部署留空。见 [64-multi-region-deployment.md](64-multi-region-deployment.md) |
 | `AUTH_SECRET` | 至少 32 字符随机值。**没有开发兜底值**,缺失或过短会直接拒绝启动;轮换会使全部访问令牌失效 |
 | `CRYPTO_PSK_ID` | 可选;加密 PSK 的标识,默认 `prod-v1` |
 | `CRYPTO_PSK_HEX` | 可选;64 位十六进制 PSK。**留空则启动时随机生成并照常启用加密**(PSK 经 `GET /crypto/psk` 动态下发给已登录客户端,不再要求预配)。随机生成的 PSK 重启会变、多实例不一致,生产建议配固定值(`openssl rand -hex 32`);轮换后已握手客户端需重新握手 |

@@ -81,10 +81,18 @@ export class SongShareRepository {
     });
   }
 
-  find(token: string): Promise<SongShareRecord | undefined> {
+  /**
+   * 按 token 取分享记录。
+   *
+   * `options` 透传给 DatabaseService：分享页是匿名消费、没有用户上下文，
+   * 写后立读窗口覆盖不到「刚创建就打开」的场景，服务层在副本未命中时会用
+   * `{ primary: true }` 回主库再确认一次（见 SongShareService.requiredShare）。
+   */
+  find(token: string, options: { primary?: boolean } = {}): Promise<SongShareRecord | undefined> {
     return this.database.first<SongShareRecord>(
       "SELECT * FROM song_share WHERE token = $1 AND enabled = 1",
       [token],
+      options,
     );
   }
 
@@ -92,6 +100,8 @@ export class SongShareRepository {
     await this.database.run(
       "UPDATE song_share SET access_count = access_count + 1 WHERE token = $1 AND enabled = 1",
       [token],
+      // 访问计数是展示用途，但语句本身是写 —— 读上下文里必须显式 pin 主库。
+      { primary: true },
     );
   }
 }

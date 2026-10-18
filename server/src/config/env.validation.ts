@@ -30,6 +30,13 @@ export function validateEnvironment(config: Record<string, unknown>): Record<str
   if (!/^postgres(ql)?:\/\//.test(databaseUrl)) {
     throw new Error(`DATABASE_URL 必须是 postgres:// 或 postgresql:// 开头：${databaseUrl}`);
   }
+
+  // 只读副本（可选，多地区部署）：格式错误如果拖到第一个读请求才暴露，表现是
+  // 「部分接口间歇失败」，很难定位。与主库同口径，启动时直接拒掉。
+  const replicaUrl = String(config.DATABASE_REPLICA_URL ?? "").trim();
+  if (replicaUrl && !/^postgres(ql)?:\/\//.test(replicaUrl)) {
+    throw new Error(`DATABASE_REPLICA_URL 必须是 postgres:// 或 postgresql:// 开头：${replicaUrl}`);
+  }
   const smtpPort = Number(config.SMTP_PORT ?? 587);
   if (!Number.isInteger(smtpPort) || smtpPort <= 0 || smtpPort > 65535) {
     throw new Error(`SMTP_PORT 不合法：${config.SMTP_PORT}`);
