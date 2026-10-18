@@ -125,7 +125,11 @@ export class SongShareService {
 
   private async requiredShare(token: string): Promise<SongShareRecord> {
     if (!/^[A-Za-z0-9_-]{8,24}$/.test(token)) throw ApiErrors.notFound(4045, "分享链接不存在或已失效");
-    const share = await this.repository.find(token);
+    // 分享页是匿名消费、没有用户上下文，「写后立读」窗口覆盖不到「刚创建就打开」：
+    // 本地副本可能还没同步到刚写入的 token，未命中时回主库再确认一次，
+    // 避免分享者把链接发出去后自己或对方立刻打开却收到 404。
+    const share =
+      (await this.repository.find(token)) ?? (await this.repository.find(token, { primary: true }));
     if (!share) throw ApiErrors.notFound(4045, "分享链接不存在或已失效");
     return share;
   }

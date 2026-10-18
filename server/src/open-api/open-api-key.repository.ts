@@ -122,6 +122,9 @@ export class OpenApiKeyRepository {
       await this.database.run(
         "UPDATE open_api_key SET last_used_at = $1 WHERE id = $2",
         [Date.now(), id],
+        // GET /api/v1/open/* 的鉴权路径在读上下文里写库，显式 pin 主库
+        // （首词安全网也能兜住，但显式标记避免每次触发告警）。
+        { primary: true },
       );
     } catch {
       // 鉴权已经通过，写库抖动不应把这次请求变成 5xx

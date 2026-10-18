@@ -78,7 +78,7 @@
 | [53-feature-music-sources.md](53-feature-music-sources.md) | 音源账号(酷我/波点)、凭据管理、KPK 签名、探测与缓存 | 维护音源账号、排查「搜得到放不出」时 |
 | [54-feature-website.md](54-feature-website.md) | React+antd+Vite 官网、挂载 /、CSP 与 vendor 分包、/status 服务状态页 | 改官网、排查状态页或官网构建时 |
 
-### 发布与部署(60–63)
+### 发布与部署(60–64)
 
 | 文档 | 核心内容 | 适用场景 |
 | --- | --- | --- |
@@ -86,6 +86,7 @@
 | [61-release-android.md](61-release-android.md) | APK 构建/登记/下载验证、灰度、最低版本、热更新契约 | 发 Android 版本、排灰度问题时 |
 | [62-ci-cloud-build.md](62-ci-cloud-build.md) | GitHub Actions 云端构建、三仓快照同步、版本号收编 | 同步仓库、用云端产物发版时 |
 | [63-ci-autopatch.md](63-ci-autopatch.md) | autopatch 方法级热修补丁自动生成、CI job、与 app_patch 下发链路的关系 | 生成/排查热修补丁时 |
+| [64-multi-region-deployment.md](64-multi-region-deployment.md) | 多地区部署：只读副本读写分离、路由规则与 pin 清单、熔断降级、主库故障应对与手动切换 runbook | 部署第二地区、排查副本延迟或 503/5033 时 |
 
 ### 排障(70–74)
 
@@ -155,6 +156,7 @@
 | 查环境变量的含义与默认值 | [21-configuration.md](21-configuration.md) |
 | 本地起后端、跑契约验证 | [20-development-setup.md](20-development-setup.md) + [22-contract-verification.md](22-contract-verification.md) |
 | 部署后端 | [60-deploy-backend.md](60-deploy-backend.md) |
+| 部署第二地区 / 排查读写分离问题 | [64-multi-region-deployment.md](64-multi-region-deployment.md) |
 | 发 Android 版 / 看 CI | [61-release-android.md](61-release-android.md) + [62-ci-cloud-build.md](62-ci-cloud-build.md) |
 | 排查搜不到 / 放不出 | [72-troubleshooting-music.md](72-troubleshooting-music.md) + [53-feature-music-sources.md](53-feature-music-sources.md) |
 | 登录 401 / 管理后台进不去 | [71-troubleshooting-auth.md](71-troubleshooting-auth.md) |

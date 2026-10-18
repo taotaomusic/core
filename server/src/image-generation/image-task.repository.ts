@@ -64,6 +64,8 @@ export class ImageTaskRepository {
        SET state = $1, completed = $2, image_url = $3
        WHERE task_id = $4`,
       [state, state === "IN_PROGRESS" ? 0 : 1, imageUrl, taskId],
+      // 轮询详情的 GET 请求会顺路更新任务状态，读上下文里的写显式 pin 主库。
+      { primary: true },
     );
   }
 }

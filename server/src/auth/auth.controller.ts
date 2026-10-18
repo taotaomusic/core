@@ -12,6 +12,7 @@ import { UsersRepository } from "./users.repository";
 import { EmailVerificationService } from "./email-verification.service";
 import { AppConfigService } from "../config/app-config.service";
 import { AvatarStoreService } from "../files/avatar-store.service";
+import { DbWriteActivityTracker } from "../database/db-write-activity.tracker";
 
 /** 用户名 3 至 32 位，允许字母数字下划线与汉字。与迁移前完全一致。 */
 const USERNAME_PATTERN = /^[\w一-龥]{3,32}$/;
@@ -42,6 +43,7 @@ export class AuthController {
     private readonly emailVerification: EmailVerificationService,
     private readonly config: AppConfigService,
     private readonly avatars: AvatarStoreService,
+    private readonly writeActivity: DbWriteActivityTracker,
   ) {}
 
   /** 向邮箱发送注册验证码。邮箱统一转小写，保证同一地址不会绕过冷却与唯一约束。 */
@@ -78,6 +80,10 @@ export class AuthController {
 
     const credentials = this.auth.hashPassword(password);
     const user = await this.users.create(username, email, credentials.hash, credentials.salt);
+    // 注册是异常路径里的写：公开路由，此时还没有 request.user，全局写拦截器
+    // 标不上号。这里手动开启「写后立读」窗口，保证注册后立刻带新令牌的第一次
+    // 读（如 /app/bootstrap、资料页）不会因副本同步延迟读到旧状态。
+    this.writeActivity.mark(user.id);
     // accessToken / refreshToken / expiresIn 必须与 user 平铺在同一层 data 下：
     // 客户端用 getString 硬取，包一层就会抛异常。
     return { user, ...(await this.auth.issueTokens(user)) };
@@ -94,6 +100,9 @@ export class AuthController {
     if (!user || !this.auth.verifyPassword(password, user.password_salt, user.password_hash)) {
       throw ApiErrors.unauthorized(4011, "用户名或密码错误");
     }
+    // 登录同理：公开路由没有 request.user 可标，手动开启写后立读窗口覆盖
+    // 「登录后立刻刷新本地数据」的时序（如刚好赶上别处写过资料）。
+    this.writeActivity.mark(user.id);
     return {
       user: { id: user.id, username: user.username, created_at: user.created_at },
       ...(await this.auth.issueTokens(user)),
