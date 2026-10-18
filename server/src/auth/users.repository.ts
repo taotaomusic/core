@@ -128,16 +128,24 @@ export class UsersRepository {
     for (let attempt = 0; attempt < 3; attempt++) {
       const candidate = randomUUID();
       try {
+        // 写的语句显式 pin 主库；下面那次回读紧随其后，也必须走主库才能看到
+        // 刚写入的值（写后立读）—— 这一路径通常由 IM 设备端在无用户令牌的
+        // 请求里触发，路由中间件的写后立读窗口覆盖不到它。
         const updated = await this.database.first<ImUidRow>(
           `UPDATE users SET im_uid = $2 WHERE id = $1 AND im_uid IS NULL RETURNING im_uid`,
           [userId, candidate],
+          { primary: true },
         );
         if (updated?.im_uid) return updated.im_uid;
       } catch (error) {
         if (!isUniqueViolation(error)) throw error;
       }
 
-      const concurrent = await this.database.first<ImUidRow>(`SELECT im_uid FROM users WHERE id = $1`, [userId]);
+      const concurrent = await this.database.first<ImUidRow>(
+        `SELECT im_uid FROM users WHERE id = $1`,
+        [userId],
+        { primary: true },
+      );
       if (concurrent?.im_uid) return concurrent.im_uid;
     }
     throw ApiErrors.upstream("生成聊天账号标识失败，请稍后重试");

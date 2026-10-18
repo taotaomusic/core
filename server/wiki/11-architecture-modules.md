@@ -2,7 +2,7 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-09-30
+最后更新:2026-10-18
 
 本文讲模块怎么分、依赖怎么走、代码该写在哪个文件。路由与表的完整清单见 [00-code-index.md](00-code-index.md)。进程内状态与单实例假设见 §4。
 
@@ -207,11 +207,13 @@ src/
 | 管理员登录退避 | `admin-auth/admin-auth.service.ts` 按账号计数的 `Map` | 重启后退避解除;多实例下暴力破解可绕开退避 |
 | 2FA 挑战票据 | `admin-auth/admin-auth.service.ts` 内存 `Map`(5 分钟一次性) | 第一步登录与第二步 `totp-verify` 若落到不同实例,票据校验必失败 |
 | 最新版本号缓存 | `release/latest-version.cache.ts` | 重启后首个 `/app/bootstrap` 回源填充,期间提示头可能缺失 |
+| 写后立读窗口 | `database/db-write-activity.tracker.ts` 的 `Map` | 重启后窗口清空,个别用户写后的首次读可能短暂读到副本旧数据(下一次请求即恢复);多实例下各算各的,写入落实例 A 而随读落实例 B 时窗口不生效 |
 
 **含义**:
 
 - 在此之前**不要**假设「限流一定拦得住」或「退避一定生效」——单实例下成立,一旦扩容就破。
-- 引入第二个实例前必须先把上面四项迁到共享存储(Redis 之类),这是扩容的**前置条件**,不是可选优化。加密会话本身(`crypto-transport.service.ts` 的会话表)也是进程内,同理。
+- 引入第二个实例前必须先把上面五项迁到共享存储(Redis 之类),这是扩容的**前置条件**,不是可选优化。加密会话本身(`crypto-transport.service.ts` 的会话表)也是进程内,同理。
+- 数据库读写分离的「写后立读」窗口只影响读请求走副本还是主库(新鲜度),不改变任何接口契约;多地区部署(每地区单实例 + 本地只读副本)的方案、熔断降级与手动切换手册见 [64-multi-region-deployment.md](64-multi-region-deployment.md)。
 - 会话令牌、刷新令牌、审计、账号口令这些**已落 PostgreSQL** 的状态不在此列,可安全跨实例。
 
-代码里相关位置都有注释标注这一前提;改这些服务时不要顺手把某项「优化」成看似无害的内存缓存而不评估扩容影响。部署形态见 [60-deploy-backend.md](60-deploy-backend.md)。
+代码里相关位置都有注释标注这一前提;改这些服务时不要顺手把某项「优化」成看似无害的内存缓存而不评估扩容影响。部署形态见 [60-deploy-backend.md](60-deploy-backend.md),多地区部署见 [64-multi-region-deployment.md](64-multi-region-deployment.md)。

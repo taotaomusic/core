@@ -13,6 +13,8 @@ import { sharePlayerCacheHeaders } from "./common/static-cache-policy";
 import { AppConfigService } from "./config/app-config.service";
 import { CryptoTransportService } from "./crypto/crypto-transport.service";
 import { createCryptoMiddleware } from "./crypto/crypto.middleware";
+import { DbWriteActivityTracker } from "./database/db-write-activity.tracker";
+import { createDbRoutingMiddleware } from "./database/db-routing.middleware";
 
 /**
  * 请求体是原始字节、必须绕开 JSON 解析的路由。
@@ -177,6 +179,11 @@ async function bootstrap(): Promise<void> {
   const config = app.get(AppConfigService);
 
   const parseJson = json({ limit: "16kb" });
+
+  // 数据库读写路由：必须挂在一切中间件之前 —— 后续所有中间件、守卫与处理函数
+  // 都可能查库，它们的目标连接池（主库 / 本地只读副本）由这里的请求上下文决定。
+  // 未配置 DATABASE_REPLICA_URL 时本中间件是空操作（全部都走主库）。
+  app.use(createDbRoutingMiddleware(app.get(DbWriteActivityTracker)));
 
   // 传输加密中间件：必须在 body parser 之前拿原始字节解密。对无加密头的请求完全透明。
   // 排除静态资源、音频流与大文件上传（这些不加密，见 plans/009）。

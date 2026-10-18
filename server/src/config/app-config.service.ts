@@ -20,6 +20,13 @@ export class AppConfigService {
   readonly databaseUrl: string;
 
   /**
+   * 本地只读副本连接串（多地区部署，可选）。形如 `postgres://user:pass@127.0.0.1:5432/music`。
+   * 留空表示未配置副本，全部读写走主库 —— 单机部署行为与从前完全一致。
+   * 配置后读请求默认走副本、写与一致性敏感查询走主库，规则见 DatabaseService。
+   */
+  readonly databaseReplicaUrl: string;
+
+  /**
    * 访问令牌的 HMAC 签名密钥。
    *
    * **没有兜底值**：缺失或短于 32 字符会在配置加载阶段直接启动失败
@@ -193,6 +200,7 @@ export class AppConfigService {
   constructor(config: ConfigService) {
     this.port = Number(config.get("PORT") ?? 4500);
     this.databaseUrl = String(config.get("DATABASE_URL") ?? "");
+    this.databaseReplicaUrl = String(config.get("DATABASE_REPLICA_URL") ?? "").trim();
     this.authSecret = String(config.get("AUTH_SECRET") ?? "");
     this.apkDirectory = resolve(String(config.get("APK_DIR") ?? "./data/apk"));
     this.defaultChannel = String(config.get("DEFAULT_CHANNEL") ?? "release");

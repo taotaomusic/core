@@ -146,6 +146,8 @@ export class PlaylistCoverService {
         `UPDATE playlist_songs SET cover_url = $1
          WHERE playlist_id = $2 AND source = $3 AND song_id = $4 AND (cover_url IS NULL OR cover_url = '')`,
         [cover, candidate.playlistId, candidate.source, candidate.songId],
+        // 读取路径上的自愈写入，显式 pin 主库（首词安全网亦能兜住，显式标记免告警）。
+        { primary: true },
       );
       return cover;
     } catch (error) {
