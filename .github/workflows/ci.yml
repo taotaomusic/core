@@ -341,6 +341,43 @@ jobs:
           curl -sf http://127.0.0.1:4720/health | grep -q '"up"' || { tail -n 20 server.log; exit 1; }
       - name: 契约验证
         run: node tools/verify-contract.mjs http://127.0.0.1:4720 2>&1 | tee verify.log
+      # 第二遍契约：把验证库兼作「只读副本」再跑一遍。不配 DATABASE_REPLICA_URL 时
+      # resolveTarget 在第 2 条规则（未配置副本 → 主库）直接返回，副本分流 / 降级 /
+      # 安全网这些代码在 CI 里一行都执行不到；本段专门让它们跑起来。自指验证的是
+      # 「路由与连接池接线」，不是复制延迟（那需要两套实例 + 真实流复制，CI 不搭）。
+      # 设计与门禁口径见 server/wiki/64-multi-region-deployment.md §8。
+      - name: 重启验证实例（本库兼作只读副本）
+        env:
+          DATABASE_REPLICA_URL: ${{ env.DATABASE_URL }}
+        run: |
+          pkill -f "dist/main.js" || true
+          for i in $(seq 1 15); do
+            pgrep -f "dist/main.js" >/dev/null || break
+            sleep 1
+          done
+          node tools/reset-db.mjs "$DATABASE_URL"
+          node dist/main.js > server-replica.log 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:4720/health | grep -q '"up"'; then echo "就绪($i s)"; break; fi
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:4720/health | grep -q '"up"' || { tail -n 20 server-replica.log; exit 1; }
+      - name: 契约验证（只读副本路径）
+        run: node tools/verify-contract.mjs http://127.0.0.1:4720 2>&1 | tee verify-replica.log
+      - name: 副本分流与安全网门禁
+        run: |
+          set -euo pipefail
+          # ① 副本池真的启用了 —— 否则这遍「副本路径验证」名存实亡
+          grep -q "已配置只读副本" server-replica.log \
+            || { echo "::error::副本池未启用，本次副本路径契约没有覆盖到分流逻辑"; tail -n 20 server-replica.log; exit 1; }
+          # ② 安全网零告警 —— 读上下文出现写语句即代表有仓库漏了显式 primary pin，
+          #    按 pin 清单（wiki/64 §2）补齐后才会变绿
+          if grep -q "读上下文检测到写语句" server-replica.log; then
+            echo "::error::安全网触发，以下写语句漏了 primary pin："
+            grep "读上下文检测到写语句" server-replica.log
+            exit 1
+          fi
+          echo "副本分流生效，安全网零告警"
       - name: 发布 dist（滚动 + 版本化）
         if: github.event_name == 'push'
         env:
@@ -369,7 +406,7 @@ jobs:
           docker push "$IMAGE:latest"; docker push "$IMAGE:$VER"; docker push "$IMAGE:${GITHUB_SHA::12}"
       - name: 失败时输出日志
         if: failure()
-        run: tail -n 60 server.log verify.log 2>/dev/null || true
+        run: tail -n 60 server.log server-replica.log verify.log verify-replica.log 2>/dev/null || true
 
   # PLACEHOLDER_CLIENT
   client-android:

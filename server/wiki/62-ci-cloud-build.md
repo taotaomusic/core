@@ -2,7 +2,7 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-10-11
+最后更新:2026-10-18
 
 正式构建在 GitHub 侧由**单仓 [taotaomusic/core](https://github.com/taotaomusic/core)** 的统一工作流承担:根目录 `.github/workflows/ci.yml` 用 `dorny/paths-filter` 按改动路径只构建相关部分,一处改动不重跑无关 job。本文讲与后端直接相关的部分;三仓快照的旧机制已废弃,末尾保留一段备查。
 
@@ -55,7 +55,7 @@
 3. `npm ci` 后写版本号:**根 `VERSION`(当前 `1.0`)+ 构建号**拼成 `<MAJOR.MINOR>.<GITHUB_RUN_NUMBER>` 写进 `package.json`。
 4. `npm run build`(带 `SKIP_WEB_PLAYER=1` —— 单仓里上级有 Gradle 工程,后端不自建 wasm 播放器,分享播放器由 `client-web` job 发布、下一步拉取)。
 5. 从**本仓库**的 Release `share-player-latest` 拉真实分享播放器(拉不到才退回占位文件,并打 `::warning::` —— 占位状态下分享页相关断言等于没验证)。
-6. 重置验证库 → 起 4720 验证实例 → **完整 `verify-contract.mjs`,全绿才算通过**。
+6. 重置验证库 → 起 4720 验证实例 → **完整 `verify-contract.mjs`,全绿才算通过**;随后**把验证库兼作只读副本重启,再跑第二遍契约**(2026-10-18 起),并过两道门禁:启动日志出现「已配置只读副本」、安全网「读上下文检测到写语句」零告警(漏 pin 即失败)。细节见 [64-multi-region-deployment.md](64-multi-region-deployment.md) §8。
 7. 发布滚动 Release **`server-dist-latest`**:`dist/` 内容扁平打包 + `crypto/` 目录并入,解压到部署目录即可 `node main.js`;版本历史经 `tools/release-log.sh` 追加进 Release 说明。
 8. 仅 push 到 main 时构建 Docker 镜像(**复用这份已验证 dist**)推到 ghcr。
 
