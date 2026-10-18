@@ -1601,12 +1601,15 @@ async function main() {
   });
   check("删除不存在的版本返回 404/4041", deleteMissing.status === 404 && (await deleteMissing.json()).code === 4041, `实际 ${deleteMissing.status}`);
 
-  // ⑪ 更新说明清理规则：webhook 把 GitHub Release body（被 release-log.sh 灌成
-  //     `- vX.Y.Z — 日期` 版本索引）原样搬进 release_note，UI 会被这种版本号墙淹没。
-  //     服务端登记时摘掉这类索引行。这里用与 GithubWebhookController.extractReleaseNote
-  //     完全一致的规则验证样例，锁住行为（改正则不得破坏这些样例）。
+  // ⑪ 更新说明清理规则：webhook 把 GitHub Release body 原样搬进 release_note。
+  //     body 由 tools/release-log.sh 生成，含两类机器噪音必须摘掉：
+  //     ① 旧格式的版本索引行 `- vX.Y.Z — 日期`（历史 body 遗留）；
+  //     ② 新格式的基准标记 `<!-- release-base: sha -->`（HTML 注释，渲染不可见但会落库）。
+  //     这里用与 GithubWebhookController.extractReleaseNote 完全一致的规则验证样例，
+  //     锁住行为（改正则不得破坏这些样例）。
   const stripIndexLines = (raw) =>
     raw.split(/\r?\n/)
+      .filter((line) => !/^\s*<!--\s*release-base:.*-->\s*$/.test(line))
       .filter((line) => !/^\s*-\s*v\d+(\.\d+)*\s+[-—]\s+\d{4}-\d{2}-\d{2}\s*$/.test(line))
       .join("\n")
       .split(/\n{2,}/)
@@ -1638,6 +1641,21 @@ async function main() {
     "更新说明：当前版本行 + 手写说明都保留",
     stripIndexLines("v1.0.628 — 2026-10-11\n\n修复播放卡顿") === "v1.0.628 — 2026-10-11\n\n修复播放卡顿",
     stripIndexLines("v1.0.628 — 2026-10-11\n\n修复播放卡顿"),
+  );
+  // 新格式完整 body（版本行 + 更新条目 + 基准标记）：只摘标记，其余原样保留。
+  const fullBody = [
+    "v1.0.640 — 2026-10-18",
+    "",
+    "- feat(搜索): 搜索框统一为 Miuix 胶囊输入框",
+    "- fix(播放): 播放服务漏配传输加密导致在线播放被 426 拒绝",
+    "",
+    "<!-- release-base: e683ce677ef6fc35da67ac2606ff980edf8a8bc4 -->",
+  ].join("\n");
+  check(
+    "更新说明：基准标记被摘除、条目保留",
+    stripIndexLines(fullBody) ===
+      "v1.0.640 — 2026-10-18\n\n- feat(搜索): 搜索框统一为 Miuix 胶囊输入框\n- fix(播放): 播放服务漏配传输加密导致在线播放被 426 拒绝",
+    JSON.stringify(stripIndexLines(fullBody)),
   );
 
   // ⑧ 创建「外链版本」：不上传包字节，直接登记外部下载地址（与 webhook 登记同形状）。

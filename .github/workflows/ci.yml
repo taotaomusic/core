@@ -146,7 +146,13 @@ jobs:
       run:
         working-directory: crypto-src
     steps:
+      # fetch-depth: 0 是给 tools/release-log.sh 聚合「更新说明」用的：它要取
+      # `git log <上次发布sha>..HEAD`，浅克隆下基准提交不可达会退化成兜底。
+      # 本仓库全量历史 pack 仅约 9MB（大文件都在 .gitignore 里），全量拉取很划算，
+      # 比按需 --deepen 反复来回更省事也更可靠。
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       # 产物缓存:按 crypto-src 全部源码哈希做 key。rust 没变 → 命中 → 跳过下面全部重活
       # (工具链/NDK/编译/校验),只把缓存里的 out/ 直接 upload 给下游 client/server/desktop。
       # out/ 相对 workspace,不受 job 的 working-directory 影响(与 upload-artifact 路径一致)。
@@ -244,7 +250,8 @@ jobs:
           gh release upload crypto-latest android.zip node-linux-x64.zip --clobber
           cd ..
           cver=$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
-          bash ../tools/release-log.sh crypto-latest "加密模块" "$cver"
+          # 路径过滤到 crypto-src/：加密模块的更新说明不该混进客户端/后端的提交。
+          bash ../tools/release-log.sh crypto-latest "加密模块" "$cver" crypto-src/
 
   # PLACEHOLDER_SERVER
   server:
@@ -283,7 +290,10 @@ jobs:
       run:
         working-directory: server
     steps:
+      # fetch-depth: 0 给 release-log.sh 聚合更新说明用（理由同 crypto job）。
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -352,7 +362,8 @@ jobs:
           gh release view server-dist-latest >/dev/null 2>&1 || \
             gh release create server-dist-latest --prerelease --title "后端" --notes "版本历史"
           gh release upload server-dist-latest server-dist.zip --clobber
-          bash ../tools/release-log.sh server-dist-latest "后端" "$(node -p "require('./package.json').version")"
+          # 路径过滤到 server/：后端更新说明只列后端改动。
+          bash ../tools/release-log.sh server-dist-latest "后端" "$(node -p "require('./package.json').version")" server/
       - name: 构建并推送 Docker 镜像到 ghcr.io
         if: github.event_name == 'push'
         env:
@@ -512,7 +523,10 @@ jobs:
     permissions:
       contents: write
     steps:
+      # fetch-depth: 0 给 release-log.sh 聚合更新说明用（理由同 crypto job）。
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -580,7 +594,7 @@ jobs:
         if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: bash tools/release-log.sh share-player-latest "Web 分享播放器" "$(tr -d '[:space:]' < VERSION).${GITHUB_RUN_NUMBER}"
+        run: bash tools/release-log.sh share-player-latest "Web 分享播放器" "$(tr -d '[:space:]' < VERSION).${GITHUB_RUN_NUMBER}" webApp/ shared/ player-ui/
 
   client-publish:
     needs: [client-android]
@@ -596,10 +610,26 @@ jobs:
       VC: ${{ needs.client-android.outputs.vc }}
       KIND: ${{ needs.client-android.outputs.kind }}
     steps:
+      # fetch-depth: 0 给 release-log.sh 聚合更新说明用（理由见 crypto job）。
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
+      # 先生成说明文本（不写 Release）：下面 metadata.json 要把这份说明一起上传，
+      # 后端 webhook 登记到的「更新说明」就等于 Release 页面内容。
+      #
+      # 时序很关键 —— 旧的写法在「整理产物」里直接读 Release body，而 body 要到
+      # 整个 job 最后一步才由 release-log.sh 写入，于是 metadata.json 里永远是**上一版**
+      # 的说明，后台比 Release 页面慢一版。这里提前生成，摸着同一个 body 写。
+      - name: 生成更新说明（预生成，稍后落库）
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_LOG_DRY_RUN: "1"
+          RELEASE_NOTES_OUT: ${{ runner.temp }}/release-notes.md
+        run: bash tools/release-log.sh latest "安卓客户端" "$VN"
       - name: 整理产物
         run: |
           mkdir -p out
@@ -610,7 +640,7 @@ jobs:
           # 服务器据此下发代理直链，自身不再接收或下发 APK 字节。versionCode 公开无妨（非密钥）。
           sha=$(sha256sum "out/$asset" | awk '{print $1}')
           size=$(stat -c %s "out/$asset")
-          notes=$(gh release view latest --json body -q '.body' 2>/dev/null || echo "")
+          notes=$(cat "$RUNNER_TEMP/release-notes.md")
           node -e '
             const [asset, vn, vc, sha, size, notes] = process.argv.slice(1);
             const fs = require("fs");
@@ -621,12 +651,19 @@ jobs:
           ' "$asset" "$VN" "$VC" "$sha" "$size" "$notes"
           cat out/metadata.json
           ls -la out
-      - name: 更新滚动 latest（安卓客户端，记录版本历史）
+      - name: 更新滚动 latest（安卓客户端，上传资产）
         run: |
           gh release view latest >/dev/null 2>&1 || gh release create latest --prerelease --title "安卓客户端" --notes "版本历史"
           gh release view latest --json assets -q '.assets[].name' 2>/dev/null | grep -E '^TaotaoMusic-.*\.apk$' | while read -r old; do gh release delete-asset latest "$old" -y || true; done
           gh release upload latest out/* --clobber
-          bash tools/release-log.sh latest "安卓客户端" "$VN"
+      # 资产已带最新 metadata.json，最后才写 body —— 与上面预生成的内容按字节一致。
+      # （不能反过来：先写 body 再传资产的话，中途那次 webhook 会读到上一版的 metadata。）
+      - name: 记录版本历史（写入 Release 说明）
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_NOTES_FROM: ${{ runner.temp }}/release-notes.md
+        run: bash tools/release-log.sh latest "安卓客户端" "$VN"
 
   # Windows 桌面（Tauri + React）。crypto-src 变化也重建（src-tauri 直接依赖 core）。
   desktop:
@@ -643,7 +680,10 @@ jobs:
       run:
         working-directory: desktop
     steps:
+      # fetch-depth: 0 给 release-log.sh 聚合更新说明用（理由见 crypto job）。
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -728,7 +768,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: bash ../tools/release-log.sh desktop-latest "桌面客户端" "$(tr -d '[:space:]' < ../VERSION).${GITHUB_RUN_NUMBER}"
+        run: bash ../tools/release-log.sh desktop-latest "桌面客户端" "$(tr -d '[:space:]' < ../VERSION).${GITHUB_RUN_NUMBER}" desktop/
 
 
 
