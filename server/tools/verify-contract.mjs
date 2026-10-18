@@ -1643,7 +1643,8 @@ async function main() {
     stripIndexLines("v1.0.628 — 2026-10-11\n\n修复播放卡顿"),
   );
   // 新格式完整 body（版本行 + 更新条目 + 基准标记）：只摘标记，其余原样保留。
-  const fullBody = [
+  // 变量名带 releaseNote 前缀：本函数作用域内另有 fullBody（另一处鉴权断言用），不可重名。
+  const releaseNoteBody = [
     "v1.0.640 — 2026-10-18",
     "",
     "- feat(搜索): 搜索框统一为 Miuix 胶囊输入框",
@@ -1653,9 +1654,9 @@ async function main() {
   ].join("\n");
   check(
     "更新说明：基准标记被摘除、条目保留",
-    stripIndexLines(fullBody) ===
+    stripIndexLines(releaseNoteBody) ===
       "v1.0.640 — 2026-10-18\n\n- feat(搜索): 搜索框统一为 Miuix 胶囊输入框\n- fix(播放): 播放服务漏配传输加密导致在线播放被 426 拒绝",
-    JSON.stringify(stripIndexLines(fullBody)),
+    JSON.stringify(stripIndexLines(releaseNoteBody)),
   );
 
   // ⑧ 创建「外链版本」：不上传包字节，直接登记外部下载地址（与 webhook 登记同形状）。
