@@ -2,7 +2,7 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-09-30
+最后更新:2026-10-18
 
 后端改动的验收标准是 `tools/verify-contract.mjs` 全绿(检查项数量随脚本版本变化,以实际输出为准,当前约 300 项)。本文讲验证库准备、验证实例启动、脚本运行和失败定位。数据层改动**必须**走完这里的流程;仅改文档或注释可以跳过。
 
@@ -96,5 +96,12 @@ node tools/verify-contract.mjs http://127.0.0.1:4720
 ## 7. CI 上的契约验证
 
 现行流程在单仓 core 的根目录 `.github/workflows/ci.yml` 的 `server` job(`server/**` 或 `crypto/**` 变更触发):Ubuntu runner + PostgreSQL 16 服务容器,`DATABASE_URL` 指向容器内的 `music_verify`,环境变量与本地验证一节相同(`ADMIN_RATE_LIMIT=1000`、`NODE_ENV=test` 等)。加密 `.node` 产物由同一次 run 的 `crypto` job 经 artifact 流入,`npm run build` 后从 Release 拉取分享播放器(拉不到退回占位文件),然后 `reset-db.mjs` → `node dist/main.js` 起验证实例 → `node tools/verify-contract.mjs http://127.0.0.1:4720`,**全绿才算通过**,之后才发布 dist 到 `server-dist-latest` Release,并在 push 时构建镜像推 `ghcr.io/taotaomusic/music-server`。
+
+CI 会跑**两遍契约**(2026-10-18 起,见 [64-multi-region-deployment.md](64-multi-region-deployment.md) §8):
+
+1. **单机形态**(不配 `DATABASE_REPLICA_URL`):与从前逐字节一致,保住单机部署的等价性。
+2. **只读副本路径**:把验证库自己兼作「只读副本」(`DATABASE_REPLICA_URL` 指向同一实例)重启后重跑全量契约,再补两道门禁 —— 启动日志必须出现「已配置只读副本」(证明真的走了双池路由而非静默退化),安全网「读上下文检测到写语句」必须零告警(任何一处漏 pin 即 CI 红)。
+
+副本自指验证覆盖的是路由与连接池接线;异步复制延迟与写后立读窗口的真实效果依赖两套实例,CI 不覆盖,上线冒烟按 [64-multi-region-deployment.md](64-multi-region-deployment.md) §4 做。
 
 `server/.github/workflows/backend.yml` 是旧 music-server 独立仓库的工作流,该仓库已停用、暂保留备查,不要再按它理解现行发布链路。见 [62-ci-cloud-build.md](62-ci-cloud-build.md)。
