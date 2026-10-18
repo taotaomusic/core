@@ -20,6 +20,9 @@ const REPLICA_DEGRADED_MS = 30_000;
 /** 同一写语句重复误入读路径时，告警最多每 5 分钟打一条，防止刷爆日志。 */
 const WRITE_MISS_WARNING_INTERVAL_MS = 300_000;
 
+/** 副本回放冲突（40001）的告警同样 5 分钟节流；冲突密集时说明主库回放压力大。 */
+const REPLICA_CONFLICT_WARNING_INTERVAL_MS = 300_000;
+
 /** 主库不可用时的业务码：5030/5031/5032 已被 GitHub 登录、可选组件、图片生成占用。 */
 const PRIMARY_UNAVAILABLE_CODE = 5033;
 const PRIMARY_UNAVAILABLE_MESSAGE = "数据库主库暂时不可用，请稍后重试";
@@ -81,6 +84,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
   /** 写语句误入读路径的告警节流表（指纹 → 上次告警时刻）。 */
   private readonly writeMissWarnedAt = new Map<string, number>();
+
+  /** 副本回放冲突的上次告警时刻（节流用）。 */
+  private lastReplicaConflictWarnedAt = 0;
 
   constructor(config: AppConfigService) {
     // int8 默认被解析成 JS 字符串（64 位整数可能超出 Number.MAX_SAFE_INTEGER）。
@@ -224,7 +230,10 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /** 副本查询：降级窗口内直连主库；连接类失败累计降级计数，本次立即回退主库。 */
+  /**
+   * 副本查询：降级窗口内直连主库；连接类失败累计降级计数，本次立即回退主库；
+   * 回放冲突（40001）本次回退主库但不计降级（副本本身是活的，只是这条查询被回放取消）。
+   */
   private async queryReplica<T extends QueryResultRow>(
     sql: string,
     params: unknown[],
@@ -238,6 +247,13 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       this.replicaFailures = 0;
       return result;
     } catch (error) {
+      // 副本回放冲突（hot standby 取消查询，SQLSTATE 40001）：副本在线、
+      // 只是这条查询被 WAL 回放打断，回主库重试即可；不计降级，避免偶发
+      // 冲突把整个副本池误判为不可用。
+      if (isReplicaRecoveryConflict(error)) {
+        this.warnReplicaConflict(error);
+        return this.queryPrimary<T>(sql, params);
+      }
       // 非连接类错误（语法错、权限错）说明副本本身是好的，直接抛出，
       // 不能让主库重试掩盖真正的程序错误。
       if (!isConnectivityError(error)) throw error;
@@ -293,6 +309,20 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     }
     this.writeMissWarnedAt.set(fingerprint, now);
     this.logger.warn(`读上下文检测到写语句，已自动改走主库（应为该仓库补显式 primary 选项）：${fingerprint}`);
+  }
+
+  /**
+   * 副本回放冲突 5 分钟最多告警一条。
+   *
+   * 冲突表示副本在线但查询被 WAL 回放取消（多为主库写入/VACUUM 压力大），
+   * 偶发属正常现象、不回退降级计数；持续出现说明主库负载或
+   * max_standby_streaming_delay 需要调整。
+   */
+  private warnReplicaConflict(error: unknown): void {
+    const now = Date.now();
+    if (now - this.lastReplicaConflictWarnedAt < REPLICA_CONFLICT_WARNING_INTERVAL_MS) return;
+    this.lastReplicaConflictWarnedAt = now;
+    this.logger.warn(`只读副本回放冲突（40001），本次查询回退主库重试：${messageOf(error)}`);
   }
 
   /** 副本是否还能响应（ping 的降级判定用，不抛错、不进降级计数）。 */
@@ -393,6 +423,18 @@ function isConnectivityError(error: unknown): boolean {
     return true;
   }
   return /timeout exceeded|Connection terminated|ECONNREFUSED|ECONNRESET/i.test(error.message);
+}
+
+/**
+ * 副本回放冲突判定：主库回放 WAL 与副本上正在执行的查询冲突时，副本会以
+ * SQLSTATE 40001 取消该查询（消息固定含「conflict with recovery」）。
+ * 这是副本专属错误（主库不会出现），只说明这条查询不适合继续在副本上等，
+ * 换主库重试即可，不代表副本故障。
+ */
+function isReplicaRecoveryConflict(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const code = (error as { code?: unknown }).code;
+  return code === "40001" && /conflict with recovery/i.test(error.message);
 }
 
 function messageOf(error: unknown): string {
