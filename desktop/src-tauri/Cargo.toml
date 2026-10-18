@@ -24,7 +24,15 @@ serde_json = "1"
 # 而服务端按安全设计默认不下发 CORS 头，跨源请求的预检必挂。
 tauri-plugin-http = "2"
 # 传输加密：直接用同仓 Rust core，不走 JNI/.dll。
-taotao-crypto-core = { path = "../../crypto-src/core" }
+#
+# 开启 `antidebug`：这是**分发给用户的 Windows 客户端产物**，攻击者有物理设备。
+# 检测到调试器 / 注入框架即 `abort()`（见 crypto-src/core/src/antidebug.rs 的
+# 模块文档，含「为什么服务端与 wasm 不开」）。
+#
+# 注意这里**没有**开 `obfuscate`（字符串混淆）—— 与改动前一致。是否该开是另一
+# 个独立问题（桌面端产物同样是分发出去的），本次不顺手改，避免把两件事混在
+# 一次改动里。
+taotao-crypto-core = { path = "../../crypto-src/core", features = ["antidebug"] }
 # 轻量阻塞 HTTP（握手/取 PSK 用）；json feature 提供 send_json。
 ureq = { version = "2", features = ["tls", "json"] }
 base64 = "0.22"

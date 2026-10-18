@@ -66,6 +66,17 @@ pub fn crypto_session_new(
     device_id: String,
     state: State<'_, Mutex<CryptoState>>,
 ) -> Result<(), String> {
+    // 反调试：这是 PSK 进入内存的唯一入口，检测放在参数落地之前。
+    //
+    // 为什么启动时（lib.rs 的 run）查过了这里还要再查一次：启动检测看不见
+    // 「先正常启动、之后再 attach 调试器」这条路 —— 而那恰恰是逆向者跟
+    // `crypto_seal` / 读 PSK 的实际姿势。入口复查把检测铺在他真正要经过的地方。
+    //
+    // 开销是两次 Win32 查询（`IsDebuggerPresent` + `CheckRemoteDebuggerPresent`，
+    // 都是读进程内存里的字段，微秒级），而本命令只在建会话时调用一次，
+    // 不在每请求的封帧路径上。
+    super::enforce_antidebug();
+
     // device_id 折进握手密钥（协议 v2）：两端不一致握手必被 MAC 拒掉，
     // JS 侧传的是 localStorage 的 taotao.deviceId，与播放上报同源。
     let engine =
