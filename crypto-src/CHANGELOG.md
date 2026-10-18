@@ -4,6 +4,32 @@
 **MAJOR 恒等于 `PROTOCOL_VERSION`**。每个正式版由 `vX.Y.Z` tag 触发，
 自动发布到仓库 Releases。
 
+## v2.3.1
+
+协议版本不变（仍 `PROTOCOL_VERSION = 2`），线格式与对外 API 都不变，
+旧客户端 / 服务端无需升级。**安全类改动**：新增反调试。
+
+- 新增 `core/src/antidebug.rs` 与 `antidebug` feature：客户端产物在**进程启动**
+  与**建加密引擎**两个时机检测调试器与注入框架，命中即 `std::process::abort()`。
+  - Android（`jni` 的 `.so`）：`TracerPid != 0`，以及 `/proc/self/maps` 里出现
+    Frida / Xposed / Substrate 特征；新增 `JNI_OnLoad` 作为最早的检测时机。
+  - Windows（`desktop/src-tauri` 的 Tauri 二进制）：`IsDebuggerPresent` +
+    `CheckRemoteDebuggerPresent`。接线在 `run()` 与 `crypto_session_new`。
+  - **服务端 `.node` 与 `.wasm` 刻意不开**：前者不对外分发且会砸掉后端排障，
+    后者在浏览器沙箱里没有等价的调试语义。
+  - **刻意不检测 root / 模拟器**：命中动作不可恢复，而 root 机型占比不低、
+    模拟器是我们的测试环境。
+  - debug 构建自动跳过，`tauri dev` / 单测不受影响。
+- 两个客户端 crate 加了编译期断言（`const _: () = assert!(...IS_ENABLED)`），
+  防止有人把 `features = ["antidebug"]` 删掉后**检测静默消失**。
+- 澄清文档：`jni` crate 顶部原先写「一份代码同时供 Android 与 Windows 使用」，
+  但桌面端已由 Compose Desktop 换成 Tauri 并直接依赖 core，**不再加载
+  `taotao_crypto.dll`**。文档已按实际形态修正（crate 与产物保留，只是说清
+  主路径不走它）。
+
+> ⚠️ **反调试抬不高「密钥不可提取」这条线。** 它把成本从「随手 attach」抬到
+> 「需要写脚本」，不是防线。边界与理由见 `README.md` §2.6 与 `SECURITY.md`。
+
 ## v2.3.0
 
 协议版本不变（仍 `PROTOCOL_VERSION = 2`）。**关键修复**：KDF 的三个协议标签

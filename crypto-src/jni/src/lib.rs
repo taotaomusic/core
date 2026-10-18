@@ -1,18 +1,23 @@
-//! JNI 绑定：一份代码同时供 Android 与 Windows 使用。
+//! JNI 绑定：供 Android 使用。
 //!
-//! ## 为什么桌面端也走 JNI
+//! ## ⚠️ Windows 侧的实际形态（2026-10-18 澄清）
 //!
-//! 桃桃音乐的 Windows 客户端是 Compose Desktop，运行在 JVM 上。它和 Android
-//! 需要的是**同一个** JNI 接口，区别只有编译目标：
+//! 本 crate **能**编译出 `x86_64-pc-windows-msvc` 的 `taotao_crypto.dll`，但
+//! **真实 Windows 客户端不用它**：桌面端已从 Compose Desktop（JVM）换成 Tauri，
+//! 而 Tauri 侧直接依赖 `taotao-crypto-core`（见 `desktop/src-tauri/Cargo.toml`
+//! 的 `taotao-crypto-core = { path = "../../crypto-src/core" }`），走的是
+//! `crypto_bridge.rs` 里的 `#[tauri::command]`，完全绕开 JNI。
 //!
-//! | 平台 | 目标三元组 | 产物 |
-//! | --- | --- | --- |
-//! | Android arm64 | `aarch64-linux-android` | `libtaotao_crypto.so` |
-//! | Android x86_64（模拟器） | `x86_64-linux-android` | `libtaotao_crypto.so` |
-//! | Windows x64 | `x86_64-pc-windows-msvc` | `taotao_crypto.dll` |
+//! 也就是说：**Windows 的反调试接线在 `desktop/src-tauri`，不在本文件**。
+//! 本文件里 `#[cfg(windows)]` 相关的路径（core 的 `antidebug` 探针）仍会生效，
+//! 但那是给 core 的单元测试与「万一有人又走回 JNI」兜底的，不是主路径。
 //!
-//! 同一份 Rust 源码、同一套 Kotlin 声明、同一组测试向量。这是选 JNI 而不是
-//! JNA 的全部理由 —— 换成 JNA 就要多维护一套 C 头文件和一层 C ABI 门面。
+//! ## 为什么 Android 也走 JNI
+//!
+//! Android 需要 `System.loadLibrary` 加载的 `.so`，JNI 是唯一通路。选纯 Rust 的
+//! `jni` crate 而不是 JNA 的原因：后者要多维护一套 C 头文件和一层 C ABI 门面，
+//! 而 `jni` crate 不需要 JDK 头文件、不需要 `javac`，交叉编译到
+//! `aarch64-linux-android` 时省掉整个 NDK sysroot 里的 `jni.h`。
 //!
 //! ## jni 0.22 的 API 形态（升级时必读）
 //!
@@ -36,6 +41,13 @@
 //! 所以这里用 [`run`] 做了一层包装：闭包统一返回 `Result<()>`，
 //! 真正的返回值通过外层局部变量带出来。这样 `resolve` 只需要处理 `()`，
 //! 而我们的领域错误在闭包内部就被转成了 Java 异常。
+//!
+//! ## 反调试
+//!
+//! 这个 crate 开启 core 的 `antidebug` feature，在 [`JNI_OnLoad`] 与每个
+//! 「建引擎」入口做检测，命中即 `abort()`（**不是** panic —— 那会被
+//! `catch_unwind` 接住，Java 侧 catch 一下就能继续跑）。检测逻辑本身在
+//! `core/src/antidebug.rs`，本文件只负责接线。debug 构建自动跳过。
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -44,9 +56,66 @@ use std::sync::{Mutex, OnceLock};
 use jni::errors::ThrowRuntimeExAndDefault;
 use jni::objects::{JByteArray, JClass, JString};
 use jni::strings::JNIString;
-use jni::sys::{jboolean, jbyteArray, jint, jlong, jstring, JNI_FALSE, JNI_TRUE};
+use jni::sys::{jboolean, jbyteArray, jint, jlong, jstring, JNI_FALSE, JNI_TRUE, JNI_VERSION_1_6};
 use jni::{jni_str, Env, EnvUnowned};
-use taotao_crypto_core::{aad, ClientEngine, CryptoError, ServerEngine};
+use taotao_crypto_core::{aad, antidebug, ClientEngine, CryptoError, ServerEngine};
+
+/// 编译期断言：本 crate 必须开启 core 的 `antidebug`。
+///
+/// `.so` 是分发给用户的产物，防护「静默消失」比「编译失败」糟得多 —— 见
+/// `core/src/antidebug.rs` 的 `IS_ENABLED`。绑在这里（而不是靠人记住）是因为
+/// 删掉 `Cargo.toml` 里那个 feature 之后，构建、单元测试、冒烟测试、发布
+/// **全都正常**，只有真正去 attach 调试器的人才会发现检测没了。
+const _: () = assert!(
+    antidebug::IS_ENABLED,
+    "taotao-crypto-jni 必须给 taotao-crypto-core 开 antidebug feature（见 jni/Cargo.toml）"
+);
+
+/// `JNI_OnLoad` 的返回类型声明。
+///
+/// 参数用裸指针而不是 `jni::JavaVM`：这个函数只用来拿一个「够早的执行时机」做
+/// 检测，参数本身一个都不用，所以没必要为它引入类型转换。
+///
+/// 库被加载时立刻做一次反调试检测。
+///
+/// 这是**最早**能拿到控制权的时机 —— 早于任何 `native*` 方法被调用、早于
+/// `clientNew` 把 PSK 读进内存。放在这里比放在各入口更彻底：攻击者的
+/// 「加载后立刻 patch 掉检测函数」这条路会变得更难，因为检测在
+/// `System.loadLibrary` 返回之前就已经跑完了。
+///
+/// 返回 `JNI_VERSION_1_6`：与 Android 侧定下的最低 API（24）配套。返回 0 或
+/// 不导出这个符号都会让 `System.loadLibrary` 报
+/// `UnsatisfiedLinkError`，所以它必须存在且返回合法版本号。
+///
+/// # Safety
+///
+/// 由 JVM 调用，签名与 JNI 规范一致。这里**不使用**任何参数，所以没有
+/// 解引用裸指针的风险。
+#[no_mangle]
+pub extern "system" fn JNI_OnLoad(
+    _vm: *mut core::ffi::c_void,
+    _reserved: *mut core::ffi::c_void,
+) -> jint {
+    enforce_antidebug();
+    JNI_VERSION_1_6
+}
+
+/// 反调试检测的统一出口。
+///
+/// 为什么在 `JNI_OnLoad` 之外**还要**在各个入口查一次：`JNI_OnLoad` 只在库被
+/// 加载时跑一次，而「先正常启动、之后再 attach 调试器」这条路径它完全看不见。
+/// 入口处复查把检测点铺在攻击者实际要用的地方（握手、建引擎）。
+///
+/// 每次调用的开销是两次文件读取（安卓上 `/proc/self/status` 与 `maps`，各几 KB），
+/// 落在建引擎 / 握手这类**低频冷路径**上，不在每请求的封帧路径上 —— 所以不需要
+/// 做结果缓存，也就不会引入「缓存让检测只跑一次」这个可被利用的窗口。
+///
+/// `#[inline(always)]`：调用点有十来处，内联后省掉一次函数调用，并且让
+/// 「未开启 feature 时彻底消失」这件事对编译器更明确（此时函数体是空的）。
+#[inline(always)]
+fn enforce_antidebug() {
+    antidebug::enforce();
+}
 
 /// 领域错误统一转成这个 Java 异常类。
 ///
@@ -214,6 +283,9 @@ pub extern "system" fn Java_com_taotao_music_crypto_NativeCrypto_clientNew<'loca
     psk_hex: JString<'local>,
     device_id: JString<'local>,
 ) -> jlong {
+    // 反调试：这是 PSK 进入内存的唯一入口，放在读取参数之前 ——
+    // 命中时进程直接 abort，PSK 连被读进来都不会发生。
+    enforce_antidebug();
     let psk_id = read_string(&psk_id);
     let psk_hex = read_string(&psk_hex);
     let device_id = read_string(&device_id);
@@ -232,6 +304,8 @@ pub extern "system" fn Java_com_taotao_music_crypto_NativeCrypto_clientHandshake
     handle: jlong,
     now_ms: jlong,
 ) -> jbyteArray {
+    // 反调试：握手是攻击者最想跟进的路径（跟进去就能读到 PSK 派生的握手密钥）。
+    enforce_antidebug();
     run(&mut env, core::ptr::null_mut(), |env| {
         let now = now_ms.max(0) as u64;
         let hello = with_entry(handle, |entry| match entry {
@@ -418,6 +492,10 @@ pub extern "system" fn Java_com_taotao_music_crypto_NativeCrypto_serverNew<'loca
     _env: EnvUnowned<'local>,
     _class: JClass<'local>,
 ) -> jlong {
+    // 服务端入口同样查：本项目后端主要走 node（不开 antidebug），但 JNI 侧
+    // 的 server* 是给「后端也用 JVM 跑」准备的，那条路径上是客户端产物，
+    // 检测必须一致 —— 否则同一份 .so 会随调用方式改变行为。
+    enforce_antidebug();
     insert(Entry::Server(ServerEngine::new()))
 }
 
@@ -473,6 +551,7 @@ pub extern "system" fn Java_com_taotao_music_crypto_NativeCrypto_serverAccept<'l
     device_id: JString<'local>,
     now_ms: jlong,
 ) -> jbyteArray {
+    enforce_antidebug();
     let device_id = read_string(&device_id);
     run(&mut env, core::ptr::null_mut(), |env| {
         let hello = read_bytes(env, client_hello);

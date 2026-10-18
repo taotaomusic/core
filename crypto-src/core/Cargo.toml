@@ -34,6 +34,14 @@ cryptify = { version = "3.2", optional = true }
 # 两种都保持可复现构建，见 src/obf.rs 的模块文档。
 obfuscate = ["dep:cryptify"]
 
+# 开启后 `antidebug::enforce()` 会真的做检测并在命中时 `abort()`；
+# 关闭时它是空函数。**只给客户端产物开**（jni 的 .so、desktop 的 Tauri 二进制），
+# 服务端 .node 与 wasm 刻意不开 —— 理由见 src/antidebug.rs 的模块文档。
+#
+# 与 `obfuscate` 不同的是：它**不需要**任何额外依赖（Windows 侧直接声明两个
+# kernel32 导出），所以这里是空 feature，只作为编译开关。
+antidebug = []
+
 [dev-dependencies]
 # 仅测试用：协议向量测试需要固定随机源，避免用例依赖真随机而无法复现。
 hex-literal = "0.4"

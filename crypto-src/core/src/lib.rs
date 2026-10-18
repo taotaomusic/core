@@ -54,6 +54,9 @@
 //! - **不加密大文件上传**（APK / jar / 补丁包）。同样是吞吐换不到安全收益。
 //! - **不替代 TLS**。这是应用层的第二道防线，用来抬高抓包和重放的门槛，
 //!   不是用来在明文 HTTP 上裸奔的。
+//! - **不检测 root / 模拟器**。`antidebug` 只查调试器与注入框架；命中即
+//!   `abort()`，用一个不可恢复的动作去拦「并不构成攻击」的环境等于把正常
+//!   用户当攻击者。理由见 [`antidebug`] 的模块文档。
 //!
 //! 详细边界见 `docs/design.md` 的「目标与边界」章节。
 
@@ -61,6 +64,7 @@
 #![warn(missing_debug_implementations)]
 
 pub mod aead;
+pub mod antidebug;
 pub mod engine;
 pub mod error;
 pub mod frame;

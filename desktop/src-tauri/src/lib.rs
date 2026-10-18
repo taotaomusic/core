@@ -6,10 +6,41 @@
 //! 加解密；取 PSK、握手上报与业务请求仍由前端经 `tauri-plugin-http` 直连后端。
 //! 契约：AAD = method + pathAndQuery（含 query）；会话失效 409/4091、
 //! 强制加密路径明文请求 426/4007；rekey = 重新建引擎 + 握手，无独立 API。
+//!
+//! ## 反调试
+//!
+//! 这是**真实 Windows 客户端的加密落点**（桌面端已由 Compose Desktop 换成
+//! Tauri，不再经 `taotao_crypto.dll`）。本 crate 开启 core 的 `antidebug`
+//! feature：进程启动时与每次 `crypto_session_new`（PSK 入口）都做一次检测，
+//! 命中即 `abort()`。检测逻辑在 `crypto-src/core/src/antidebug.rs`，本文件只
+//! 负责接线。debug 构建自动跳过，所以 `tauri dev` 不受影响。
 
 use std::sync::Mutex;
 
 mod crypto_bridge;
+
+/// 编译期断言：桌面端必须开启 core 的 `antidebug`。
+///
+/// 这是分发给用户的 Windows 客户端产物，防护「静默消失」比「编译失败」糟得多 ——
+/// 删掉 `Cargo.toml` 里的 feature 之后构建与发布全都正常，只有真正去 attach
+/// 调试器的人才会发现检测没了。见 `core/src/antidebug.rs` 的 `IS_ENABLED`。
+const _: () = assert!(
+    taotao_crypto_core::antidebug::IS_ENABLED,
+    "taotao-desktop 必须给 taotao-crypto-core 开 antidebug feature（见 src-tauri/Cargo.toml）"
+);
+
+/// 反调试检测的统一出口。
+///
+/// 与 Android 侧（`crypto-src/jni/src/lib.rs`）同一个函数名与语义，便于两端
+/// 对照阅读。未开启 `antidebug` 时它编译成空函数（core 里两个分支签名一致），
+/// 所以调用点不需要条件编译。
+///
+/// debug 构建里 `enforce()` 直接返回，所以 `tauri dev` 与单测都不受影响；
+/// **release 产物则不能在本机挂调试器跑** —— 会直接 abort。
+#[inline(always)]
+fn enforce_antidebug() {
+    taotao_crypto_core::antidebug::enforce();
+}
 
 /// 设备号：Windows 取注册表 MachineGuid；其它平台退回占位。折进握手密钥做设备绑定。
 fn device_id() -> String {
@@ -39,6 +70,13 @@ fn device_id() -> String {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // 反调试：放在 Builder 构造**之前**，让进程在被附加调试器的状态下尽早死掉，
+    // 而不是等窗口起来、PSK 已经读进内存之后。
+    //
+    // 放在这里而不是 setup 回调里：setup 是 Tauri 建好运行时之后才调的，那时
+    // 已经有相当多的初始化跑完了；`run()` 的第一行是控制权最早的地方。
+    enforce_antidebug();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
