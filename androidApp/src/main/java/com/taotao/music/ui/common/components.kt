@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -34,7 +33,6 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
@@ -43,11 +41,9 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarData
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -60,9 +56,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.platform.LocalContext
@@ -77,6 +70,7 @@ import coil.request.ImageRequest
 import com.taotao.music.model.Song
 import com.taotao.music.playerui.SharedContentState
 import com.taotao.music.playerui.SharedContentStateType
+import com.taotao.music.playerui.SharedSearchBar
 import com.taotao.music.playerui.SharedSongRow
 import com.taotao.music.playerui.SharedVipBadge
 import com.taotao.music.playerui.theme.TaotaoShapes
@@ -374,7 +368,11 @@ fun VipBadge(modifier: Modifier = Modifier) = SharedVipBadge(modifier)
 
 /**
  * 搜索栏，首页和搜索页共用。
- * [focusRequester] 由搜索页传入以便进入时自动聚焦，首页不需要则留空。
+ *
+ * 委托 [SharedSearchBar]：输入控件已统一为 Miuix 的胶囊搜索框（皮肤侧是唯一实现），
+ * Android 端不再自绘第二份 Material3 输入框。保留函数名与签名，平台层调用点无需
+ * 跟着改，与 [VipBadge] 委托 [SharedVipBadge] 同一处理方式。
+ * [autoFocus] 由搜索页传入以便进入时自动聚焦，首页不需要则留空。
  */
 @Composable
 fun MusicSearchBar(
@@ -382,21 +380,15 @@ fun MusicSearchBar(
     onKeywordChanged: (String) -> Unit,
     onSearch: () -> Unit,
     onFocus: () -> Unit = {},
-    focusRequester: FocusRequester? = null,
+    autoFocus: Boolean = false,
 ) {
-    Row(Modifier.fillMaxWidth().padding(bottom = TaotaoSpacing.xs), verticalAlignment = Alignment.CenterVertically) {
-        OutlinedTextField(
-            value = keyword,
-            onValueChange = onKeywordChanged,
-            modifier = Modifier.weight(1f)
-                .then(focusRequester?.let { Modifier.focusRequester(it) } ?: Modifier)
-                .onFocusChanged { if (it.isFocused) onFocus() },
-            singleLine = true,
-            placeholder = { Text("搜索歌曲或歌手", color = MaterialTheme.colorScheme.onSurfaceVariant) },
-            leadingIcon = { Icon(Icons.Default.Search, "搜索") },
-        )
-        TextButton(onClick = onSearch) { Text("搜索", color = TaotaoCoral) }
-    }
+    SharedSearchBar(
+        keyword = keyword,
+        onKeywordChanged = onKeywordChanged,
+        onSearch = onSearch,
+        onFocus = onFocus,
+        autoFocus = autoFocus,
+    )
 }
 
 /**

@@ -3,9 +3,11 @@ package com.taotao.music.playerui.theme
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.luminance
 import top.yukonga.miuix.kmp.theme.Colors
+import top.yukonga.miuix.kmp.theme.LocalContentColor
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.theme.darkColorScheme
 import top.yukonga.miuix.kmp.theme.lightColorScheme
@@ -41,11 +43,22 @@ import top.yukonga.miuix.kmp.theme.lightColorScheme
  * 灰阶，凭空推导容易错；等页面实际采用后再按观感收敛。M3 没有 variant 概念，
  * `primaryVariant` / `secondaryVariant` 先用主值顶位，Miuix 组件里它们只做
  * 微差色，肉眼不可分。
+ *
+ * ## 除了配色，还要补 Miuix 的 LocalContentColor
+ *
+ * Miuix 有两套 `MiuixTheme` 重载：`controller` 那套会额外下发
+ * `LocalContentColor`，而本项目用的 `colors` 那套**不下发**。缺了它，读该 Local
+ * 的组件（如 `InputField` 里用户输入的正文）会退到 `compositionLocalOf` 的默认值
+ * `Color.Black`——深色主题下搜索框里打进去的字直接看不见。这里按上游 `controller`
+ * 重载的口径补一层，取值口径保持一致（`onBackground`）。
  */
 @Composable
 fun TaotaoMiuixTheme(content: @Composable () -> Unit) {
-    MiuixTheme(colors = taotaoMiuixColors()) {
-        content()
+    val colors = taotaoMiuixColors()
+    MiuixTheme(colors = colors) {
+        CompositionLocalProvider(LocalContentColor provides colors.onBackground) {
+            content()
+        }
     }
 }
 
@@ -93,6 +106,11 @@ private fun translateToMiuix(scheme: ColorScheme): Colors {
         onSurfaceContainer = scheme.onSurface,
         onSurfaceContainerVariant = scheme.onSurfaceVariant,
         surfaceContainerHigh = scheme.surfaceContainerHigh,
+        // 搜索输入框（Miuix InputField）的占位文案与前后图标取这一档：上游工厂值是
+        // 一枚弱灰（浅色 #A2A2A2），语义正是「胶囊底上的次要前景」，所以跟其余 variant
+        // / summary 字段一样落到 onSurfaceVariant —— 用 onSurface 会让占位文案看起来
+        // 跟真实输入内容一个强度，失去占位提示。
+        onSurfaceContainerHigh = scheme.onSurfaceVariant,
         surfaceContainerHighest = scheme.surfaceContainerHighest,
         onSurfaceContainerHighest = scheme.onSurface,
         outline = scheme.outline,

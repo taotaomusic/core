@@ -88,7 +88,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
@@ -288,21 +287,18 @@ fun SearchPage(
     /** 保留兼容当前调用链；搜索结果不再需要逐条入场状态。 */
     searchSession: Int = 0,
 ) {
-    val focusRequester = remember { FocusRequester() }
-    // 进入搜索页自动聚焦输入框。焦点请求必须在组件挂载后发起，否则请求会被丢弃。
-    LaunchedEffect(Unit) { runCatching { focusRequester.requestFocus() } }
-
     Column(Modifier.fillMaxSize().padding(horizontal = TaotaoSpacing.screenHorizontal)) {
         SharedSectionHeader(
             title = "搜索音乐",
             level = SharedSectionLevel.PAGE,
             leading = { SharedBackButton(onBack) },
         )
+        // autoFocus：进入搜索页即拉起键盘。Miuix 输入框内部自己请求焦点（见 SharedSearchBar）。
         MusicSearchBar(
             keyword = keyword,
             onKeywordChanged = onKeywordChanged,
             onSearch = onSearch,
-            focusRequester = focusRequester,
+            autoFocus = true,
         )
         // 搜索历史放在热门搜索上面：个人历史的使用频率通常高于热搜榜。
         if (!hasSearched && history.isNotEmpty()) {
