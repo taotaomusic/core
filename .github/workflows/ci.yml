@@ -350,7 +350,11 @@ jobs:
           done
           curl -sf http://127.0.0.1:4720/health | grep -q '"up"' || { tail -n 20 server.log; exit 1; }
       - name: 契约验证
-        run: node tools/verify-contract.mjs http://127.0.0.1:4720 2>&1 | tee verify.log
+        # pipefail 不能省：GitHub 默认 shell 是 `bash -e {0}`，管道退出码取末段（tee 恒 0），
+        # 脚本 process.exitCode=1 会被吞掉，契约失败也显示全绿（2026-10-18 实测踩到）。
+        run: |
+          set -euo pipefail
+          node tools/verify-contract.mjs http://127.0.0.1:4720 2>&1 | tee verify.log
       # 第二遍契约：把验证库兼作「只读副本」再跑一遍。不配 DATABASE_REPLICA_URL 时
       # resolveTarget 在第 2 条规则（未配置副本 → 主库）直接返回，副本分流 / 降级 /
       # 安全网这些代码在 CI 里一行都执行不到；本段专门让它们跑起来。自指验证的是
@@ -373,7 +377,10 @@ jobs:
           done
           curl -sf http://127.0.0.1:4720/health | grep -q '"up"' || { tail -n 20 server-replica.log; exit 1; }
       - name: 契约验证（只读副本路径）
-        run: node tools/verify-contract.mjs http://127.0.0.1:4720 2>&1 | tee verify-replica.log
+        # 同上一遍：必须 pipefail，否则契约失败会被 tee 吞成绿。
+        run: |
+          set -euo pipefail
+          node tools/verify-contract.mjs http://127.0.0.1:4720 2>&1 | tee verify-replica.log
       - name: 副本分流与安全网门禁
         run: |
           set -euo pipefail
