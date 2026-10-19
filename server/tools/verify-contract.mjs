@@ -248,14 +248,32 @@ let skipped = 0;
 /** 上游音源不可达的特征：服务端把未知异常归一成 502/{code:5020}。CI 出不了外网时整批命中。 */
 function isEnvironmentalDetail(detail) {
   if (!detail) return false;
-  return detail.includes('"code":5020') || /(^|\s)HTTP 50[24](\s|$)/.test(detail) || /(^|\s)50[24](\s|\s*\{)/.test(detail);
+  return detail.includes('"code":5020') || /(^|\s)HTTP 50[24](\s|$)/.test(detail) || /(^|\s)50[24](\s|\s*\{|$)/.test(detail);
 }
 
-function check(label, condition, detail = "") {
+/**
+ * 断言所依赖的上游请求是否本身就失败了。
+ *
+ * 有些断言只序列化内层数据（`{}`、`undefined`、`0 首`），detail 里没有状态码，
+ * 上游整体不可达时会被误判成真失败（2026-10-19 CI 出网失败时踩到）。调用方把
+ * 该请求的响应（或 `{ status, code }`）传进来，这里显式按「上游故障」归类。
+ *
+ * 只认服务端明确表示上游不可达的形态：502/504，或信封 code 5020。业务性 5xx
+ * 与 4xx 一律不算 —— 否则门禁会被无关故障染绿。
+ */
+function isUpstreamFailure(upstream) {
+  if (!upstream) return false;
+  const status = typeof upstream.status === "number" ? upstream.status : undefined;
+  const code = upstream.code ?? upstream.body?.code;
+  if (code === 5020) return true;
+  return status === 502 || status === 504;
+}
+
+function check(label, condition, detail = "", upstream = undefined) {
   if (condition) {
     passed++;
     console.log(`  ✓ ${label}`);
-  } else if (isEnvironmentalDetail(String(detail))) {
+  } else if (isEnvironmentalDetail(String(detail)) || isUpstreamFailure(upstream)) {
     environmental++;
     console.log(`  ~ ${label}  →  环境性（上游不可达）${detail ? `: ${detail}` : ""}`);
   } else {
@@ -312,7 +330,7 @@ async function fetchNdjson(url, init, { label = "搜索", hasContent } = {}) {
     const retryable = response.status === 200 || response.status >= 500;
     if (!retryable || attempt >= SEARCH_RETRY_ATTEMPTS) return { response, text, lines, elapsedMs };
     console.log(
-      `  … ${label}上游返回空结果（HTTP ${response.status}，${lines.length} 行），`
+      `  … ${label}${response.status === 200 ? `上游返回空结果（HTTP 200，${lines.length} 行）` : `上游返回 HTTP ${response.status}`}，`
       + `${SEARCH_RETRY_DELAY_MS}ms 后重试（${attempt}/${SEARCH_RETRY_ATTEMPTS - 1}）`,
     );
     await sleep(SEARCH_RETRY_DELAY_MS);
@@ -335,7 +353,7 @@ async function fetchJsonRows(url, init, { label = "搜索", rowsOf }) {
     const retryable = response.status === 200 || response.status >= 500;
     if (usable || !retryable || attempt >= SEARCH_RETRY_ATTEMPTS) return { response, body, rows };
     console.log(
-      `  … ${label}上游返回空结果（HTTP ${response.status}，0 行），`
+      `  … ${label}${response.status === 200 ? '上游返回空结果（HTTP 200，0 行）' : `上游返回 HTTP ${response.status}`}，`
       + `${SEARCH_RETRY_DELAY_MS}ms 后重试（${attempt}/${SEARCH_RETRY_ATTEMPTS - 1}）`,
     );
     await sleep(SEARCH_RETRY_DELAY_MS);
@@ -1053,6 +1071,7 @@ async function main() {
     "搜索联想包含真实相关词「雨爱」",
     suggestionsBody.data?.includes("雨爱") === true,
     JSON.stringify(suggestionsBody.data),
+    suggestions,
   );
 
   const emptySuggestion = await fetch(`${base}/api/v1/search/suggestions?keyword=`, {
@@ -1891,7 +1910,7 @@ async function main() {
   const nanPage = await fetch(`${base}/api/v1/search?keyword=test&page=abc&num=3&source=tencent`, {
     headers: { authorization: `Bearer ${token}` },
   });
-  check("page 非法时不炸（回落默认值）", nanPage.status === 200, `实际 ${nanPage.status}`);
+  check("page 非法时不炸（回落默认值）", nanPage.status === 200, `实际 ${nanPage.status}`, nanPage);
   // Number("") 是 0 且 Number.isInteger(0) 为真，空 quality 曾静默落到最低档。
   const blankQuality = await (await fetch(`${base}/api/v1/search?keyword=test&quality=&num=3&source=tencent`, {
     headers: { authorization: `Bearer ${token}` },
@@ -2634,12 +2653,13 @@ async function main() {
       && ["artist", "album", "song"].includes(kuwoLines[0]?.type),
     `${kuwoSearch.status} ${kuwoNdjson.slice(0, 160)}`,
   );
-  check("酷我搜索返回了歌曲", kuwoSongs.length > 0, `${kuwoSongs.length} 首`);
+  check("酷我搜索返回了歌曲", kuwoSongs.length > 0, `${kuwoSongs.length} 首`, kuwoSearch);
   // 酷我没有 mid 概念，身份完全由数字 id 承载，所以 mid 必须缺省而不是空串。
   check(
     "酷我歌曲 id 是 number 且不带 mid",
     typeof kuwoSongs[0]?.data?.id === "number" && kuwoSongs[0]?.data?.mid === undefined,
     JSON.stringify(kuwoSongs[0]?.data ?? {}).slice(0, 200),
+    kuwoSearch,
   );
   check(
     "酷我搜索结果的 source 字段回填为 kuwo",
@@ -2694,6 +2714,7 @@ async function main() {
     "kuwo song 行首条带正数 artistId（查看歌手的钥匙）",
     typeof kuwoEntitySongRows[0]?.data?.artistId === "number" && kuwoEntitySongRows[0].data.artistId > 0,
     JSON.stringify(kuwoEntitySongRows[0]?.data ?? {}).slice(0, 200),
+    kuwoEntityResult.response,
   );
   check(
     "kuwo song 行的 albumId 每条都是 undefined 或正数（绝不发 0 / null）",
@@ -2768,17 +2789,19 @@ async function main() {
     detailMetaShape(kuwoArtistSongsBody.data?.meta, 1, 30)
       && kuwoArtistSongsBody.data.meta.total > 0,
     JSON.stringify(kuwoArtistSongsBody.data?.meta),
+    kuwoArtistSongsRes,
   );
 
   // 波点详情族端点的 `pn` 是 **1 基**的，与搜索接口（0 基）不同：绝不能过
   // upstreamPage()（page-1）的换算，否则 page=1 与 page=2 都会落在同一页
   // （实测 pn=0 与 pn=1 同页）。下面用「page=2 的首条不在 page=1 的 id 集合里」
   // 守住这条分页语义 —— 固定歌手的整表列表秒级间隔内不会重排，出现交叠只能是偏移错了。
-  const kuwoArtistSongsPage2 = (await fetchJsonRows(
+  const kuwoArtistSongsPage2Result = await fetchJsonRows(
     `${base}/api/v1/artists/336/songs?page=2&num=30&source=kuwo`,
     { headers: { authorization: `Bearer ${token}` } },
     { label: "歌手歌曲列表第 2 页", rowsOf: (body) => body.data?.songs },
-  )).body;
+  );
+  const kuwoArtistSongsPage2 = kuwoArtistSongsPage2Result.body;
   const kuwoArtistSongsPage1Ids = kuwoArtistSongs.map((song) => song.id);
   check(
     "歌手歌曲翻页前进（pn 1 基：page=2 不与 page=1 交叠）",
@@ -2786,6 +2809,7 @@ async function main() {
       && (kuwoArtistSongsPage2.data?.songs ?? []).length > 0
       && !kuwoArtistSongsPage1Ids.includes(kuwoArtistSongsPage2.data.songs[0]?.id),
     JSON.stringify({ "p1 首条": kuwoArtistSongs[0]?.id, "p2 首条": kuwoArtistSongsPage2.data?.songs?.[0]?.id }),
+    kuwoArtistSongsPage2Result.response,
   );
 
   const kuwoArtistAlbumsResult = await fetchJsonRows(
@@ -2815,6 +2839,7 @@ async function main() {
     "歌手专辑列表的 meta 分页信封正确",
     detailMetaShape(kuwoArtistAlbums.data?.meta, 1, 20),
     JSON.stringify(kuwoArtistAlbums.data?.meta),
+    kuwoArtistAlbumsResult.response,
   );
 
   const kuwoSimilarArtistsResult = await fetchJsonRows(
@@ -2880,6 +2905,7 @@ async function main() {
     detailMetaShape(kuwoAlbumSongsBody.data?.meta, 1, 30)
       && kuwoAlbumSongsBody.data.meta.total > 0,
     JSON.stringify(kuwoAlbumSongsBody.data?.meta),
+    kuwoAlbumSongsRes,
   );
 
   // 详情族的通用拒绝契约：ID 非正整数 4001、source=all 4001（详情必须有确定的音源）、
@@ -2944,12 +2970,14 @@ async function main() {
     detailMetaShape(kuwoSearchArtistsBody.data?.meta, 1, 10)
       && kuwoSearchArtistsBody.data.meta.total > 0,
     JSON.stringify(kuwoSearchArtistsBody.data?.meta),
+    kuwoSearchArtistsRes,
   );
-  const kuwoSearchArtistsPage2 = (await fetchJsonRows(
+  const kuwoSearchArtistsPage2Result = await fetchJsonRows(
     `${base}/api/v1/search/artists?keyword=${encodeURIComponent("周杰伦")}&page=2&num=10&source=kuwo`,
     { headers: { authorization: `Bearer ${token}` } },
     { label: "歌手分页搜索第 2 页", rowsOf: (body) => body.data?.artists },
-  )).body;
+  );
+  const kuwoSearchArtistsPage2 = kuwoSearchArtistsPage2Result.body;
   const kuwoSearchArtistPage1Ids = new Set(kuwoSearchArtistRows.map((artist) => artist.id));
   check(
     "歌手分页搜索 page=2 前进（与 page=1 的 id 无交叠）",
@@ -2960,6 +2988,7 @@ async function main() {
       "p1 首条": kuwoSearchArtistRows[0]?.id,
       "p2 首条": kuwoSearchArtistsPage2.data?.artists?.[0]?.id,
     }),
+    kuwoSearchArtistsPage2Result.response,
   );
 
   const kuwoSearchAlbums = await fetchJsonRows(
@@ -2990,12 +3019,14 @@ async function main() {
     detailMetaShape(kuwoSearchAlbumsBody.data?.meta, 1, 10)
       && kuwoSearchAlbumsBody.data.meta.total > 0,
     JSON.stringify(kuwoSearchAlbumsBody.data?.meta),
+    kuwoSearchAlbumsRes,
   );
-  const kuwoSearchAlbumsPage2 = (await fetchJsonRows(
+  const kuwoSearchAlbumsPage2Result = await fetchJsonRows(
     `${base}/api/v1/search/albums?keyword=${encodeURIComponent("周杰伦")}&page=2&num=10&source=kuwo`,
     { headers: { authorization: `Bearer ${token}` } },
     { label: "专辑分页搜索第 2 页", rowsOf: (body) => body.data?.albums },
-  )).body;
+  );
+  const kuwoSearchAlbumsPage2 = kuwoSearchAlbumsPage2Result.body;
   const kuwoSearchAlbumPage1Ids = new Set(kuwoSearchAlbumRows.map((album) => album.id));
   check(
     "专辑分页搜索 page=2 前进（与 page=1 的 id 无交叠）",
@@ -3006,6 +3037,7 @@ async function main() {
       "p1 首条": kuwoSearchAlbumRows[0]?.id,
       "p2 首条": kuwoSearchAlbumsPage2.data?.albums?.[0]?.id,
     }),
+    kuwoSearchAlbumsPage2Result.response,
   );
 
   // 空 keyword 与 /search 同语义：4001，两个新路由一致。
@@ -3068,12 +3100,14 @@ async function main() {
     detailMetaShape(kuwoSearchPlaylistsBody.data?.meta, 1, 10)
       && kuwoSearchPlaylistsBody.data.meta.total > 0,
     JSON.stringify(kuwoSearchPlaylistsBody.data?.meta),
+    kuwoSearchPlaylistsRes,
   );
-  const kuwoSearchPlaylistsPage2 = (await fetchJsonRows(
+  const kuwoSearchPlaylistsPage2Result = await fetchJsonRows(
     `${base}/api/v1/search/playlists?keyword=${encodeURIComponent("周杰伦")}&page=2&num=10&source=kuwo`,
     { headers: { authorization: `Bearer ${token}` } },
     { label: "歌单分页搜索第 2 页", rowsOf: (body) => body.data?.playlists },
-  )).body;
+  );
+  const kuwoSearchPlaylistsPage2 = kuwoSearchPlaylistsPage2Result.body;
   const kuwoSearchPlaylistPage1Ids = new Set(kuwoSearchPlaylistRows.map((playlist) => playlist.id));
   check(
     "歌单分页搜索 page=2 前进（与 page=1 的 id 无交叠）",
@@ -3084,6 +3118,7 @@ async function main() {
       "p1 首条": kuwoSearchPlaylistRows[0]?.id,
       "p2 首条": kuwoSearchPlaylistsPage2.data?.playlists?.[0]?.id,
     }),
+    kuwoSearchPlaylistsPage2Result.response,
   );
 
   // ---------- 在线歌单详情（2026-10 新增）----------
@@ -3245,12 +3280,14 @@ async function main() {
     detailMetaShape(kuwoSearchVideosBody.data?.meta, 1, 10)
       && kuwoSearchVideosBody.data.meta.total > 0,
     JSON.stringify(kuwoSearchVideosBody.data?.meta),
+    kuwoSearchVideosRes,
   );
-  const kuwoSearchVideosPage2 = (await fetchJsonRows(
+  const kuwoSearchVideosPage2Result = await fetchJsonRows(
     `${base}/api/v1/search/videos?keyword=${encodeURIComponent("周杰伦")}&page=2&num=10&source=kuwo`,
     { headers: { authorization: `Bearer ${token}` } },
     { label: "视频分页搜索第 2 页", rowsOf: (body) => body.data?.videos },
-  )).body;
+  );
+  const kuwoSearchVideosPage2 = kuwoSearchVideosPage2Result.body;
   const kuwoSearchVideoPage1Ids = new Set(kuwoSearchVideoRows.map((video) => video.id));
   check(
     "视频分页搜索 page=2 前进（与 page=1 的 id 无交叠）",
@@ -3261,6 +3298,7 @@ async function main() {
       "p1 首条": kuwoSearchVideoRows[0]?.id,
       "p2 首条": kuwoSearchVideosPage2.data?.videos?.[0]?.id,
     }),
+    kuwoSearchVideosPage2Result.response,
   );
 
   const kuwoSearchLyrics = await fetchJsonRows(
@@ -3292,12 +3330,14 @@ async function main() {
     detailMetaShape(kuwoSearchLyricsBody.data?.meta, 1, 10)
       && kuwoSearchLyricsBody.data.meta.total > 0,
     JSON.stringify(kuwoSearchLyricsBody.data?.meta),
+    kuwoSearchLyricsRes,
   );
-  const kuwoSearchLyricsPage2 = (await fetchJsonRows(
+  const kuwoSearchLyricsPage2Result = await fetchJsonRows(
     `${base}/api/v1/search/lyrics?keyword=${encodeURIComponent("晴天")}&page=2&num=10&source=kuwo`,
     { headers: { authorization: `Bearer ${token}` } },
     { label: "歌词分页搜索第 2 页", rowsOf: (body) => body.data?.songs },
-  )).body;
+  );
+  const kuwoSearchLyricsPage2 = kuwoSearchLyricsPage2Result.body;
   const kuwoSearchLyricPage1Ids = new Set(kuwoSearchLyricRows.map((song) => song.id));
   check(
     "歌词分页搜索 page=2 前进（与 page=1 的 id 无交叠）",
@@ -3308,6 +3348,7 @@ async function main() {
       "p1 首条": kuwoSearchLyricRows[0]?.id,
       "p2 首条": kuwoSearchLyricsPage2.data?.songs?.[0]?.id,
     }),
+    kuwoSearchLyricsPage2Result.response,
   );
 
   // 三条新路由的拒绝契约：空 keyword 与 source=all 都 4001（source=all 在进入
