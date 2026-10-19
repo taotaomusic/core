@@ -104,4 +104,19 @@ CI 会跑**两遍契约**(2026-10-18 起,见 [64-multi-region-deployment.md](64-
 
 副本自指验证覆盖的是路由与连接池接线;异步复制延迟与写后立读窗口的真实效果依赖两套实例,CI 不覆盖,上线冒烟按 [64-multi-region-deployment.md](64-multi-region-deployment.md) §4 做。
 
+### 上游抖动的重试与「真失败」的边界
+
+契约里有一批断言依赖**真实上游召回**（酷我/QQ 的搜索结果、歌手列表）。上游偶发返回 200 但 0 条结果,同一条请求隔几秒重发就有数据 —— 2026-10-18 实测两遍契约各出现 1~3 条这类假失败。
+
+脚本对**搜索族取数点**统一走 `fetchNdjson` / `fetchJsonRows`:HTTP 200 但结果为空(或不足断言所需的条数)时,间隔 1.5 秒重试,最多 3 次。两条边界:
+
+- **4xx 不重试** —— 400/401 是确定性契约失败,重试只会拖慢报错;
+- **重试到上限仍为空就照常失败** —— 真正的「搜索全空」回归不会被重试掩盖,只是把上游抖动的偶发红压掉。
+
+### CI 步骤必须带 `pipefail`(2026-10-18 修复)
+
+契约步骤是 `node tools/verify-contract.mjs ... | tee verify.log`。GitHub 默认 shell 是 `bash -e {0}`,**没有 pipefail**,管道退出码取末段(`tee` 恒 0)——脚本的 `process.exitCode = 1` 会被吞掉,契约失败也显示全绿。2026-10-18 实测到一次 3+1 个非环境性失败却全绿的 run(缺陷从旧独立仓 `backend.yml` 就存在)。
+
+现在两道契约步骤都写成 `set -euo pipefail` 后再跑。**改这两步时不要退回单行管道形式**;复核对 CI 结论时要 grep job 日志的汇总行(「通过 N 项,失败 M 项」),只看 `gh pr checks` 的绿不足以证明契约通过。
+
 `server/.github/workflows/backend.yml` 是旧 music-server 独立仓库的工作流,该仓库已停用、暂保留备查,不要再按它理解现行发布链路。见 [62-ci-cloud-build.md](62-ci-cloud-build.md)。

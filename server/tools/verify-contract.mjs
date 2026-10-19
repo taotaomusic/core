@@ -274,6 +274,74 @@ function section(title) {
   console.log(`\n=== ${title}`);
 }
 
+/**
+ * 上游搜索抖动的重试次数与间隔。
+ *
+ * 上游（酷我 / QQ）偶发返回 200 但 0 条结果，实测同一条请求隔几秒重发就有数据。
+ * 不重试时这类抖动会把契约刷红，而重试到上限仍然为空就照常失败 ——
+ * 真正的「搜索全空」回归不会被掩盖。
+ */
+const SEARCH_RETRY_ATTEMPTS = 3;
+const SEARCH_RETRY_DELAY_MS = 1500;
+
+function sleep(ms) {
+  return new Promise((done) => setTimeout(done, ms));
+}
+
+function parseNdjson(text) {
+  return text.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+}
+
+/**
+ * 取 NDJSON 搜索结果，空结果自动重试。
+ *
+ * `hasContent` 默认要求至少有一行 song —— 上游抖动最典型的形态就是只回了 `end` 行
+ * （或 artist/album 行），依赖首条 song 的断言（artistId、翻页起点）会跟着假失败。
+ * 返回最后一次响应（含 status/headers）与已解析的行，调用方的形状断言不受影响。
+ */
+async function fetchNdjson(url, init, { label = "搜索", hasContent } = {}) {
+  const usable = hasContent ?? ((lines) => lines.some((line) => line.type === "song"));
+  for (let attempt = 1; ; attempt++) {
+    const startedAt = Date.now();
+    const response = await fetch(url, init);
+    const text = await response.text();
+    const elapsedMs = Date.now() - startedAt;
+    const lines = parseNdjson(text);
+    if (response.status === 200 && usable(lines)) return { response, text, lines, elapsedMs };
+    // 4xx 是确定性契约失败（401/4001 之类），重试只会拖慢报错，直接交给断言。
+    const retryable = response.status === 200 || response.status >= 500;
+    if (!retryable || attempt >= SEARCH_RETRY_ATTEMPTS) return { response, text, lines, elapsedMs };
+    console.log(
+      `  … ${label}上游返回空结果（HTTP ${response.status}，${lines.length} 行），`
+      + `${SEARCH_RETRY_DELAY_MS}ms 后重试（${attempt}/${SEARCH_RETRY_ATTEMPTS - 1}）`,
+    );
+    await sleep(SEARCH_RETRY_DELAY_MS);
+  }
+}
+
+/**
+ * 取信封式 JSON 搜索结果，空行集自动重试（与 fetchNdjson 同一套抖动兜底）。
+ *
+ * `rowsOf(body)` 给出该接口的行数组；重试只针对「HTTP 200 + code 0 但 0 行」，
+ * 400/401 之类的契约性拒绝立即返回，不会因为重试把断言拖成超时。
+ */
+async function fetchJsonRows(url, init, { label = "搜索", rowsOf }) {
+  for (let attempt = 1; ; attempt++) {
+    const response = await fetch(url, init);
+    const body = await response.json();
+    const rows = rowsOf(body) ?? [];
+    const usable = response.status === 200 && body?.code === 0 && rows.length > 0;
+    // 与 fetchNdjson 同一口径：4xx 是确定性契约失败，不重试。
+    const retryable = response.status === 200 || response.status >= 500;
+    if (usable || !retryable || attempt >= SEARCH_RETRY_ATTEMPTS) return { response, body, rows };
+    console.log(
+      `  … ${label}上游返回空结果（HTTP ${response.status}，0 行），`
+      + `${SEARCH_RETRY_DELAY_MS}ms 后重试（${attempt}/${SEARCH_RETRY_ATTEMPTS - 1}）`,
+    );
+    await sleep(SEARCH_RETRY_DELAY_MS);
+  }
+}
+
 async function main() {
   section("健康检查与未匹配路由");
   const health = await fetch(`${base}/health`);
@@ -1016,14 +1084,17 @@ async function main() {
   const emptyBody = await emptyKeyword.json();
   check("空关键词 400 且 code 4001", emptyKeyword.status === 400 && emptyBody.code === 4001, JSON.stringify(emptyBody));
 
-  const started = Date.now();
-  const search = await fetch(`${base}/api/v1/search?keyword=${encodeURIComponent("周杰伦")}&num=20&quality=10&source=tencent`, {
-    headers: { authorization: `Bearer ${token}` },
-  });
-  const ndjson = await search.text();
-  const elapsed = Date.now() - started;
+  const searchResult = await fetchNdjson(
+    `${base}/api/v1/search?keyword=${encodeURIComponent("周杰伦")}&num=20&quality=10&source=tencent`,
+    { headers: { authorization: `Bearer ${token}` } },
+    { label: "腾讯 周杰伦" },
+  );
+  const search = searchResult.response;
+  const ndjson = searchResult.text;
+  // 只统计成功那一次的耗时：重试说明上游抖动，不该把重试等待算进「搜索慢」。
+  const elapsed = searchResult.elapsedMs;
   check("content-type 是 application/x-ndjson", (search.headers.get("content-type") ?? "").includes("x-ndjson"), search.headers.get("content-type"));
-  const lines = ndjson.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  const lines = searchResult.lines;
   const songs = lines.filter((line) => line.type === "song");
   const end = lines.find((line) => line.type === "end");
   check("响应没有被信封包住（首行 type 为 song）", lines[0]?.type === "song", JSON.stringify(lines[0]).slice(0, 100));
@@ -1726,13 +1797,15 @@ async function main() {
   section("搜索拆分：元信息 + 独立解析");
   // 播放地址解析已从搜索里拆出去，搜索只返回元信息。这一组覆盖拆分后的新契约。
 
-  const wideStarted = Date.now();
-  const wide = await fetch(`${base}/api/v1/search?keyword=${encodeURIComponent("周杰伦")}&num=60&source=tencent`, {
-    headers: { authorization: `Bearer ${token}` },
-  });
-  const wideBody = await wide.text();
-  const wideElapsed = Date.now() - wideStarted;
-  const wideLines = wideBody.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  const wideResult = await fetchNdjson(
+    `${base}/api/v1/search?keyword=${encodeURIComponent("周杰伦")}&num=60&source=tencent`,
+    { headers: { authorization: `Bearer ${token}` } },
+    { label: "腾讯 周杰伦 num=60", hasContent: (lines) => lines.filter((line) => line.type === "song").length === 60 },
+  );
+  const wide = wideResult.response;
+  const wideBody = wideResult.text;
+  const wideElapsed = wideResult.elapsedMs;
+  const wideLines = wideResult.lines;
   const wideSongs = wideLines.filter((line) => line.type === "song").map((line) => line.data);
   check(`60 首在 3 秒内返回（实测 ${wideElapsed}ms）`, wideElapsed < 3000, `${wideElapsed}ms`);
   check("确实返回了 60 首", wideSongs.length === 60, `${wideSongs.length} 首`);
@@ -1758,10 +1831,11 @@ async function main() {
     method: "POST",
     headers: { authorization: `Bearer ${token}` },
   });
-  const afterFav = (await (await fetch(`${base}/api/v1/search?keyword=${encodeURIComponent("周杰伦")}&num=60&source=tencent`, {
-    headers: { authorization: `Bearer ${token}` },
-  })).text())
-    .split("\n").filter(Boolean).map((line) => JSON.parse(line))
+  const afterFav = (await fetchNdjson(
+    `${base}/api/v1/search?keyword=${encodeURIComponent("周杰伦")}&num=60&source=tencent`,
+    { headers: { authorization: `Bearer ${token}` } },
+    { label: "腾讯 周杰伦 num=60（收藏回读）", hasContent: (lines) => lines.filter((line) => line.type === "song").length === 60 },
+  )).lines
     .filter((line) => line.type === "song").map((line) => line.data);
   const flagged = afterFav.filter((song) => song.favorited);
   check(
@@ -2542,11 +2616,14 @@ async function main() {
   check("删除音源账号返回 204", removedSource.status === 204, String(removedSource.status));
 
   // 酷我已在音源白名单里：/search 必须接受它，并且仍然返回**裸 NDJSON**（不能被信封包住）。
-  const kuwoSearch = await fetch(`${base}/api/v1/search?keyword=${encodeURIComponent("轻音乐")}&num=5&source=kuwo`, {
-    headers: { authorization: `Bearer ${token}` },
-  });
-  const kuwoNdjson = await kuwoSearch.text();
-  const kuwoLines = kuwoNdjson.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  const kuwoSearchResult = await fetchNdjson(
+    `${base}/api/v1/search?keyword=${encodeURIComponent("轻音乐")}&num=5&source=kuwo`,
+    { headers: { authorization: `Bearer ${token}` } },
+    { label: "轻音乐" },
+  );
+  const kuwoSearch = kuwoSearchResult.response;
+  const kuwoNdjson = kuwoSearchResult.text;
+  const kuwoLines = kuwoSearchResult.lines;
   const kuwoSongs = kuwoLines.filter((line) => line.type === "song");
   // 2026-10 起 song 行之前可能先有 artist / album 行（见下方专属检查段）：
   // 上游歌手/专辑搜索失败或召回为空时这两段缺席，首行退回 song，两者都是契约内形状。
@@ -2576,10 +2653,12 @@ async function main() {
   // artist / album 两类行。这里刻意写成**宽松断言**：上游偶发失败时服务端整段省略，
   // 区块缺失不算失败 —— 只有「区块存在但形状不对」才挂。关键词选「周杰伦」，
   // 歌手与专辑的命中率最高，缺区块基本可以断定是上游故障而非召回为空。
-  const kuwoEntitySearch = await fetch(`${base}/api/v1/search?keyword=${encodeURIComponent("周杰伦")}&num=5&source=kuwo`, {
-    headers: { authorization: `Bearer ${token}` },
-  });
-  const kuwoEntityLines = (await kuwoEntitySearch.text()).split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  const kuwoEntityResult = await fetchNdjson(
+    `${base}/api/v1/search?keyword=${encodeURIComponent("周杰伦")}&num=5&source=kuwo`,
+    { headers: { authorization: `Bearer ${token}` } },
+    { label: "周杰伦" },
+  );
+  const kuwoEntityLines = kuwoEntityResult.lines;
   const kuwoArtists = kuwoEntityLines.filter((line) => line.type === "artist");
   const kuwoAlbums = kuwoEntityLines.filter((line) => line.type === "album");
   check(
@@ -2668,11 +2747,14 @@ async function main() {
     && typeof meta?.hasMore === "boolean"
     && meta.hasMore === (page * num < meta.total);
 
-  const kuwoArtistSongsRes = await fetch(`${base}/api/v1/artists/336/songs?page=1&num=30&source=kuwo`, {
-    headers: { authorization: `Bearer ${token}` },
-  });
-  const kuwoArtistSongsBody = await kuwoArtistSongsRes.json();
-  const kuwoArtistSongs = kuwoArtistSongsBody.data?.songs ?? [];
+  const kuwoArtistSongsResult = await fetchJsonRows(
+    `${base}/api/v1/artists/336/songs?page=1&num=30&source=kuwo`,
+    { headers: { authorization: `Bearer ${token}` } },
+    { label: "歌手歌曲列表", rowsOf: (body) => body.data?.songs },
+  );
+  const kuwoArtistSongsRes = kuwoArtistSongsResult.response;
+  const kuwoArtistSongsBody = kuwoArtistSongsResult.body;
+  const kuwoArtistSongs = kuwoArtistSongsResult.rows;
   check(
     "歌手歌曲列表返回 200 且 songs 与 search 的歌曲行同构",
     kuwoArtistSongsRes.status === 200
@@ -2692,9 +2774,11 @@ async function main() {
   // upstreamPage()（page-1）的换算，否则 page=1 与 page=2 都会落在同一页
   // （实测 pn=0 与 pn=1 同页）。下面用「page=2 的首条不在 page=1 的 id 集合里」
   // 守住这条分页语义 —— 固定歌手的整表列表秒级间隔内不会重排，出现交叠只能是偏移错了。
-  const kuwoArtistSongsPage2 = await (await fetch(`${base}/api/v1/artists/336/songs?page=2&num=30&source=kuwo`, {
-    headers: { authorization: `Bearer ${token}` },
-  })).json();
+  const kuwoArtistSongsPage2 = (await fetchJsonRows(
+    `${base}/api/v1/artists/336/songs?page=2&num=30&source=kuwo`,
+    { headers: { authorization: `Bearer ${token}` } },
+    { label: "歌手歌曲列表第 2 页", rowsOf: (body) => body.data?.songs },
+  )).body;
   const kuwoArtistSongsPage1Ids = kuwoArtistSongs.map((song) => song.id);
   check(
     "歌手歌曲翻页前进（pn 1 基：page=2 不与 page=1 交叠）",
@@ -2704,10 +2788,13 @@ async function main() {
     JSON.stringify({ "p1 首条": kuwoArtistSongs[0]?.id, "p2 首条": kuwoArtistSongsPage2.data?.songs?.[0]?.id }),
   );
 
-  const kuwoArtistAlbums = await (await fetch(`${base}/api/v1/artists/336/albums?page=1&num=20&source=kuwo`, {
-    headers: { authorization: `Bearer ${token}` },
-  })).json();
-  const kuwoArtistAlbumRows = kuwoArtistAlbums.data?.albums ?? [];
+  const kuwoArtistAlbumsResult = await fetchJsonRows(
+    `${base}/api/v1/artists/336/albums?page=1&num=20&source=kuwo`,
+    { headers: { authorization: `Bearer ${token}` } },
+    { label: "歌手专辑列表", rowsOf: (body) => body.data?.albums },
+  );
+  const kuwoArtistAlbums = kuwoArtistAlbumsResult.body;
+  const kuwoArtistAlbumRows = kuwoArtistAlbumsResult.rows;
   check(
     "歌手专辑列表行与 search 的 album 行同构（songCount 归一，长简介 info 丢弃）",
     kuwoArtistAlbums.code === 0
@@ -2730,10 +2817,13 @@ async function main() {
     JSON.stringify(kuwoArtistAlbums.data?.meta),
   );
 
-  const kuwoSimilarArtists = await (await fetch(`${base}/api/v1/artists/336/similar?source=kuwo`, {
-    headers: { authorization: `Bearer ${token}` },
-  })).json();
-  const kuwoSimilarRows = kuwoSimilarArtists.data?.artists ?? [];
+  const kuwoSimilarArtistsResult = await fetchJsonRows(
+    `${base}/api/v1/artists/336/similar?source=kuwo`,
+    { headers: { authorization: `Bearer ${token}` } },
+    { label: "相似歌手", rowsOf: (body) => body.data?.artists },
+  );
+  const kuwoSimilarArtists = kuwoSimilarArtistsResult.body;
+  const kuwoSimilarRows = kuwoSimilarArtistsResult.rows;
   check(
     "相似歌手行与 search 的 artist 行同构（songCount/albumCount 归一，aliasName/desc 丢弃）",
     kuwoSimilarArtists.code === 0
@@ -2769,11 +2859,14 @@ async function main() {
     JSON.stringify(kuwoAlbumDetail).slice(0, 220),
   );
 
-  const kuwoAlbumSongsRes = await fetch(`${base}/api/v1/albums/87758985/songs?page=1&num=30&source=kuwo`, {
-    headers: { authorization: `Bearer ${token}` },
-  });
-  const kuwoAlbumSongsBody = await kuwoAlbumSongsRes.json();
-  const kuwoAlbumSongs = kuwoAlbumSongsBody.data?.songs ?? [];
+  const kuwoAlbumSongsResult = await fetchJsonRows(
+    `${base}/api/v1/albums/87758985/songs?page=1&num=30&source=kuwo`,
+    { headers: { authorization: `Bearer ${token}` } },
+    { label: "专辑歌曲列表", rowsOf: (body) => body.data?.songs },
+  );
+  const kuwoAlbumSongsRes = kuwoAlbumSongsResult.response;
+  const kuwoAlbumSongsBody = kuwoAlbumSongsResult.body;
+  const kuwoAlbumSongs = kuwoAlbumSongsResult.rows;
   check(
     "专辑歌曲列表返回 200 且 songs 与 search 的歌曲行同构",
     kuwoAlbumSongsRes.status === 200
@@ -2825,12 +2918,14 @@ async function main() {
   // 行结构与区块行**完全同构**。meta.total 用上游 data.total 的整表总数（实测
   // 「周杰伦」歌手 53 / 专辑 103）；分页语义与搜索族一致（上游 pn 0 基，服务端过
   // upstreamPage() 换算），用「page=2 与 page=1 的 id 无交叠」守住。
-  const kuwoSearchArtistsRes = await fetch(
+  const kuwoSearchArtists = await fetchJsonRows(
     `${base}/api/v1/search/artists?keyword=${encodeURIComponent("周杰伦")}&page=1&num=10&source=kuwo`,
     { headers: { authorization: `Bearer ${token}` } },
+    { label: "歌手分页搜索", rowsOf: (body) => body.data?.artists },
   );
-  const kuwoSearchArtistsBody = await kuwoSearchArtistsRes.json();
-  const kuwoSearchArtistRows = kuwoSearchArtistsBody.data?.artists ?? [];
+  const kuwoSearchArtistsRes = kuwoSearchArtists.response;
+  const kuwoSearchArtistsBody = kuwoSearchArtists.body;
+  const kuwoSearchArtistRows = kuwoSearchArtists.rows;
   check(
     "歌手分页搜索返回 200 且行与 /search 的 artist 行同构",
     kuwoSearchArtistsRes.status === 200
@@ -2850,10 +2945,11 @@ async function main() {
       && kuwoSearchArtistsBody.data.meta.total > 0,
     JSON.stringify(kuwoSearchArtistsBody.data?.meta),
   );
-  const kuwoSearchArtistsPage2 = await (await fetch(
+  const kuwoSearchArtistsPage2 = (await fetchJsonRows(
     `${base}/api/v1/search/artists?keyword=${encodeURIComponent("周杰伦")}&page=2&num=10&source=kuwo`,
     { headers: { authorization: `Bearer ${token}` } },
-  )).json();
+    { label: "歌手分页搜索第 2 页", rowsOf: (body) => body.data?.artists },
+  )).body;
   const kuwoSearchArtistPage1Ids = new Set(kuwoSearchArtistRows.map((artist) => artist.id));
   check(
     "歌手分页搜索 page=2 前进（与 page=1 的 id 无交叠）",
@@ -2866,12 +2962,14 @@ async function main() {
     }),
   );
 
-  const kuwoSearchAlbumsRes = await fetch(
+  const kuwoSearchAlbums = await fetchJsonRows(
     `${base}/api/v1/search/albums?keyword=${encodeURIComponent("周杰伦")}&page=1&num=10&source=kuwo`,
     { headers: { authorization: `Bearer ${token}` } },
+    { label: "专辑分页搜索", rowsOf: (body) => body.data?.albums },
   );
-  const kuwoSearchAlbumsBody = await kuwoSearchAlbumsRes.json();
-  const kuwoSearchAlbumRows = kuwoSearchAlbumsBody.data?.albums ?? [];
+  const kuwoSearchAlbumsRes = kuwoSearchAlbums.response;
+  const kuwoSearchAlbumsBody = kuwoSearchAlbums.body;
+  const kuwoSearchAlbumRows = kuwoSearchAlbums.rows;
   check(
     "专辑分页搜索返回 200 且行与 /search 的 album 行同构",
     kuwoSearchAlbumsRes.status === 200
@@ -2893,10 +2991,11 @@ async function main() {
       && kuwoSearchAlbumsBody.data.meta.total > 0,
     JSON.stringify(kuwoSearchAlbumsBody.data?.meta),
   );
-  const kuwoSearchAlbumsPage2 = await (await fetch(
+  const kuwoSearchAlbumsPage2 = (await fetchJsonRows(
     `${base}/api/v1/search/albums?keyword=${encodeURIComponent("周杰伦")}&page=2&num=10&source=kuwo`,
     { headers: { authorization: `Bearer ${token}` } },
-  )).json();
+    { label: "专辑分页搜索第 2 页", rowsOf: (body) => body.data?.albums },
+  )).body;
   const kuwoSearchAlbumPage1Ids = new Set(kuwoSearchAlbumRows.map((album) => album.id));
   check(
     "专辑分页搜索 page=2 前进（与 page=1 的 id 无交叠）",
@@ -2936,12 +3035,14 @@ async function main() {
   // 关键词用实测有召回的：歌单 / 视频「周杰伦」（上游 total 143 / 603），
   // 歌词「晴天」（上游 total 100）。视频行断言 vid>0（非 MV 条目服务端已丢弃），
   // 歌词行复用 detailSongShape 断言「与 /search 的歌曲行同构」+ lyricSnippet 摘要。
-  const kuwoSearchPlaylistsRes = await fetch(
+  const kuwoSearchPlaylists = await fetchJsonRows(
     `${base}/api/v1/search/playlists?keyword=${encodeURIComponent("周杰伦")}&page=1&num=10&source=kuwo`,
     { headers: { authorization: `Bearer ${token}` } },
+    { label: "歌单分页搜索", rowsOf: (body) => body.data?.playlists },
   );
-  const kuwoSearchPlaylistsBody = await kuwoSearchPlaylistsRes.json();
-  const kuwoSearchPlaylistRows = kuwoSearchPlaylistsBody.data?.playlists ?? [];
+  const kuwoSearchPlaylistsRes = kuwoSearchPlaylists.response;
+  const kuwoSearchPlaylistsBody = kuwoSearchPlaylists.body;
+  const kuwoSearchPlaylistRows = kuwoSearchPlaylists.rows;
   check(
     "歌单分页搜索返回 200 且行形状符合契约（pic 已升级 https，运营字段丢弃）",
     kuwoSearchPlaylistsRes.status === 200
@@ -2968,10 +3069,11 @@ async function main() {
       && kuwoSearchPlaylistsBody.data.meta.total > 0,
     JSON.stringify(kuwoSearchPlaylistsBody.data?.meta),
   );
-  const kuwoSearchPlaylistsPage2 = await (await fetch(
+  const kuwoSearchPlaylistsPage2 = (await fetchJsonRows(
     `${base}/api/v1/search/playlists?keyword=${encodeURIComponent("周杰伦")}&page=2&num=10&source=kuwo`,
     { headers: { authorization: `Bearer ${token}` } },
-  )).json();
+    { label: "歌单分页搜索第 2 页", rowsOf: (body) => body.data?.playlists },
+  )).body;
   const kuwoSearchPlaylistPage1Ids = new Set(kuwoSearchPlaylistRows.map((playlist) => playlist.id));
   check(
     "歌单分页搜索 page=2 前进（与 page=1 的 id 无交叠）",
@@ -3110,12 +3212,14 @@ async function main() {
   }
 
 
-  const kuwoSearchVideosRes = await fetch(
+  const kuwoSearchVideos = await fetchJsonRows(
     `${base}/api/v1/search/videos?keyword=${encodeURIComponent("周杰伦")}&page=1&num=10&source=kuwo`,
     { headers: { authorization: `Bearer ${token}` } },
+    { label: "视频分页搜索", rowsOf: (body) => body.data?.videos },
   );
-  const kuwoSearchVideosBody = await kuwoSearchVideosRes.json();
-  const kuwoSearchVideoRows = kuwoSearchVideosBody.data?.videos ?? [];
+  const kuwoSearchVideosRes = kuwoSearchVideos.response;
+  const kuwoSearchVideosBody = kuwoSearchVideos.body;
+  const kuwoSearchVideoRows = kuwoSearchVideos.rows;
   check(
     "视频分页搜索返回 200 且行形状符合契约（vid>0、mv 元数据齐、playable 同歌曲行语义）",
     kuwoSearchVideosRes.status === 200
@@ -3142,10 +3246,11 @@ async function main() {
       && kuwoSearchVideosBody.data.meta.total > 0,
     JSON.stringify(kuwoSearchVideosBody.data?.meta),
   );
-  const kuwoSearchVideosPage2 = await (await fetch(
+  const kuwoSearchVideosPage2 = (await fetchJsonRows(
     `${base}/api/v1/search/videos?keyword=${encodeURIComponent("周杰伦")}&page=2&num=10&source=kuwo`,
     { headers: { authorization: `Bearer ${token}` } },
-  )).json();
+    { label: "视频分页搜索第 2 页", rowsOf: (body) => body.data?.videos },
+  )).body;
   const kuwoSearchVideoPage1Ids = new Set(kuwoSearchVideoRows.map((video) => video.id));
   check(
     "视频分页搜索 page=2 前进（与 page=1 的 id 无交叠）",
@@ -3158,12 +3263,14 @@ async function main() {
     }),
   );
 
-  const kuwoSearchLyricsRes = await fetch(
+  const kuwoSearchLyrics = await fetchJsonRows(
     `${base}/api/v1/search/lyrics?keyword=${encodeURIComponent("晴天")}&page=1&num=10&source=kuwo`,
     { headers: { authorization: `Bearer ${token}` } },
+    { label: "歌词分页搜索", rowsOf: (body) => body.data?.songs },
   );
-  const kuwoSearchLyricsBody = await kuwoSearchLyricsRes.json();
-  const kuwoSearchLyricRows = kuwoSearchLyricsBody.data?.songs ?? [];
+  const kuwoSearchLyricsRes = kuwoSearchLyrics.response;
+  const kuwoSearchLyricsBody = kuwoSearchLyrics.body;
+  const kuwoSearchLyricRows = kuwoSearchLyrics.rows;
   check(
     "歌词分页搜索返回 200 且行与 search 的歌曲行同构 + lyricSnippet 纯文本摘要",
     kuwoSearchLyricsRes.status === 200
@@ -3186,10 +3293,11 @@ async function main() {
       && kuwoSearchLyricsBody.data.meta.total > 0,
     JSON.stringify(kuwoSearchLyricsBody.data?.meta),
   );
-  const kuwoSearchLyricsPage2 = await (await fetch(
+  const kuwoSearchLyricsPage2 = (await fetchJsonRows(
     `${base}/api/v1/search/lyrics?keyword=${encodeURIComponent("晴天")}&page=2&num=10&source=kuwo`,
     { headers: { authorization: `Bearer ${token}` } },
-  )).json();
+    { label: "歌词分页搜索第 2 页", rowsOf: (body) => body.data?.songs },
+  )).body;
   const kuwoSearchLyricPage1Ids = new Set(kuwoSearchLyricRows.map((song) => song.id));
   check(
     "歌词分页搜索 page=2 前进（与 page=1 的 id 无交叠）",
@@ -3385,16 +3493,12 @@ async function main() {
   // ⚠️ 关键词挑的是**可播比例高**的：酷我会把拿不到播放地址的歌滤掉，
   // 用「周杰伦」这种全被滤掉的词会让下面的比较变成空对空，断言假通过。
   const pageIds = async (page, num, keyword = "稻香") => {
-    const res = await fetch(
+    const { lines } = await fetchNdjson(
       `${base}/api/v1/search?keyword=${encodeURIComponent(keyword)}&page=${page}&num=${num}&source=kuwo`,
       { headers: { authorization: `Bearer ${token}` } },
+      { label: `${keyword} 第 ${page} 页 num=${num}` },
     );
-    return (await res.text())
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line))
-      .filter((line) => line.type === "song")
-      .map((line) => line.data.id);
+    return lines.filter((line) => line.type === "song").map((line) => line.data.id);
   };
 
   const p1n20 = await pageIds(1, 20);
@@ -3425,11 +3529,11 @@ async function main() {
   // ⚠️ 这两条都依赖上游曲库：哪天周杰伦的歌在酷我拿到版权（`dropped` 类断言当年也这么写），
   // 它们会失败。那时换一个同样全部不可播的关键词即可，不代表代码坏了。
   const playableSearch = async (keyword, num) => {
-    const res = await fetch(
+    const { lines } = await fetchNdjson(
       `${base}/api/v1/search?keyword=${encodeURIComponent(keyword)}&num=${num}&source=kuwo`,
       { headers: { authorization: `Bearer ${token}` } },
+      { label: `${keyword} num=${num}` },
     );
-    const lines = (await res.text()).split("\n").filter(Boolean).map((line) => JSON.parse(line));
     return {
       songs: lines.filter((line) => line.type === "song").map((line) => line.data),
       meta: lines.at(-1)?.meta,
