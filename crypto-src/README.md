@@ -37,7 +37,7 @@
 | 把 A 端点的密文搬到 B 端点 | AAD 绑定 `"{METHOD} {PATH}?{QUERY}"` |
 | 中间人各自与两端握手 | PSK 参与握手 HMAC，没有 PSK 算不出合法 MAC |
 | 长期密钥泄露后解密历史流量 | 每次握手生成临时 X25519 密钥对，前向保密 |
-| 随手 attach 调试器 / Frida 就能抓明文 | 客户端产物检测调试器与注入框架，命中即 `abort()`（§2.6） |
+| 随手 attach 调试器 / Frida 就能抓明文 | 客户端产物检测调试器与注入框架，命中只记录信号、不终止进程（§2.6） |
 
 > **最后一行要如实理解**：反调试是「提高门槛」，不是「建立防线」。它挡不住有
 > 决心的人 —— 有物理设备的人总能 patch 掉检测。但它能把「半小时工作量」抬成
@@ -198,12 +198,13 @@ AAD = session_id(16) ‖ aad_context ‖ frame_header(17)
 ### 2.6 反调试
 
 客户端产物（Android `.so`、Windows Tauri 二进制）在**进程启动**与**建加密引擎**
-两个时机做一次检测，命中即 `std::process::abort()`。
+两个时机各做一次检测。命中后只把结果记录到 `antidebug::detected()`，**进程继续
+正常运行** —— 它是一条观测信号，不是拦截动作。
 
 | 覆盖 | 检测什么 | 命中动作 |
 | --- | --- | --- |
-| Android | `TracerPid != 0`（`/proc/self/status`）；`/proc/self/maps` 里出现 Frida / Xposed / Substrate 特征 | `abort()` |
-| Windows | `IsDebuggerPresent()`（本进程 PEB）；`CheckRemoteDebuggerPresent()`（另一进程 attach） | `abort()` |
+| Android | `TracerPid != 0`（`/proc/self/status`）；`/proc/self/maps` 里出现 Frida / Xposed / Substrate 特征 | 记录信号 |
+| Windows | `IsDebuggerPresent()`（本进程 PEB）；`CheckRemoteDebuggerPresent()`（另一进程 attach） | 记录信号 |
 | 服务端 `.node` | ❌ 不开 | — |
 | `.wasm` | ❌ 不开 | — |
 
@@ -211,21 +212,25 @@ AAD = session_id(16) ‖ aad_context ‖ frame_header(17)
 
 **① 为什么服务端与 wasm 不开。** `.node` 只在服务器上加载、不对外分发，没有
 「攻击者手持产物」这个前提；而且它会让**后端排障**变难 —— 在 Windows 上用调试器
-跟一个 node 进程是极常见的开发动作，无条件 abort 会砸掉它。`.wasm` 跑在浏览器
-沙箱里，没有等价的调试语义，「检测 devtools」会直接砸掉正常的 F12 调试。
+跟一个 node 进程是极常见的开发动作，拦下来会砸掉它。`.wasm` 跑在浏览器沙箱里，
+没有等价的调试语义，「检测 devtools」会直接砸掉正常的 F12 调试。
 
-**② 为什么是 `abort()` 而不是抛异常。** 抛出的错误会被 JNI / napi 绑定层的
-`catch_unwind` 接住并转成宿主语言异常，攻击者 **catch 一下就能继续跑**。
-`abort()` 触发 SIGABRT，没有可恢复路径。
+**② 为什么命中不终止进程（2026-11-03 修正）。** 早期版本用
+`std::process::abort()`，理由是抛异常会被 JNI / napi 绑定层的 `catch_unwind`
+接住、攻击者 catch 一下就能继续。线上 1.0.659（2026-10-18 云编译）证明这个取舍
+不成立：`TracerPid` 非 0 不一定是调试器（Magisk/Zygisk 模块、应用双开/分身容器、
+厂商性能或「防闪退」服务都会 ptrace 目标进程），maps 里裸 `gadget` 的匹配面也
+过宽。用户侧的表现为「登录后一进主页立刻闪退」，而 SIGABRT 绕过
+`Thread.setDefaultUncaughtExceptionHandler`，应用自己的崩溃日志目录是空的。
+现在命中只记录信号并继续运行，`gadget` 也已从特征清单移除。
 
 **③ 为什么刻意不查 root / 模拟器。** 不是技术做不到，是**误伤面太大**：
-模拟器是我们自己的测试环境，root 机型在安卓用户里占比不低，而 `abort()` 不可
-恢复。用一个无法回滚的动作去拦一类**并不构成攻击**的环境，是把正常用户当攻击者。
-要拦这类环境应当先走「观测」（记录命中、继续服务），拿到真实比例再决定。
+模拟器是我们自己的测试环境，root 机型在安卓用户里占比不低。用一个不可回滚的
+动作去拦一类**并不构成攻击**的环境，是把正常用户当攻击者。现在检测虽已不终止
+进程，这条边界仍然保留：root / 模拟器本身不是攻击信号，收进来只会污染观测数据。
 
-**④ debug 构建自动跳过。** 否则会砸掉自己在本机用调试器排障的能力。反过来说：
-**不要用 release 产物做本机排障** —— 一 attach 就 abort，症状是「应用刚起来就
-没了」，很容易误判成别的问题。
+**④ debug 构建自动跳过。** 否则会砸掉自己在本机用调试器排障的能力（Android
+Studio attach、Windows 上 VSCode 调试 Tauri）。发布产物走 release，不受影响。
 
 > 这一层与「PSK 可提取性」的关系要说清楚：**它抬不高那条线。** 客户端密钥
 > 必然可提取这个结论不因反调试而改变，它只是把提取的**成本**从小脚本抬到
@@ -630,10 +635,10 @@ pwsh tools/build.ps1 -Target all -OutDir ..\music\crypto\dist   # 直接输出�
   不是用来在明文 HTTP 上裸奔的。
 - **不追求「密钥不可提取」。** 没有做控制流平坦化、没有做白盒密码学 ——
   收益递减而维护成本很高。
-- **反调试只做到「检测 + 终止」，且刻意不检测 root / 模拟器。** 客户端产物
+- **反调试只做到「检测 + 记录」，且刻意不检测 root / 模拟器。** 客户端产物
   （Android `.so`、Windows Tauri）会在启动与建引擎时查调试器与注入框架，
-  命中即 `abort()`；服务端 `.node` 与 `.wasm` 不开（理由见 §2.6）。
-  root / 模拟器不查 —— 那是把正常用户当攻击者，而 `abort()` 不可恢复。
+  命中只记录到 `antidebug::detected()`、不终止进程；服务端 `.node` 与 `.wasm`
+  不开（理由见 §2.6）。root / 模拟器不查 —— 那不是攻击信号，只会污染观测数据。
 - **PSK 只支持构建期注入。** 运行时从密钥管理服务拉取的路径尚未实现。
 - **不与 `server/native/kiwi-crypto` 合并。** 那是主项目里一套独立的
   C++17 + OpenSSL 加密模块，面向服务端单机场景；本仓库是跨四平台的传输层。

@@ -12,7 +12,8 @@
 //! 这是**真实 Windows 客户端的加密落点**（桌面端已由 Compose Desktop 换成
 //! Tauri，不再经 `taotao_crypto.dll`）。本 crate 开启 core 的 `antidebug`
 //! feature：进程启动时与每次 `crypto_session_new`（PSK 入口）都做一次检测，
-//! 命中即 `abort()`。检测逻辑在 `crypto-src/core/src/antidebug.rs`，本文件只
+//! 命中只记录到 `antidebug::detected()`、**不终止进程**（早期版本的 `abort()`
+//! 因误伤已被移除）。检测逻辑在 `crypto-src/core/src/antidebug.rs`，本文件只
 //! 负责接线。debug 构建自动跳过，所以 `tauri dev` 不受影响。
 
 use std::sync::Mutex;
@@ -35,8 +36,9 @@ const _: () = assert!(
 /// 对照阅读。未开启 `antidebug` 时它编译成空函数（core 里两个分支签名一致），
 /// 所以调用点不需要条件编译。
 ///
-/// debug 构建里 `enforce()` 直接返回，所以 `tauri dev` 与单测都不受影响；
-/// **release 产物则不能在本机挂调试器跑** —— 会直接 abort。
+/// debug 构建里 `enforce()` 直接返回，所以 `tauri dev` 与单测都不受影响。
+/// 命中只记录信号（`antidebug::detected()`），**不会终止进程**；早期版本的
+/// `abort()` 会误伤挂调试器/被安全软件 ptrace 的正常用户，已移除。
 #[inline(always)]
 fn enforce_antidebug() {
     taotao_crypto_core::antidebug::enforce();
@@ -70,8 +72,8 @@ fn device_id() -> String {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // 反调试：放在 Builder 构造**之前**，让进程在被附加调试器的状态下尽早死掉，
-    // 而不是等窗口起来、PSK 已经读进内存之后。
+    // 反调试：放在 Builder 构造**之前**，让检测信号尽早被记录
+    // （命中不影响启动，见 core/src/antidebug.rs 的模块文档）。
     //
     // 放在这里而不是 setup 回调里：setup 是 Tauri 建好运行时之后才调的，那时
     // 已经有相当多的初始化跑完了；`run()` 的第一行是控制权最早的地方。

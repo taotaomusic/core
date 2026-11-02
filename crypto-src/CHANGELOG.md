@@ -4,6 +4,28 @@
 **MAJOR 恒等于 `PROTOCOL_VERSION`**。每个正式版由 `vX.Y.Z` tag 触发，
 自动发布到仓库 Releases。
 
+## v2.3.2
+
+协议版本不变（仍 `PROTOCOL_VERSION = 2`），线格式与对外 API 都不变。
+**修复线上闪退**：反调试命中不再终止进程。
+
+- **问题**：客户端 1.0.659（2026-10-18 云编译，首个带 `antidebug` 的 Release）
+  出现「登录页正常、进入主页立刻闪退、应用自己的崩溃日志目录为空」。
+- **根因**：`antidebug::enforce()` 命中即 `std::process::abort()`。安卓侧
+  `TracerPid != 0` 与 `/proc/self/maps` 的裸 `gadget` 都有明显误伤面（双开/
+  分身容器、Magisk/Zygisk 模块、厂商性能或「防闪退」服务都会对目标进程
+  `ptrace`；任何路径带 `gadget` 的映射也会命中）。SIGABRT 绕过
+  `Thread.setDefaultUncaughtExceptionHandler`，所以只有 tombstone、没有 Java 堆栈。
+- **修复**：
+  - `enforce()` 改为把命中结果记进新增的 `antidebug::detected()`，进程继续运行；
+    删除 `abort_now()`。探测时机与「不查 root / 模拟器」的边界不变。
+  - 特征清单移除裸 `gadget`（Frida gadget 仍由 `frida-gadget` 覆盖）。
+  - 同步更新 `README.md` §2.6、`SECURITY.md`、`docs/design.md` 与 jni/desktop
+    注释：反调试从「检测 + 终止」退化为「检测 + 观测」。
+- **代价（如实说明）**：它不再主动终止任何进程，反调试不再提供拦截效果；
+  「PSK 可提取」这条结论本来也没变过。安全边界仍由 TLS、PSK 动态下发与字符串
+  混淆承担。
+
 ## v2.3.1
 
 协议版本不变（仍 `PROTOCOL_VERSION = 2`），线格式与对外 API 都不变，

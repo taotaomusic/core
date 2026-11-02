@@ -22,8 +22,8 @@ name = "taotao_crypto_jni"
 # 会被塞进安装包分发出去，协议标签与错误文案不该以明文留在二进制里。
 #
 # 开启 `antidebug`：这是分发给用户的产物，攻击者有物理设备。检测到调试器 /
-# 注入框架即 `abort()`（见 core/src/antidebug.rs 的模块文档，含「为什么服务端
-# 与 wasm 不开」）。
+# 注入框架只记录信号（`antidebug::detected()`），**不终止进程** —— 误伤的代价
+# 是用户闪退且没有 Java 堆栈（详见 core/src/antidebug.rs 的模块文档）。
 taotao-crypto-core = { workspace = true, features = ["obfuscate", "antidebug"] }
 # 纯 Rust 的 JNI 绑定，不需要 JDK 头文件，也不需要 javac —— 交叉编译到
 # aarch64-linux-android 时这是唯一省心的选择（用 bindgen 生成头文件绑定会
