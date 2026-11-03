@@ -10,6 +10,8 @@
 - `player-ui/`：Android、Windows、Web 共用的播放主题、歌曲行、迷你播放器和布局组件。
 - `shared/`：跨平台共享的数据模型、歌词解析和音质规则，代码放在 `src/commonMain/`。
 - `patch/`、`build-logic/`：热修复补丁模块与 Gradle/字节码插桩构建逻辑。
+- `hotupdate/`：热更新独立模块 —— 整包更新 + 远程配置（`update` 包）与 DEX 热修运行时（`hotfix` 包）。包名与插桩白名单、R8 keep、补丁方法键绑定，**不可改名**；androidApp 经 `UpdateHost` 契约注入能力（接线在 `androidApp/.../update/TaotaoUpdateHost.kt`），强制更新门禁 UI 仍在 androidApp 的 `ui/update/`。其它 Kotlin 客户端用 `HotUpdate` 门面接入；非 Compose 界面订阅 `UpdateManager.statusFlow` / `events`（StateFlow/SharedFlow），快速调用见 `hotupdate/README.md`。
+- `hotupdate-node/`：热更新的 Node 客户端与运维 SDK（零运行时依赖）—— `/app/bootstrap` 客户端（超时/重试）、带 sha256 校验的断点续传下载、与服务端同源的灰度分桶算法、TOTP 动态码、发布/放量/补丁/远程配置的管理 SDK，以及 `createHotUpdateServer` 零依赖可自建热更新后端（与主服务端同契约的参考实现）；协议兼容锚点在 `src/protocol.ts`，快速调用见 `hotupdate-node/README.md`。
 - `crypto/`：传输层加密层的**产物目录**，只放 `dist/`（四端编译产物），用 `tools/fetch-crypto.ps1` 从 tools 仓库的 Release 拉取。本地**不需要**安装 Rust / Android NDK / wasm-bindgen 等交叉编译环境。
 - `crypto-src/`：传输层加密层的**Rust 源码**（`core/jni/node/wasm` 四 crate + 自带 `.github/workflows/`）。它由 `tools/sync-repos.ps1` 推到 GitHub `tools` 仓库，交叉编译由那边的 GitHub Actions 负责，产物发 Release 后再经 `fetch-crypto.ps1` 落回 `crypto/dist/`。改加密协议在这里改，别去 `crypto/dist/` 动产物。
 - 根目录 Gradle 文件：定义上述客户端模块和 `:shared` 的构建关系。

@@ -270,7 +270,7 @@ internal object PrefsPayloadParser {
         }.getOrDefault(emptyList())
         return decoded
             .distinctBy { it.first }
-            .mapIndexed { index, (songJson, stableKey) -> FavoriteSongRow(stableKey, songJson, index) }
+            .mapIndexed { index, (stableKey, songJson) -> FavoriteSongRow(stableKey, songJson, index) }
     }
 
     /** 返回（会话行，消息行）；只含欢迎语的空白对话在迁移时一并清掉，与旧读取规则一致。 */
