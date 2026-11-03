@@ -1,6 +1,9 @@
 package com.taotao.music.ui.common
 
+import android.content.ClipData
 import android.content.Context
+import android.content.Intent
+import androidx.core.content.FileProvider
 import com.taotao.music.model.Song
 import java.io.File
 
@@ -11,20 +14,20 @@ import java.io.File
  * FileUriExposedException。`crash/export/` 已在 file_paths.xml 里声明。
  */
 internal fun shareLogFile(context: Context, file: File) {
-    val uri = androidx.core.content.FileProvider.getUriForFile(
+    val uri = FileProvider.getUriForFile(
         context,
         "${context.packageName}.fileprovider",
         file,
     )
-    val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+    val intent = Intent(Intent.ACTION_SEND).apply {
         type = "text/plain"
-        putExtra(android.content.Intent.EXTRA_STREAM, uri)
-        putExtra(android.content.Intent.EXTRA_SUBJECT, file.name)
-        addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        putExtra(Intent.EXTRA_STREAM, uri)
+        putExtra(Intent.EXTRA_SUBJECT, file.name)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }
-    context.startActivity(android.content.Intent.createChooser(intent, "导出崩溃日志").apply {
+    context.startActivity(Intent.createChooser(intent, "导出崩溃日志").apply {
         // 从非 Activity 上下文启动分享面板需要这个标记。
-        addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     })
 }
 
@@ -36,14 +39,41 @@ internal fun shareLogFile(context: Context, file: File) {
  * AndroidRuntimeException，表现为点「分享」后整个应用直接退回桌面。
  */
 internal fun shareSongLink(context: Context, song: Song, url: String) {
-    val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+    val intent = Intent(Intent.ACTION_SEND).apply {
         type = "text/plain"
-        putExtra(android.content.Intent.EXTRA_SUBJECT, "${song.title} - ${song.artist}")
-        putExtra(android.content.Intent.EXTRA_TEXT, "我在桃桃音乐分享了《${song.title}》\n$url")
+        putExtra(Intent.EXTRA_SUBJECT, "${song.title} - ${song.artist}")
+        putExtra(Intent.EXTRA_TEXT, "我在桃桃音乐分享了《${song.title}》\n$url")
     }
     context.startActivity(
-        android.content.Intent.createChooser(intent, "分享歌曲").apply {
-            addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+        Intent.createChooser(intent, "分享歌曲").apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        },
+    )
+}
+
+/**
+ * 把分享海报交给系统分享面板。
+ *
+ * `cache/share/` 已在 file_paths.xml 声明，改成 content:// 后授权读权限；同时把短链
+ * 塞进 [Intent.EXTRA_TEXT]，只收文字的目标应用（部分旧版微信/QQ）仍能拿到链接。
+ */
+internal fun shareSongPoster(context: Context, poster: SharePoster) {
+    val uri = FileProvider.getUriForFile(
+        context,
+        "${context.packageName}.fileprovider",
+        poster.file,
+    )
+    val intent = Intent(Intent.ACTION_SEND).apply {
+        type = "image/png"
+        putExtra(Intent.EXTRA_STREAM, uri)
+        putExtra(Intent.EXTRA_SUBJECT, "${poster.song.title} - ${poster.song.artist}")
+        putExtra(Intent.EXTRA_TEXT, "我在桃桃音乐分享了《${poster.song.title}》\n${poster.url}")
+        clipData = ClipData.newRawUri("分享海报", uri)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    context.startActivity(
+        Intent.createChooser(intent, "分享歌曲").apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         },
     )
 }

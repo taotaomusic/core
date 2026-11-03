@@ -33,6 +33,15 @@ import kotlinx.coroutines.withContext
  */
 @Composable
 internal fun TaotaoAppDialogs(state: TaotaoAppState, inDetailActivity: Boolean = false) {
+    // 分享海报：主界面与详情页共用同一份全局状态，触发源在哪一侧就由哪一侧的组合渲染。
+    SharePosterSheet(
+        loading = state.sharePosterLoading,
+        poster = state.sharePoster,
+        onShareImage = { state.shareCurrentPoster() },
+        onCopyLink = { state.copyCurrentPosterLink() },
+        onShareLink = { state.shareCurrentPosterLink() },
+        onDismiss = { state.dismissSharePoster() },
+    )
     if (!inDetailActivity && state.showAnnouncementDialog) {
         AnnouncementDialog(announcements = state.announcements, onDismiss = { state.showAnnouncementDialog = false })
     }
