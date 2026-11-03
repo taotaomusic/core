@@ -28,12 +28,22 @@ internal fun shareLogFile(context: Context, file: File) {
     })
 }
 
-/** 把歌曲短链交给 Android 系统，不附带服务端试听文件或上游音频地址。 */
+/**
+ * 把歌曲短链交给 Android 系统，不附带服务端试听文件或上游音频地址。
+ *
+ * 状态层持有的是 application context（见 TaotaoApplication.appState），从非 Activity
+ * 上下文启动分享面板必须带 FLAG_ACTIVITY_NEW_TASK：targetSdk >= P 时缺少它会抛
+ * AndroidRuntimeException，表现为点「分享」后整个应用直接退回桌面。
+ */
 internal fun shareSongLink(context: Context, song: Song, url: String) {
     val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
         type = "text/plain"
         putExtra(android.content.Intent.EXTRA_SUBJECT, "${song.title} - ${song.artist}")
         putExtra(android.content.Intent.EXTRA_TEXT, "我在桃桃音乐分享了《${song.title}》\n$url")
     }
-    context.startActivity(android.content.Intent.createChooser(intent, "分享歌曲"))
+    context.startActivity(
+        android.content.Intent.createChooser(intent, "分享歌曲").apply {
+            addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+        },
+    )
 }
