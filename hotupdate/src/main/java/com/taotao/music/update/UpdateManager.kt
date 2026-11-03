@@ -1,4 +1,4 @@
-package com.taotao.music.update
+﻿package com.taotao.music.update
 
 import android.content.Context
 import android.content.pm.PackageInfo
@@ -7,7 +7,17 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.taotao.music.hotfix.HotfixInstaller
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
 
@@ -25,6 +35,8 @@ class UpdateManager(
     private val host: UpdateHost,
     initialPatchVersion: Int = 0,
     private val channel: String = "release",
+    /** 状态桥接与后台任务的作用域；默认自建，宿主传自己的作用域可统一生命周期。 */
+    private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
 ) {
     private val appContext = context.applicationContext
     private val api = AppUpdateApi(host)
@@ -32,15 +44,38 @@ class UpdateManager(
     private val installer = UpdateInstaller(appContext)
     private val hotfix = HotfixInstaller(appContext, host.userAgent)
 
+    init {
+        // 单向桥接：flow 是事实源，Compose 状态只是它的视图。
+        // 订阅发生在构造线程（主线程），所有写路径都会先落 flow 再由这里同步给 Compose。
+        scope.launch {
+            _statusFlow.collect { status = it }
+        }
+    }
+
     /** 远程配置缓存，界面可直接读取，取不到时用代码内默认值。 */
     val remoteConfig: UpdateConfigStore get() = host.config
 
     /** 同一时刻只允许一次检查。原来靠读 status 判断，两个协程可能同时通过。 */
     private val checkLock = Mutex()
 
+    /**
+     * 状态的单一事实源。Compose 客户端仍直接读 [status] 等属性（零改动）；
+     * 非 Compose 客户端（Service、普通 Activity、桌面端桥接等）订阅
+     * [statusFlow] / [events] 拿同样的信息，不引入 Compose 依赖。
+     */
+    private val _statusFlow = MutableStateFlow(UpdateStatus())
 
     var status by mutableStateOf(UpdateStatus())
         private set
+
+    /**
+     * [status] 的 StateFlow 视图。
+     *
+     * 两个通道由 [init] 里的单向桥接保持同步：所有写路径改 flow，
+     * flow 订阅把值回填到 Compose 状态。非 Compose 客户端订阅它即可获得
+     * 与 Compose 重组完全一致的更新序列（StateFlow 去重相同值）。
+     */
+    val statusFlow: StateFlow<UpdateStatus> = _statusFlow.asStateFlow()
 
     /**
      * 手动检查的结果，供界面弹一次提示后自行清空。
@@ -48,6 +83,16 @@ class UpdateManager(
      */
     var manualResult by mutableStateOf<String?>(null)
         private set
+
+    /**
+     * 手动检查结果与下载进度错误的回调通道（非 Compose 客户端用）。
+     *
+     * SharedFlow 会重放最近 1 条 manualResult，新订阅者也能立刻拿到
+     * 当前待展示的提示；不需要提示时值为 null 也会发一条，便于清 UI。
+     */
+    private val _events = MutableSharedFlow<HotUpdateEvent>(replay = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+
+    val events: SharedFlow<HotUpdateEvent> = _events.asSharedFlow()
 
     /** 本机已安装的版本号，用于上报和比对。 */
     val installedVersionCode: Long = versionCodeOf(packageInfo())
@@ -97,15 +142,15 @@ class UpdateManager(
         if (!checkLock.tryLock()) return
         try {
             val previous = status
-            status = status.copy(stage = UpdateStage.CHECKING)
+            publishStatus(previous.copy(stage = UpdateStage.CHECKING))
             val result = runCatching {
                 withContext(Dispatchers.IO) {
                     api.bootstrap(installedVersionCode, Build.VERSION.SDK_INT, host.deviceId(), channel)
                 }
             }.getOrElse {
                 // 失败时回到检查前的状态，而不是造一个全新的 UP_TO_DATE。
-                status = if (previous.stage == UpdateStage.CHECKING) UpdateStatus(stage = UpdateStage.UP_TO_DATE) else previous
-                if (manual) manualResult = "检查更新失败，请稍后再试"
+                publishStatus(if (previous.stage == UpdateStage.CHECKING) UpdateStatus(stage = UpdateStage.UP_TO_DATE) else previous)
+                if (manual) publishManualResult("检查更新失败，请稍后再试")
                 return
             }
 
@@ -124,21 +169,23 @@ class UpdateManager(
             val release = result.release
             if (release == null || release.versionCode <= installedVersionCode) {
                 // 服务端不该下发不高于当前版本的包，真出现时按无更新处理，避免死循环提示。
-                status = UpdateStatus(stage = UpdateStage.UP_TO_DATE)
-                if (manual) manualResult = "已是最新版本 $installedVersionName"
+                publishStatus(UpdateStatus(stage = UpdateStage.UP_TO_DATE))
+                if (manual) publishManualResult("已是最新版本 $installedVersionName")
                 return
             }
             // 用户划掉过这个版本就不再自动弹；手动检查视为明确想看，忽略这条记录。
             if (!manual && !result.forced && release.versionCode == dismissedVersionCode()) {
-                status = UpdateStatus(stage = UpdateStage.UP_TO_DATE)
+                publishStatus(UpdateStatus(stage = UpdateStage.UP_TO_DATE))
                 return
             }
             val ready = withContext(Dispatchers.IO) { downloader.completedApk(release) }
-            status = if (ready != null) {
-                UpdateStatus(stage = UpdateStage.READY, release = release, forced = result.forced, progressPercent = 100, apk = ready)
-            } else {
-                UpdateStatus(stage = UpdateStage.AVAILABLE, release = release, forced = result.forced)
-            }
+            publishStatus(
+                if (ready != null) {
+                    UpdateStatus(stage = UpdateStage.READY, release = release, forced = result.forced, progressPercent = 100, apk = ready)
+                } else {
+                    UpdateStatus(stage = UpdateStage.AVAILABLE, release = release, forced = result.forced)
+                },
+            )
         } finally {
             checkLock.unlock()
         }
@@ -174,18 +221,18 @@ class UpdateManager(
     suspend fun download() {
         val release = status.release ?: return
         if (status.stage == UpdateStage.DOWNLOADING) return
-        status = status.copy(stage = UpdateStage.DOWNLOADING, progressPercent = 0, error = null)
+        publishStatus(status.copy(stage = UpdateStage.DOWNLOADING, progressPercent = 0, error = null))
         runCatching {
             withContext(Dispatchers.IO) {
                 downloader.download(release) { percent ->
-                    // 进度回调在 IO 线程，Compose 状态写入是线程安全的，重组会被调度到主线程。
-                    status = status.copy(progressPercent = percent)
+                    // 进度回调在 IO 线程；StateFlow.value 写入线程安全，Compose 侧由桥接调度到主线程。
+                    publishStatus(status.copy(progressPercent = percent))
                 }
             }
         }.onSuccess { apk ->
-            status = status.copy(stage = UpdateStage.READY, progressPercent = 100, apk = apk)
+            publishStatus(status.copy(stage = UpdateStage.READY, progressPercent = 100, apk = apk))
         }.onFailure { error ->
-            status = status.copy(stage = UpdateStage.FAILED, error = error.message ?: "下载失败，请重试")
+            publishStatus(status.copy(stage = UpdateStage.FAILED, error = error.message ?: "下载失败，请重试"))
         }
     }
 
@@ -193,7 +240,7 @@ class UpdateManager(
     fun install() {
         val apk = status.apk ?: return
         installer.install(apk)?.let { reason ->
-            status = status.copy(stage = UpdateStage.FAILED, error = reason)
+            publishStatus(status.copy(stage = UpdateStage.FAILED, error = reason))
         }
     }
 
@@ -204,7 +251,7 @@ class UpdateManager(
     fun dismiss() {
         if (status.forced) return
         status.release?.versionCode?.let { host.commitDismissed(it) }
-        status = UpdateStatus(stage = UpdateStage.UP_TO_DATE)
+        publishStatus(UpdateStatus(stage = UpdateStage.UP_TO_DATE))
     }
 
     private fun dismissedVersionCode(): Long = host.dismissedVersionCode()
@@ -212,6 +259,20 @@ class UpdateManager(
     /** 失败后重试：已下载的分片会被续传复用。 */
     suspend fun retry() {
         if (status.release == null) check(manual = true) else download()
+    }
+
+    /**
+     * 唯一的状态写入口：先落 flow（事实源），Compose 状态由 init 桥接同步。
+     * StateFlow 对相同值去重，无谓的重组与事件都不会发生。
+     */
+    private fun publishStatus(value: UpdateStatus) {
+        _statusFlow.value = value
+    }
+
+    /** 手动检查结果的双通道写入：Compose 状态 + 事件流（供非 Compose 客户端弹提示）。 */
+    private fun publishManualResult(message: String) {
+        manualResult = message
+        _events.tryEmit(HotUpdateEvent.ManualResult(message))
     }
 
     private fun packageInfo(): PackageInfo? = runCatching {
@@ -225,4 +286,15 @@ class UpdateManager(
     }
 
     private companion object
+}
+
+/**
+ * 非订阅 [UpdateManager.events] 的客户端可收到的一次性事件。
+ *
+ * [ManualResult] 与 `manualResult` Compose 状态同源同语义：
+ * 后台检查不发，只有用户主动检查才产生。
+ */
+sealed interface HotUpdateEvent {
+    /** 用户主动检查更新的可见结果（成功/失败文案，界面弹一次即可）。 */
+    data class ManualResult(val message: String) : HotUpdateEvent
 }

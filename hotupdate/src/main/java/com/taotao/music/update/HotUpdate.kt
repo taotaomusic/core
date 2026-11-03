@@ -55,11 +55,11 @@ object HotUpdate {
         host: UpdateHost,
         initialPatchVersion: Int = 0,
         channel: String = "release",
-        scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
-    ): HotUpdateSession = HotUpdateSession(
-        updateManager = UpdateManager(context, host, initialPatchVersion, channel),
-        scope = scope,
-    )
+        scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
+    ): HotUpdateSession {
+        val manager = UpdateManager(context, host, initialPatchVersion, channel, scope)
+        return HotUpdateSession(updateManager = manager, scope = scope)
+    }
 
     private fun versionCodeOf(context: Context): Long {
         val info = runCatching {

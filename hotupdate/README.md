@@ -94,6 +94,36 @@ Compose 客户端直接观察即可；强制更新门禁 UI 参考桃桃主 App 
 | 忽略本次可选更新 | `updateManager.dismiss()` |
 | 失败重试 | `updateManager.retry()` |
 | 读远程配置 | `updateManager.remoteConfig.text/boolean/int(key, default)` |
+| 非 Compose 订阅状态 | `updateManager.statusFlow`（StateFlow）与 `updateManager.events`（SharedFlow） |
+
+## 非 Compose 客户端接入（StateFlow）
+
+界面不是 Compose（普通 View、桌面桥接、后台 Service）时，不用引 Compose 也能拿到同样的状态：
+
+```kotlin
+val manager = hotUpdate.updateManager
+
+// 状态流：与 Compose status 属性同源，StateFlow 去重相同值
+scope.launch {
+    manager.statusFlow.collect { status ->
+        when (status.stage) {
+            UpdateStage.AVAILABLE -> showUpdateDialog(status.release)
+            UpdateStage.DOWNLOADING -> updateProgress(status.progressPercent)
+            UpdateStage.FAILED -> showToast(status.error)
+            else -> Unit
+        }
+    }
+}
+
+// 事件流：手动检查结果（与 manualResult 同源），新订阅者重放最近 1 条
+scope.launch {
+    manager.events.collect { event ->
+        if (event is HotUpdateEvent.ManualResult) showToast(event.message)
+    }
+}
+```
+
+宿主经 `HotUpdate.create(..., scope = 自己的作用域)` 传入作用域可统一生命周期。
 
 ## 服务端接口（配套 Node SDK 见 `../hotupdate-node/`）
 

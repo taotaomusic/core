@@ -1,14 +1,16 @@
-# @taotao/hotupdate-node —— 热更新 Node 客户端与运维 SDK
+# @taotao/hotupdate-node —— 热更新 Node 客户端、运维 SDK 与自建服务
 
 配套 `hotupdate/`（Kotlin 客户端模块）的后端侧工具集，**零运行时依赖**（仅 Node 20+ 内置能力），
-供四类调用方使用：
+供六类调用方使用：
 
 | 调用方 | 用什么 |
 | --- | --- |
-| 其它 Node 服务 / 机器人 | `HotUpdateClient`：调 `/app/bootstrap` 判断有没有新版本/补丁 |
+| 其它 Node 服务 / 机器人 | `HotUpdateClient`：调 `/app/bootstrap` 判断有没有新版本/补丁（带超时与网络级重试） |
+| 下载侧脚本 | `downloadToFile`：断点续传 + sha256 校验的安装包/补丁下载 |
 | 运维脚本 / CI 步骤 | `HotUpdateAdmin`：发布、放量、补丁、远程配置的管理接口 SDK |
 | 自测 / 联调 | `bucketOf` / `pickGrayCandidate`：与服务端**同源**的灰度分桶算法 |
 | 直连管理接口的脚本 | `totp()`：本地生成 2FA 动态码（与服务端同一实现） |
+| 想要独立热更新后端的系统 | `createHotUpdateServer`：零依赖可自建服务（与主服务端同契约，见下文） |
 
 ## 快速开始
 
@@ -101,14 +103,54 @@ const code = totp(secret)[1];          // 取 ±1 窗口的三个码之一，容
 **改协议必须三方同步**：Kotlin `hotupdate` 模块、本 SDK、服务端 `release` 模块，
 并同步更新 `src/test/` 下的兼容测试。
 
+## 自建热更新服务（零依赖一键起）
+
+不想部署整个 NestJS 主服务端时，用 `createHotUpdateServer` 起一个与主服务端**同契约**的轻量实例：
+
+```powershell
+cd hotupdate-node
+npm start -- --port 4730 --token <你的管理令牌> --data ./data --persist ./data/state.json
+```
+
+```ts
+// 或者嵌入现有 Node 进程
+import { createHotUpdateServer } from "@taotao/hotupdate-node";
+const server = createHotUpdateServer({ port: 4730, adminToken: process.env.TOKEN! });
+await server.listen();
+```
+
+起来之后 `HotUpdateClient` / Kotlin `hotupdate` 模块的 `endpoint` 指过去即可：
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/v1/app/bootstrap` | 更新 + 补丁 + 远程配置（公开；灰度分桶与主服务端同算法） |
+| GET | `/api/v1/app/apk/:versionCode` | 整包下载（支持 Range 续传 / HEAD / ETag；登记了外链则 302 跳转） |
+| GET | `/api/v1/app/patch/:target/:version` | 补丁下载（同上） |
+| POST | `/api/v1/admin/releases`（查询参数元数据 + APK 字节体） | 上传登记 |
+| POST | `/api/v1/admin/releases/link` | 外链登记 |
+| POST | `/api/v1/admin/rollout` / `min-version` | 放量 / 抬强制下限 |
+| POST | `/api/v1/admin/patches`（查询参数元数据 + 补丁字节体） | 补丁上传登记（`rollout` 查询参数可同时放量） |
+| POST | `/api/v1/admin/patch-rollout` | 补丁放量 / 紧急下架（`enabled:false`） |
+| POST | `/api/v1/admin/config` | 远程配置（`value:null` 删除） |
+| GET | `/api/v1/admin/releases` / `patches` / `config` | 列表 |
+
+管理接口用静态 Bearer 令牌（不传 `--token` 则全部 401）；存储为内存 + 可选 JSON 快照
+（`--persist`），不依赖任何数据库。**定位是参考实现/开发替身**：多实例共享状态、
+企业级管理员认证（会话/2FA/审计）请用主服务端 `server/` 的 NestJS 版本。
+
 ## 测试覆盖
 
 - `bucket.test.ts`：分桶算法与服务端实现互验（同 SHA-1 算法比对）、稳定性与值域、灰度命中语义。
 - `totp.test.ts`：RFC 4226 附录 D 全部 10 个已知向量、base32 往返、时钟漂移容错。
 - `protocol.test.ts`：Descriptor 展开判据与 Kotlin 解析语义一致（含字段不完整时拒绝）。
 - `client.test.ts`：请求 URL/头/令牌、信封解析、HTTP 与业务错误抛错路径（fetch stub）。
+- `server.test.ts`：自建服务全链路 —— 登记→放量→bootstrap（含灰度与强制更新）、
+  补丁下发判定（无整包才发 + 目标版本精确匹配）、字节上传→Range/HEAD/ETag/404、管理鉴权与配置读写删除。
+- `e2e.test.ts`：真实 HTTP 端到端 —— `HotUpdateClient` 起服务检查更新 → `downloadToFile` 带 sha256 校验落盘；
+  校验失败清 .part；超时错误信息。
 
 ```powershell
 npm test        # 跑 dist/test/*.test.js
 npm run verify  # 构建 + 测试一条龙
+npm start       # 一键起自建服务（构建 + node dist/server-cli.js）
 ```
