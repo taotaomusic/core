@@ -1,6 +1,5 @@
 package com.taotao.music.update
 
-import com.taotao.music.AppHttp
 import android.content.Context
 import java.io.File
 import java.net.HttpURLConnection
@@ -16,7 +15,7 @@ import java.security.MessageDigest
  *
  * 下载完成后校验 sha256，不一致就删除重来，绝不交给安装器。
  */
-class UpdateDownloader(context: Context) {
+class UpdateDownloader(context: Context, private val userAgent: String) {
     private val directory = File(context.filesDir, DIRECTORY)
 
     /** 已经下载并校验通过的安装包，用于避免重复下载。 */
@@ -62,7 +61,7 @@ class UpdateDownloader(context: Context) {
             requestMethod = "GET"
             connectTimeout = 15_000
             readTimeout = 30_000
-            setRequestProperty("User-Agent", AppHttp.USER_AGENT)
+            setRequestProperty("User-Agent", userAgent)
             if (downloaded > 0L) setRequestProperty("Range", "bytes=$downloaded-")
         }
         val code = connection.responseCode

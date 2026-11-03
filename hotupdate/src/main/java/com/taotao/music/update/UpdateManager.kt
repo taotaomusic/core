@@ -7,13 +7,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.taotao.music.hotfix.HotfixInstaller
-import com.taotao.music.data.DeviceIdStore
-import com.taotao.music.data.RemoteConfigStore
-import com.taotao.music.data.TokenProvider
-import com.taotao.music.data.db.MirroredPreference
-import com.taotao.music.data.db.PREFERENCE_ROW_ID
-import com.taotao.music.data.db.TaotaoLocalDatabase
-import com.taotao.music.data.db.UpdateDismissalRow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
@@ -23,31 +16,24 @@ import kotlinx.coroutines.withContext
  *
  * 状态以 Compose 状态暴露，界面只读不写。所有网络与磁盘动作都在 IO 线程执行，
  * 状态回写发生在主线程。
+ *
+ * 宿主依赖（令牌、设备号、远程配置与划掉记录的本地存储）经 [UpdateHost] 注入：
+ * 模块本身不依赖 app 的会话与 Room，独立维护时只需实现这一个契约。
  */
 class UpdateManager(
     context: Context,
-    tokenProvider: TokenProvider?,
+    private val host: UpdateHost,
     initialPatchVersion: Int = 0,
     private val channel: String = "release",
 ) {
     private val appContext = context.applicationContext
-    private val api = AppUpdateApi(tokenProvider)
-    private val downloader = UpdateDownloader(appContext)
+    private val api = AppUpdateApi(host)
+    private val downloader = UpdateDownloader(appContext, host.userAgent)
     private val installer = UpdateInstaller(appContext)
-    private val deviceIdStore = DeviceIdStore(appContext)
-    private val hotfix = HotfixInstaller(appContext)
+    private val hotfix = HotfixInstaller(appContext, host.userAgent)
 
     /** 远程配置缓存，界面可直接读取，取不到时用代码内默认值。 */
-    val remoteConfig = RemoteConfigStore(appContext)
-
-    /** 用户已划掉的版本号，跨启动记住。 */
-    private val dismissalMirror = object : MirroredPreference<UpdateDismissalRow>(appContext, "update_dismissal") {
-        override fun default() = UpdateDismissalRow(PREFERENCE_ROW_ID, 0L)
-        override fun load(db: TaotaoLocalDatabase) = db.preferenceDao().getUpdateDismissal()
-        override fun persist(db: TaotaoLocalDatabase, value: UpdateDismissalRow) {
-            db.preferenceDao().upsertUpdateDismissal(value)
-        }
-    }
+    val remoteConfig: UpdateConfigStore get() = host.config
 
     /** 同一时刻只允许一次检查。原来靠读 status 判断，两个协程可能同时通过。 */
     private val checkLock = Mutex()
@@ -114,7 +100,7 @@ class UpdateManager(
             status = status.copy(stage = UpdateStage.CHECKING)
             val result = runCatching {
                 withContext(Dispatchers.IO) {
-                    api.bootstrap(installedVersionCode, Build.VERSION.SDK_INT, deviceIdStore.deviceId(), channel)
+                    api.bootstrap(installedVersionCode, Build.VERSION.SDK_INT, host.deviceId(), channel)
                 }
             }.getOrElse {
                 // 失败时回到检查前的状态，而不是造一个全新的 UP_TO_DATE。
@@ -217,11 +203,11 @@ class UpdateManager(
      */
     fun dismiss() {
         if (status.forced) return
-        status.release?.versionCode?.let { dismissalMirror.commit(UpdateDismissalRow(PREFERENCE_ROW_ID, it)) }
+        status.release?.versionCode?.let { host.commitDismissed(it) }
         status = UpdateStatus(stage = UpdateStage.UP_TO_DATE)
     }
 
-    private fun dismissedVersionCode(): Long = dismissalMirror.current().dismissedVersionCode
+    private fun dismissedVersionCode(): Long = host.dismissedVersionCode()
 
     /** 失败后重试：已下载的分片会被续传复用。 */
     suspend fun retry() {

@@ -8,7 +8,10 @@ plugins {
     kotlin("plugin.compose")
     id("org.jetbrains.compose")
     id("com.google.devtools.ksp")
-    // 热修复插桩。只作用于 data / player / update 包，UI 层不碰 —— 见 build-logic 里的说明。
+    // 热修复插桩。只作用于 data / player 包，UI 层不碰 —— 见 build-logic 里的说明。
+    // update 包已拆到 :hotupdate 模块：PROJECT 作用域探不到库模块的类，
+    // 那边的插桩由 :hotupdate 自己注册（build-logic 的白名单默认值三方一致：
+    // data/player/update，与 autopatch --allow 同一条热修边界）。
     id("com.taotao.hotfix")
 }
 
@@ -106,6 +109,9 @@ tasks.register("incrementVersion") {
 dependencies {
     implementation(project(":shared"))
     implementation(project(":player-ui"))
+    // 热更新（整包更新 + 远程配置 + DEX 热修运行时）独立模块；
+    // 宿主侧接线见 update/TaotaoUpdateHost，包名与旧 update/hotfix 包一致。
+    implementation(project(":hotupdate"))
     testImplementation(kotlin("test"))
     // 本地单元测试的 mockable android.jar 里 org.json 方法会抛 not mocked，需要真实实现才能测 SongCodec。
     testImplementation("org.json:json:20240303")

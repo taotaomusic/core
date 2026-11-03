@@ -42,7 +42,8 @@
 
 | 模块 | 文件/节点 | 主要职责 | 关键入口或文件 |
 | --- | ---: | --- | --- |
-| `androidApp` | 85 / 2,439 | Android 生命周期、Compose 页面、账号与本地 Store、网络适配、Media3 播放、IM、热修复和更新。`ui/` 已拆 15 个功能子包（account/ai/app/auth/chat/common/home/library/mine/player/playlist/search/settings/theme/update），全局状态在 `ui/app/` 状态容器（`TaotaoAppState`、`SearchState`、`PlaylistState`、`AppEffects`、`AppDialogs`、`AppPageRouter`、`AppContent`） | `MainActivity.kt`、`TaotaoMusicApp.kt`、`TencentMusicApi.kt`、`AudioPlayer.kt`、`PlaybackService.kt` |
+| `androidApp` | 85 / 2,439 | Android 生命周期、Compose 页面、账号与本地 Store、网络适配、Media3 播放、IM。`ui/` 已拆 15 个功能子包（account/ai/app/auth/chat/common/home/library/mine/player/playlist/search/settings/theme/update），全局状态在 `ui/app/` 状态容器（`TaotaoAppState`、`SearchState`、`PlaylistState`、`AppEffects`、`AppDialogs`、`AppPageRouter`、`AppContent`）；热更新与热修复已拆到 `:hotupdate` 模块，宿主接线在 `update/TaotaoUpdateHost.kt` | `MainActivity.kt`、`TaotaoMusicApp.kt`、`TencentMusicApi.kt`、`AudioPlayer.kt`、`PlaybackService.kt` |
+| `hotupdate` | 待刷新（`codegraph sync`） | 整包更新 + 远程配置（`update/`）与 DEX 热修运行时（`hotfix/`）；包名不变，宿主经 `UpdateHost` 契约注入令牌、设备号与本地存储；其它 Kotlin 客户端从 `HotUpdate` 门面接入 | `update/UpdateManager.kt`、`update/HotUpdate.kt`、`update/UpdateHost.kt`、`hotfix/HotfixLoader.kt` |
 | `shared` | 6 / 52 | Kotlin Multiplatform 纯模型和规则：歌曲、歌词、音质与解析器 | `MusicModels.kt`、`Lyric.kt`、`AudioQuality.kt` |
 | `player-ui` | 23 / 381 | Android、Web 共用的播放主题、歌曲行、迷你播放器、播放布局和状态视图；`theme/` 是 Taotao 设计 token 与组件，`layout/` 承载主布局骨架 | `SharedMiniPlayer.kt`、`PlayerSurface.kt`、`layout/SharedMainLayout.kt`、`theme/AppleStyleTheme.kt` |
 | `webApp` | 4 / 106 | Kotlin/Wasm 分享播放器，只负责公开试听页和浏览器音频适配 | `Main.kt`、`WebAudioController.kt` |
@@ -68,7 +69,8 @@
 | 模块 | 文件/节点 | 主要职责 | 备注 |
 | --- | ---: | --- | --- |
 | `build-logic` | 8 / 68 | Gradle convention/plugin、热修复字节码插桩 | 编译期能力，不应被运行时模块反向依赖 |
-| `patch` | 2 / 24 | 独立 DEX 补丁入口和补丁构建配置 | 通过 `compileOnly` 读取宿主产物，不打入 APK |
+| `patch` | 2 / 24 | 独立 DEX 补丁入口和补丁构建配置 | 通过 `compileOnly` 读取宿主产物（androidApp + hotupdate + shared 的 kotlin-classes），不打入 APK |
+| `hotupdate-node` | Node SDK（未纳入 CodeGraph） | 热更新的 Node 客户端与运维 SDK：bootstrap 客户端、灰度分桶（与服务端同源）、TOTP、发布/放量/补丁/远程配置管理接口；协议锚点 `src/protocol.ts` | `src/client.ts`、`src/admin.ts`、`src/bucket.ts`、`src/totp.ts` |
 
 索引还记录根目录的 `build.gradle.kts`、`settings.gradle.kts`、`gradle.properties`、`version.properties` 以及维护脚本；这些文件用于定位构建边界，但不计入上面的运行模块职责。
 
@@ -121,8 +123,8 @@ androidApp
 | Android 拖动排序 | `DragReorderList` / `TaotaoSnackbar` | `androidApp/.../ui/common/DragReorderList.kt`、`ui/common/components.kt` | 播放队列与歌单共用的统一拖动组件、全局 Snackbar |
 | Android 播放记录与日记 | `PlaybackHistoryPage` / `SongDiaryPage` / `DiaryRecordsPage` | `androidApp/.../ui/library/MineLibraryPages.kt` | 播放记录独立下级页与单曲倒带日记（路由 key `diary-records`） |
 | Android 设备号 | `HardwareDeviceId` | `androidApp/.../data/crypto/HardwareDeviceId.kt` | ANDROID_ID 设备号来源，供传输加密协议 v2 绑定 |
-| Android 更新 | `UpdateManager` | `androidApp/src/main/java/com/taotao/music/update/UpdateManager.kt` | 版本检查、下载、校验和安装协调 |
-| Android 热修复 | `PatchDispatcher` / `PatchEntry` | `androidApp/src/main/java/com/taotao/music/hotfix/` | 补丁入口、分发和诊断 |
+| Android 更新 | `UpdateManager` | `hotupdate/src/main/java/com/taotao/music/update/UpdateManager.kt` | 版本检查、下载、校验和安装协调；宿主依赖经 `UpdateHost`（`update/UpdateHost.kt`，实现在 androidApp `TaotaoUpdateHost`）注入 |
+| Android 热修复 | `PatchDispatcher` / `PatchEntry` | `hotupdate/src/main/java/com/taotao/music/hotfix/` | 补丁入口、分发和诊断 |
 | 共享模型 | `Song` | `shared/src/commonMain/kotlin/com/taotao/music/model/MusicModels.kt` | 被 Android、播放 UI 等客户端文件引用的歌曲模型 |
 | 歌词规则 | `LyricParser` | `shared/src/commonMain/kotlin/com/taotao/music/model/Lyric.kt` | LRC/YRC 解析、逐字进度和时间映射 |
 | 音质规则 | `AudioQuality` | `shared/src/commonMain/kotlin/com/taotao/music/model/AudioQuality.kt` | STANDARD/HIGH/LOSSLESS/HIRES/MASTER 及标签映射 |
