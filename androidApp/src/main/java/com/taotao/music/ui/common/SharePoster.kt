@@ -174,7 +174,9 @@ object SharePosterRenderer {
                 coverRect,
                 Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG),
             )
-            cover.recycle()
+            // 这里不能 recycle：该位图由 Coil 内存缓存持有，同一张封面可能正被界面上的
+            // AsyncImage 绘制。提前回收会让后续绘制命中已回收位图，触发
+            // Canvas: trying to use a recycled bitmap 崩溃。交给 Coil 缓存和 GC 管理。
         } else {
             // 封面缺失或加载失败时用歌曲身份色兜底，保持每首歌的视觉记忆点。
             val coverColor = song.color.toInt().let { if (Color.alpha(it) == 0) FallbackCover else it }
@@ -280,6 +282,10 @@ object SharePosterRenderer {
             BitmapFactory.Options().apply { inScaled = false },
         )
 
+    /**
+     * 通过 Coil 取封面。返回的位图可能来自内存缓存，**调用方不得 recycle**，
+     * 否则会让界面上正在展示同一封面的 AsyncImage 绘制到已回收位图。
+     */
     private suspend fun loadCover(context: Context, url: String?): Bitmap? {
         if (url.isNullOrBlank()) return null
         val request = ImageRequest.Builder(context)
