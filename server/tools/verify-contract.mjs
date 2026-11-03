@@ -1846,21 +1846,29 @@ async function main() {
   check("meta.dropped 仍然存在（旧客户端会读）", typeof wideLines.at(-1)?.meta?.dropped === "number");
 
   const favSong = wideSongs[0];
+  // 收藏状态是跨用例累积的（97773 在 PostgreSQL 迁移专项里被收藏过），而搜索结果
+  // 首条会随上游排序变化。先快照当前收藏集合，再逐首核对「favorited ⟺ 在集合里」，
+  // 不假设首条固定是某首歌，也不假设此前没有别的收藏。
+  const favoritedBefore = new Set(
+    ((await (await fetch(`${base}/api/v1/favorites`, { headers: { authorization: `Bearer ${token}` } })).json()).data ?? [])
+      .map((item) => String(item.songId)),
+  );
   await fetch(`${base}/api/v1/favorites/tencent/${favSong.id}`, {
     method: "POST",
     headers: { authorization: `Bearer ${token}` },
   });
+  const expectedFavorited = new Set([...favoritedBefore, String(favSong.id)]);
   const afterFav = (await fetchNdjson(
     `${base}/api/v1/search?keyword=${encodeURIComponent("周杰伦")}&num=60&source=tencent`,
     { headers: { authorization: `Bearer ${token}` } },
     { label: "腾讯 周杰伦 num=60（收藏回读）", hasContent: (lines) => lines.filter((line) => line.type === "song").length === 60 },
   )).lines
     .filter((line) => line.type === "song").map((line) => line.data);
-  const flagged = afterFav.filter((song) => song.favorited);
+  const misflagged = afterFav.filter((song) => Boolean(song.favorited) !== expectedFavorited.has(String(song.id)));
   check(
-    "批量收藏查询只标记真正收藏的那首",
-    flagged.length === 1 && flagged[0].id === favSong.id,
-    `${flagged.length} 首：${flagged.map((song) => song.id).join(",")}`,
+    "批量收藏查询只标记真正收藏的曲目",
+    misflagged.length === 0,
+    `误标 ${misflagged.length} 首：${misflagged.map((song) => `${song.id}=${song.favorited}`).join(",")}`,
   );
 
   section("解析播放地址与音质列表");

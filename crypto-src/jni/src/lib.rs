@@ -45,8 +45,9 @@
 //! ## 反调试
 //!
 //! 这个 crate 开启 core 的 `antidebug` feature，在 [`JNI_OnLoad`] 与每个
-//! 「建引擎」入口做检测，命中即 `abort()`（**不是** panic —— 那会被
-//! `catch_unwind` 接住，Java 侧 catch 一下就能继续跑）。检测逻辑本身在
+//! 「建引擎」入口做检测。命中只记录信号（`antidebug::detected()`），
+//! **不终止进程** —— 早期版本用 `abort()`，但 1.0.659 的线上闪退证明误伤
+//! 不可接受（详见 `core/src/antidebug.rs` 的模块文档）。检测逻辑本身在
 //! `core/src/antidebug.rs`，本文件只负责接线。debug 构建自动跳过。
 
 use std::collections::HashMap;
@@ -283,8 +284,9 @@ pub extern "system" fn Java_com_taotao_music_crypto_NativeCrypto_clientNew<'loca
     psk_hex: JString<'local>,
     device_id: JString<'local>,
 ) -> jlong {
-    // 反调试：这是 PSK 进入内存的唯一入口，放在读取参数之前 ——
-    // 命中时进程直接 abort，PSK 连被读进来都不会发生。
+    // 反调试：这是 PSK 进入内存的唯一入口，检测尽量早跑。
+    // 命中只记录信号（`antidebug::detected()`），不改变本函数的返回值 ——
+    // 检测是观测，不是拦截（见 core/src/antidebug.rs 的模块文档）。
     enforce_antidebug();
     let psk_id = read_string(&psk_id);
     let psk_hex = read_string(&psk_hex);

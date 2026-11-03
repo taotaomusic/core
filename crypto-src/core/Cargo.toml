@@ -34,8 +34,9 @@ cryptify = { version = "3.2", optional = true }
 # 两种都保持可复现构建，见 src/obf.rs 的模块文档。
 obfuscate = ["dep:cryptify"]
 
-# 开启后 `antidebug::enforce()` 会真的做检测并在命中时 `abort()`；
-# 关闭时它是空函数。**只给客户端产物开**（jni 的 .so、desktop 的 Tauri 二进制），
+# 开启后 `antidebug::enforce()` 会真的做检测，并把命中结果记进
+# `antidebug::detected()`（**不终止进程**）；关闭时它是空函数。
+# **只给客户端产物开**（jni 的 .so、desktop 的 Tauri 二进制），
 # 服务端 .node 与 wasm 刻意不开 —— 理由见 src/antidebug.rs 的模块文档。
 #
 # 与 `obfuscate` 不同的是：它**不需要**任何额外依赖（Windows 侧直接声明两个

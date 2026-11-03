@@ -1,4 +1,4 @@
-//! 反调试 / 反注入：检测到调试或注入框架即终止进程。
+//! 反调试 / 反注入：检测调试器与注入框架，把结果记录为进程内信号。
 //!
 //! ## 为什么用 feature 门控，而不是无条件生效
 //!
@@ -10,7 +10,7 @@
 //! | Android `.so`（jni） | ✅ | 分发给用户，攻击者有物理设备 |
 //! | Windows Tauri（desktop） | ✅ | 同上 |
 //! | 服务端 `.node` | ❌ | 只在服务器上加载、不对外分发；而且**误伤**：在 Windows 上
-//!   用调试器跟一个 node 进程是极常见的开发动作，无条件 abort 会砸掉后端排障 |
+//!   用调试器跟一个 node 进程是极常见的开发动作，拦下来会砸掉后端排障 |
 //! | Web `.wasm` | ❌ | 浏览器沙箱里没有等价的调试语义，且「检测 devtools」会砸掉
 //!   正常的 F12 调试，收益远小于代价 |
 //!
@@ -29,22 +29,27 @@
 //!
 //! 只查「调试器」与「注入框架」，不查 root、不查 Magisk、不查模拟器。原因不是
 //! 技术做不到，而是**误伤面太大**：模拟器是我们自己的测试环境，root 机型在
-//! 安卓用户里占比不低，而这套判定一旦命中就是 `abort()`——不可恢复。用一个
-//! 无法回滚的动作去拦一类**并不构成攻击**的环境，是把正常用户当攻击者处理。
+//! 安卓用户里占比不低，而这两类环境本身并不构成攻击。把它们收进检测只会产生
+//! 错误信号；要据此做策略，应当先有独立的上报链路与灰度机制。
 //!
-//! 要拦 root 机型应当先走「观测」（记录命中、继续服务），拿到真实比例再决定，
-//! 那需要一条独立的上报链路，不在本模块范围内。
+//! ## 命中的动作是「记录信号」，不是终止进程
 //!
-//! ## 命中的动作是 abort，不是 panic
+//! 2026-11-03 之前这里用 [`std::process::abort`]：命中即 SIGABRT，没有可恢复的
+//! 路径。线上 1.0.659（2026-10-18 云编译）暴露了两个问题：
 //!
-//! `panic` 会被绑定层的 `catch_unwind` 接住并转成宿主语言异常（JNI 是
-//! `CryptoException`、Tauri 是 `Err`）——**攻击者只要 catch 一下就能继续跑**。
-//! 所以这里用 [`std::process::abort`]，进程直接收到 SIGABRT 退出，没有可恢复的
-//! 路径。
+//! - **误伤不可逆**。`TracerPid` 非 0 不一定是调试器：Magisk/Zygisk 模块、
+//!   应用双开/分身容器、部分厂商的性能 /「防闪退」服务都会 `ptrace` 目标进程；
+//!   `/proc/self/maps` 里的 `gadget` 更是只要路径带这个词就命中，宽得离谱。
+//!   结果就是正常用户「登录后一进主页立刻闪退」。
+//! - **无从排查**。SIGABRT 绕过 `Thread.setDefaultUncaughtExceptionHandler`，
+//!   应用自己的崩溃日志目录是空的，只能靠系统 tombstone。
 //!
-//! 刻意**不打印**任何关于命中原因的信息：那行日志会直接告诉逆向者「你在查什么」，
-//! 等于把检测逻辑白送出去。安卓侧崩溃时系统 tombstone 里的 SIGABRT 与调用栈
-//! 足够我们自己定位。
+//! 现在命中只把结果记进 [`detected`] 并继续运行；探测时机、特征清单的准入门槛
+//! 都保持不变，将来要做上报或灰度拦截时消费这个信号即可。代价如实说明：
+//! **它不再主动终止任何进程**，反调试退化为观测。安全性仍然由 TLS + PSK 动态
+//! 下发 + 字符串混淆承担，这条结论本来也没变过。
+
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// 本 crate 是否编译进了反调试能力。
 ///
@@ -62,6 +67,19 @@
 /// 用 `cfg!` 而不是 `#[cfg]`：常量必须**在任何 feature 组合下都存在**，
 /// 否则引用它的地方要跟着做条件编译，而那个引用点恰恰是用来兜住 feature 配错的。
 pub const IS_ENABLED: bool = cfg!(feature = "antidebug");
+
+/// [`enforce`] 记录下来的检测结果；只在开启 `antidebug` 的 release 构建里可能为
+/// `true`（debug 构建直接跳过检测，未开启 feature 时永远是 `false`）。
+///
+/// 检测命中**不会**终止进程 —— 见模块文档「命中的动作是记录信号」。
+static DETECTED: AtomicBool = AtomicBool::new(false);
+
+/// 本进程是否检测到过调试器或注入框架。
+///
+/// 只作观测信号：命中后应用继续正常运行，调用方可以拿它做上报、提示或灰度策略。
+pub fn detected() -> bool {
+    DETECTED.load(Ordering::Relaxed)
+}
 
 /// 检测到的威胁种类。
 ///
@@ -141,13 +159,14 @@ pub fn instrumentation_markers() -> Vec<String> {
 
     vec![
         // Frida 的几个注入形态：gadget 是重打包嵌进去的，agent/server 是运行时附加的。
+        // 只收带 `frida-`/`libfrida` 前缀的完整形态；裸 `gadget` 会命中任何路径里
+        // 恰好带这个词的正常映射（误伤面太大），2026-11-03 已移除。
         obf!("frida-agent"),
         obf!("frida-gadget"),
         obf!("frida-server"),
         obf!("libfrida"),
         // 连 Frida 的调试器名，出现在部分注入路径的映射名里。
         obf!("re.frida."),
-        obf!("gadget"),
         // Substrate / Cydia 系注入框架。
         obf!("libsubstrate"),
         // Xposed / LSPosed。
@@ -231,26 +250,25 @@ fn probe() -> Option<Threat> {
     None
 }
 
-/// 做一次检测；命中即终止进程。
+/// 做一次检测，命中时把结果记进 [`detected`]。
 ///
 /// 调用时机应当是**加解密路径上最早能拿到控制权的地方**（见 jni 的 `JNI_OnLoad`
-/// 与 desktop 的启动钩子），让进程在建立会话、把 PSK 读进内存之前就死掉。
+/// 与 desktop 的启动钩子），让信号尽可能早地被记录。
+///
+/// **不终止进程**：误伤代价不可接受（详见模块文档）。检测结果只作观测信号。
 ///
 /// # debug 构建直接放行
 ///
 /// `cfg!(debug_assertions)` 为真时不做任何检测。这是**必要的逃生阀**：开了检测
 /// 就必然砸掉自己在本机用调试器排障的能力（Android Studio attach、Windows 上
 /// VSCode 调试 Tauri）。发布产物走 release，不受影响。
-///
-/// 同时意味着：**不要用 release 产物做本机排障** —— 一旦 attach 调试器就会
-/// 直接 abort，症状是「应用刚起来就没了」，很容易被误判成别的问题。
 #[cfg(feature = "antidebug")]
 pub fn enforce() {
     if cfg!(debug_assertions) {
         return;
     }
     if probe().is_some() {
-        abort_now();
+        DETECTED.store(true, Ordering::Relaxed);
     }
 }
 
@@ -261,17 +279,6 @@ pub fn enforce() {
 /// 配置才编译失败」这类问题。
 #[cfg(not(feature = "antidebug"))]
 pub fn enforce() {}
-
-/// 立即终止进程。
-///
-/// 用 `abort()` 而不是 `panic!`：后者会被绑定层的 `catch_unwind` 接住并转成
-/// 可捕获的宿主语言异常，攻击者 catch 一下就能继续。`abort()` 触发 SIGABRT，
-/// 没有从 Rust 侧恢复的路径（release profile 的 `panic = "unwind"` 对这个函数
-/// 无效，见 Cargo.toml 的说明）。
-#[cfg(feature = "antidebug")]
-fn abort_now() -> ! {
-    std::process::abort()
-}
 
 #[cfg(test)]
 mod tests {
@@ -380,7 +387,6 @@ Uid:\t10123\t10123\t10123\t10123
             "frida-gadget",
             "frida-server",
             "libfrida",
-            "gadget",
             "libsubstrate",
             "xposed",
         ] {
@@ -391,11 +397,26 @@ Uid:\t10123\t10123\t10123\t10123
         }
     }
 
+    /// 裸 `gadget` 不该回到生产清单里。
+    ///
+    /// 它匹配的是「路径里出现这个词」，任何正常库只要带这个词就会被当成注入
+    /// 框架。1.0.659 的误判就是这类过宽特征放大的后果；Frida gadget 的完整
+    /// 形态已由 `frida-gadget` 覆盖，不需要这个裸词。
+    #[cfg(feature = "antidebug")]
+    #[test]
+    fn production_markers_do_not_use_overbroad_gadget() {
+        let markers = instrumentation_markers();
+        assert!(
+            !markers.iter().any(|m| m == "gadget"),
+            "裸 gadget 会误伤路径里恰好带这个词的正常映射，Frida gadget 由 frida-gadget 覆盖"
+        );
+    }
+
     /// 清单里不该出现 root / 模拟器相关的串。
     ///
     /// 这条断言守的是**误伤面**：一旦有人「顺手」把 `su` / `magisk` 加进来，
-    /// 命中的动作是 `abort()`，等于把所有 root 机型的正常用户直接打死。
-    /// 那是不可恢复的，所以用一个反向断言把意图钉死。
+    /// 只会制造错误的检测信号；如果将来把它接到拦截动作上，就是大面积误杀。
+    /// 所以用一个反向断言把意图钉死。
     #[cfg(feature = "antidebug")]
     #[test]
     fn production_markers_exclude_root_and_emulator_signals() {
