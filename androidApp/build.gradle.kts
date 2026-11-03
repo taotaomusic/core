@@ -126,6 +126,8 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
     implementation("io.coil-kt:coil-compose:2.7.0")
+    // 分享海报内的二维码：纯 JVM 编码器（不引入 Android 端扫码 UI）。
+    implementation("com.google.zxing:core:3.5.3")
     // 本地结构化存储（SQLite/Room）：播放历史、播放统计 outbox、收藏缓存、AI 会话、播放队列
     // 五个大 JSON 桶从 SharedPreferences 迁入；小键值（登录态/音质/外观等）仍留在 prefs。
     implementation("androidx.room:room-runtime:2.8.4")

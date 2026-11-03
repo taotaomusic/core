@@ -1,5 +1,7 @@
 package com.taotao.music.ui.app
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.graphics.Rect
 import android.os.SystemClock
@@ -42,6 +44,8 @@ import com.taotao.music.data.im.ImSessionStore
 import com.taotao.music.data.im.WukongImClient
 import com.taotao.music.model.Song
 import com.taotao.music.player.AudioPlayer
+import com.taotao.music.ui.common.SharePoster
+import com.taotao.music.ui.common.SharePosterRenderer
 import com.taotao.music.ui.common.dedupeSongs
 import com.taotao.music.ui.common.moved
 import com.taotao.music.ui.common.movedIndex
@@ -51,6 +55,7 @@ import com.taotao.music.ui.common.playbackSource
 import com.taotao.music.ui.common.playbackStableKey
 import com.taotao.music.ui.common.sameSongIdentity
 import com.taotao.music.ui.common.shareSongLink
+import com.taotao.music.ui.common.shareSongPoster
 import com.taotao.music.ui.library.MineLibrarySection
 import com.taotao.music.ui.player.QualityChoice
 import com.taotao.music.ui.player.QualitySheetKind
@@ -208,6 +213,13 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
     var showProfilePage by mutableStateOf(false)
     var bottomTab by mutableIntStateOf(0)
     var message by mutableStateOf<String?>(null)
+
+    // ---- 分享海报 ----
+    /** 海报生成中：分享面板先展示加载态，避免点了「分享」后长时间没有反馈。 */
+    var sharePosterLoading by mutableStateOf(false)
+    /** 已生成、等待用户确认分享的海报；非空时弹出预览面板。 */
+    var sharePoster by mutableStateOf<SharePoster?>(null)
+    private var shareGeneration = 0
 
     // ---- 账号与 IM ----
     var signedIn by mutableStateOf(authSession.isSignedIn)
@@ -619,7 +631,12 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
         }
     }
 
-    /** 分享动作只传短链，不暴露音频直链；短链生成失败时仍留在当前页面。 */
+    /**
+     * 点「分享」：先拿短链，再在本地渲染一张带二维码的海报，最后弹预览面板。
+     *
+     * 海报不预先存图库也不自动拉起系统面板 —— 用户可以先看清版式，再决定发图、
+     * 复制链接还是只发文字。生成全程在 IO，失败只提示，不离开当前页面。
+     */
     fun requestSongShare(song: Song) {
         if (!signedIn) {
             message = "登录后才能分享歌曲"
@@ -629,14 +646,60 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
             message = "本地歌曲缺少可分享的远端身份"
             return
         }
+        if (sharePosterLoading) return
+        sharePosterLoading = true
+        sharePoster = null
+        val generation = ++shareGeneration
         scope.launch {
             // 唤起系统分享面板也要放进 runCatching：它抛异常时若落在 onSuccess 之外，
             // 会直接打到未捕获异常处理器，用户看到的是应用瞬间退回桌面。
             runCatching {
                 val share = withContext(Dispatchers.IO) { musicApi.createSongShare(song) }
-                shareSongLink(context, song, share.url)
-            }.onFailure { message = it.message ?: "分享链接生成失败" }
+                withContext(Dispatchers.IO) { SharePosterRenderer.render(context, song, share.url) }
+            }.onSuccess { poster ->
+                if (generation != shareGeneration) return@onSuccess
+                sharePosterLoading = false
+                sharePoster = poster
+            }.onFailure {
+                if (generation != shareGeneration) return@onFailure
+                sharePosterLoading = false
+                message = it.message ?: "分享图生成失败"
+            }
         }
+    }
+
+    /** 关闭海报面板；生成中的请求一并作废，晚到的结果不会再弹出来。 */
+    fun dismissSharePoster() {
+        shareGeneration += 1
+        sharePosterLoading = false
+        sharePoster = null
+    }
+
+    /** 分享海报图片；图片里已经带二维码，同时附上文字短链兜底不支持图片分享的应用。 */
+    fun shareCurrentPoster() {
+        val poster = sharePoster ?: return
+        dismissSharePoster()
+        runCatching { shareSongPoster(context, poster) }
+            .onFailure { message = it.message ?: "分享失败" }
+    }
+
+    /** 只分享文字短链，保留「不想发图」的原有路径。 */
+    fun shareCurrentPosterLink() {
+        val poster = sharePoster ?: return
+        dismissSharePoster()
+        runCatching { shareSongLink(context, poster.song, poster.url) }
+            .onFailure { message = it.message ?: "分享失败" }
+    }
+
+    /** 复制短链：部分用户只是想把链接贴到聊天框里，不经过分享面板。 */
+    fun copyCurrentPosterLink() {
+        val url = sharePoster?.url ?: return
+        dismissSharePoster()
+        runCatching {
+            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            clipboard.setPrimaryClip(ClipData.newPlainText("分享链接", url))
+        }.onSuccess { message = "分享链接已复制" }
+            .onFailure { message = it.message ?: "复制失败" }
     }
 
     /** 清理账号级内存缓存；收藏关系不是设备级数据，退出或会话失效后不得留在界面。 */
