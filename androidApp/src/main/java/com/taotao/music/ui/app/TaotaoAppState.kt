@@ -630,9 +630,12 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
             return
         }
         scope.launch {
-            runCatching { withContext(Dispatchers.IO) { musicApi.createSongShare(song) } }
-                .onSuccess { share -> shareSongLink(context, song, share.url) }
-                .onFailure { message = it.message ?: "分享链接生成失败" }
+            // 唤起系统分享面板也要放进 runCatching：它抛异常时若落在 onSuccess 之外，
+            // 会直接打到未捕获异常处理器，用户看到的是应用瞬间退回桌面。
+            runCatching {
+                val share = withContext(Dispatchers.IO) { musicApi.createSongShare(song) }
+                shareSongLink(context, song, share.url)
+            }.onFailure { message = it.message ?: "分享链接生成失败" }
         }
     }
 
