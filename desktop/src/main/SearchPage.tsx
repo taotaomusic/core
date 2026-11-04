@@ -31,6 +31,17 @@ import {
   removeHistory,
   setPaused,
 } from "./searchHistory";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogOverlay,
+  AlertDialogPortal,
+  AlertDialogTitle,
+  Checkbox,
+} from "../ui/radix";
 import "./search.css";
 
 /**
@@ -233,13 +244,11 @@ export function SearchPage({
     setHistoryPaused(next);
   }
 
+  /** 清空全部搜索历史：AlertDialog「清空」按钮回调（关闭由按钮自身的 Close 语义完成）。 */
   function doClearHistory() {
     clearHistory();
     setHistory([]);
-    setConfirmingClear(false);
-  }
-
-  function removeOne(kw: string) {
+  }  function removeOne(kw: string) {
     setHistory(removeHistory(kw));
   }
 
@@ -323,7 +332,8 @@ export function SearchPage({
                 <div className="sp-section-head">
                   <span className="sp-section-title">搜索历史</span>
                   <label className="sp-pause">
-                    <input type="checkbox" checked={!historyPaused} onChange={togglePauseRecord} />
+                    {/* 记录开关：组件库 Checkbox（珊瑚色勾选态） */}
+                    <Checkbox checked={!historyPaused} onCheckedChange={() => togglePauseRecord()} />
                     <span>{historyPaused ? "已暂停" : "记录"}</span>
                   </label>
                   <button
@@ -335,21 +345,24 @@ export function SearchPage({
                   </button>
                 </div>
                 {confirmingClear ? (
-                  <div className="sp-confirm">
-                    <span className="sp-confirm-msg">
-                      确定要清空全部搜索历史吗？清空后无法恢复。
-                    </span>
-                    <button type="button" className="sp-confirm-btn ok" onClick={doClearHistory}>
-                      确定
-                    </button>
-                    <button
-                      type="button"
-                      className="sp-confirm-btn cancel"
-                      onClick={() => setConfirmingClear(false)}
-                    >
-                      取消
-                    </button>
-                  </div>
+                  /* 清空确认：AlertDialog 保证破坏性操作必须显式选择，Esc / 点遮罩不误关 */
+                  <AlertDialog open onOpenChange={setConfirmingClear}>
+                    <AlertDialogPortal>
+                      <AlertDialogOverlay />
+                      <AlertDialogContent aria-describedby={undefined}>
+                        <AlertDialogTitle>清空搜索历史</AlertDialogTitle>
+                        <AlertDialogDescription>
+                          确定要清空全部搜索历史吗？清空后无法恢复。
+                        </AlertDialogDescription>
+                        <div className="apd-actions">
+                          <AlertDialogCancel className="apd-btn">取消</AlertDialogCancel>
+                          <AlertDialogAction className="apd-btn danger" onClick={doClearHistory}>
+                            清空
+                          </AlertDialogAction>
+                        </div>
+                      </AlertDialogContent>
+                    </AlertDialogPortal>
+                  </AlertDialog>
                 ) : (
                   <div className="sp-chips">
                     {history.map((h) => (

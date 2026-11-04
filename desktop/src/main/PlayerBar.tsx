@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { absoluteUrl, refrainRangeOf } from "../api";
 import { useApp } from "../state/AppState";
 import { hideOnError } from "./img";
+import { Slider, SliderRange, SliderThumb, SliderTrack } from "../ui/radix";
 import {
   IconClose,
   IconHeart,
@@ -141,16 +142,21 @@ export function PlayerBar() {
             <IconVolume size={16} muted={app.volume === 0} />
           </button>
           <div className={`playerbar-volume-pop${volumeHover ? " show" : ""}`}>
-            <input
-              className="playerbar-volume-slider"
-              type="range"
+            {/* 音量滑杆：组件库 Slider（迷你规格），键盘方向键微调由 Radix 原生支持 */}
+            <Slider
+              className="ui-slider ui-slider-mini"
               min={0}
               max={100}
               step={1}
-              value={Math.round(app.volume * 100)}
-              onChange={(e) => app.setVolume(Number(e.currentTarget.value) / 100)}
+              value={[Math.round(app.volume * 100)]}
+              onValueChange={([v]) => app.setVolume(v / 100)}
               aria-label="播放音量"
-            />
+            >
+              <SliderTrack>
+                <SliderRange />
+              </SliderTrack>
+              <SliderThumb />
+            </Slider>
             <span className="playerbar-volume-num">{Math.round(app.volume * 100)}</span>
           </div>
         </div>

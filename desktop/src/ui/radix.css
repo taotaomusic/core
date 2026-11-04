@@ -1,0 +1,178 @@
+/* Radix UI 适配层样式：覆盖 ui-* 前缀的组件库原语外观。
+   视觉规格与原手写浮层（srmenu-pop / apd-mask / apd-card / pd-track）逐项对齐，
+   目标是替换交互实现后界面观感不变。 */
+
+/* 屏幕阅读器专用：无障碍标题/描述只在 DOM 里存在，不占视觉空间 */
+.ui-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ---- 弹窗骨架（Dialog/AlertDialog）：遮罩沿用 apd-mask；卡片为 Radix Overlay 的
+   兄弟节点（非其子元素），不能依赖遮罩的 grid 居中，需自带固定定位居中 ---- */
+.ui-dialog-card {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: 71; /* 高于 apd-mask 的 70，保证卡片盖在遮罩之上 */
+  transform: translate(-50%, -50%);
+  width: 360px;
+  max-width: calc(100vw - 48px);
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-radius: 16px;
+  padding: 20px;
+  box-shadow: var(--shadow-lg);
+  outline: none;
+  animation: ui-dialog-pop-in .18s ease-out;
+}
+/* 入场动画把居中位移带进关键帧，避免 from 帧覆盖 transform 造成跳位 */
+@keyframes ui-dialog-pop-in {
+  from { opacity: 0; transform: translate(-50%, calc(-50% + 8px)) scale(.98); }
+}
+
+/* ---- 下拉菜单（DropdownMenu）：对齐原 srmenu-pop 视觉 ---- */
+.ui-menu {
+  z-index: 90; /* 行内菜单原为 30；弹出层挂 body，抬高到遮罩(70)与全局 toast(80)之上、toast 之下 */
+  min-width: 132px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-md);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  animation: ui-menu-in .14s ease-out;
+}
+@keyframes ui-menu-in {
+  from { opacity: 0; transform: translateY(-4px); }
+}
+.ui-menu-item {
+  border: 0;
+  background: transparent;
+  text-align: left;
+  font-size: 13px;
+  color: var(--text);
+  padding: 8px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background .15s, color .15s;
+  outline: none;
+  user-select: none;
+}
+.ui-menu-item:hover,
+.ui-menu-item[data-highlighted] {
+  background: var(--coral-tint);
+  color: var(--coral);
+}
+.ui-menu-item[data-disabled] {
+  opacity: .5;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* ---- 弹窗卡片（Dialog/AlertDialog 复用 ui-dialog-card），不再追加规则 ---- */
+
+/* ---- 滑杆（Slider）：按 Radix 官方布局模式（Root 为 flex 容器做对齐，
+   Track 承载轨道底色，Range 内联 left/right%，Thumb 由外层壳水平居中） ---- */
+.ui-slider {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1;
+  height: 20px;
+  touch-action: none;
+  cursor: pointer;
+  outline: none;
+}
+.ui-slider[data-disabled] {
+  cursor: not-allowed;
+  opacity: .55;
+}
+.ui-slider-track {
+  position: relative;
+  flex: 1;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--border);
+}
+.ui-slider-range {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  background: var(--coral);
+  border-radius: 3px;
+}
+.ui-slider-thumb {
+  display: block;
+  width: 14px;
+  height: 14px;
+  background: var(--coral);
+  border: 2px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .25);
+  outline: none;
+  transition: box-shadow .12s;
+}
+.ui-slider:hover .ui-slider-thumb,
+.ui-slider:focus-within .ui-slider-thumb {
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .25), 0 0 0 3px rgba(250, 94, 91, .2);
+}
+
+/* 音量滑杆：比进度条更紧凑的迷你版（原 playerbar-volume-slider 规格） */
+.ui-slider-mini {
+  flex: none;
+  width: 120px;
+  height: 16px;
+}
+.ui-slider-mini .ui-slider-track {
+  height: 4px;
+  border-radius: 2px;
+}
+.ui-slider-mini .ui-slider-thumb {
+  width: 12px;
+  height: 12px;
+  border-width: 2px;
+}
+
+/* ---- 复选框（Checkbox）：珊瑚色勾选态，替代原生 accent-color ---- */
+.ui-checkbox {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface);
+  color: #fff;
+  cursor: pointer;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  transition: background .15s, border-color .15s;
+  outline: none;
+}
+.ui-checkbox:hover {
+  border-color: var(--coral);
+}
+.ui-checkbox[data-state="checked"] {
+  background: var(--coral);
+  border-color: var(--coral);
+}
+.ui-checkbox:focus-visible {
+  box-shadow: 0 0 0 3px rgba(250, 94, 91, .18);
+}
+.ui-checkbox[data-disabled] {
+  opacity: .5;
+  cursor: not-allowed;
+}

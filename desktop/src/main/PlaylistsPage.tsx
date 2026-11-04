@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { DragEvent as ReactDragEvent } from "react";
 import {
   absoluteUrl,
@@ -17,6 +17,20 @@ import { useApp } from "../state/AppState";
 import { AddToPlaylistDialog } from "./AddToPlaylistDialog";
 import { hideOnError } from "./img";
 import { SongRowMenu } from "./SongRowMenu";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogOverlay,
+  AlertDialogPortal,
+  AlertDialogTitle,
+  Dialog,
+  DialogContent,
+  DialogPortal,
+  DialogTitle,
+} from "../ui/radix";
 // 曲目行复用 search.css 里的 songrow-* 全局类，显式导入保证样式自足
 import "./search.css";
 import "./playlists.css";
@@ -363,7 +377,7 @@ export function PlaylistsPage() {
         </>
       )}
 
-      {/* 新建歌单小弹窗（列表视图） */}
+      {/* 新建歌单输入弹窗（列表视图）：组件库 Dialog，Esc / 点遮罩关闭由 Radix 处理 */}
       {createOpen && (
         <PlPromptModal
           title="新建歌单"
@@ -374,7 +388,7 @@ export function PlaylistsPage() {
         />
       )}
 
-      {/* 重命名小弹窗（详情视图） */}
+      {/* 重命名输入弹窗（详情视图） */}
       {renameOpen && detail && (
         <PlPromptModal
           title="重命名歌单"
@@ -386,22 +400,25 @@ export function PlaylistsPage() {
         />
       )}
 
-      {/* 删除确认小弹窗（详情视图） */}
+      {/* 删除确认弹窗（详情视图）：AlertDialog 保证破坏性操作必须显式选择，Esc / 点遮罩不误关 */}
       {deleteOpen && detail && (
-        <div className="apd-mask" onClick={() => setDeleteOpen(false)}>
-          <div className="apd-card" onClick={(e) => e.stopPropagation()}>
-            <div className="apd-title">删除歌单</div>
-            <div className="apd-sub">确定删除歌单「{detail.name}」吗？该操作不可恢复。</div>
-            <div className="apd-actions">
-              <button type="button" className="apd-btn" onClick={() => setDeleteOpen(false)}>
-                取消
-              </button>
-              <button type="button" className="apd-btn danger" onClick={() => void handleDelete()}>
-                删除
-              </button>
-            </div>
-          </div>
-        </div>
+        <AlertDialog open onOpenChange={setDeleteOpen}>
+          <AlertDialogPortal>
+            <AlertDialogOverlay />
+            <AlertDialogContent aria-describedby={undefined}>
+              <AlertDialogTitle>删除歌单</AlertDialogTitle>
+              <AlertDialogDescription>
+                确定删除歌单「{detail.name}」吗？该操作不可恢复。
+              </AlertDialogDescription>
+              <div className="apd-actions">
+                <AlertDialogCancel className="apd-btn">取消</AlertDialogCancel>
+                <AlertDialogAction className="apd-btn danger" onClick={() => void handleDelete()}>
+                  删除
+                </AlertDialogAction>
+              </div>
+            </AlertDialogContent>
+          </AlertDialogPortal>
+        </AlertDialog>
       )}
 
       <AddToPlaylistDialog song={addToSong} onClose={() => setAddToSong(null)} />
@@ -411,7 +428,8 @@ export function PlaylistsPage() {
 
 /**
  * 歌单页的小输入弹窗（新建 / 重命名共用 apd 弹窗规格）：
- * 遮罩点击与 Esc 关闭，Enter 直接确认；确认后的收起与否由父级回调决定。
+ * 骨架为组件库 Dialog，遮罩点击与 Esc 关闭交由 Radix，Enter 仍直接确认；
+ * 确认后的收起与否由父级回调决定。
  */
 function PlPromptModal({
   title,
@@ -431,40 +449,36 @@ function PlPromptModal({
   const [name, setName] = useState(initial);
   const trimmed = name.trim();
 
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    document.addEventListener("keydown", handleKeyDown);
-    return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [onClose]);
-
   return (
-    <div className="apd-mask" onClick={onClose}>
-      <div className="apd-card" onClick={(e) => e.stopPropagation()}>
-        <div className="apd-title">{title}</div>
-        <div className="apd-create">
-          <input
-            className="apd-input"
-            autoFocus
-            value={name}
-            maxLength={50}
-            placeholder={placeholder}
-            onChange={(e) => setName(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && trimmed) onConfirm(trimmed);
-            }}
-          />
-          <button
-            type="button"
-            className="apd-create-btn"
-            disabled={!trimmed}
-            onClick={() => onConfirm(trimmed)}
-          >
-            {confirmText}
-          </button>
-        </div>
-      </div>
-    </div>
+    <Dialog open onOpenChange={(next) => { if (!next) onClose(); }}>
+      <DialogPortal>
+        <DialogContent aria-describedby={undefined}>
+          {/* Radix Title 提供无障碍标题（视觉隐藏），可见标题由下方 apd-title 承担 */}
+          <DialogTitle>{title}</DialogTitle>
+          <div className="apd-title" aria-hidden>{title}</div>
+          <div className="apd-create">
+            <input
+              className="apd-input"
+              autoFocus
+              value={name}
+              maxLength={50}
+              placeholder={placeholder}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && trimmed) onConfirm(trimmed);
+              }}
+            />
+            <button
+              type="button"
+              className="apd-create-btn"
+              disabled={!trimmed}
+              onClick={() => onConfirm(trimmed)}
+            >
+              {confirmText}
+            </button>
+          </div>
+        </DialogContent>
+      </DialogPortal>
+    </Dialog>
   );
 }
