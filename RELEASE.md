@@ -87,7 +87,27 @@ curl.exe -X POST "https://music.xydaigua.cn/api/v1/app/admin/rollout" `
 .\gradlew.bat :androidApp:assembleRelease
 ```
 
-产物在 `androidApp/build/outputs/apk/release/androidApp-release.apk`。
+产物在 `androidApp/build/outputs/apk/release/androidApp-release.apk`，这是**未加固的 canonical APK**。
+
+发布前必须再跑一次 XopProtector 加固，产物是同目录的
+`androidApp-release-protected.apk`。以下命令在 **Git Bash** 中执行（PowerShell 不能直接
+运行 bash 脚本）：
+
+```bash
+# 首次或加固脚本/上游版本变更时构建引擎（需要 JDK 17）
+bash tools/apk-hardening/build-protector.sh --out .xop-engine
+
+# 加固；签名口令从 TAOTAO_STORE_PASSWORD / TAOTAO_KEY_ALIAS /
+# TAOTAO_KEY_PASSWORD 环境变量读取（与 local.properties 的变量名一致）
+bash tools/apk-hardening/harden-apk.sh \
+  --input androidApp/build/outputs/apk/release/androidApp-release.apk \
+  --engine .xop-engine \
+  --keystore taotao-release.jks
+```
+
+**canonical APK 必须保留**：`:patch:printMethodKeys` 要从它的 `classes*.dex` 读取插桩
+方法键，加固后的业务 DEX 已收进 `assets/protector/dexes.zip`。登记、放量、上传都只用
+`*-protected.apk`；加固策略、校验项和 RASP 说明见 [APK_HARDENING.md](APK_HARDENING.md)。
 
 Release 构建启用 R8 收缩/优化与资源收缩，并与热修复插桩共存（不混淆、不内联、插桩三包 keep，见 AGENTS.md 与 `androidApp/proguard-rules.pro`），签名配置读 `local.properties`,该文件不进版本库。
 
@@ -96,7 +116,7 @@ Release 构建启用 R8 收缩/优化与资源收缩，并与热修复插桩共�
 请求体是 **APK 原始字节**,不是 base64、不是 multipart。`rollout` 不传就是 0,也就是"登记但不下发给任何人"—— 这是刻意的默认值,给你留一个先自测的机会。
 
 ```powershell
-$apk = "androidApp\build\outputs\apk\release\androidApp-release.apk"
+$apk = "androidApp\build\outputs\apk\release\androidApp-release-protected.apk"
 $meta = node -e "const d=require('./androidApp/build/outputs/apk/release/output-metadata.json').elements[0];console.log(d.versionCode+' '+d.versionName)"
 $vc, $vn = $meta.Split(' ')
 $sha = (Get-FileHash $apk -Algorithm SHA256).Hash.ToLower()
@@ -169,7 +189,7 @@ curl.exe -X POST "https://music.xydaigua.cn/api/v1/app/admin/min-version" `
 .\gradlew.bat :patch:printMethodKeys -Pfilter=TencentMusicApi
 ```
 
-它直接从 release APK 的 DEX 里读,是唯一不会说谎的口径 —— 源码里有的方法不一定插了桩(构造器、静态初始化块、合成方法都跳过了)。
+它直接从 release APK 的 DEX 里读,是唯一不会说谎的口径 —— 源码里有的方法不一定插了桩(构造器、静态初始化块、合成方法都跳过了)。这里的 release APK 指未加固的 canonical APK；**不要指向 `*-protected.apk`**，加固后业务 DEX 在 `assets/protector/dexes.zip`，读不到插桩键。
 
 ### 1. 写补丁
 
@@ -371,8 +391,9 @@ Windows 桌面端现在是 Tauri 应用（`desktop/` 目录，Tauri 2 + React + 
 - **版本号**：仓库里的 `version.properties` 是**基线，不会被云端回写**；每次运行用
   `VERSION_CODE + GITHUB_RUN_NUMBER` 派生唯一版本，避免每次干净 checkout 产出同一个号。
   Android 版本号仍只能从 `output-metadata.json` 读，且**绝不回滚** `version.properties`（见第三节）。
-- **APK 签名**：core 仓库 Secrets 配 `ANDROID_KEYSTORE_BASE64`、`ANDROID_STORE_PASSWORD`、
-  `ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD` 后出签名 Release 包；未配置时自动退回 Debug 包。
+- **APK 签名**：core 仓库 Secrets 配 `ANDROID_KEYSTORE_BASE64`、`TAOTAO_STORE_PASSWORD`、
+  `TAOTAO_KEY_ALIAS`、`TAOTAO_KEY_PASSWORD` 后出签名 Release 包；未配置时自动退回 Debug 包。
+  加固步骤复用同一组 keystore 与口令。
 - ⚠️ **`.github/**` 不在任何 paths-filter 里**：只改工作流本身的提交会让全部 job 跳过，run 显示
   success 但什么都没验证。验证工作流改动要在提交信息里写 `[full]`，或手动 dispatch 勾选 `full`。
 - ⚠️ 给已有工作流加 `pull_request` 触发前，必须先堵住所有发布步骤（本仓库有 8 处），否则

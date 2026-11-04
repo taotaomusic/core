@@ -70,3 +70,6 @@ artifacts/*
 !artifacts/playback-history-playlist/
 !artifacts/playback-history-playlist/**
 server/bodian/index.ts
+
+# APK 加固引擎（build-protector.sh 产物，较大且可重建）
+/.xop-engine/
