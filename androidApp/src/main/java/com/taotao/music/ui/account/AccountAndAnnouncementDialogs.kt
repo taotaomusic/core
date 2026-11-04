@@ -9,7 +9,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.VerifiedUser
@@ -24,6 +23,7 @@ import androidx.compose.ui.unit.dp
 import com.taotao.music.data.TencentMusicApi
 import com.taotao.music.playerui.SharedSectionHeader
 import com.taotao.music.playerui.SharedSectionLevel
+import com.taotao.music.playerui.theme.TaotaoMiuixTheme
 import com.taotao.music.playerui.theme.TaotaoShapes
 import com.taotao.music.playerui.theme.TaotaoSizes
 import com.taotao.music.playerui.theme.TaotaoSpacing
@@ -35,6 +35,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import top.yukonga.miuix.kmp.basic.ButtonDefaults
+import top.yukonga.miuix.kmp.basic.TextButton as MiuixTextButton
+import top.yukonga.miuix.kmp.window.WindowBottomSheet
+import top.yukonga.miuix.kmp.window.WindowDialog
 
 /** 客户端仅做格式预校验；实际可用域名和验证规则由服务端统一裁决。 */
 private const val SUPPORTED_EMAIL_HINT = "请输入有效的邮箱地址"
@@ -59,7 +63,6 @@ private val AnnouncementDialogMaxHeight = 480.dp
  * 账号资料用完整底部页承载，避免在窄小对话框里叠放三组输入与操作。
  * 老账号 email 为 null 时明确走“补绑”，已有邮箱时才进入换绑流程。
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AccountSheet(
     api: TencentMusicApi,
@@ -75,7 +78,6 @@ fun AccountSheet(
     val scope = rememberCoroutineScope()
     val changingEmail = profile.email != null
     val emailAccepted = EMAIL_INPUT_PATTERN.matches(email.trim())
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     fun launchRequest(work: suspend () -> Unit, successMessage: String) {
         loading = true
@@ -87,12 +89,14 @@ fun AccountSheet(
         }
     }
 
-    ModalBottomSheet(
-        onDismissRequest = { if (!loading) onDismiss() },
-        sheetState = sheetState,
-        containerColor = MaterialTheme.colorScheme.surface,
-        contentColor = MaterialTheme.colorScheme.onSurface,
-    ) {
+    // 弹层骨架走 Miuix WindowBottomSheet（组件库渲染底部滑入/拖拽关闭/返回手势）；
+    // 内部表单仍走 Material3（昵称/邮箱输入与按钮的规格与全应用一致，不随 Miuix 换肤）。
+    TaotaoMiuixTheme {
+        WindowBottomSheet(
+            show = true,
+            title = "个人资料",
+            onDismissRequest = { if (!loading) onDismiss() },
+        ) {
         Column(
             modifier = Modifier.fillMaxWidth().heightIn(max = ProfileSheetMaxHeight).verticalScroll(rememberScrollState())
                 .padding(
@@ -184,6 +188,7 @@ fun AccountSheet(
                 CircularProgressIndicator(color = MaterialTheme.colorScheme.primary, strokeWidth = TaotaoStroke.medium)
             }
             TextButton(onClick = onDismiss, enabled = !loading, modifier = Modifier.align(Alignment.End)) { Text("完成") }
+        }
         }
     }
 }
@@ -354,16 +359,19 @@ private fun EmailBindingStatus(email: String?) {
 /** 公告列表只展示服务端已启用的公开内容，服务端决定排序与置顶。 */
 @Composable
 fun AnnouncementDialog(announcements: List<TencentMusicApi.Announcement>, onDismiss: () -> Unit) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        icon = { Icon(Icons.Default.Campaign, null) },
-        title = { Text("公告") },
-        // 容器色走主题默认：surfaceContainerHigh 已在 PlayerTheme 覆盖为暖色。
-        iconContentColor = MaterialTheme.colorScheme.primary,
-        titleContentColor = MaterialTheme.colorScheme.onSurface,
-        textContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-        text = {
-            Column(Modifier.heightIn(max = AnnouncementDialogMaxHeight).verticalScroll(rememberScrollState())) {
+    // 对话框骨架走 Miuix WindowDialog（居中卡片 + 遮罩，返回手势关闭）；
+    // 多条公告的分隔与置顶徽标保留原布局，配色继续走 MaterialTheme 保证同源。
+    TaotaoMiuixTheme {
+        WindowDialog(
+            show = true,
+            title = "公告",
+            onDismissRequest = onDismiss,
+        ) {
+            Column(
+                Modifier
+                    .heightIn(max = AnnouncementDialogMaxHeight)
+                    .verticalScroll(rememberScrollState()),
+            ) {
                 announcements.forEachIndexed { index, announcement ->
                     if (index > 0) HorizontalDivider(
                         modifier = Modifier.padding(vertical = TaotaoSpacing.sm),
@@ -380,9 +388,16 @@ fun AnnouncementDialog(announcements: List<TencentMusicApi.Announcement>, onDism
                     Text(announcement.content, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = TaotaoSpacing.xxs))
                 }
             }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("知道了") } },
-    )
+            MiuixTextButton(
+                text = "知道了",
+                onClick = onDismiss,
+                colors = ButtonDefaults.textButtonColorsPrimary(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = TaotaoSpacing.md),
+            )
+        }
+    }
 }
 
 private const val EMAIL_RESEND_INTERVAL_SECONDS = 60

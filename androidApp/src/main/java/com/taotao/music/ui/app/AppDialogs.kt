@@ -1,12 +1,11 @@
 package com.taotao.music.ui.app
 
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import androidx.compose.foundation.layout.Row
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import com.taotao.music.data.TencentMusicApi
 import com.taotao.music.model.AudioQuality
+import com.taotao.music.playerui.theme.TaotaoMiuixTheme
 import com.taotao.music.ui.account.AnnouncementDialog
 import com.taotao.music.ui.player.QualityChoice
 import com.taotao.music.ui.player.QualitySheet
@@ -20,6 +19,9 @@ import com.taotao.music.ui.playlist.PlaylistSongPickerDialog
 import com.taotao.music.ui.theme.TaotaoCoral
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import top.yukonga.miuix.kmp.basic.ButtonDefaults
+import top.yukonga.miuix.kmp.basic.TextButton as MiuixTextButton
+import top.yukonga.miuix.kmp.window.WindowDialog
 
 /**
  * 全局弹窗与底部面板装配：公告、定时关闭、歌单三件套、删除确认与音质面板。
@@ -122,18 +124,33 @@ internal fun TaotaoAppDialogs(state: TaotaoAppState, inDetailActivity: Boolean =
     }
     state.pendingDelete?.let { target ->
         if (inDetailActivity) return@let
-        AlertDialog(
-            onDismissRequest = { state.pendingDelete = null },
-            title = { Text("删除下载") },
-            text = { Text("将删除「${target.title}」的音频、封面和歌词，无法恢复。") },
-            confirmButton = {
-                TextButton(onClick = {
-                    state.pendingDelete = null
-                    state.deleteDownloaded(target)
-                }) { Text("删除", color = TaotaoCoral) }
-            },
-            dismissButton = { TextButton(onClick = { state.pendingDelete = null }) { Text("取消") } },
-        )
+        // 删除确认走 Miuix WindowDialog：破坏性操作用组件库的居中对话框 + 底部滑入规格，
+        // WindowDialog 不依赖 Scaffold 宿主，Esc/返回/点遮罩都走 onDismissRequest。
+        TaotaoMiuixTheme {
+            WindowDialog(
+                show = true,
+                title = "删除下载",
+                summary = "将删除「${target.title}」的音频、封面和歌词，无法恢复。",
+                onDismissRequest = { state.pendingDelete = null },
+            ) {
+                Row {
+                    MiuixTextButton(
+                        text = "取消",
+                        onClick = { state.pendingDelete = null },
+                        modifier = Modifier.weight(1f),
+                    )
+                    MiuixTextButton(
+                        text = "删除",
+                        onClick = {
+                            state.pendingDelete = null
+                            state.deleteDownloaded(target)
+                        },
+                        colors = ButtonDefaults.textButtonColors(textColor = TaotaoCoral),
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+        }
     }
 
     // 下载前的音质面板：查一次 /song/info 拿到这首歌真实存在的档位与体积。

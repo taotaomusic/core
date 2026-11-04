@@ -32,7 +32,6 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -58,6 +57,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
+import top.yukonga.miuix.kmp.basic.ButtonDefaults
+import top.yukonga.miuix.kmp.basic.TextButton as MiuixTextButton
+import top.yukonga.miuix.kmp.window.WindowDialog
 import coil.request.ImageRequest
 import com.taotao.music.data.TencentMusicApi
 import com.taotao.music.model.Song
@@ -287,47 +289,49 @@ fun PlaylistSongPickerDialog(
             }
         }
     }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("添加歌曲") },
-        text = {
-            if (loading) {
-                Box(Modifier.fillMaxWidth().padding(TaotaoSpacing.xl), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = TaotaoCoral, modifier = Modifier.size(TaotaoSizes.iconMd))
-                }
-            } else if (usable.isEmpty()) {
-                Text("暂无可添加的歌曲，请先搜索或播放音乐。", modifier = Modifier.padding(vertical = TaotaoSpacing.md))
-            } else {
-                LazyColumn(
-                    modifier = Modifier.fillMaxWidth().heightIn(max = PickerDialogContentMaxHeight),
-                    verticalArrangement = Arrangement.spacedBy(TaotaoSpacing.xxs),
-                ) {
-                    items(usable, key = ::playlistCandidateKey) { song ->
-                        val exists = playlistIdentityKeys(song).any { it in existingKeys }
-                        Row(
-                            Modifier.fillMaxWidth()
-                                .clip(TaotaoShapes.medium)
-                                .clickable(enabled = !exists) { onPick(song) }
-                                .padding(horizontal = TaotaoSpacing.xs, vertical = TaotaoSpacing.xxs),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            AlbumArt(Color(song.color), TaotaoSizes.artworkRow, song.coverUri)
-                            Column(Modifier.weight(1f).padding(start = TaotaoSpacing.xs)) {
-                                Text(song.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Medium)
-                                Text(song.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
-                            }
-                            Text(
-                                if (exists) "已在歌单" else "添加",
-                                color = if (exists) MaterialTheme.colorScheme.onSurfaceVariant else TaotaoCoral,
-                                style = MaterialTheme.typography.bodySmall,
-                            )
+    // 对话框骨架走 Miuix WindowDialog（居中卡片 + 遮罩 + 返回手势关闭）；
+    // 候选列表行保留自绘布局：歌曲行有封面/置灰/已在歌单等专属状态。
+    MiuixPlaylistDialogFrame(
+        title = "添加歌曲",
+        onDismiss = onDismiss,
+        confirmText = "完成",
+        onConfirm = onDismiss,
+    ) {
+        if (loading) {
+            Box(Modifier.fillMaxWidth().padding(TaotaoSpacing.xl), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = TaotaoCoral, modifier = Modifier.size(TaotaoSizes.iconMd))
+            }
+        } else if (usable.isEmpty()) {
+            Text("暂无可添加的歌曲，请先搜索或播放音乐。", modifier = Modifier.padding(vertical = TaotaoSpacing.md))
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth().heightIn(max = PickerDialogContentMaxHeight),
+                verticalArrangement = Arrangement.spacedBy(TaotaoSpacing.xxs),
+            ) {
+                items(usable, key = ::playlistCandidateKey) { song ->
+                    val exists = playlistIdentityKeys(song).any { it in existingKeys }
+                    Row(
+                        Modifier.fillMaxWidth()
+                            .clip(TaotaoShapes.medium)
+                            .clickable(enabled = !exists) { onPick(song) }
+                            .padding(horizontal = TaotaoSpacing.xs, vertical = TaotaoSpacing.xxs),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        AlbumArt(Color(song.color), TaotaoSizes.artworkRow, song.coverUri)
+                        Column(Modifier.weight(1f).padding(start = TaotaoSpacing.xs)) {
+                            Text(song.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Medium)
+                            Text(song.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
                         }
+                        Text(
+                            if (exists) "已在歌单" else "添加",
+                            color = if (exists) MaterialTheme.colorScheme.onSurfaceVariant else TaotaoCoral,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
                     }
                 }
             }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("完成") } },
-    )
+        }
+    }
 }
 
 private fun playlistCandidateKey(song: Song): String =
@@ -361,56 +365,45 @@ fun PlaylistPickerDialog(
     onPick: (TencentMusicApi.Playlist) -> Unit,
     onCreate: () -> Unit,
 ) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("加入歌单") },
-        text = {
-            Column(Modifier.fillMaxWidth().heightIn(max = PickerDialogContentMaxHeight)) {
-                Text(
-                    "将「${song.title}」保存到云端歌单",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(bottom = TaotaoSpacing.xs),
-                )
-                if (loading) {
-                    Box(Modifier.fillMaxWidth().padding(TaotaoSpacing.lg), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = TaotaoCoral, modifier = Modifier.size(TaotaoSizes.iconMd))
-                    }
-                } else if (playlists.isEmpty()) {
-                    Text("还没有歌单，先创建一个吧", modifier = Modifier.padding(vertical = TaotaoSpacing.md))
-                } else {
-                    Column(Modifier.verticalScroll(rememberScrollState())) {
-                        playlists.forEach { playlist ->
-                            Row(
-                                Modifier.fillMaxWidth().clip(TaotaoShapes.medium)
-                                    .clickable { onPick(playlist) }
-                                    .padding(horizontal = TaotaoSpacing.xs, vertical = TaotaoSpacing.sm),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                PlaylistCover(coverUrl = playlist.coverUrl, size = TaotaoSizes.artworkRow, shape = TaotaoShapes.small)
-                                Column(Modifier.weight(1f).padding(start = TaotaoSpacing.xs)) {
-                                    Text(playlist.name, style = MaterialTheme.typography.titleSmall)
-                                    Text(
-                                        "${playlist.songCount} 首",
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        style = MaterialTheme.typography.bodySmall,
-                                    )
-                                }
-                            }
+    // 对话框骨架走 Miuix WindowDialog；「新建歌单」动作放进内容区底部（WindowDialog
+    // 没有槽位式的 confirmButton/dismissButton，动作行由内容自行布局）。
+    MiuixPlaylistDialogFrame(
+        title = "加入歌单",
+        summary = "将「${song.title}」保存到云端歌单",
+        onDismiss = onDismiss,
+        confirmText = "新建歌单",
+        onConfirm = onCreate,
+        dismissText = "取消",
+    ) {
+        if (loading) {
+            Box(Modifier.fillMaxWidth().padding(TaotaoSpacing.lg), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = TaotaoCoral, modifier = Modifier.size(TaotaoSizes.iconMd))
+            }
+        } else if (playlists.isEmpty()) {
+            Text("还没有歌单，先创建一个吧", modifier = Modifier.padding(vertical = TaotaoSpacing.md))
+        } else {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                playlists.forEach { playlist ->
+                    Row(
+                        Modifier.fillMaxWidth().clip(TaotaoShapes.medium)
+                            .clickable { onPick(playlist) }
+                            .padding(horizontal = TaotaoSpacing.xs, vertical = TaotaoSpacing.sm),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        PlaylistCover(coverUrl = playlist.coverUrl, size = TaotaoSizes.artworkRow, shape = TaotaoShapes.small)
+                        Column(Modifier.weight(1f).padding(start = TaotaoSpacing.xs)) {
+                            Text(playlist.name, style = MaterialTheme.typography.titleSmall)
+                            Text(
+                                "${playlist.songCount} 首",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
                         }
                     }
                 }
             }
-        },
-        confirmButton = {
-            TextButton(onClick = onCreate) {
-                Icon(Icons.Default.Add, null, modifier = Modifier.size(TaotaoSizes.iconXs))
-                Spacer(Modifier.width(TaotaoSpacing.xxs))
-                Text("新建歌单")
-            }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
-    )
+        }
+    }
 }
 
 /** 新建/编辑歌单资料对话框。 */
@@ -424,36 +417,80 @@ fun PlaylistEditorDialog(
 ) {
     var name by remember(initialName) { mutableStateOf(initialName) }
     var description by remember(initialDescription) { mutableStateOf(initialDescription) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(title) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(TaotaoSpacing.xs)) {
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    label = { Text("歌单名称") },
-                    singleLine = true,
-                    supportingText = { Text("${name.length}/80") },
-                )
-                OutlinedTextField(
-                    value = description,
-                    onValueChange = { description = it },
-                    label = { Text("简介（可选）") },
-                    minLines = 2,
-                    maxLines = 4,
-                    supportingText = { Text("${description.length}/1000") },
+    // 对话框骨架走 Miuix WindowDialog；表单输入仍走 M3 OutlinedTextField（字数角标、
+    // 多行简介的规格与全应用表单一致，不随 Miuix 换肤）。
+    MiuixPlaylistDialogFrame(
+        title = title,
+        onDismiss = onDismiss,
+        confirmText = "保存",
+        confirmEnabled = name.trim().isNotEmpty() && name.trim().length <= 80,
+        onConfirm = { onConfirm(name.trim(), description.trim()) },
+        dismissText = "取消",
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(TaotaoSpacing.xs)) {
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it },
+                label = { Text("歌单名称") },
+                singleLine = true,
+                supportingText = { Text("${name.length}/80") },
+            )
+            OutlinedTextField(
+                value = description,
+                onValueChange = { description = it },
+                label = { Text("简介（可选）") },
+                minLines = 2,
+                maxLines = 4,
+                supportingText = { Text("${description.length}/1000") },
+            )
+        }
+    }
+}
+
+/**
+ * 歌单相关 Miuix 对话框的公共骨架：标题/摘要 + 内容 + 底部动作行。
+ *
+ * WindowDialog 本身只提供 title/summary/content 三个槽位，动作按钮要由内容区
+ * 自行布局；这里把「取消 / 确认」两颗按钮的排布收拢成一处，避免每个对话框各写一份。
+ * [dismissText] 为 null 时不渲染取消键（如仅一个「完成」确认的选择器）。
+ */
+@Composable
+private fun MiuixPlaylistDialogFrame(
+    title: String,
+    onDismiss: () -> Unit,
+    confirmText: String,
+    onConfirm: () -> Unit,
+    summary: String? = null,
+    confirmEnabled: Boolean = true,
+    dismissText: String? = null,
+    content: @Composable () -> Unit,
+) {
+    TaotaoMiuixTheme {
+        WindowDialog(
+            show = true,
+            title = title,
+            summary = summary,
+            onDismissRequest = onDismiss,
+        ) {
+            content()
+            Row(Modifier.fillMaxWidth().padding(top = TaotaoSpacing.md)) {
+                if (dismissText != null) {
+                    MiuixTextButton(
+                        text = dismissText,
+                        onClick = onDismiss,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                MiuixTextButton(
+                    text = confirmText,
+                    onClick = onConfirm,
+                    enabled = confirmEnabled,
+                    colors = ButtonDefaults.textButtonColorsPrimary(),
+                    modifier = Modifier.weight(1f),
                 )
             }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = { onConfirm(name.trim(), description.trim()) },
-                enabled = name.trim().isNotEmpty() && name.trim().length <= 80,
-            ) { Text("保存") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
-    )
+        }
+    }
 }
 
 /**

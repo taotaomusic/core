@@ -28,7 +28,6 @@ import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SystemUpdate
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -54,6 +53,7 @@ import coil.compose.AsyncImage
 import com.taotao.music.data.CrashLog
 import com.taotao.music.data.CrashReporter
 import com.taotao.music.data.TencentMusicApi
+import com.taotao.music.playerui.theme.TaotaoMiuixTheme
 import com.taotao.music.playerui.theme.TaotaoShapes
 import com.taotao.music.playerui.theme.TaotaoSizes
 import com.taotao.music.playerui.theme.TaotaoSpacing
@@ -64,6 +64,8 @@ import com.taotao.music.ui.theme.TaotaoCoral
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import top.yukonga.miuix.kmp.basic.TextButton as MiuixTextButton
+import top.yukonga.miuix.kmp.window.WindowDialog
 
 /** “我的”页三张快捷卡的固定高度。 */
 private val MineShortcutCardHeight = 120.dp
@@ -248,31 +250,32 @@ internal fun MinePage(
     if (showCrashLogs) {
         val allLogs = crashLogs.joinToString("\n\n" + "=".repeat(40) + "\n\n") { "${it.name}\n${it.content}" }
         val scope = rememberCoroutineScope()
-        AlertDialog(
-            onDismissRequest = { showCrashLogs = false },
-            title = { Text("崩溃日志（${crashLogs.size} 条）") },
-            text = {
+        // 崩溃日志查看器走 Miuix WindowDialog（居中卡片 + 返回手势关闭）；
+        // 导出/复制/清空三颗动作保留 M3 TextButton（长文案按钮行是本页专属排布）。
+        TaotaoMiuixTheme {
+            WindowDialog(
+                show = true,
+                title = "崩溃日志（${crashLogs.size} 条）",
+                onDismissRequest = { showCrashLogs = false },
+            ) {
                 Column(Modifier.heightIn(max = CrashLogViewportMaxHeight).verticalScroll(rememberScrollState())) {
                     Text(allLogs, style = MaterialTheme.typography.labelSmall)
                 }
-            },
-            confirmButton = {
-                // 导出成 .log 交给系统分享：多条堆栈叠起来轻易上万字符，
-                // 剪贴板装不下，粘贴时换行也常被吃掉。
-                TextButton(onClick = {
-                    scope.launch {
-                        val file = withContext(Dispatchers.IO) { crashReporter.exportToFile() }
-                        if (file == null) {
-                            onMessage("没有可导出的日志")
-                            return@launch
+                Row(Modifier.fillMaxWidth().padding(top = TaotaoSpacing.md)) {
+                    // 导出成 .log 交给系统分享：多条堆栈叠起来轻易上万字符，
+                    // 剪贴板装不下，粘贴时换行也常被吃掉。
+                    TextButton(onClick = {
+                        scope.launch {
+                            val file = withContext(Dispatchers.IO) { crashReporter.exportToFile() }
+                            if (file == null) {
+                                onMessage("没有可导出的日志")
+                                return@launch
+                            }
+                            runCatching { shareLogFile(context, file) }
+                                .onFailure { onMessage(it.message ?: "导出失败") }
                         }
-                        runCatching { shareLogFile(context, file) }
-                            .onFailure { onMessage(it.message ?: "导出失败") }
-                    }
-                }) { Text("导出 .log") }
-            },
-            dismissButton = {
-                Row {
+                    }) { Text("导出 .log") }
+                    Spacer(Modifier.weight(1f))
                     TextButton(onClick = {
                         scope.launch {
                             clipboard.setClipEntry(
@@ -288,8 +291,8 @@ internal fun MinePage(
                         showCrashLogs = false
                     }) { Text("清空") }
                 }
-            },
-        )
+            }
+        }
     }
 }
 

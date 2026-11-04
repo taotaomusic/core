@@ -13,12 +13,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -29,10 +27,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.animation.animateColorAsState
 import com.taotao.music.model.AudioQuality
 import com.taotao.music.model.labelOfQuality
+import com.taotao.music.playerui.theme.TaotaoMiuixTheme
 import com.taotao.music.playerui.theme.TaotaoShapes
 import com.taotao.music.playerui.theme.TaotaoSizes
 import com.taotao.music.playerui.theme.TaotaoSpacing
 import com.taotao.music.playerui.theme.TaotaoTypeScale
+import top.yukonga.miuix.kmp.window.WindowBottomSheet
 
 /**
  * 一个可选档位。
@@ -57,12 +57,14 @@ internal enum class QualitySheetKind { CURRENT_SONG, PLAYBACK_DEFAULT, DOWNLOAD_
 /**
  * 音质选择面板。
  *
+ * 弹层骨架走 Miuix 的 [WindowBottomSheet]（组件库渲染底部滑入/拖拽关闭/返回手势，
+ * 外层包 TaotaoMiuixTheme 保证珊瑚配色）；档位行保留自绘选中态高亮，属专属视觉。
+ *
  * 播放页临时切档、下载前选档、设置页改默认值共用同一个面板：
  * 三处的差别只是候选档位从哪来，以及确认后把值写去哪。
  *
  * [loading] 为真时显示进度 —— 与具体歌曲相关的档位表要先查一次 `/song/info`。
  */
-@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 fun QualitySheet(
     title: String,
@@ -73,47 +75,46 @@ fun QualitySheet(
     onPick: (Int) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = rememberModalBottomSheetState(),
-        containerColor = MaterialTheme.colorScheme.surface,
-        contentColor = MaterialTheme.colorScheme.onSurface,
-    ) {
-        Column(
-            Modifier.fillMaxWidth()
-                .padding(horizontal = TaotaoSpacing.screenHorizontal)
-                .padding(bottom = TaotaoSpacing.xl),
+    TaotaoMiuixTheme {
+        WindowBottomSheet(
+            show = true,
+            title = title,
+            onDismissRequest = onDismiss,
         ) {
-            Text(title, color = MaterialTheme.colorScheme.onSurface, style = TaotaoTypeScale.sectionTitle)
-            if (!note.isNullOrBlank()) {
-                Text(
-                    note,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(top = TaotaoSpacing.xxs),
-                )
-            }
-            if (loading) {
-                Row(
-                    Modifier.fillMaxWidth().padding(vertical = TaotaoSpacing.xl),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    CircularProgressIndicator(
-                        Modifier.size(TaotaoSizes.progressInline),
-                        color = MaterialTheme.colorScheme.primary,
-                    )
+            Column(
+                Modifier.fillMaxWidth()
+                    .padding(bottom = TaotaoSpacing.md),
+            ) {
+                if (!note.isNullOrBlank()) {
                     Text(
-                        "正在查可用音质…",
+                        note,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.padding(start = TaotaoSpacing.xs),
+                        modifier = Modifier.padding(top = TaotaoSpacing.xxs),
                     )
                 }
-                return@Column
-            }
-            choices.forEach { choice ->
-                QualityRow(choice, choice.value == selected) { if (choice.available) onPick(choice.value) }
+                if (loading) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(vertical = TaotaoSpacing.xl),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        CircularProgressIndicator(
+                            Modifier.size(TaotaoSizes.progressInline),
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                        Text(
+                            "正在查可用音质…",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(start = TaotaoSpacing.xs),
+                        )
+                    }
+                    return@Column
+                }
+                choices.forEach { choice ->
+                    QualityRow(choice, choice.value == selected) { if (choice.available) onPick(choice.value) }
+                }
             }
         }
     }
