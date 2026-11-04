@@ -150,6 +150,16 @@ fi
 grep -Fq 'abiFilters += listOf("arm64-v8a")' "$NATIVE_GRADLE" \
   || fail "无法把 native ABI 收窄到 arm64-v8a"
 
+# 上游 settings.gradle.kts 还硬编码了 Windows 的 UniMP SDK 路径；Linux 上
+# file("E:/...") 会按 URL 解析并抛 "Cannot convert URL ... to a file"。
+# 该模块与 packer 无关，删掉候选行，只保留可选的 unimp.sdk.libs 属性。
+SETTINGS_GRADLE="$SRC/settings.gradle.kts"
+[ -f "$SETTINGS_GRADLE" ] || fail "找不到 $SETTINGS_GRADLE"
+if grep -q 'SDK-Android@5\.14-20260706' "$SETTINGS_GRADLE"; then
+  sed -i.bak '/SDK-Android@5\.14-20260706/d' "$SETTINGS_GRADLE"
+  rm -f "$SETTINGS_GRADLE.bak"
+fi
+
 GRADLE_PROPS="$SRC/gradle.properties"
 if [ -f "$GRADLE_PROPS" ]; then
   # 上游 gradle.properties 提交了 Windows 专用 unimp.sdk.libs 路径；Linux 上 Gradle
