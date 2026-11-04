@@ -94,6 +94,7 @@ GitHub 侧三个仓库（music / music-server / tools）都是**正式仓库**�
 - [README.md](README.md)：项目总览、播放链路、开发入口。
 - [client-code-index.md](client-code-index.md)：客户端 CodeGraph 索引、模块边界、关键符号和刷新命令。
 - **[RELEASE.md](RELEASE.md)：发布与热更新流程、版本号铁律、不能破的客户端契约。改后端或推版本前必读。**
+- [APK_HARDENING.md](APK_HARDENING.md)：发布 APK 的 XopProtector 加固策略、CI 接入、校验与许可证。
 - [server/README.md](server/README.md)：后端接口、数据层规矩、契约验证。
 - [HOT_UPDATE.md](HOT_UPDATE.md)：热更新的设计动机（部分内容已被实现取代，文内有标注）。
 - [MUSIC_CROSS_PLATFORM.md](MUSIC_CROSS_PLATFORM.md)：Android/Windows 双端功能边界、定时播放与云端歌单契约。

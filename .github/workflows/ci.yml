@@ -83,6 +83,7 @@ jobs:
               - 'shared/**'
               - 'build-logic/**'
               - 'patch/**'
+              - 'tools/apk-hardening/**'
               - 'gradle/**'
               - '*.gradle*'
               - 'gradle.properties'
@@ -426,9 +427,40 @@ jobs:
         if: failure()
         run: tail -n 60 server.log server-replica.log verify.log verify-replica.log 2>/dev/null || true
 
+  # XopProtector 加固引擎：从固定提交源码构建 packer.jar + shell-files。
+  # 只在 Android 真要出包时跑；引擎体积大、构建慢，用 .xop-engine 缓存兜住。
+  # 上游版本/脚本/许可证任一变化都会让 key 失效并重建。
+  protector-tool:
+    needs: [changes]
+    if: needs.changes.outputs.client == 'true' || needs.changes.outputs.crypto == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: 缓存加固引擎
+        id: engine-cache
+        uses: actions/cache@v4
+        with:
+          path: .xop-engine
+          key: xop-engine-0.7.9-arm64-${{ hashFiles('tools/apk-hardening/build-protector.sh', 'tools/apk-hardening/LICENSES/**') }}
+      - name: 构建加固引擎（XopProtector 0.7.9）
+        if: steps.engine-cache.outputs.cache-hit != 'true'
+        run: bash tools/apk-hardening/build-protector.sh --out .xop-engine
+      - uses: actions/upload-artifact@v4
+        with:
+          name: protector-engine
+          path: .xop-engine
+          if-no-files-found: error
+          retention-days: 7
+
   # PLACEHOLDER_CLIENT
   client-android:
-    needs: [changes, crypto]
+    needs: [changes, crypto, protector-tool]
     if: needs.changes.outputs.client == 'true' || needs.changes.outputs.crypto == 'true'
     # 用 Linux：Android 构建平台无关，而 Windows runner 有两个实打实的坑 ——
     # ① setup-java 的 gradle 缓存在 Windows 上保存必然失败（tar 打包 ~/.gradle 时
@@ -459,6 +491,11 @@ jobs:
         with:
           name: crypto-android
           path: crypto/dist/android
+      - name: 取加固引擎（同 run protector-tool 产物）
+        uses: actions/download-artifact@v4
+        with:
+          name: protector-engine
+          path: .xop-engine
       - name: 还原发布签名（未配 Secrets 时退回 Debug 包）
         id: signing
         env:
@@ -527,6 +564,40 @@ jobs:
           else
             ./gradlew :androidApp:assembleDebug --build-cache --console=plain
           fi
+      - name: APK 加固（XopProtector 0.7.9）
+        env:
+          SIGNED: ${{ steps.signing.outputs.signed }}
+          STORE_PASS: ${{ secrets.TAOTAO_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.TAOTAO_KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.TAOTAO_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          input=$(find androidApp/build/outputs/apk -path '*/release/*.apk' -name '*.apk' ! -name '*-protected.apk' -print -quit)
+          [ -n "$input" ] || input=$(find androidApp/build/outputs/apk -path '*/debug/*.apk' -name '*.apk' ! -name '*-protected.apk' -print -quit)
+          [ -n "$input" ] || { echo "找不到待加固 APK" >&2; exit 1; }
+          if [ "$SIGNED" = "true" ]; then
+            ks=taotao-release.jks
+            alias="$KEY_ALIAS"
+            store="$STORE_PASS"
+            key="$KEY_PASS"
+          else
+            ks="$HOME/.android/debug.keystore"
+            alias=androiddebugkey
+            store=android
+            key=android
+            mkdir -p "$HOME/.android"
+            if [ ! -f "$ks" ]; then
+              keytool -genkeypair -keystore "$ks" -storepass android -keypass android \
+                -alias androiddebugkey -dname "CN=Android Debug,O=Android,C=US" \
+                -keyalg RSA -keysize 2048 -validity 10000 -noprompt
+            fi
+          fi
+          bash tools/apk-hardening/harden-apk.sh \
+            --input "$input" \
+            --output "${input%.apk}-protected.apk" \
+            --engine .xop-engine \
+            --keystore "$ks" --alias "$alias" \
+            --storepass "$store" --keypass "$key"
       - name: 整理版本号
         id: prep
         shell: bash
@@ -534,15 +605,17 @@ jobs:
           meta=$(find androidApp/build/outputs/apk -name output-metadata.json | head -1)
           vn=$(node -p "require('./$meta').elements[0].versionName" 2>/dev/null || echo unknown)
           vc=$(node -p "require('./$meta').elements[0].versionCode" 2>/dev/null || echo 0)
-          apk=$(find androidApp/build/outputs/apk -name '*.apk' | head -1)
+          apk=$(find androidApp/build/outputs/apk -name '*-protected.apk' -print -quit)
+          [ -n "$apk" ] || apk=$(find androidApp/build/outputs/apk -name '*.apk' -print -quit)
           case "$apk" in *release*) kind=release;; *) kind=debug;; esac
           echo "vn=$vn" >> "$GITHUB_OUTPUT"; echo "vc=$vc" >> "$GITHUB_OUTPUT"; echo "kind=$kind" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         with:
           name: android-apk
           path: |
-            androidApp/build/outputs/apk/**/*.apk
+            androidApp/build/outputs/apk/**/*-protected.apk
             androidApp/build/outputs/apk/**/output-metadata.json
+            androidApp/build/outputs/apk/**/hardening-report.txt
           if-no-files-found: error
       # autopatch 生成补丁需要「线上那个版本」的 kotlin-classes 作为 base 侧 diff 的输入，
       # 而该目录会被下一次构建覆盖 —— 不归档，现场就对不上 base，线上版本的补丁无法生成。
