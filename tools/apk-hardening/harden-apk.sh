@@ -171,10 +171,11 @@ if [ -n "$APKSIGNER" ]; then
   if ! "$APKSIGNER" verify --verbose --print-certs "$OUTPUT" >> "$REPORT" 2>&1; then
     fail "apksigner verify 失败，详见 $REPORT"
   fi
-  CERT_SHA="$("$APKSIGNER" verify --print-certs "$OUTPUT" 2>/dev/null \
-    | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' \
+  # 直接解析首次 verify 写入 report 的输出。Linux 上 apksigner 的 --print-certs
+  # 输出可能走 stderr，单独再跑一次并丢弃 stderr 会得到空值。
+  CERT_SHA="$(sed -n 's/.*Signer #1 certificate SHA-256 digest:[[:space:]]*//p' "$REPORT" \
     | head -1 | tr -d '\r' | tr 'A-F' 'a-f')"
-  [ -n "$CERT_SHA" ] || fail "无法读取签名证书 SHA-256"
+  [ -n "$CERT_SHA" ] || fail "无法读取签名证书 SHA-256（详见 $REPORT）"
 else
   echo "警告: 未找到 apksigner，跳过签名验证" | tee -a "$REPORT"
 fi
