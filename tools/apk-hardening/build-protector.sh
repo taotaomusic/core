@@ -152,6 +152,13 @@ grep -Fq 'abiFilters += listOf("arm64-v8a")' "$NATIVE_GRADLE" \
 
 GRADLE_PROPS="$SRC/gradle.properties"
 if [ -f "$GRADLE_PROPS" ]; then
+  # 上游 gradle.properties 提交了 Windows 专用 unimp.sdk.libs 路径；Linux 上 Gradle
+  # 会把它当 URI 解析并抛 URISyntaxException。该模块与 packer 无关，删掉属性后
+  # settings.gradle.kts 会走 missing 分支跳过 :unimp-host。
+  if grep -q '^unimp\.sdk\.libs=' "$GRADLE_PROPS"; then
+    sed -i.bak '/^unimp\.sdk\.libs=/d' "$GRADLE_PROPS"
+    rm -f "$GRADLE_PROPS.bak"
+  fi
   if grep -q '^org\.gradle\.jvmargs=' "$GRADLE_PROPS"; then
     sed -i.bak -E 's/^org\.gradle\.jvmargs=.*/org.gradle.jvmargs=-Xmx4g -Dfile.encoding=UTF-8 -Djava.net.preferIPv4Stack=true/' "$GRADLE_PROPS"
     rm -f "$GRADLE_PROPS.bak"
