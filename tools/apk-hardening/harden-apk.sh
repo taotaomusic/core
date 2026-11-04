@@ -168,13 +168,18 @@ APKANALYZER="$(find_apkanalyzer || true)"
 CERT_SHA=""
 
 if [ -n "$APKSIGNER" ]; then
-  if ! "$APKSIGNER" verify --verbose --print-certs "$OUTPUT" >> "$REPORT" 2>&1; then
+  if ! "$APKSIGNER" verify --verbose --print-certs "$OUTPUT" 2>&1 | tee -a "$REPORT"; then
     fail "apksigner verify 失败，详见 $REPORT"
   fi
-  # 直接解析首次 verify 写入 report 的输出。Linux 上 apksigner 的 --print-certs
-  # 输出可能走 stderr，单独再跑一次并丢弃 stderr 会得到空值。
+  # 优先解析 apksigner 输出；不同 build-tools 版本可能把证书信息写到 stderr，
+  # 因此同时保留 keytool 从 APK 的 JAR 签名读取指纹作为兜底。
   CERT_SHA="$(sed -n 's/.*Signer #1 certificate SHA-256 digest:[[:space:]]*//p' "$REPORT" \
     | head -1 | tr -d '\r' | tr 'A-F' 'a-f')"
+  if [ -z "$CERT_SHA" ] && command -v keytool >/dev/null 2>&1; then
+    CERT_SHA="$(keytool -printcert -jarfile "$OUTPUT" 2>/dev/null \
+      | sed -n 's/.*SHA256:[[:space:]]*//p' \
+      | head -1 | tr -d ':\r' | tr 'A-F' 'a-f')"
+  fi
   [ -n "$CERT_SHA" ] || fail "无法读取签名证书 SHA-256（详见 $REPORT）"
 else
   echo "警告: 未找到 apksigner，跳过签名验证" | tee -a "$REPORT"
