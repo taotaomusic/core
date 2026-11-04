@@ -163,7 +163,8 @@ fi
 echo "==> 构建 packer 与 shell-files（ABI=$ABI，首次约 10-20 分钟）"
 (
   cd "$SRC"
-  ./gradlew --no-daemon --console=plain :packer:jar exportShellFiles
+  # 上游 gradlew 在部分检出环境没有执行位；用 bash 显式调用，避免权限位差异。
+  bash ./gradlew --no-daemon --console=plain :packer:jar exportShellFiles
 )
 
 STAGE="$WORK/engine"
