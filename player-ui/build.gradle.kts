@@ -23,8 +23,10 @@ kotlin {
             // foundation 1.12.0-alpha03 编译，与本项目 Kotlin 2.4.21 + CMP 1.12.1 的
             // 消费环境配对（PR #26 已把工具链抬到该档位：KLIB ABI 2.4 无小版本容忍，
             // wasm 侧倒逼全链升级）。主题桥见 theme/MiuixBridge.kt；组件按页渐进采用。
-            implementation("top.yukonga.miuix.kmp:miuix-ui:0.9.4")
-            implementation("top.yukonga.miuix.kmp:miuix-preference:0.9.4")
+            // 用 api 而非 implementation：组件库是本共享 UI 层对外契约的一部分，
+            // androidApp 等平台层的页面也要直接采用 Miuix 组件（2026-11 起）。
+            api("top.yukonga.miuix.kmp:miuix-ui:0.9.4")
+            api("top.yukonga.miuix.kmp:miuix-preference:0.9.4")
         }
         commonTest.dependencies {
             implementation(kotlin("test"))
