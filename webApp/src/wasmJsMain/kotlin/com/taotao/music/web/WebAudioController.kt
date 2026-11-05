@@ -53,8 +53,11 @@ class WebAudioController(
         audio.onwaiting = {
             publish(buffering = true)
         }
+        // onerror 是五参回调，属性类型要求返回 JsAny?——末尾 null 是必需的返回值，
+        // 不属于上面那批可删的冗余尾表达式。
         audio.onerror = { _, _, _, _, _ ->
             onStateChanged(currentState().copy(isBuffering = false, errorMessage = "试听加载失败，请稍后重试"))
+            null
         }
     }
 
