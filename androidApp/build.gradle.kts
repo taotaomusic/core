@@ -68,8 +68,8 @@ configure<ApplicationExtension> {
     // tools/fetch-crypto.ps1 落到 crypto/dist/android/<abi>/libtaotao_crypto.so。
     // 目录结构即 jniLibs 约定（<srcDir>/<abi>/lib*.so），abiFilters 只保留 arm64-v8a
     // 时也只打包对应那份。产物缺失时不阻断构建，运行时由 NativeCrypto.available 兜底降级明文。
-    // srcDir(Any) 已弃用，按 AGP 新 DSL 改 directories 可变集合追加。
-    sourceSets["main"].jniLibs.directories += rootProject.file("crypto/dist/android")
+    // srcDir(Any) 已弃用，按新 DSL 改 directories 集合（MutableSet<String>，add 不触发重赋值）。
+    sourceSets["main"].jniLibs.directories.add(rootProject.file("crypto/dist/android").absolutePath)
 }
 
 tasks.matching { it.name == "assembleDebug" || it.name == "assembleRelease" }.configureEach {
