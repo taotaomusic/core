@@ -1,3 +1,7 @@
+// @JsExport 在 Kotlin 2.4 挂在 ExperimentalJsExport 后面；本文件全部导出面
+// 都是刻意暴露给 JS 的门面函数，文件级豁免。
+@file:OptIn(kotlin.js.ExperimentalJsExport::class)
+
 package com.taotao.music.shared.wasm
 
 import com.taotao.music.model.AudioQuality

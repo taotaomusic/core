@@ -1,3 +1,4 @@
+import com.android.build.api.dsl.ApplicationExtension
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 import java.util.Properties
@@ -22,7 +23,11 @@ val versionProperties = Properties().apply {
 val appVersionCode = versionProperties.getProperty("VERSION_CODE").toInt()
 val appVersionName = versionProperties.getProperty("VERSION_NAME")
 
-android { namespace = "com.taotao.music"; compileSdk = 37
+// Project.android(configure: Action<BaseAppModuleExtension>) 访问器已弃用，
+// 按官方迁移建议改 ApplicationExtension 配置块。
+configure<ApplicationExtension> {
+    namespace = "com.taotao.music"
+    compileSdk = 37
     buildFeatures { buildConfig = true }  // 用 BuildConfig.VERSION_NAME 拼真实版本进 User-Agent
     // AGP 8.7.3 内置 lint 的 Kotlin Analysis API 与 Kotlin 2.2 编译产物不兼容，lifecycle 库的
     // NonNullableMutableLiveDataDetector 会在 lintVitalAnalyzeRelease 直接崩溃（按 lint 自身

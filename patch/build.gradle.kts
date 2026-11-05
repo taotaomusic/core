@@ -51,7 +51,9 @@ java {
  *
  * 用法：./gradlew :patch:buildPatch -PpatchVersion=1
  */
-val buildPatch by tasks.registering {
+// tasks.registering 委托属性写法在 Gradle 9.6 已弃用（三连弃用告警），
+// 按升级指南改回 register(name) { } 的标准形态。
+val buildPatch = tasks.register("buildPatch") {
     group = "热修复"
     description = "编译补丁并打包成可下发的补丁包"
     dependsOn(tasks.named("classes"))
@@ -109,7 +111,7 @@ val buildPatch by tasks.registering {
  *
  * 用法：./gradlew :patch:printMethodKeys -Pfilter=TencentMusicApi
  */
-val printMethodKeys by tasks.registering {
+val printMethodKeys = tasks.register("printMethodKeys") {
     group = "热修复"
     description = "列出 release APK 里可被补丁接管的方法键"
 
