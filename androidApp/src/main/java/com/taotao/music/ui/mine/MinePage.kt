@@ -127,7 +127,9 @@ internal fun MinePage(
                 ) {
                     if (!profile?.avatarUrl.isNullOrBlank()) {
                         AsyncImage(
-                            model = profile?.avatarUrl,
+                            // 条件已保证 profile 非空（isNullOrBlank 的契约让 K2 推导出智能转换），
+                            // 这里不再需要安全调用。
+                            model = profile.avatarUrl,
                             contentDescription = "个人头像",
                             modifier = Modifier.fillMaxSize(),
                         )

@@ -1,3 +1,7 @@
+// 理由同 Main.kt：浏览器事件回调属性与 play() 等互操作声明在 Kotlin 2.4 需要
+// ExperimentalWasmJsInterop，本文件是纯互操作胶水层，文件级豁免。
+@file:OptIn(kotlin.js.ExperimentalWasmJsInterop::class)
+
 package com.taotao.music.web
 
 import kotlinx.browser.document
@@ -23,7 +27,6 @@ class WebAudioController(
         audio.preload = "metadata"
         audio.onloadedmetadata = {
             publish(buffering = false)
-            null
         }
         audio.ontimeupdate = {
             if (audio.currentTime >= previewDurationSeconds) {
@@ -31,7 +34,6 @@ class WebAudioController(
                 audio.play()
             }
             publish()
-            null
         }
         // ⚠️ 这里**刻意不加** `audio.onended` 之类的兜底回调。
         //
@@ -44,19 +46,15 @@ class WebAudioController(
         // 夹取一起守已经够用，不值得为一点兜底再扩大这个导入面。
         audio.onplay = {
             publish(playing = true, buffering = false)
-            null
         }
         audio.onpause = {
             publish(playing = false)
-            null
         }
         audio.onwaiting = {
             publish(buffering = true)
-            null
         }
         audio.onerror = { _, _, _, _, _ ->
             onStateChanged(currentState().copy(isBuffering = false, errorMessage = "试听加载失败，请稍后重试"))
-            null
         }
     }
 

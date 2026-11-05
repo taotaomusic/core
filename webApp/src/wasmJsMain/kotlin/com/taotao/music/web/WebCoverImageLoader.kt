@@ -1,3 +1,7 @@
+// 理由同 Main.kt：fetch/Response/@JsFun 等互操作声明在 Kotlin 2.4 需要
+// ExperimentalWasmJsInterop，文件级豁免。
+@file:OptIn(kotlin.js.ExperimentalWasmJsInterop::class)
+
 package com.taotao.music.web
 
 import androidx.compose.foundation.Image
