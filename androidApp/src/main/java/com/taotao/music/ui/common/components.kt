@@ -253,14 +253,15 @@ fun SongRow(
                             if (canOpenArtist) {
                                 DropdownMenuItem(
                                     text = { Text("查看歌手") },
-                                    onClick = { showActions = false; onOpenArtist?.invoke() },
+                                    // canOpenArtist 已含回调非空判断，K2 在此推导出智能转换，无需安全调用。
+                                    onClick = { showActions = false; onOpenArtist.invoke() },
                                     leadingIcon = { Icon(Icons.Default.Person, null) },
                                 )
                             }
                             if (canOpenAlbum) {
                                 DropdownMenuItem(
                                     text = { Text("查看专辑") },
-                                    onClick = { showActions = false; onOpenAlbum?.invoke() },
+                                    onClick = { showActions = false; onOpenAlbum.invoke() },
                                     leadingIcon = { Icon(Icons.Default.Album, null) },
                                 )
                             }

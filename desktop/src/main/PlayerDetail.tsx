@@ -13,6 +13,17 @@ import { useApp } from "../state/AppState";
 import type { ArtistTarget } from "./ArtistPage";
 import { hideOnError } from "./img";
 import {
+  Checkbox,
+  Dialog,
+  DialogContent,
+  DialogPortal,
+  DialogTitle,
+  Slider,
+  SliderRange,
+  SliderThumb,
+  SliderTrack,
+} from "../ui/radix";
+import {
   IconChevronDown,
   IconClock,
   IconClose,
@@ -136,20 +147,6 @@ export function PlayerDetail({
   const wasOpenRef = useRef(app.showDetail);
   // 退场计时器句柄：退场中途重新打开时先取消，避免到点把页面卸载掉
   const closeTimerRef = useRef<number | null>(null);
-  const trackRef = useRef<HTMLDivElement>(null);
-
-  // ESC 关闭最上层弹窗：音质 > 定时 > 分享
-  useEffect(() => {
-    if (!share && !qualityOpen && !sleepOpen) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      if (qualityOpen) setQualityOpen(false);
-      else if (sleepOpen) setSleepOpen(false);
-      else setShare(null);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [share, qualityOpen, sleepOpen]);
 
   // 详情页进出场：打开时立即取消未完成的退场（回到进场动画）；
   // 收起时先播 160ms 淡出再卸载。ESC 收起与 ⌄ 收起都走 setShowDetail(false)，这里统一接管。
@@ -211,7 +208,6 @@ export function PlayerDetail({
   const fav = current ? app.isFavorite(current) : false;
   // 拖动中优先显示预览位置，否则用实时播放位置
   const shownSec = dragSec ?? app.position;
-  const pct = duration > 0 ? Math.min(100, (shownSec / duration) * 100) : 0;
   // 高潮区间标记与小字：与进度条同用一个真实时长做分母；区间无效（缺值/时长未知）时都不显示
   const refrain = refrainRangeOf(current, duration);
   // 定时关闭：顶栏按钮高亮 / 按钮文案 / 悬浮提示 / 弹窗中与剩余时间对应的分钟选项
@@ -230,29 +226,8 @@ export function PlayerDetail({
     app.sleepRemainingSec != null ? Math.round(app.sleepRemainingSec / 60) : null;
 
   /** 指针在滑轨上的水平位置换算成秒（已夹到 0..duration）。 */
-  function secFromEvent(e: React.PointerEvent<HTMLDivElement>): number {
-    const el = trackRef.current;
-    if (!el || duration <= 0) return 0;
-    const rect = el.getBoundingClientRect();
-    const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
-    return ratio * duration;
-  }
-
-  function onTrackDown(e: React.PointerEvent<HTMLDivElement>) {
-    if (duration <= 0) return;
-    e.currentTarget.setPointerCapture(e.pointerId);
-    setDragSec(secFromEvent(e));
-  }
-
-  function onTrackMove(e: React.PointerEvent<HTMLDivElement>) {
-    if (dragSec === null) return;
-    setDragSec(secFromEvent(e));
-  }
-
-  function onTrackUp(e: React.PointerEvent<HTMLDivElement>) {
-    if (dragSec === null) return;
-    setDragSec(null);
-    app.seek(secFromEvent(e));
+  function secFromPointer(sec: number): number {
+    return Math.min(duration, Math.max(0, sec));
   }
 
   /** 收起详情页：顺手清掉弹窗与拖动残留状态。 */
@@ -441,23 +416,35 @@ export function PlayerDetail({
             <div className="pd-controls">
               <div className="pd-slider-row">
                 <span className="pd-time">{duration > 0 ? formatTime(shownSec) : "--:--"}</span>
-                <div
-                  className={`pd-track${duration > 0 ? "" : " disabled"}`}
-                  ref={trackRef}
-                  onPointerDown={onTrackDown}
-                  onPointerMove={onTrackMove}
-                  onPointerUp={onTrackUp}
+                {/* 进度条：组件库 Slider。duration 未知时 disabled；
+                    拖动中 onValueChange 更新预览，松手 onValueCommit 才真正 seek */}
+                <Slider
+                  className="ui-slider"
+                  min={0}
+                  max={duration > 0 ? duration : 1}
+                  step={0.1}
+                  disabled={duration <= 0}
+                  value={[duration > 0 ? shownSec : 0]}
+                  onValueChange={([sec]) => setDragSec(secFromPointer(sec))}
+                  onValueCommit={([sec]) => {
+                    setDragSec(null);
+                    app.seek(secFromPointer(sec));
+                  }}
+                  aria-label="播放进度"
                 >
-                  <div className="pd-track-fill" style={{ width: `${pct}%` }} />
-                  {/* 高潮区间标记段：叠在轨道上的强调色圆头胶囊（对标安卓 PlayerProgress） */}
+                  <SliderTrack className="ui-slider-track">
+                    <SliderRange className="ui-slider-range" />
+                  </SliderTrack>
+                  {/* 高潮区间标记段：叠在轨道上的强调色圆头段（对标安卓 PlayerProgress）；
+                      pointer-events 关闭避免抢占滑杆交互 */}
                   {refrain && (
                     <div
                       className="pd-track-refrain"
                       style={{ left: `${refrain.start * 100}%`, width: `${(refrain.end - refrain.start) * 100}%` }}
                     />
                   )}
-                  <div className="pd-track-thumb" style={{ left: `${pct}%` }} />
-                </div>
+                  <SliderThumb className="ui-slider-thumb" />
+                </Slider>
                 <span className="pd-time">{duration > 0 ? formatTime(duration) : "--:--"}</span>
               </div>
               {/* 高潮区间小字：区间有效才显示，位置与进度条上的标记段对应 */}
@@ -574,40 +561,37 @@ export function PlayerDetail({
         <div className="pd-empty">未在播放</div>
       )}
 
-      {/* 分享弹窗 */}
+      {/* 分享弹窗（组件库 Dialog）：点遮罩 / Esc 关闭由 Radix 处理 */}
       {share && (
-        <div
-          className="pd-modal-mask"
-          onMouseDown={(e) => { if (e.target === e.currentTarget) setShare(null); }}
-        >
-          <div className="pd-modal">
-            <div className="pd-modal-title">分享歌曲</div>
-            <div className="pd-modal-song">
-              {current ? `${current.title} - ${current.artist}` : ""}
-            </div>
-            <input
-              className="pd-modal-link"
-              readOnly
-              value={share.url}
-              onFocus={(e) => e.currentTarget.select()}
-            />
-            <div className="pd-modal-actions">
-              <button className="pd-modal-btn primary" onClick={() => { void copyShareLink(); }}>复制链接</button>
-              <button className="pd-modal-btn" onClick={() => setShare(null)}>完成</button>
-            </div>
-          </div>
-        </div>
+        <Dialog open onOpenChange={(next) => { if (!next) setShare(null); }}>
+          <DialogPortal>
+            <DialogContent aria-describedby={undefined}>
+              <DialogTitle className="pd-modal-title">分享歌曲</DialogTitle>
+              <div className="pd-modal-song">
+                {current ? `${current.title} - ${current.artist}` : ""}
+              </div>
+              <input
+                className="pd-modal-link"
+                readOnly
+                value={share.url}
+                onFocus={(e) => e.currentTarget.select()}
+              />
+              <div className="pd-modal-actions">
+                <button className="pd-modal-btn primary" onClick={() => { void copyShareLink(); }}>复制链接</button>
+                <button className="pd-modal-btn" onClick={() => setShare(null)}>完成</button>
+              </div>
+            </DialogContent>
+          </DialogPortal>
+        </Dialog>
       )}
 
-      {/* 音质选择弹窗 */}
+      {/* 音质选择弹窗（组件库 Dialog） */}
       {qualityOpen && current && (
-        <div
-          className="pd-modal-mask"
-          onMouseDown={(e) => { if (e.target === e.currentTarget) setQualityOpen(false); }}
-        >
-          <div className="pd-modal">
-            <div className="pd-modal-title">播放音质</div>
-            <div className="pd-modal-song">{current.title} - {current.artist}</div>
+        <Dialog open onOpenChange={(next) => { if (!next) setQualityOpen(false); }}>
+          <DialogPortal>
+            <DialogContent aria-describedby={undefined}>
+              <DialogTitle className="pd-modal-title">播放音质</DialogTitle>
+              <div className="pd-modal-song">{current.title} - {current.artist}</div>
             {tiers === null ? (
               <div className="pd-quality-loading">加载中…</div>
             ) : tierErr !== "" ? (
@@ -642,55 +626,52 @@ export function PlayerDetail({
               </div>
             )}
             <div className="pd-quality-note">切换音质会按新档位重新取流，播放进度不丢失</div>
-          </div>
-        </div>
+            </DialogContent>
+          </DialogPortal>
+        </Dialog>
       )}
 
-      {/* 定时关闭弹窗 */}
+      {/* 定时关闭弹窗（组件库 Dialog） */}
       {sleepOpen && (
-        <div
-          className="pd-modal-mask"
-          onMouseDown={(e) => { if (e.target === e.currentTarget) setSleepOpen(false); }}
-        >
-          <div className="pd-modal">
-            <div className="pd-modal-title">定时关闭</div>
-            {app.sleepPendingStop && (
-              <div className="pd-sleep-notice">倒计时已结束，将在本首播完后暂停</div>
-            )}
-            <div className="pd-sleep-list">
-              {SLEEP_MINUTES.map((min) => {
-                const selected = sleepRemainMin === min;
-                return (
-                  <button
-                    key={min}
-                    type="button"
-                    className={`pd-sleep-row${selected ? " selected" : ""}`}
-                    onClick={() => pickSleepMinutes(min)}
-                  >
-                    <span>{min} 分钟</span>
-                    {selected && <span className="pd-sleep-check">✓</span>}
-                  </button>
-                );
-              })}
-            </div>
-            <label className="pd-sleep-wait">
-              <input
-                type="checkbox"
-                checked={app.sleepWaitForSongEnd}
-                onChange={() => app.toggleSleepWaitForSongEnd()}
-              />
-              播完整首歌再停止播放
-            </label>
-            <button
-              type="button"
-              className="pd-modal-btn pd-sleep-cancel"
-              disabled={app.sleepRemainingSec == null && !app.sleepPendingStop}
-              onClick={cancelSleep}
-            >
-              取消定时
-            </button>
-          </div>
-        </div>
+        <Dialog open onOpenChange={(next) => { if (!next) setSleepOpen(false); }}>
+          <DialogPortal>
+            <DialogContent aria-describedby={undefined}>
+              <DialogTitle className="pd-modal-title">定时关闭</DialogTitle>
+              {app.sleepPendingStop && (
+                <div className="pd-sleep-notice">倒计时已结束，将在本首播完后暂停</div>
+              )}
+              <div className="pd-sleep-list">
+                {SLEEP_MINUTES.map((min) => {
+                  const selected = sleepRemainMin === min;
+                  return (
+                    <button
+                      key={min}
+                      type="button"
+                      className={`pd-sleep-row${selected ? " selected" : ""}`}
+                      onClick={() => pickSleepMinutes(min)}
+                    >
+                      <span>{min} 分钟</span>
+                      {selected && <span className="pd-sleep-check">✓</span>}
+                    </button>
+                  );
+                })}
+              </div>
+              {/* 播完再停开关：组件库 Checkbox（珊瑚色勾选态） */}
+              <label className="pd-sleep-wait">
+                <Checkbox checked={app.sleepWaitForSongEnd} onCheckedChange={() => app.toggleSleepWaitForSongEnd()} />
+                播完整首歌再停止播放
+              </label>
+              <button
+                type="button"
+                className="pd-modal-btn pd-sleep-cancel"
+                disabled={app.sleepRemainingSec == null && !app.sleepPendingStop}
+                onClick={cancelSleep}
+              >
+                取消定时
+              </button>
+            </DialogContent>
+          </DialogPortal>
+        </Dialog>
       )}
     </div>
   );

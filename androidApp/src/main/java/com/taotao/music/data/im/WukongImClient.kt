@@ -149,7 +149,8 @@ class WukongImClient(
                         startMessageSeq = startSeq,
                         endMessageSeq = endSeq,
                         limit = limit.coerceIn(1, 50),
-                        pullMode = pullMode.toInt().coerceIn(0, 1),
+                        // pullMode 回调签名已是 Int，直接夹取（.toInt() 会被编译器判冗余）。
+                        pullMode = pullMode.coerceIn(0, 1),
                     )
                 }.onSuccess { callback?.onBack(toSyncChannelMessages(it)) }
                     .onFailure { callback?.onBack(null) }

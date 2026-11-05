@@ -1041,7 +1041,9 @@ class TencentMusicApi(
 
     private fun recentPlaybackPage(): RecentPlaybackPage = authorized("/api/v1/playback/recent?limit=500") { bytes ->
         val result = JSONObject(String(bytes, Charsets.UTF_8))
-        val data = result.opt("data")
+        // 显式声明 Any?：org.json 的 opt() 返回类型带 @RecentlyNullable 增强（KT-88972），
+        // 推断类型会让 K2 误报「when 不穷尽」，标注后类型回归普通 Any?。
+        val data: Any? = result.opt("data")
         val records = when (data) {
             is JSONArray -> data // 兼容尚未部署新契约的服务端。
             is JSONObject -> data.optJSONArray("entries") ?: JSONArray()
@@ -1837,7 +1839,8 @@ class TencentMusicApi(
      */
     private fun authorizedConversationSync(path: String, body: JSONObject): ImConversationSync =
         authorizedCrypto(path, "POST", body.toString().toByteArray()) { bytes ->
-            val data = JSONObject(String(bytes, Charsets.UTF_8)).opt("data")
+            // 同上：显式 Any? 规避 @RecentlyNullable 引发的 when 穷尽性误报（KT-88972）。
+            val data: Any? = JSONObject(String(bytes, Charsets.UTF_8)).opt("data")
             when (data) {
                 is JSONArray -> ImConversationSync(uid = null, conversations = data)
                 is JSONObject -> ImConversationSync(

@@ -59,7 +59,7 @@ jobs:
           if [ "${{ inputs.full }}" = "true" ]; then full=true; fi
           echo "full=$full" >> "$GITHUB_OUTPUT"
           echo "全量构建开关：$full"
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dorny/paths-filter@v3
         id: f
         with:
@@ -97,8 +97,8 @@ jobs:
     if: needs.changes.outputs.autopatch == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '21'
@@ -108,7 +108,7 @@ jobs:
         run: ./gradlew -p autopatch test --console=plain --no-daemon
       - name: 归档测试报告
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: autopatch-test-report
           path: autopatch/build/reports/tests/test/
@@ -151,7 +151,7 @@ jobs:
       # `git log <上次发布sha>..HEAD`，浅克隆下基准提交不可达会退化成兜底。
       # 本仓库全量历史 pack 仅约 9MB（大文件都在 .gitignore 里），全量拉取很划算，
       # 比按需 --deepen 反复来回更省事也更可靠。
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       # 产物缓存:按 crypto-src 全部源码哈希做 key。rust 没变 → 命中 → 跳过下面全部重活
@@ -159,7 +159,7 @@ jobs:
       # out/ 相对 workspace,不受 job 的 working-directory 影响(与 upload-artifact 路径一致)。
       - name: 复用 crypto 产物(源码未变时跳过编译)
         id: crypto-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: crypto-src/out
           key: crypto-out-${{ hashFiles('crypto-src/**') }}
@@ -179,7 +179,7 @@ jobs:
           key: unified-crypto
       - name: 缓存 Android NDK（省去每次约 700MB 下载安装）
         if: steps.crypto-cache.outputs.cache-hit != 'true'
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: /usr/local/lib/android/sdk/ndk/${{ env.NDK_VERSION }}
           key: ndk-${{ env.NDK_VERSION }}
@@ -229,12 +229,12 @@ jobs:
       - name: 端到端冒烟（node）
         if: steps.crypto-cache.outputs.cache-hit != 'true'
         run: node tools/smoke-test.cjs out/node/linux-x64/taotao_crypto.node
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: crypto-android
           path: crypto-src/out/android
           if-no-files-found: error
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: crypto-node-linux
           path: crypto-src/out/node
@@ -292,16 +292,16 @@ jobs:
         working-directory: server
     steps:
       # fetch-depth: 0 给 release-log.sh 聚合更新说明用（理由同 crypto job）。
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: server/package-lock.json
       - name: 取加密 .node（同 run crypto 产物）
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: crypto-node-linux
           path: server/crypto/dist/node
@@ -436,22 +436,22 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "17"
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
       - name: 缓存加固引擎
         id: engine-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .xop-engine
           key: xop-engine-0.7.9-arm64-${{ hashFiles('tools/apk-hardening/build-protector.sh', 'tools/apk-hardening/LICENSES/**') }}
       - name: 构建加固引擎（XopProtector 0.7.9）
         if: steps.engine-cache.outputs.cache-hit != 'true'
         run: bash tools/apk-hardening/build-protector.sh --out .xop-engine
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: protector-engine
           path: .xop-engine
@@ -477,8 +477,8 @@ jobs:
       vc: ${{ steps.prep.outputs.vc }}
       kind: ${{ steps.prep.outputs.kind }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "21"
@@ -486,14 +486,14 @@ jobs:
       # 改用官方 Gradle action：缓存 ~/.gradle（依赖仓库 + --build-cache 的任务输出），
       # 主键带 gradle 脚本哈希，restore-keys 兜底 —— 依赖微变也能吃到大头，
       # 命中后只有改动模块真正重编，安卓 job 的大头从冷构建变成增量。
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
       - name: 取加密 .so（同 run crypto 产物）
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: crypto-android
           path: crypto/dist/android
       - name: 取加固引擎（同 run protector-tool 产物）
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: protector-engine
           path: .xop-engine
@@ -610,7 +610,7 @@ jobs:
           [ -n "$apk" ] || apk=$(find androidApp/build/outputs/apk -name '*.apk' -print -quit)
           case "$apk" in *release*) kind=release;; *) kind=debug;; esac
           echo "vn=$vn" >> "$GITHUB_OUTPUT"; echo "vc=$vc" >> "$GITHUB_OUTPUT"; echo "kind=$kind" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: android-apk
           path: |
@@ -621,7 +621,7 @@ jobs:
       # autopatch 生成补丁需要「线上那个版本」的 kotlin-classes 作为 base 侧 diff 的输入，
       # 而该目录会被下一次构建覆盖 —— 不归档，现场就对不上 base，线上版本的补丁无法生成。
       - name: 归档 kotlin-classes（补丁 base 输入）
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: kotlin-classes-release
           path: |
@@ -642,17 +642,17 @@ jobs:
       contents: write
     steps:
       # fetch-depth: 0 给 release-log.sh 聚合更新说明用（理由同 crypto job）。
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "21"
       # 缓存同 client-android：setup-java 的 cache: gradle 在本仓库从未生效过，
       # 用官方 Gradle action 显式缓存 ~/.gradle（npm 包仓库 + wasm 工具链 + 任务输出）。
-      - uses: gradle/actions/setup-gradle@v4
-      - uses: actions/setup-node@v4
+      - uses: gradle/actions/setup-gradle@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       # npm 锁文件解析有平台差异：Windows 侧生成的 kotlin-js-store 锁在 Linux
@@ -729,10 +729,10 @@ jobs:
       KIND: ${{ needs.client-android.outputs.kind }}
     steps:
       # fetch-depth: 0 给 release-log.sh 聚合更新说明用（理由见 crypto job）。
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
       # 先生成说明文本（不写 Release）：下面 metadata.json 要把这份说明一起上传，
@@ -799,10 +799,10 @@ jobs:
         working-directory: desktop
     steps:
       # fetch-depth: 0 给 release-log.sh 聚合更新说明用（理由见 crypto job）。
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       # SHA 固定理由同 crypto job。

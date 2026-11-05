@@ -63,7 +63,6 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -125,6 +124,7 @@ import com.taotao.music.playerui.SharedSectionLevel
 import com.taotao.music.playerui.theme.LocalReduceMotion
 import com.taotao.music.playerui.theme.TaotaoColors
 import com.taotao.music.playerui.theme.TaotaoElevation
+import com.taotao.music.playerui.theme.TaotaoMiuixTheme
 import com.taotao.music.playerui.theme.TaotaoShapes
 import com.taotao.music.playerui.theme.TaotaoSizes
 import com.taotao.music.playerui.theme.TaotaoSpacing
@@ -132,6 +132,9 @@ import com.taotao.music.playerui.theme.TaotaoWash
 import com.taotao.music.playerui.theme.TaotaoTypeScale
 import com.taotao.music.playerui.theme.taotaoSpring
 import com.taotao.music.playerui.theme.taotaoTween
+import top.yukonga.miuix.kmp.basic.ButtonDefaults
+import top.yukonga.miuix.kmp.basic.TextButton as MiuixTextButton
+import top.yukonga.miuix.kmp.window.WindowDialog
 // 「歌手 / 专辑」标签的失败占位与统计缩写复用歌手页已有的内部组件：同一模块内
 // internal 可见，避免在搜索页再长一份一模一样的实现。
 import com.taotao.music.ui.app.SearchTab
@@ -326,20 +329,33 @@ fun SearchPage(
                 modifier = Modifier.fillMaxWidth().padding(bottom = TaotaoSpacing.xxs),
             )
             if (showClearConfirm) {
-                AlertDialog(
-                    onDismissRequest = { showClearConfirm = false },
-                    title = { Text("清空搜索历史") },
-                    text = { Text("确定要清空全部搜索历史吗？清空后无法恢复。") },
-                    confirmButton = {
-                        TextButton(onClick = {
-                            onHistoryClear()
-                            showClearConfirm = false
-                        }) { Text("清空", color = TaotaoCoral) }
-                    },
-                    dismissButton = {
-                        TextButton(onClick = { showClearConfirm = false }) { Text("取消") }
-                    },
-                )
+                // 清空确认走 Miuix WindowDialog：破坏性操作用组件库对话框规格，
+                // 取消/清空两颗按钮用 Miuix TextButton（清空为危险动作，珊瑚色文字）。
+                TaotaoMiuixTheme {
+                    WindowDialog(
+                        show = true,
+                        title = "清空搜索历史",
+                        summary = "确定要清空全部搜索历史吗？清空后无法恢复。",
+                        onDismissRequest = { showClearConfirm = false },
+                    ) {
+                        Row {
+                            MiuixTextButton(
+                                text = "取消",
+                                onClick = { showClearConfirm = false },
+                                modifier = Modifier.weight(1f),
+                            )
+                            MiuixTextButton(
+                                text = "清空",
+                                onClick = {
+                                    onHistoryClear()
+                                    showClearConfirm = false
+                                },
+                                colors = ButtonDefaults.textButtonColors(textColor = TaotaoCoral),
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                    }
+                }
             }
         }
         if (!hasSearched && keyword.isNotBlank() && suggestions.isNotEmpty()) {
