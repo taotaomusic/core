@@ -429,7 +429,7 @@ jobs:
 
   # XopProtector 加固引擎：从固定提交源码构建 packer.jar + shell-files。
   # 只在 Android 真要出包时跑；引擎体积大、构建慢，用 .xop-engine 缓存兜住。
-  # 上游版本/脚本/许可证任一变化都会让 key 失效并重建。
+  # 上游版本/脚本/本地补丁/许可证任一变化都会让 key 失效并重建。
   protector-tool:
     needs: [changes]
     if: needs.changes.outputs.client == 'true' || needs.changes.outputs.crypto == 'true'
@@ -447,7 +447,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: .xop-engine
-          key: xop-engine-0.7.9-arm64-${{ hashFiles('tools/apk-hardening/build-protector.sh', 'tools/apk-hardening/LICENSES/**') }}
+          key: xop-engine-0.7.9-arm64-${{ hashFiles('tools/apk-hardening/build-protector.sh', 'tools/apk-hardening/patches/**', 'tools/apk-hardening/LICENSES/**') }}
       - name: 构建加固引擎（XopProtector 0.7.9）
         if: steps.engine-cache.outputs.cache-hit != 'true'
         run: bash tools/apk-hardening/build-protector.sh --out .xop-engine
@@ -599,6 +599,15 @@ jobs:
             --engine .xop-engine \
             --keystore "$ks" --alias "$alias" \
             --storepass "$store" --keypass "$key"
+      - name: 校验 True-VMP 装箱形参门禁
+        shell: bash
+        run: |
+          report=$(find androidApp/build/outputs/apk -name hardening-report.txt -print -quit)
+          [ -n "$report" ] || { echo "缺少 hardening-report.txt" >&2; exit 1; }
+          if ! grep -q "TRUE_VMP skip .*: boxed parameter" "$report"; then
+            echo "未发现装箱形参跳过记录，PVM2 门禁未生效" >&2
+            exit 1
+          fi
       - name: 整理版本号
         id: prep
         shell: bash

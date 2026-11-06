@@ -1,0 +1,54 @@
+diff --git a/packer/src/main/java/com/yqsh/protector/packer/PackerMain.java b/packer/src/main/java/com/yqsh/protector/packer/PackerMain.java
+index dab9064..b2452ae 100644
+--- a/packer/src/main/java/com/yqsh/protector/packer/PackerMain.java
++++ b/packer/src/main/java/com/yqsh/protector/packer/PackerMain.java
+@@ -1518,6 +1518,36 @@ public class PackerMain {
+         return methodKey(rec.definingClass, rec.methodName, rec.paramTypes, rec.returnType);
+     }
+ 
++    /**
++     * True-VMP 入口按运行时类型拆箱参数，无法还原声明寄存器宽度：引用形参收到
++     * 包装值时，Long/Double 会占两个寄存器，后续参数整体错位，甚至读到空寄存器。
++     * 含这类形参的方法不进入 True-VMP，仍由整体 DEX 加密保护。
++     *
++     * 不拦 Object：Kotlin suspend 状态机的 invokeSuspend 以 Object 接收恢复值，
++     * 拦掉会失去整个挂起函数的 VMP 覆盖；业务侧 Any 形参需单独评估。
++     */
++    private static boolean hasBoxedPrimitiveParam(String[] paramTypes) {
++        for (String type : paramTypes) {
++            switch (type) {
++                case "Ljava/lang/Boolean;":
++                case "Ljava/lang/Byte;":
++                case "Ljava/lang/Short;":
++                case "Ljava/lang/Character;":
++                case "Ljava/lang/Integer;":
++                case "Ljava/lang/Long;":
++                case "Ljava/lang/Float;":
++                case "Ljava/lang/Double;":
++                case "Ljava/lang/Number;":
++                case "Ljava/lang/Comparable;":
++                case "Ljava/io/Serializable;":
++                    return true;
++                default:
++                    break;
++            }
++        }
++        return false;
++    }
++
+     static String methodKey(String definingClass, String name, String[] params,
+                             String returnType) {
+         StringBuilder sb = new StringBuilder();
+@@ -1773,6 +1803,12 @@ public class PackerMain {
+ 
+         if (phase == ExtractPhase.TRUE_VMP_ONLY) {
+             pvm2Admission.noteCandidate();
++            if (hasBoxedPrimitiveParam(paramTypes)) {
++                pvm2Admission.noteFail("boxed parameter");
++                System.out.println("TRUE_VMP skip " + typeDescriptor + "->" + methodName
++                        + ": boxed parameter");
++                return null;
++            }
+             Pvm2Compiler.Result compiled =
+                     Pvm2Compiler.tryCompile(dex, code, returnType, isStatic, pvm2Morph);
+             if (!compiled.isOk()) {
