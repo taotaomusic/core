@@ -118,7 +118,11 @@ dependencies {
     // BOM 对齐 CMP 1.12.1 的 androidx 映射（compose 1.12 世代）；material3 会被
     // player-ui 传来的 CMP material3（androidx 1.5.0-alpha22）解析为更高版本。
     implementation(platform("androidx.compose:compose-bom:2026.09.00"))
-    implementation("androidx.activity:activity-compose:1.10.0")
+    // 1.13.0：ComponentActivity 自 1.12 起实现 NavigationEventDispatcherOwner，并把 owner
+    // 挂到窗口 ViewTree。Miuix 0.9.4 的 WindowDialog / WindowBottomSheet 内部用
+    // NavigationBackHandler 读取 LocalNavigationEventDispatcherOwner；1.10.0 既没实现也没挂
+    // ViewTree，所有 Miuix 弹层一打开就抛 IllegalStateException（1.0.703 线上闪退根因）。
+    implementation("androidx.activity:activity-compose:1.13.0")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.media:media:1.7.0")
