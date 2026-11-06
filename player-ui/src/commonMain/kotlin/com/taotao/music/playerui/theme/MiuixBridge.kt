@@ -115,7 +115,9 @@ private fun translateToMiuix(scheme: ColorScheme): Colors {
         onSurfaceContainerHighest = scheme.onSurface,
         outline = scheme.outline,
         dividerLine = scheme.outlineVariant,
-        windowDimming = scheme.scrim,
+        // windowDimming 不能取 scheme.scrim：M3 的 scrim 是不透明黑，而 Miuix 会直接
+        // 把它按自身 alpha 画成整屏遮罩，映射过去会让所有弹层背景变成纯黑。
+        // 保留工厂默认的半透明黑（浅色 0.3 / 深色 0.6）。
         sliderKeyPoint = scheme.primary,
         sliderKeyPointForeground = scheme.onPrimary,
         sliderBackground = scheme.surfaceVariant,
