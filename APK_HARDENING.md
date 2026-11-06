@@ -30,7 +30,8 @@
 | ABI | 仅 `arm64-v8a` |
 
 0.7.9 包含首页启动黑屏修复、16KB page 对齐和 `--dex-scan-compat` 默认开启；不要
-回退到 0.7.2。
+回退到 0.7.2。`build-protector.sh` 会在固定提交检出后应用 `patches/` 下的本地补丁
+（当前为 PVM2 装箱形参准入门禁），补丁目录参与引擎缓存 key。
 
 ## 3. 策略
 
@@ -57,6 +58,12 @@
 - **True-VMP 白名单**在 `tools/apk-hardening/business-prefixes.txt`。前缀匹配是
   `startsWith`：不以 `;` 结尾会连带嵌套类、Kotlin 合成类和 suspend 状态机；以 `;`
   结尾只匹配该类本身，用于方法数特别大的类。
+- **装箱形参保护**：PVM2 入口按运行时类型拆箱参数，引用形参若收到包装值会改变
+  寄存器宽度（`Long`/`Double` 占两个），导致后续引用参数错位。packer 补丁会让
+  形参含包装类、`Number`、`Comparable`、`Serializable` 的方法退出 True-VMP，
+  仍由整体 DEX 加密保护；日志里会出现 `TRUE_VMP skip ...: boxed parameter`。
+  `Object` 形参刻意不拦：Kotlin suspend 状态机的 `invokeSuspend` 依赖它；业务侧
+  `Any` 形参需单独评估。
 - **不加密 SO**：`libtaotao_crypto.so` 继续从 APK 的 `lib/arm64-v8a/` 加载，避免
   `NativeLibDirRedirect`/sokeys 与现有 JNI 初始化冲突。
 - **不加密 assets**：壳不接管 `AssetManager`，应用读取 `assets/` 的方式不变。
@@ -98,7 +105,7 @@ bash tools/apk-hardening/harden-apk.sh \
 `.github/workflows/ci.yml` 新增 `protector-tool` job：
 
 1. `actions/setup-java@v4` 安装 JDK 17；
-2. 缓存 `.xop-engine`（key 含 0.7.9 提交、`build-protector.sh` 与许可证哈希）；
+2. 缓存 `.xop-engine`（key 含 0.7.9 提交、`build-protector.sh`、`patches/**` 与许可证哈希）；
 3. 缓存未命中时执行 `build-protector.sh`，命中时直接复用；
 4. 上传 `protector-engine` artifact。
 
@@ -126,7 +133,9 @@ bash tools/apk-hardening/harden-apk.sh \
 - `config.json` 的 `application_name`、`risk_flags`、`rasp_action`、`protect_so`、
   `encrypt_assets`、`app_sign_sha256` 与预期一致；
 - Manifest 的 `application` 指向 `com.yqsh.protector.shell.ProxyApplication`；
-- packer 日志中 `TRUE_VMP Lcom/` 数量大于 0，并记录 `PVM2 admission` 行。
+- packer 日志中 `TRUE_VMP Lcom/` 数量大于 0，并记录 `PVM2 admission` 行；
+- CI 另校验日志里至少有一条 `TRUE_VMP skip ...: boxed parameter`，防止引擎补丁
+  未生效；业务侧若已消除装箱形参，连同补丁和这条校验一起移除。
 
 发布前建议在真机做一次冷启动、登录、搜索、播放、下载、收藏、切换音质、更新检查
 的冒烟。加固壳只支持 arm64，x86_64 模拟器无法验证。
