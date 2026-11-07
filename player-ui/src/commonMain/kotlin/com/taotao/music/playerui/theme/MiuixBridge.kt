@@ -1,6 +1,7 @@
 package com.taotao.music.playerui.theme
 
 import androidx.compose.material3.ColorScheme
+import androidx.compose.material3.LocalContentColor as MaterialLocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -51,12 +52,21 @@ import top.yukonga.miuix.kmp.theme.lightColorScheme
  * 的组件（如 `InputField` 里用户输入的正文）会退到 `compositionLocalOf` 的默认值
  * `Color.Black`——深色主题下搜索框里打进去的字直接看不见。这里按上游 `controller`
  * 重载的口径补一层，取值口径保持一致（`onBackground`）。
+ *
+ * 同时要补 **Material3** 的 `LocalContentColor`：它和 Miuix 的同名 CompositionLocal
+ * 是两套独立实现。`MaterialTheme` 本身不下发它，主界面靠 `Scaffold` / `Surface`
+ * 包的 M3 容器补齐；Miuix 的 `WindowDialog` / `WindowBottomSheet` 只提供 Miuix
+ * 主题，没有 M3 Surface，弹层内容里没显式写颜色的 `Text` / `Icon` 会退回默认
+ * 黑色，暗色下就是黑底黑字。这里一并下发，弹层里的 M3 内容才和页面同源。
  */
 @Composable
 fun TaotaoMiuixTheme(content: @Composable () -> Unit) {
     val colors = taotaoMiuixColors()
     MiuixTheme(colors = colors) {
-        CompositionLocalProvider(LocalContentColor provides colors.onBackground) {
+        CompositionLocalProvider(
+            LocalContentColor provides colors.onBackground,
+            MaterialLocalContentColor provides MaterialTheme.colorScheme.onBackground,
+        ) {
             content()
         }
     }
