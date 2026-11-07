@@ -9,6 +9,7 @@ import com.taotao.music.data.CrashReporter
 import com.taotao.music.data.TencentMusicApi
 import com.taotao.music.data.crypto.HardwareDeviceId
 import com.taotao.music.data.db.LocalDb
+import com.taotao.music.data.diagnostics.PowerDiagnostics
 import com.taotao.music.hotfix.HotfixLoader
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -82,7 +83,10 @@ class TaotaoApplication : Application() {
             cryptoEnabled = true,
         )
 
-        /** onCreate 时赋值；lazy 求值只会发生在首个组合里，必然晚于 onCreate。 */
+        /** 进程级耗电诊断采集器，不依赖界面组合，后台播放时也能记录状态变化。 */
+        internal val powerDiagnostics by lazy { PowerDiagnostics(application) }
+
+        /** onCreate 时最先赋值；进程级 lazy 单例都在此之后才读取 application。 */
         private lateinit var application: TaotaoApplication
     }
 
@@ -91,6 +95,8 @@ class TaotaoApplication : Application() {
         application = this
         // 测试机无法连接 adb，崩溃堆栈必须落盘才能定位问题。
         CrashReporter(this).install()
+        // 耗电诊断只监听系统状态广播，不轮询、不持锁；尽早注册，后台播放的状态变化才完整。
+        powerDiagnostics.install()
         // 热修复必须尽早：晚于第一次业务调用就白打了。放在 onCreate 而不是
         // attachBaseContext，是为了让崩溃上报先装好 —— 补丁自己崩了也要有日志。
         activePatchVersion = HotfixLoader.apply(this, versionCode())

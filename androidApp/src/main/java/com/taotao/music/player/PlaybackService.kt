@@ -242,6 +242,8 @@ class PlaybackService : MediaSessionService() {
 
                     override fun onIsPlayingChanged(isPlaying: Boolean) {
                         updateSleepTimerTicker()
+                        // 进程可能只启动播放服务而没有界面状态；这里用服务回调记录后台暂停/续播。
+                        TaotaoApplication.powerDiagnostics.onPlaybackChanged(isPlaying)
                     }
 
                     override fun onEvents(player: Player, events: Player.Events) {
