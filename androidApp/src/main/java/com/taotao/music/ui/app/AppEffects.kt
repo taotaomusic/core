@@ -63,8 +63,14 @@ internal fun TaotaoAppPreAuthEffects(state: TaotaoAppState) {
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
-                Lifecycle.Event.ON_RESUME -> state.wukongImClient.setAppForeground(true)
-                Lifecycle.Event.ON_PAUSE -> state.wukongImClient.setAppForeground(false)
+                Lifecycle.Event.ON_RESUME -> {
+                    state.wukongImClient.setAppForeground(true)
+                    state.powerDiagnostics.onAppForeground()
+                }
+                Lifecycle.Event.ON_PAUSE -> {
+                    state.wukongImClient.setAppForeground(false)
+                    state.powerDiagnostics.onAppBackground()
+                }
                 else -> Unit
             }
         }
@@ -81,7 +87,8 @@ internal fun TaotaoAppPreAuthEffects(state: TaotaoAppState) {
      */
     BackHandler(
         enabled = state.mvSong != null || state.showSearchPage ||
-            state.showSettingsPage || state.showProfilePage || state.playlist.selected != null ||
+            state.showSettingsPage || state.showPowerDiagnosticsPage ||
+            state.showProfilePage || state.playlist.selected != null ||
             state.mineLibrarySection != null || state.diarySong != null ||
             state.artistPage.selected != null || state.albumPage.selected != null ||
             state.onlinePlaylistPage.selected != null ||
@@ -94,6 +101,7 @@ internal fun TaotaoAppPreAuthEffects(state: TaotaoAppState) {
             state.showDiaryRecords -> state.showDiaryRecords = false
             state.diarySong != null -> state.diarySong = null
             state.showProfilePage -> state.showProfilePage = false
+            state.showPowerDiagnosticsPage -> state.showPowerDiagnosticsPage = false
             state.showSettingsPage -> state.showSettingsPage = false
             // 歌手 / 专辑 / 在线歌单主页是从搜索页或排行榜歌曲行菜单进入的下级页
             // （宿主页标志仍为真），必须先于搜索页 / 排行榜判断退出。
