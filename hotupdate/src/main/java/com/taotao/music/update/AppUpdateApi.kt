@@ -1,8 +1,5 @@
 package com.taotao.music.update
 
-import com.taotao.music.AppHttp
-import com.taotao.music.data.TencentMusicApi
-import com.taotao.music.data.TokenProvider
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
@@ -10,23 +7,23 @@ import java.net.URL
 /**
  * 热更新与远程配置客户端。
  *
- * 令牌是可选的，且刻意使用 [TokenProvider.currentToken] 而不是 `validToken()`：
+ * 令牌是可选的，且刻意使用 [UpdateHost.currentToken] 而不是「取可用令牌并续期」：
  * 后者在令牌过期时会同步续期，续期失败还会触发会话失效回调把用户踢回登录页。
  * 检查更新是后台动作，绝不能因此让用户掉线；令牌过期时服务端会退回按设备号分桶。
  */
-class AppUpdateApi(private val tokenProvider: TokenProvider?) {
+class AppUpdateApi(private val host: UpdateHost) {
 
     // GitHub 直链由服务端保存，客户端优先走代理；代理不可用时由下载器回退原链。
 
     fun bootstrap(versionCode: Long, sdk: Int, deviceId: String, channel: String = "release"): BootstrapResult {
         val query = "?channel=${channel}&versionCode=$versionCode&sdk=$sdk&deviceId=$deviceId"
-        val connection = (URL("${TencentMusicApi.ENDPOINT}$PATH_BOOTSTRAP$query").openConnection() as HttpURLConnection).apply {
+        val connection = (URL("${host.endpoint}$PATH_BOOTSTRAP$query").openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 10_000
             readTimeout = 20_000
             setRequestProperty("Accept", "application/json")
-            setRequestProperty("User-Agent", AppHttp.USER_AGENT)
-            tokenProvider?.currentToken()?.takeIf { it.isNotBlank() }?.let { setRequestProperty("Authorization", "Bearer $it") }
+            setRequestProperty("User-Agent", host.userAgent)
+            host.currentToken()?.takeIf { it.isNotBlank() }?.let { setRequestProperty("Authorization", "Bearer $it") }
         }
         val code = connection.responseCode
         if (code !in 200..299) {

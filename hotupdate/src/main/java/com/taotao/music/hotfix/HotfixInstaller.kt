@@ -1,6 +1,5 @@
 package com.taotao.music.hotfix
 
-import com.taotao.music.AppHttp
 import android.content.Context
 import android.util.Log
 import com.taotao.music.update.AvailablePatch
@@ -18,7 +17,7 @@ import java.security.MessageDigest
  * 每一步都有明确的拒绝条件，宁可不打补丁也不能装一个来路不明或对不上版本的：
  * 唯一的修复通道本身就是更新通道。
  */
-class HotfixInstaller(context: Context) {
+class HotfixInstaller(context: Context, private val userAgent: String) {
     private val appContext = context.applicationContext
     private val store = HotfixStore(appContext)
 
@@ -138,7 +137,7 @@ class HotfixInstaller(context: Context) {
             requestMethod = "GET"
             connectTimeout = 15_000
             readTimeout = 30_000
-            setRequestProperty("User-Agent", AppHttp.USER_AGENT)
+            setRequestProperty("User-Agent", userAgent)
         }
         val code = connection.responseCode
         check(code in 200..299) { "下载补丁失败：HTTP $code" }

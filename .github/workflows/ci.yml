@@ -78,6 +78,7 @@ jobs:
               - 'autopatch/**'
             client:
               - 'androidApp/**'
+              - 'hotupdate/**'
               - 'webApp/**'
               - 'player-ui/**'
               - 'shared/**'
@@ -635,6 +636,7 @@ jobs:
           name: kotlin-classes-release
           path: |
             androidApp/build/tmp/kotlin-classes/release
+            hotupdate/build/tmp/kotlin-classes/release
             shared/build/tmp/kotlin-classes/release
           if-no-files-found: error
           retention-days: 30

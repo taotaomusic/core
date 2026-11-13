@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 纯逻辑模块：无组件、无权限声明。FileProvider 与 REQUEST_INSTALL_PACKAGES 权限
+     由宿主 androidApp 的清单持有，UpdateInstaller 在运行时按 packageName 解析 authority。 -->
+<manifest />

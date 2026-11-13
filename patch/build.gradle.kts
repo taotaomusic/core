@@ -21,13 +21,15 @@ val sdkDirectory: String by lazy {
 
 /** 宿主编译产物所在目录，patch 代码按类型引用宿主类就靠它。 */
 val hostClasses = rootProject.file("androidApp/build/tmp/kotlin-classes/release")
+// update/hotfix 两包已抽到 :hotupdate 模块，补丁若引用其中的类型需要它的编译产物。
+val hotupdateClasses = rootProject.file("hotupdate/build/tmp/kotlin-classes/release")
 val sharedClasses = rootProject.file("shared/build/tmp/kotlin-classes/release")
 
 /** 编译期需要 android.jar，但它由宿主提供，不能进补丁。 */
 val androidJar: File by lazy { file("$sdkDirectory/platforms/android-35/android.jar") }
 
 dependencies {
-    compileOnly(files(hostClasses, sharedClasses))
+    compileOnly(files(hostClasses, hotupdateClasses, sharedClasses))
     compileOnly(files(provider { androidJar }))
     compileOnly(kotlin("stdlib"))
 }
@@ -82,6 +84,7 @@ val buildPatch = tasks.register("buildPatch") {
             add("--min-api"); add("24")
             add("--lib"); add(androidJar.absolutePath)
             if (hostClasses.exists()) { add("--classpath"); add(hostClasses.absolutePath) }
+            if (hotupdateClasses.exists()) { add("--classpath"); add(hotupdateClasses.absolutePath) }
             if (sharedClasses.exists()) { add("--classpath"); add(sharedClasses.absolutePath) }
             addAll(classFiles.map { it.absolutePath })
         }

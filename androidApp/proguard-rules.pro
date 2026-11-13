@@ -1,10 +1,11 @@
 # ===== 桃桃音乐 R8 规则 =====
 #
-# 本包与热修复插桩（build-logic，data/player/update 三包）共存，边界三条：
+# 本包与热修复插桩（build-logic，data/player 两包 + :hotupdate 模块的 update 包）共存，边界三条：
 #   1. 不混淆——补丁键是「类名#方法名#签名」精确匹配，改名即全体系失配；
 #   2. 不优化——R8 没有 per 规则的禁内联（-dontinline 是 ProGuard 选项，R8 不认），
 #      内联属优化阶段，-dontoptimize 一并关掉，方法体保持原样可供补丁替换；
-#   3. 插桩三包整包 keep——R8 不得删除任何被插桩的类与方法。
+#   3. 插桩域整包 keep——R8 不得删除任何被插桩的类与方法（update/hotfix 两包的
+#      keep 随 :hotupdate 模块的 consumer-rules.pro 下发，这里只保留 data/player）。
 # R8 仍照常做：未用代码收缩（第三方库树为主，占体积大头）、资源收缩。
 # 第三方库自带 consumer rules 照常生效。
 #
@@ -16,15 +17,11 @@
 -dontoptimize
 -keep class com.taotao.music.data.** { *; }
 -keep class com.taotao.music.player.** { *; }
--keep class com.taotao.music.update.** { *; }
+# update / hotfix 两包已抽到 :hotupdate 模块，keep 规则随其 consumer-rules.pro 下发。
 
 # ---- JNI 绑定：libtaotao_crypto.so 按「类名+方法名」注册/查找 native 方法，
 #      改名或删除都会 UnsatisfiedLinkError，整域保留。 ----
 -keep class com.taotao.music.crypto.** { *; }
-
-# ---- 热修复运行时：加载器在 Application 启动即运行，可能与设备上遗留的
-#      旧补丁包交互，防御性保留。 ----
--keep class com.taotao.music.hotfix.** { *; }
 
 # ---- 悟空 IM SDK：外部 SDK 自带本地消息库与长连接栈，可能经反射访问实体
 #      与回调，防御性整包保留（体积由主收缩兜底）。 ----
