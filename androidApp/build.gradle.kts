@@ -120,7 +120,7 @@ dependencies {
     implementation(project(":hotupdate"))
     testImplementation(kotlin("test"))
     // 本地单元测试的 mockable android.jar 里 org.json 方法会抛 not mocked，需要真实实现才能测 SongCodec。
-    testImplementation("org.json:json:20240303")
+    testImplementation("org.json:json:20260719")
     // BOM 对齐 CMP 1.12.1 的 androidx 映射（compose 1.12 世代）；material3 会被
     // player-ui 传来的 CMP material3（androidx 1.5.0-alpha22）解析为更高版本。
     implementation(platform("androidx.compose:compose-bom:2026.09.00"))
