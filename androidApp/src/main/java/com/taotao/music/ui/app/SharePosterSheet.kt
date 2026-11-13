@@ -15,14 +15,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -31,20 +28,24 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
+import com.taotao.music.playerui.theme.TaotaoMiuixTheme
 import com.taotao.music.playerui.theme.TaotaoShapes
 import com.taotao.music.playerui.theme.TaotaoSizes
 import com.taotao.music.playerui.theme.TaotaoSpacing
 import com.taotao.music.playerui.theme.TaotaoTypeScale
 import com.taotao.music.ui.common.SharePoster
+import top.yukonga.miuix.kmp.window.WindowBottomSheet
 
 /**
  * 分享歌曲的预览面板：先让用户看到生成的海报，再决定发图还是只发链接。
+ *
+ * 弹层骨架走 Miuix 的 [WindowBottomSheet]（组件库渲染底部滑入/拖拽关闭/返回手势），
+ * 内部按钮仍走 Material3（分享动作的视觉规格与全应用一致，不随 Miuix 换肤）。
  *
  * 为什么不在点「分享」时直接拉起系统面板：海报要联网取短链和封面，慢的时候
  * 用户会以为没点上；预览面板同时承担加载态与确认作用。文字分享路径保留，
  * 照顾只想贴链接、不想发图的场景。
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun SharePosterSheet(
     loading: Boolean,
@@ -54,26 +55,21 @@ internal fun SharePosterSheet(
     onShareLink: () -> Unit,
     onDismiss: () -> Unit,
 ) {
+    // show=false 让组件库自己播退场动画；无海报且非加载中时整体不装配
     if (!loading && poster == null) return
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-        containerColor = MaterialTheme.colorScheme.surface,
-        contentColor = MaterialTheme.colorScheme.onSurface,
-    ) {
+    TaotaoMiuixTheme {
+        WindowBottomSheet(
+            show = true,
+            title = if (loading) "正在生成分享图" else "分享这首歌",
+            onDismissRequest = onDismiss,
+        ) {
         Column(
             modifier = Modifier.fillMaxWidth()
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = TaotaoSpacing.screenHorizontal)
-                .padding(bottom = TaotaoSpacing.xl),
+                .padding(bottom = TaotaoSpacing.lg),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(TaotaoSpacing.md),
         ) {
-            Text(
-                text = if (loading) "正在生成分享图" else "分享这首歌",
-                modifier = Modifier.fillMaxWidth(),
-                style = TaotaoTypeScale.sectionTitle,
-            )
             if (loading) {
                 Box(
                     modifier = Modifier.fillMaxWidth().height(260.dp),
@@ -135,6 +131,7 @@ internal fun SharePosterSheet(
                     Text("只分享文字链接", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
+        }
         }
     }
 }

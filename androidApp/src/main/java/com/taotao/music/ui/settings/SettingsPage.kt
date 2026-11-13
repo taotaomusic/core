@@ -57,6 +57,7 @@ fun SettingsPage(
     onPickPlaybackQuality: () -> Unit,
     onPickDownloadQuality: () -> Unit,
     onOpenSleepTimer: () -> Unit,
+    onOpenPowerDiagnostics: () -> Unit,
     onPickAppearance: (AppearanceMode) -> Unit,
     onBack: () -> Unit,
 ) {
@@ -111,6 +112,15 @@ fun SettingsPage(
                 },
                 description = "播放达到设定时长后自动停止；暂停会保留剩余时间，切歌不会重置。",
                 onClick = onOpenSleepTimer,
+            )
+        }
+
+        SharedCard(title = "诊断", modifier = Modifier.padding(top = TaotaoSpacing.sm)) {
+            SettingRow(
+                title = "耗电诊断",
+                value = "查看",
+                description = "记录本机电量、前后台、亮屏和播放状态，判断后台是否异常耗电；数据只保存在本机。",
+                onClick = onOpenPowerDiagnostics,
             )
         }
 

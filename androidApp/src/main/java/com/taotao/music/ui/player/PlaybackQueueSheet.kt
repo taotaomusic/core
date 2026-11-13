@@ -20,10 +20,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.RepeatOne
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.SecondaryTabRow
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
@@ -40,6 +38,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.taotao.music.data.PlaybackHistoryEntry
 import com.taotao.music.model.Song
+import com.taotao.music.playerui.theme.TaotaoMiuixTheme
 import com.taotao.music.playerui.theme.TaotaoShapes
 import com.taotao.music.playerui.theme.TaotaoSizes
 import com.taotao.music.playerui.theme.TaotaoSpacing
@@ -49,6 +48,7 @@ import com.taotao.music.ui.common.songKeyOf
 import com.taotao.music.ui.theme.TaotaoCoral
 import com.taotao.music.ui.theme.contentFadeIn
 import com.taotao.music.ui.theme.contentFadeOut
+import top.yukonga.miuix.kmp.window.WindowBottomSheet
 
 /**
  * 三类来源共享固定的正文视口，不能让空态、短列表和长列表反复改变 BottomSheet 高度。
@@ -56,7 +56,6 @@ import com.taotao.music.ui.theme.contentFadeOut
 private val PlaybackQueueContentHeight = 360.dp
 
 /** 播放队列面板：展示当前队列并支持直接跳到某一首。 */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun PlaybackQueueSheet(
     queue: List<Song>,
@@ -83,11 +82,17 @@ internal fun PlaybackQueueSheet(
     onOpenAlbumPage: (Song) -> Unit = {},
 ) {
     var selectedSource by remember { mutableIntStateOf(0) }
-    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = MaterialTheme.colorScheme.background) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = TaotaoSpacing.screenHorizontal)) {
+    // 弹层骨架走 Miuix WindowBottomSheet（组件库渲染底部滑入/拖拽关闭/返回手势）；
+    // 页内 Tab 保留 M3 SecondaryTabRow：队列来源切换的指示条视觉是播放页专属规格。
+    TaotaoMiuixTheme {
+        WindowBottomSheet(
+            show = true,
+            title = "播放列表",
+            onDismissRequest = onDismiss,
+        ) {
+        Column(Modifier.fillMaxWidth()) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text("播放列表", style = MaterialTheme.typography.titleLarge)
                     Text(
                         when (selectedSource) {
                             1 -> "从最近播放重新开始"
@@ -175,6 +180,7 @@ internal fun PlaybackQueueSheet(
                 }
             }
             Spacer(Modifier.height(TaotaoSpacing.md))
+        }
         }
     }
 }

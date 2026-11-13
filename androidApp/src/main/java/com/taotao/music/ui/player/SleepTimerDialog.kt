@@ -28,16 +28,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Timer
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -52,11 +46,16 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.taotao.music.playerui.theme.TaotaoMiuixTheme
 import com.taotao.music.playerui.theme.TaotaoShapes
 import com.taotao.music.playerui.theme.TaotaoSizes
 import com.taotao.music.playerui.theme.TaotaoSpacing
 import com.taotao.music.playerui.theme.TaotaoTypeScale
 import com.taotao.music.playerui.theme.TaotaoWash
+import top.yukonga.miuix.kmp.basic.TextField
+import top.yukonga.miuix.kmp.basic.TextButton as MiuixTextButton
+import top.yukonga.miuix.kmp.basic.Switch as MiuixSwitch
+import top.yukonga.miuix.kmp.window.WindowBottomSheet
 
 /** 快捷时长圆钮，与设计稿一致的 10-90 分钟六档。 */
 private val SleepTimerQuickMinutes = listOf(10, 20, 30, 45, 60, 90)
@@ -64,13 +63,14 @@ private val SleepTimerQuickMinutes = listOf(10, 20, 30, 45, 60, 90)
 /**
  * 定时关闭选择面板（底部弹层）。
  *
+ * 弹层骨架走 Miuix 的 [WindowBottomSheet]（组件库渲染底部滑入/拖拽关闭/返回手势，
+ * 无需 Scaffold 宿主），内部仍包 [TaotaoMiuixTheme] 使组件库配色与全应用珊瑚色系同源。
  * 倒计时由播放服务维护，这个面板只负责发送用户选择并展示服务同步回来的状态：
- * - 「上次定时」开关：打开按上次时长重新计时，关闭取消定时；
- * - 圆形快捷键直接按对应分钟数开始倒计时；
- * - 「自定义」展开输入 1-1440 分钟；
+ * - 「上次定时」开关：打开按上次时长重新计时，关闭取消定时（Miuix Switch）；
+ * - 圆形快捷键直接按对应分钟数开始倒计时（保留自绘圆钮，属专属视觉）；
+ * - 「自定义」展开输入 1-1440 分钟（Miuix TextField）；
  * - 「播完整首歌再停止播放」只切换到期行为，不影响正在进行的倒计时。
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SleepTimerSheet(
     remainingMs: Long,
@@ -87,141 +87,144 @@ fun SleepTimerSheet(
     var customMinutes by remember { mutableStateOf("") }
     val customValue = customMinutes.toIntOrNull()
     val customValid = customValue in 1..1_440
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = rememberModalBottomSheetState(),
-        containerColor = MaterialTheme.colorScheme.background,
-        contentColor = MaterialTheme.colorScheme.onSurface,
-    ) {
-        Column(
-            Modifier.fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = TaotaoSpacing.screenHorizontal)
-                .padding(bottom = TaotaoSpacing.xl),
+    TaotaoMiuixTheme {
+        WindowBottomSheet(
+            show = true,
+            title = "定时关闭",
+            onDismissRequest = onDismiss,
         ) {
-            Text("定时关闭", style = TaotaoTypeScale.sectionTitle, fontWeight = FontWeight.Bold)
-            if (waitingSongEnd) {
-                Text(
-                    "定时已到，本歌唱完后停止播放",
-                    color = MaterialTheme.colorScheme.primary,
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(top = TaotaoSpacing.xxs),
-                )
-            }
             Column(
                 Modifier.fillMaxWidth()
-                    .padding(top = TaotaoSpacing.md)
-                    .clip(TaotaoShapes.card)
-                    .background(MaterialTheme.colorScheme.surface)
-                    .padding(horizontal = TaotaoSpacing.md, vertical = TaotaoSpacing.md),
+                    .verticalScroll(rememberScrollState())
+                    .padding(bottom = TaotaoSpacing.md),
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                if (waitingSongEnd) {
                     Text(
-                        if (active) "剩余" else "上次定时",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold,
-                    )
-                    Icon(
-                        Icons.Default.Timer,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier
-                            .padding(start = TaotaoSpacing.xs)
-                            .size(TaotaoSizes.iconSm),
-                    )
-                    Text(
-                        if (active) formatSleepTimerRemaining(remainingMs) else formatTimerDuration(lastMinutes),
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold,
-                    )
-                    Spacer(Modifier.weight(1f))
-                    Switch(
-                        checked = active,
-                        onCheckedChange = { on -> if (on) onSet(lastMinutes) else onCancelTimer() },
+                        "定时已到，本歌唱完后停止播放",
+                        color = MaterialTheme.colorScheme.primary,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(top = TaotaoSpacing.xxs),
                     )
                 }
-                Row(
-                    Modifier.fillMaxWidth().padding(top = TaotaoSpacing.md),
-                    horizontalArrangement = Arrangement.spacedBy(TaotaoSpacing.xs),
+                Column(
+                    Modifier.fillMaxWidth()
+                        .padding(top = TaotaoSpacing.md)
+                        .clip(TaotaoShapes.card)
+                        .background(MaterialTheme.colorScheme.surface)
+                        .padding(horizontal = TaotaoSpacing.md, vertical = TaotaoSpacing.md),
                 ) {
-                    SleepTimerQuickMinutes.forEach { minutes ->
-                        val selected = active && lastMinutes == minutes
-                        Box(
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            if (active) "剩余" else "上次定时",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Icon(
+                            Icons.Default.Timer,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier
-                                .weight(1f)
-                                .aspectRatio(1f)
-                                .clip(CircleShape)
-                                .background(
-                                    if (selected) {
-                                        MaterialTheme.colorScheme.primaryContainer
+                                .padding(start = TaotaoSpacing.xs)
+                                .size(TaotaoSizes.iconSm),
+                        )
+                        Text(
+                            if (active) formatSleepTimerRemaining(remainingMs) else formatTimerDuration(lastMinutes),
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Spacer(Modifier.weight(1f))
+                        // 上次定时开关：Miuix Switch（HyperOS 胶囊滑块），主题桥保证选中色为珊瑚
+                        MiuixSwitch(
+                            checked = active,
+                            onCheckedChange = { on -> if (on) onSet(lastMinutes) else onCancelTimer() },
+                        )
+                    }
+                    Row(
+                        Modifier.fillMaxWidth().padding(top = TaotaoSpacing.md),
+                        horizontalArrangement = Arrangement.spacedBy(TaotaoSpacing.xs),
+                    ) {
+                        SleepTimerQuickMinutes.forEach { minutes ->
+                            val selected = active && lastMinutes == minutes
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .aspectRatio(1f)
+                                    .clip(CircleShape)
+                                    .background(
+                                        if (selected) {
+                                            MaterialTheme.colorScheme.primaryContainer
+                                        } else {
+                                            MaterialTheme.colorScheme.surfaceVariant
+                                        },
+                                    )
+                                    .clickable { onSet(minutes) },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    "$minutes",
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (selected) {
+                                        MaterialTheme.colorScheme.onPrimaryContainer
                                     } else {
-                                        MaterialTheme.colorScheme.surfaceVariant
+                                        MaterialTheme.colorScheme.onSurface
                                     },
                                 )
-                                .clickable { onSet(minutes) },
-                            contentAlignment = Alignment.Center,
+                            }
+                        }
+                    }
+                    HorizontalDivider(
+                        Modifier.padding(top = TaotaoSpacing.md),
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = TaotaoWash.subtle),
+                    )
+                    if (!customExpanded) {
+                        Text(
+                            "自定义",
+                            textAlign = TextAlign.Center,
+                            style = MaterialTheme.typography.titleMedium,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { customExpanded = true }
+                                .padding(vertical = TaotaoSpacing.sm),
+                        )
+                    } else {
+                        Row(
+                            Modifier.fillMaxWidth().padding(top = TaotaoSpacing.sm),
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Text(
-                                "$minutes",
-                                fontWeight = FontWeight.Bold,
-                                color = if (selected) {
-                                    MaterialTheme.colorScheme.onPrimaryContainer
-                                } else {
-                                    MaterialTheme.colorScheme.onSurface
+                            // 自定义分钟输入：Miuix TextField（胶囊输入框 + 浮动标签）
+                            TextField(
+                                value = customMinutes,
+                                onValueChange = { value ->
+                                    if (value.length <= 4 && value.all(Char::isDigit)) customMinutes = value
                                 },
+                                label = "分钟（1-1440）",
+                                useLabelAsPlaceholder = true,
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                modifier = Modifier.weight(1f),
+                            )
+                            MiuixTextButton(
+                                text = "确定",
+                                onClick = { customValue?.let(onSet) },
+                                enabled = customValid,
+                                modifier = Modifier.padding(start = TaotaoSpacing.xs),
                             )
                         }
                     }
                 }
-                HorizontalDivider(
-                    Modifier.padding(top = TaotaoSpacing.md),
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = TaotaoWash.subtle),
-                )
-                if (!customExpanded) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable { onToggleWaitForSongEnd(!waitForSongEnd) },
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    CheckCircleBadge(checked = waitForSongEnd)
                     Text(
-                        "自定义",
-                        textAlign = TextAlign.Center,
-                        style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { customExpanded = true }
-                            .padding(vertical = TaotaoSpacing.sm),
+                        "播完整首歌再停止播放",
+                        modifier = Modifier.padding(start = TaotaoSpacing.xs),
                     )
-                } else {
-                    Row(
-                        Modifier.fillMaxWidth().padding(top = TaotaoSpacing.sm),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        OutlinedTextField(
-                            value = customMinutes,
-                            onValueChange = { value ->
-                                if (value.length <= 4 && value.all(Char::isDigit)) customMinutes = value
-                            },
-                            label = { Text("分钟（1-1440）") },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            modifier = Modifier.weight(1f),
-                        )
-                        TextButton(
-                            onClick = { customValue?.let(onSet) },
-                            enabled = customValid,
-                            modifier = Modifier.padding(start = TaotaoSpacing.xs),
-                        ) { Text("确定") }
-                    }
                 }
-            }
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clickable { onToggleWaitForSongEnd(!waitForSongEnd) },
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                CheckCircleBadge(checked = waitForSongEnd)
-                Text(
-                    "播完整首歌再停止播放",
-                    modifier = Modifier.padding(start = TaotaoSpacing.xs),
-                )
             }
         }
     }

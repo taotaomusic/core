@@ -9,13 +9,14 @@ import {
 import { useApp } from "../state/AppState";
 import { absoluteUrl } from "../api";
 import { hideOnError } from "./img";
-import "./playlists.css";
+import { Dialog, DialogContent, DialogTitle } from "../ui/radix";
 
 /**
  * 加入歌单弹窗：song 为 null 时不渲染。
  * 点歌单行直接加入（服务端幂等，重复添加也提示成功并关闭）；
  * 顶部「＋ 新建歌单」展开输入行，创建成功后立即把当前歌曲加入新歌单。
- * 挂遮罩 + 卡片（视觉规格对齐 pd-modal，类名自带 apd-*）。
+ * 弹窗骨架改用组件库（Radix Dialog）：遮罩 + 卡片沿用原 apd-* 视觉，
+ * Esc / 点遮罩关闭、焦点圈定与滚动锁定交由 Radix 处理。
  */
 export function AddToPlaylistDialog({ song, onClose }: { song: Song | null; onClose: () => void }) {
   const { playlists, playlistsReady, createPlaylistAction, toast } = useApp();
@@ -31,16 +32,6 @@ export function AddToPlaylistDialog({ song, onClose }: { song: Song | null; onCl
       setBusy(false);
     }
   }, [song]);
-
-  // 打开期间监听 Esc 关闭；点遮罩关闭由遮罩 onClick 承担
-  useEffect(() => {
-    if (!song) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    document.addEventListener("keydown", handleKeyDown);
-    return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [song, onClose]);
 
   if (!song) return null;
   // 卫语句后捕获为常量：跨异步回调的窄化不依赖编译器版本，target 必为 Song
@@ -82,9 +73,11 @@ export function AddToPlaylistDialog({ song, onClose }: { song: Song | null; onCl
   }
 
   return (
-    <div className="apd-mask" onClick={onClose}>
-      <div className="apd-card" onClick={(e) => e.stopPropagation()}>
-        <div className="apd-title">加入歌单</div>
+    <Dialog open onOpenChange={(next) => { if (!next) onClose(); }}>
+      <DialogContent aria-describedby={undefined}>
+        {/* Radix Title 提供无障碍标题，视觉上隐藏；可见标题由下方 apd-title 承担 */}
+        <DialogTitle>加入歌单</DialogTitle>
+        <div className="apd-title" aria-hidden>加入歌单</div>
         <div className="apd-sub" title={`${song.title} - ${song.artist}`}>
           {song.title} - {song.artist}
         </div>
@@ -147,7 +140,7 @@ export function AddToPlaylistDialog({ song, onClose }: { song: Song | null; onCl
             )}
           </div>
         )}
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }

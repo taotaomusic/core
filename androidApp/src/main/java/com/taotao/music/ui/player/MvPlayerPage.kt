@@ -145,8 +145,9 @@ internal fun MvPlayerPage(
                 }
             }
             previousLight?.let { light ->
-                controller?.isAppearanceLightStatusBars = light
-                controller?.isAppearanceLightNavigationBars = light
+                // previousLight 非空意味着当初读取时 controller 非空（val 推导链），无需安全调用。
+                controller.isAppearanceLightStatusBars = light
+                controller.isAppearanceLightNavigationBars = light
             }
         }
     }

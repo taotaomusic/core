@@ -128,7 +128,8 @@ fun PlayerSongHeader(
                     modifier = if (artistClickable) {
                         Modifier.clickable(
                             onClickLabel = "查看歌手主页",
-                            onClick = { onArtistClick?.invoke() },
+                            // artistClickable 已含回调非空判断，无需安全调用。
+                            onClick = { onArtistClick.invoke() },
                         )
                     } else {
                         Modifier
@@ -147,7 +148,7 @@ fun PlayerSongHeader(
                         modifier = if (albumClickable) {
                             Modifier.clickable(
                                 onClickLabel = "查看专辑主页",
-                                onClick = { onAlbumClick?.invoke() },
+                                onClick = { onAlbumClick.invoke() },
                             )
                         } else {
                             Modifier
