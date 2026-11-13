@@ -630,7 +630,10 @@ jobs:
           if-no-files-found: error
       # autopatch 生成补丁需要「线上那个版本」的 kotlin-classes 作为 base 侧 diff 的输入，
       # 而该目录会被下一次构建覆盖 —— 不归档，现场就对不上 base，线上版本的补丁无法生成。
+      # 只有签名构建才产出 release 变体；Dependabot / fork PR 拿不到 Secrets，走的是
+      # assembleDebug，此时目录必然不存在，硬归档会把整个 job 刷红（2026-11-13 踩到）。
       - name: 归档 kotlin-classes（补丁 base 输入）
+        if: steps.signing.outputs.signed == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: kotlin-classes-release
