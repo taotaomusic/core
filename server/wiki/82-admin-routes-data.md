@@ -41,6 +41,7 @@
 | 图片 Key | `/app/admin/image-keys` | `READ_ROLES` | `WRITE_ROLES` |
 | 开放 API Key | `/app/admin/open-api-keys` | `READ_ROLES` | `WRITE_ROLES` |
 | 音源账号 | `/app/admin/music-sources*`(清单、可用项、增删改、启停、探测、短信、登录) | 清单 `PRIVILEGED_READ_ROLES`(凭据属个人信息),其余 `READ_ROLES` | `WRITE_ROLES` |
+| 分享短链 | `/app/admin/share-links`(列表、汇总、删除、软删/恢复、手动清除) | `READ_ROLES`(运营数据) | `WRITE_ROLES`(审计 `share.delete` / `share.set_disabled` / `share.purge`) |
 | 用户 | `/app/admin/users`(清单、创建、听歌历史、禁用、删除) | 清单与听歌历史 `PRIVILEGED_READ_ROLES` | `WRITE_ROLES`(创建、禁用、删除;创建免邮箱验证码,审计 `user.create`) |
 
 **守卫一律逐个方法挂,任何控制器都不例外。** 早期文档把守卫的挂法分成两类(「全是管理接口的控制器挂类上、含公开路由的逐个方法挂」),这个区分已经废弃:类级守卫在「将来给这个控制器加一个公开路由」时会静默出错,而维护者不会记得去改类级装饰器。统一用 `@AdminGuarded()` 之后,「这个路由受不受保护」在方法上一眼可见。

@@ -1,6 +1,6 @@
 import type { Dict } from "./zh";
 
-/** English copy. Structure must match zh.ts exactly (enforced by Dict). */
+/** 英文文案。结构与 zh.ts 完全一致（由 Dict 类型强制约束）。 */
 export const en: Dict = {
   brand: "TaotaoMusic",
   docTitle: "TaotaoMusic · Cross-platform private music player",

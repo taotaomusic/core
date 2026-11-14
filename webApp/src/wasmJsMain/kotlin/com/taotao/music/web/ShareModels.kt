@@ -16,6 +16,11 @@ data class ShareSong(
     val refrainStartMs: Int? = null,
     /** 高潮区间终点（整曲毫秒）。仅酷我源下发；键缺席或 null 落 null，不伪造 0。 */
     val refrainEndMs: Int? = null,
+    /**
+     * 当前分享页的短码（URL 路径尾段）。仅用于「进入 App / 试听播放」打点；
+     * 演示卡（无 token 打开 /s/）为 null，此时打点静默跳过。
+     */
+    val shareToken: String? = null,
 )
 
 /** 兼容服务端统一信封与直接对象，便于分享页由 CDN 或 NestJS 托管。 */

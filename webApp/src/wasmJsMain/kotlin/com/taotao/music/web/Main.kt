@@ -138,7 +138,9 @@ private fun SharePlayerApp() {
             check(response.ok) { "分享链接不存在或已失效" }
             val payloadText: JsString = response.text().await()
             val payload = payloadText.toString()
-            parseShareSong(payload)
+            // 短码从 URL 路径取（token 是公开短码，不需要服务端下发），
+            // 打点用它定位统计行；演示卡 shareSlug 为 null，打点自然跳过。
+            parseShareSong(payload).copy(shareToken = shareSlug)
         }.onSuccess {
             share = it
         }.onFailure {
@@ -195,6 +197,17 @@ private fun SharePlayerPage(share: ShareSong) {
             controller.load(share.previewUrl)
         }
         onDispose(controller::release)
+    }
+    // 播放状态翻转即打点一次「试听播放」：翻到「正在播」记一次，暂停不记、
+    // 缓冲不记。shareToken 为 null（演示卡 / 无 token 的旧短链）时不发请求。
+    // LaunchedEffect 以 isPlaying 为 key：仅当「播放 → 暂停 → 播放」这样的状态
+    // 变化才重新进入协程，协程体内按 playTracked 幂等去重。
+    var playTracked by remember(share.previewUrl) { mutableStateOf(false) }
+    LaunchedEffect(audioState.isPlaying, share.previewUrl) {
+        if (audioState.isPlaying && !playTracked) {
+            playTracked = true
+            trackShareEvent(share.shareToken, "play")
+        }
     }
     val state = PlayerUiState(
         song = share.song,
@@ -268,7 +281,11 @@ private fun SharePlayerPage(share: ShareSong) {
             )
             Spacer(Modifier.height(TaotaoSpacing.xl))
             Button(
-                onClick = { window.location.href = share.appDownloadUrl },
+                onClick = {
+                    // 「下载」也视为「通过短链进入 App」的意向：先打点再跳转。
+                    trackShareEvent(share.shareToken, "open-app")
+                    window.location.href = share.appDownloadUrl
+                },
                 modifier = Modifier.fillMaxWidth().height(DownloadButtonHeight),
                 // 8dp 不在圆角刻度里（刻度是 6/10/14/20/28），对齐到 small。
                 shape = TaotaoShapes.small,
@@ -284,7 +301,11 @@ private fun SharePlayerPage(share: ShareSong) {
             openAppUrl?.let { url ->
                 Spacer(Modifier.height(TaotaoSpacing.sm))
                 Button(
-                    onClick = { window.location.href = url },
+                    onClick = {
+                        // 深链接跳转前打点：进 App 的人数统计就落在这一步。
+                        trackShareEvent(share.shareToken, "open-app")
+                        window.location.href = url
+                    },
                     modifier = Modifier.fillMaxWidth().height(DownloadButtonHeight),
                     shape = TaotaoShapes.small,
                     colors = ButtonDefaults.buttonColors(
@@ -353,6 +374,31 @@ private external fun encodeURIComponent(value: String): String
 
 @JsFun("() => navigator.userAgent")
 private external fun navigatorUserAgent(): String
+
+@JsFun("(method) => navigator.sendBeacon(method)")
+private external fun sendBeacon(url: String): Boolean
+
+@JsFun("(url, body) => { fetch(url, { method: 'POST', body: body, keepalive: true }).catch(function () {}) }")
+private external fun postKeepalive(url: String, body: String)
+
+/**
+ * 分享页打点：把「进入 App / 试听播放」上报给服务端。
+ *
+ * - POST `/api/v1/public/shares/{token}/{kind}`，无请求体、不读响应；
+ * - 优先 `sendBeacon`：跳转深链接时页面可能立即失活，fetch 不保证发出去；
+ * - fetch 兜底并 `catch` 吞错：打点是锦上添花，绝不影响跳转与播放；
+ * - token 为空（演示卡）直接跳过。
+ */
+private fun trackShareEvent(shareToken: String?, kind: String) {
+    val token = shareToken?.takeIf { it.isNotBlank() } ?: return
+    val url = "/api/v1/public/shares/$token/$kind"
+    try {
+        if (sendBeacon(url)) return
+    } catch (_: Throwable) {
+        // sendBeacon 不可用（老浏览器 / 权限问题）时走 fetch 兜底。
+    }
+    postKeepalive(url, "")
+}
 
 private fun formatTime(milliseconds: Long): String {
     val seconds = (milliseconds.coerceAtLeast(0L) / 1_000L).toInt()

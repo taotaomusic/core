@@ -2,9 +2,30 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-10-18
+最后更新:2026-11-04
 
 本文讲模块怎么分、依赖怎么走、代码该写在哪个文件。路由与表的完整清单见 [00-code-index.md](00-code-index.md)。进程内状态与单实例假设见 §4。
+
+## 0. 仓库两级模块图
+
+monorepo 里有**两套模块体系**:Gradle 客户端模块与 NestJS 服务端模块,两层各画一个框;两边唯一的耦合点是 HTTP 契约(30–37 各篇)。客户端模块图与 `:hotupdate` 的接线细节见 [90-client-android.md](90-client-android.md) §0/§8。
+
+```text
+┌─ Gradle 客户端体系 ─────────────────────────────────────────────┐
+│  androidApp ──> :hotupdate(update/hotfix 热更新,经 UpdateHost   │
+│      │          契约注入宿主能力)                                │
+│      ├──> :player-ui(跨端播放组件)──> :shared(模型/歌词/音质)   │
+│      └──> :shared                                               │
+│  webApp ──> :player-ui ──> :shared      patch(补丁源码壳,不进 APK) │
+│  build-logic(com.taotao.hotfix 插桩插件,androidApp 与 hotupdate   │
+│              各自应用,各插各的模块)     autopatch(独立 JVM 工具)  │
+└─────────────────────────────────────────────────────────────────┘
+                 │ HTTPS /api/v1(可选传输加密)
+                 v
+┌─ NestJS 服务端体系(见 §1 模块依赖图)───────────────────────────┐
+│  AppModule ──> 20+ 业务模块 ──> PostgreSQL / 上游音源 / 悟空 IM   │
+└─────────────────────────────────────────────────────────────────┘
+```
 
 ## 1. 模块依赖图
 

@@ -2,7 +2,7 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-10-18
+最后更新:2026-11-04
 
 正式构建在 GitHub 侧由**单仓 [taotaomusic/core](https://github.com/taotaomusic/core)** 的统一工作流承担:根目录 `.github/workflows/ci.yml` 用 `dorny/paths-filter` 按改动路径只构建相关部分,一处改动不重跑无关 job。本文讲与后端直接相关的部分;三仓快照的旧机制已废弃,末尾保留一段备查。
 
@@ -17,7 +17,7 @@
 | `crypto` | `crypto-src/**` |
 | `server` | `server/**` |
 | `desktop` | `desktop/**` |
-| `client` | `androidApp/**`、`webApp/**`、`player-ui/**`、`shared/**`、`build-logic/**`、`patch/**`、`gradle/**`、`*.gradle*`、`gradle.properties`、`settings.gradle*`、`version.properties`、`crypto/**` |
+| `client` | `androidApp/**`、`hotupdate/**`、`tools/apk-hardening/**`、`webApp/**`、`player-ui/**`、`shared/**`、`build-logic/**`、`patch/**`、`gradle/**`、`*.gradle*`、`gradle.properties`、`settings.gradle*`、`version.properties`、`crypto/**` |
 | `autopatch` | `autopatch/**` |
 
 两个提交信息魔法字:
@@ -31,9 +31,10 @@
 | --- | --- | --- | --- |
 | `crypto` | ubuntu | crypto 或 server 或 client 有改动 | Android `.so` + Node `.node`(同 run artifact + Release `crypto-latest`;源码未变时复用缓存) |
 | `server` | ubuntu | server 或 crypto 有改动 | `server-dist-latest` Release + ghcr 镜像 |
-| `client-android` | **ubuntu**(2026-10-05 起从 Windows 迁来) | client 或 crypto 有改动 | APK + 两份 kotlin-classes(artifact,APK 由 `client-publish` 发布) |
+| `protector-tool` | ubuntu | client 或 crypto 有改动 | 加固引擎 artifact `protector-engine`(XopProtector 0.7.9 packer.jar + shell-files,`.xop-engine` 目录,保留 7 天) |
+| `client-android` | **ubuntu**(2026-10-05 起从 Windows 迁来) | client 或 crypto 有改动 | 加固 APK(`*-protected.apk`)+ hardening-report + 三份 kotlin-classes(artifact,APK 由 `client-publish` 发布) |
 | `client-web` | ubuntu | client 有改动 | Release `share-player-latest` |
-| `client-publish` | ubuntu | `client-android` 成功 | Release `latest`(滚动,APK) |
+| `client-publish` | ubuntu | `client-android` 成功 | Release `latest`(滚动,加固 APK) |
 | `desktop` | windows | desktop 或 crypto 有改动 | Release `desktop-latest`(Tauri) |
 | `autopatch` | ubuntu | `autopatch/**` 有改动 | 无 Release;测试报告 artifact `autopatch-test-report`(见 [63-ci-autopatch.md](63-ci-autopatch.md)) |
 | `purge` | ubuntu | 无条件进入,但仅提交信息含 `[purge]` 时执行删除 | 无(删除全部旧 Release,由随后各 job 重建) |
@@ -41,6 +42,7 @@
 要点:
 
 - **加密产物在同一次 run 内经 `upload-artifact` / `download-artifact` 流转**:`server` job 取 `crypto-node-linux`,`client-android` job 取 `crypto-android`,不再跨仓、跨 Release 拉取。
+- **加固引擎在同一次 run 内构建并流转**(2026-11 起):`protector-tool` job 用 `.xop-engine` 缓存兜住(XopProtector 上游版本 / 构建脚本 / 许可证任一变化都让缓存 key 失效并重建),`client-android` 下载后跑 `tools/apk-hardening/harden-apk.sh` 加固;策略、校验项与 RASP 见 [APK_HARDENING.md](../../APK_HARDENING.md)。
 - **crypto 产物按源码哈希缓存**(2026-10-02 起):`crypto-src/out` 以 `hashFiles('crypto-src/**')` 为 key。命中时跳过工具链/NDK 安装、fmt/clippy/测试、双平台编译与混淆校验,直接把缓存产物 upload 给下游,且**不重发** `crypto-latest`(Release 保持上一次真实构建的版本);rust 源码有变才全量重跑。
 - crypto 有改动时 server 和客户端也会连带重建(它们都消费加密产物);反向不成立。
 - `client-web` 固定在 **Linux** 跑:Windows runner 上 npm 刚生成的 `wasm-opt.cmd` shim 偶发被占用导致进程启动失败,Linux 的 POSIX shim 无此问题。该 job 还负责 `kotlin-js-store` 锁文件自愈:漂移时以 Linux 解析为准回写仓库(`[skip ci]` 提交)。
@@ -71,7 +73,21 @@ ghcr.io/taotaomusic/music-server
 
 ## 4. 客户端与桌面 job
 
-- `client-android`(**ubuntu runner**,2026-10-05 迁移):Windows 上有两个实打实的坑——`setup-java` 的 Gradle 缓存打包 `~/.gradle` 时撞 `modules-2.lock` 文件锁必然失败(缓存从未落盘,天天冷构建)、IO/CPU 更慢;旧 music 仓必须 Windows 的唯一理由(`incrementVersion` 走 PowerShell)在 core 里已不存在,签名还原与版本号生成均已用 bash/node 重写。缓存改用**官方 Gradle action** 缓存 `~/.gradle`(依赖仓库 + `--build-cache` 任务输出,主键带 gradle 脚本哈希、restore-keys 兜底),Gradle 堆 `org.gradle.jvmargs=-Xmx4g`(根 `gradle.properties`);迁移后安卓 job 从约 445s 降到约 132s。流程不变:还原签名 Secrets(见 [61-release-android.md](61-release-android.md))后跑 `:androidApp:assembleRelease`,未配 Secrets 自动退回 `:androidApp:assembleDebug`;版本号读 `output-metadata.json`,APK 以 artifact 交给 `client-publish` 重命名为 `TaotaoMusic-<版本>-<release|debug>.apk` 发布到滚动 Release **`latest`**(每次覆盖,免登录可下载)。**另归档两份 kotlin-classes**(androidApp + shared 的 release 变体,artifact `kotlin-classes-release`,保留 30 天)——autopatch 生成补丁需要「线上那个版本」的产物做 base 侧 diff 输入,而该目录会被下一次构建覆盖(见 [63-ci-autopatch.md](63-ci-autopatch.md) §4)。
+安卓端的完整管线(同一次 run 内流转,不在 job 间走 Release):
+
+```mermaid
+flowchart LR
+    CH["changes<br/>paths-filter"] --> PT["protector-tool<br/>构建/缓存加固引擎"]
+    CH --> CR["crypto<br/>交叉编译 .so/.node"]
+    PT --> CA["client-android<br/>assembleRelease/Debug"]
+    CR --> CA
+    CA -->|"artifact: protector-engine<br/>crypto-android<br/>*-protected.apk<br/>3 份 kotlin-classes"| CP["client-publish<br/>重命名 + metadata.json<br/>+ release notes 聚合"]
+    CP --> REL[("Release latest<br/>(滚动)")]
+    REL -.->|"webhook + metadata.json"| SRV["POST /app/github-webhook<br/>自动登记版本"]
+    CW["client-web<br/>wasm 分享播放器"] --> REL2[("Release<br/>share-player-latest")]
+```
+
+- `client-android`(**ubuntu runner**,2026-10-05 迁移):Windows 上有两个实打实的坑——`setup-java` 的 Gradle 缓存打包 `~/.gradle` 时撞 `modules-2.lock` 文件锁必然失败(缓存从未落盘,天天冷构建)、IO/CPU 更慢;旧 music 仓必须 Windows 的唯一理由(`incrementVersion` 走 PowerShell)在 core 里已不存在,签名还原与版本号生成均已用 bash/node 重写。缓存改用**官方 Gradle action** 缓存 `~/.gradle`(依赖仓库 + `--build-cache` 任务输出,主键带 gradle 脚本哈希、restore-keys 兜底),Gradle 堆 `org.gradle.jvmargs=-Xmx4g`(根 `gradle.properties`);迁移后安卓 job 从约 445s 降到约 132s。流程不变:还原签名 Secrets(见 [61-release-android.md](61-release-android.md))后跑 `:androidApp:assembleRelease`,未配 Secrets 自动退回 `:androidApp:assembleDebug`;**随后跑 XopProtector 加固出 `*-protected.apk`**(加固复用同一组 keystore 口令,Debug 路径自动造 debug.keystore;artifact 只上传加固包与 `hardening-report.txt`),版本号读 `output-metadata.json`,APK 以 artifact 交给 `client-publish` 重命名为 `TaotaoMusic-<版本>-<release|debug>.apk` 发布到滚动 Release **`latest`**(每次覆盖,免登录可下载)。**另归档三份 kotlin-classes**(androidApp、hotupdate、shared 的 release 变体,artifact `kotlin-classes-release`,保留 30 天)——autopatch 生成补丁需要「线上那个版本」的产物做 base 侧 diff 输入,而该目录会被下一次构建覆盖(见 [63-ci-autopatch.md](63-ci-autopatch.md) §4);`hotupdate` 拆独立模块后它的 update 包类也在这份归档里。
 - `client-web`:构建 `:webApp:wasmJsBrowserDistribution`,打包发布到滚动 Release **`share-player-latest`**(后端 server job 与本地 `build:web-player` 之外的分发渠道)。
 - `desktop`:Tauri + Rust,版本号同样是根 `VERSION` + 构建号;未配 `TAURI_SIGNING_PRIVATE_KEY` 时出无签名安装包、不产更新清单(不让 desktop 构建变红),配好后自动更新(`latest.json`)生效。产物发滚动 Release **`desktop-latest`**,旧资产按版本清理、只留本次与 `latest.json`。`desktop/src-tauri/Cargo.lock` 已入库(2026-10 起,Rust 依赖树锁定,防止每次构建全量重编),升级 Rust 依赖要连 lock 一起提交。
 
@@ -80,6 +96,7 @@ ghcr.io/taotaomusic/music-server
 后端在分发链路里退化为**只出元数据的控制面**,不再接收/下发安装包字节:
 
 - `client-android` / `client-publish` 发版时除 APK 外再产出 `metadata.json`(`versionCode`、`versionName`、`sha256`、`size`、`apkAsset`、历史 notes)一起传上滚动 Release `latest`。
+- **更新说明由 git 历史自动聚合**(2026-10-18 起,`tools/release-log.sh`):脚本在上次发布的 body 里藏一行 `<!-- release-base: <sha> -->` 基准标记,本次据此取 `git log <base>..HEAD`,滤掉 merge / CI 回写 / `[skip ci]` 噪音,第 4+ 参数作 git pathspec 只统计本组件相关改动(桌面端说明不混后端提交)。安卓发布走 OUT/FROM 两步:先 dry-run 生成说明塞进 `metadata.json` 再上传资产,最后用 FROM 落库——保证 webhook 登记到的「更新说明」与 Release 页面完全一致(修复了此前 metadata 永远存上一版说明的时序 bug)。
 - `POST /api/v1/app/github-webhook`(公开路由)用 `X-Hub-Signature-256` 验签(`GITHUB_WEBHOOK_SECRET`),收到发版事件后拉取 `metadata.json` 自动登记版本、补齐 versionCode/sha256;手工登记仍是兜底(见 [61-release-android.md](61-release-android.md))。
 - `app_release.apk_url` / `app_patch.patch_url` 新列存构件外链(带 `DOWNLOAD_PROXY_PREFIX` 前缀的代理直链),为空回落本机 `/app/apk`、`/app/patch` 的本地文件(`apk_file`/`patch_file` 已放宽为可空,见 [42-database-tables-release.md](42-database-tables-release.md))。
 - 桌面自动更新走后端代理:`GET /api/v1/desktop/updater/latest.json`(公开)代理 Tauri 更新清单,**只改写未签名的 url**,签名校验不受影响;`tauri.conf.json` 的 endpoints 服务器优先、GitHub `desktop-latest` 兜底(客户端侧见 [91-client-desktop.md](91-client-desktop.md))。

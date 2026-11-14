@@ -49,6 +49,19 @@ export function validateEnvironment(config: Record<string, unknown>): Record<str
     throw new Error("ADMIN_INITIAL_PASSWORD 至少需要 12 个字符，留空则自动随机生成");
   }
 
+  // 分享短链自动清除阈值：0 或留空 = 永不清除；开启时最少 1 天，
+  // 避免「刚分享出去、对方还没点开」的链接被一次激进配置批量误删。
+  const shareExpireDays = Number(config.SHARE_EXPIRE_DAYS ?? 0);
+  if (!Number.isInteger(shareExpireDays) || shareExpireDays < 0 || shareExpireDays > 3650) {
+    throw new Error(`SHARE_EXPIRE_DAYS 必须是 0（永不清除）到 3650 之间的整数：${config.SHARE_EXPIRE_DAYS}`);
+  }
+  // 扫描间隔（可选）：0 或留空表示「只做启动时一次扫描」，也是合法用法。
+  const shareExpireSweepSeconds = Number(config.SHARE_EXPIRE_SWEEP_SECONDS ?? 6 * 3600);
+  if (!Number.isInteger(shareExpireSweepSeconds) || shareExpireSweepSeconds < 0 || shareExpireSweepSeconds > 86_400) {
+    throw new Error(`SHARE_EXPIRE_SWEEP_SECONDS 必须是 0（仅启动时扫描）到 86400 之间的整数：${config.SHARE_EXPIRE_SWEEP_SECONDS}`);
+  }
+
+
   // GitHub OAuth 登录（可选）：Client ID 与 Secret 必须成对提供，只配一半等于没配却以为自己开了。
   const githubClientId = String(config.GITHUB_OAUTH_CLIENT_ID ?? "").trim();
   const githubClientSecret = String(config.GITHUB_OAUTH_CLIENT_SECRET ?? "").trim();

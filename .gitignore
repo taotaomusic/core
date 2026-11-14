@@ -70,3 +70,15 @@ artifacts/*
 !artifacts/playback-history-playlist/
 !artifacts/playback-history-playlist/**
 server/bodian/index.ts
+
+# APK 加固引擎（build-protector.sh 产物，较大且可重建）
+/.xop-engine/
+
+# AI 工具本地状态与运行时数据（不入库）
+/.mimosa/
+/.opencode/
+/server/bangNew-full.json
+/server/popular-day.json
+/server/week40.json
+/plugins/
+/deliverables/

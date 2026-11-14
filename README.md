@@ -81,13 +81,14 @@ Web 分享播放器，以及支撑它们的自建后端。三端共享同一套�
 
 | 目录 | 说明 |
 |------|------|
-| `androidApp/` | Android 应用（Compose 界面、Media3 ExoPlayer、热更新、离线下载、崩溃日志） |
+| `androidApp/` | Android 应用（Compose 界面、Media3 ExoPlayer、离线下载、崩溃日志） |
 | `desktop/` | Windows 桌面端（Tauri 2 + React + TypeScript） |
 | `webApp/` | Kotlin/Wasm 分享播放器（试听片段，复用 `player-ui`） |
 | `player-ui/` | Android / Windows / Web 共用的主题与播放界面组件 |
 | `shared/` | 跨平台共享层：数据模型、歌词解析（LRC/YRC）、音质档位规则 |
 | `server/` | NestJS + TypeScript + PostgreSQL 后端服务 |
 | `patch/` | 热修复补丁模块（独立编译的 DEX，不打入 APK） |
+| `hotupdate/` | 热更新模块：整包更新 + 远程配置 + DEX 热修运行时（androidApp 依赖它） |
 | `crypto-src/` | 传输加密层 Rust 源码（core / jni / node / wasm 四 crate） |
 | `crypto/` | 加密层四端编译产物目录（由 CI 产出后拉取，不手改） |
 | `build-logic/` | Gradle 插件：编译期字节码插桩，为逻辑层注入补丁拦截入口 |

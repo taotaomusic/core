@@ -7,18 +7,29 @@
 ## 🗺️ 架构全景图
 
 ```text
-  androidApp(Android)   desktop(Tauri 2)   webApp 分享播放器   管理后台 + 官网
-        |                     |                  |                  |
-        +----- HTTPS /api/v1(可选传输加密)-----+------------------+
+  androidApp(:hotupdate 热更新)  desktop(Tauri 2)   webApp 分享播放器   管理后台(/admin) + 官网(/)
+        |                              |                  |                  |
+        +----- HTTPS /api/v1(可选传输加密,强制加密全量覆盖)-----+-----------------+
                                        |
                                        v
-                             server(NestJS,/api/v1)
+                             server(NestJS,/api/v1,单实例)
                           /            |             \
                  PostgreSQL      上游音源(酷我(波点)/腾讯/网易)、图片上游、悟空 IM
-                                       ^
-                                       | 发版 webhook(构件上云后回注 server)
-  CI(GitHub Actions) --构建--> 各端 Release(APK / 桌面包 / 加密产物)
+                 (+只读副本,                      ^
+                  多地区部署)                     | 发版 webhook(构件上云后回注 server)
+
+  CI(GitHub Actions,单仓统一流水线,路径过滤按需构建)
+     ├─ crypto job ──────> .so / .node 产物(artifact 同 run 流转 + Release crypto-latest)
+     ├─ client-android ──> APK 加固(*-protected.apk)──> Release latest ──┐
+     ├─ client-web ──────> wasm 分享播放器 ──────────> Release share-player-latest
+     ├─ server job ──────> dist + ghcr 镜像 ─────────> Release server-dist-latest
+     └─ desktop job ─────> Tauri 安装包 ─────────────> Release desktop-latest
+                                                                        │ metadata.json
+                                                                        v
+                                                    POST /app/github-webhook 自动登记版本
 ```
+
+客户端各端与 Gradle 模块的关系(Android 侧)见 [90-client-android.md](90-client-android.md) §0 的模块依赖图;后端模块依赖图见 [11-architecture-modules.md](11-architecture-modules.md) §1;发布链路图见 [61-release-android.md](61-release-android.md) 开头。
 
 ## 📚 文档导航
 
@@ -44,7 +55,7 @@
 | [20-development-setup.md](20-development-setup.md) | 环境要求、首次初始化、常用命令、数据库建表、调试技巧 | 搭本地环境、日常跑服务时 |
 | [21-configuration.md](21-configuration.md) | **全部环境变量的唯一完整出处**,含校验行为与坑 | 新增或查配置项、部署前核对 `.env` 时 |
 | [22-contract-verification.md](22-contract-verification.md) | 验证库准备、验证实例启动参数、契约脚本运行与失败定位 | 数据层改动后验证、交付前全绿验收时 |
-| [23-coding-rules.md](23-coding-rules.md) | 新增模块步骤、DTO 校验、错误处理、提交前检查 | 写新接口、写新 Repository、准备提交时 |
+| [23-coding-rules.md](23-coding-rules.md) | 新增模块步骤、DTO 校验、错误处理、注释规范、提交前检查 | 写新接口、写新 Repository、准备提交时 |
 
 ### 接口契约(30–37)
 
@@ -83,9 +94,9 @@
 | 文档 | 核心内容 | 适用场景 |
 | --- | --- | --- |
 | [60-deploy-backend.md](60-deploy-backend.md) | 后端构建 6 步、部署文件、生产配置检查、systemd、nginx、回滚 | 部署后端、改生产环境时 |
-| [61-release-android.md](61-release-android.md) | APK 构建/登记/下载验证、灰度、最低版本、热更新契约 | 发 Android 版本、排灰度问题时 |
-| [62-ci-cloud-build.md](62-ci-cloud-build.md) | GitHub Actions 云端构建、三仓快照同步、版本号收编 | 同步仓库、用云端产物发版时 |
-| [63-ci-autopatch.md](63-ci-autopatch.md) | autopatch 方法级热修补丁自动生成、CI job、与 app_patch 下发链路的关系 | 生成/排查热修补丁时 |
+| [61-release-android.md](61-release-android.md) | APK 构建/加固/登记/下载验证、灰度、最低版本、热更新契约、autopatch 补丁输入 | 发 Android 版本、排灰度问题时 |
+| [62-ci-cloud-build.md](62-ci-cloud-build.md) | GitHub Actions 单仓统一流水线、路径过滤、加固引擎与加密产物同 run 流转、发版说明自动聚合 | 同步仓库、用云端产物发版时 |
+| [63-ci-autopatch.md](63-ci-autopatch.md) | autopatch 方法级热修补丁自动生成、双模块插桩边界、CI job、与 app_patch 下发链路的关系 | 生成/排查热修补丁时 |
 | [64-multi-region-deployment.md](64-multi-region-deployment.md) | 多地区部署：只读副本读写分离、路由规则与 pin 清单、熔断降级、主库故障应对与手动切换 runbook | 部署第二地区、排查副本延迟或 503/5033 时 |
 
 ### 排障(70–74)
@@ -111,7 +122,7 @@
 
 | 文档 | 核心内容 | 适用场景 |
 | --- | --- | --- |
-| [90-client-android.md](90-client-android.md) | 安卓端架构、导航三处同步、播放/队列链路、与后端契约、关键功能落点、发布与热更新 | 改安卓端代码、找功能实现位置时 |
+| [90-client-android.md](90-client-android.md) | 安卓端架构与模块依赖图、`:hotupdate` 热更新模块(UpdateHost 契约与自愈时序)、导航三处同步、播放/队列链路、与后端契约、关键功能落点、发布与热更新 | 改安卓端代码、找功能实现位置时 |
 | [91-client-desktop.md](91-client-desktop.md) | Windows 桌面端(Tauri 2 + React):CORS 与能力白名单、传输加密、自动更新、构建调试 | 改桌面端、换后端域名、排查更新问题时 |
 | [92-client-web.md](92-client-web.md) | Web 分享播放器(Kotlin/Wasm):60 秒试听、构建产物分发、浏览器侧限制 | 改分享页、排查 wasm 构建时 |
 | [93-player-ui.md](93-player-ui.md) | player-ui 跨端播放组件库:主题 token、PlayerSurface 部件族、SharedSongRow、状态模型 | 改播放 UI 组件时 |
@@ -194,7 +205,7 @@
 
 ### 发布与部署
 
-1. [60-deploy-backend.md](60-deploy-backend.md) → [61-release-android.md](61-release-android.md)。
+1. [61-release-android.md](61-release-android.md) → [62-ci-cloud-build.md](62-ci-cloud-build.md):发版链路(含加固)与云端构建。
 2. [项目根目录 RELEASE.md](../../RELEASE.md):版本号铁律,**推版本前必读**。
 3. [73-troubleshooting-release.md](73-troubleshooting-release.md):热更新失效诊断。
 

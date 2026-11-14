@@ -1,8 +1,8 @@
 import { Injectable } from "@nestjs/common";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import type { Request, Response } from "express";
 import { ApiErrors } from "../common/api.exception";
-import { AppConfigService } from "../config/app-config.service";
+import { clientAddressOf } from "../common/request.types";import { AppConfigService } from "../config/app-config.service";
 import { StreamService } from "../music/stream.service";
 import { ReleaseService } from "../release/release.service";
 import type { MusicSource, SongKey } from "../upstream/music-source.client";
@@ -121,6 +121,45 @@ export class SongShareService {
     const share = await this.requiredShare(token);
     const target = await this.stream.resolvePlayUrl(this.playKeyOf(share), PREVIEW_QUALITY, share.source);
     await this.stream.proxy(request, response, target);
+  }
+
+  /**
+   * 「通过短链进入 APP」打点。
+   *
+   * 访客按浏览器指纹去重（UA + IP 派生哈希，不落原文）：同一访客反复点按钮只算一个人。
+   * 与 metadata 的 404/4045 语义对齐——非法短码在这里如实抛出（路由错误必须可见），
+   * 只有数据库层故障才由控制器兜底吞掉，那才是「统计坏了不影响分享页」的正确边界。
+   */
+  async noteOpenApp(token: string, request: Request): Promise<void> {
+    if (!/^[A-Za-z0-9_-]{8,24}$/.test(token)) throw ApiErrors.notFound(4045, "分享链接不存在或已失效");
+    const fingerprint = this.visitorFingerprintOf(request);
+    const known = await this.repository.hasVisitor(token, fingerprint);
+    if (known) return;
+    await this.repository.noteAppOpen(token, fingerprint);
+  }
+
+  /**
+   * 试听播放打点。
+   *
+   * 非法短码同样抛 404/4045（与 metadata / open-app 一致）；数据库故障由控制器兜底。
+   */
+  async notePlay(token: string): Promise<void> {
+    if (!/^[A-Za-z0-9_-]{8,24}$/.test(token)) throw ApiErrors.notFound(4045, "分享链接不存在或已失效");
+    await this.repository.notePlay(token);
+  }
+
+  /**
+   * 浏览器访客指纹：UA 与来源 IP 的 SHA-256 摘要。
+   *
+   * 只存哈希不存原文 —— 指纹带 IP 属于个人信息面，去重表里保留的必须是派生值。
+   * UA 不同的浏览器/设备天然分开；同一浏览器换 IP（如 Wi-Fi 切流量）会再计一次，
+   * 这是无 cookie 方案的既有取舍（统计口径是「进过 App 的浏览器实例」）。
+   */
+  private visitorFingerprintOf(request: Request): string {
+    const userAgent = String(request.headers["user-agent"] ?? "").trim().slice(0, 256);
+    return createHash("sha256")
+      .update(`${userAgent}|${clientAddressOf(request)}`)
+      .digest("hex");
   }
 
   private async requiredShare(token: string): Promise<SongShareRecord> {

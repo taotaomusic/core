@@ -60,6 +60,7 @@ import com.taotao.music.ui.library.MineLibrarySection
 import com.taotao.music.ui.player.QualityChoice
 import com.taotao.music.ui.player.QualitySheetKind
 import com.taotao.music.ui.auth.readableMessage
+import com.taotao.music.update.TaotaoUpdateHost
 import com.taotao.music.update.UpdateManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -120,7 +121,7 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
     val sleepTimerStore = SleepTimerStore(context)
     val updateManager = UpdateManager(
         context,
-        authSession,
+        TaotaoUpdateHost(context, authSession),
         initialPatchVersion = (context.applicationContext as? TaotaoApplication)?.activePatchVersion ?: 0,
     )
 

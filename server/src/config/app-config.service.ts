@@ -39,6 +39,15 @@ export class AppConfigService {
   readonly defaultChannel: string;
 
   /**
+   * 分享短链自动清除的天数阈值：连续 N 天无任何公开访问（元数据 / 打点）即清除。
+   * 留空或 0 表示**永不清除** —— 自动清除默认关闭，部署方显式开启才生效。
+   */
+  readonly shareExpireDays: number;
+
+  /** 自动清除扫描的间隔秒数；默认 6 小时一次，0 表示只在启动时清一次。 */
+  readonly shareExpireSweepSeconds: number;
+
+  /**
    * 对外可访问的基地址，用于拼装安装包下载地址。
    * 留空时按请求头推导，但反向代理未透传 `X-Forwarded-Proto` 时可能推出错误的协议，
    * 生产环境建议显式配置。
@@ -204,6 +213,8 @@ export class AppConfigService {
     this.authSecret = String(config.get("AUTH_SECRET") ?? "");
     this.apkDirectory = resolve(String(config.get("APK_DIR") ?? "./data/apk"));
     this.defaultChannel = String(config.get("DEFAULT_CHANNEL") ?? "release");
+    this.shareExpireDays = Number(config.get("SHARE_EXPIRE_DAYS") ?? 0);
+    this.shareExpireSweepSeconds = Number(config.get("SHARE_EXPIRE_SWEEP_SECONDS") ?? 6 * 3600);
     this.publicBaseUrl = String(config.get("PUBLIC_BASE_URL") ?? "").replace(/\/+$/, "");
     this.downloadProxyPrefix = String(config.get("DOWNLOAD_PROXY_PREFIX") ?? "").trim();
     this.githubWebhookSecret = String(config.get("GITHUB_WEBHOOK_SECRET") ?? "").trim();

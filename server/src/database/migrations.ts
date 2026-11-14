@@ -163,6 +163,31 @@ export async function runMigrations(pool: Pool): Promise<void> {
       );
       CREATE INDEX IF NOT EXISTS idx_song_share_lookup ON song_share (source, song_id, enabled);
 
+      -- 分享短链的后台运营统计：进入 APP 的去重访客数与试听播放次数。
+      -- 访客计数在 song_share_visitor 里按「短链 × 浏览器指纹」去重落行，
+      -- 这里的 visitor_count 只是随打点累加的展示值（阈值由服务层判断后 +1）。
+      ALTER TABLE song_share ADD COLUMN IF NOT EXISTS visitor_count integer NOT NULL DEFAULT 0;
+      ALTER TABLE song_share ADD COLUMN IF NOT EXISTS play_count integer NOT NULL DEFAULT 0;
+      ALTER TABLE song_share ADD COLUMN IF NOT EXISTS last_visited_at bigint;
+      ALTER TABLE song_share ADD COLUMN IF NOT EXISTS last_opened_app_at bigint;
+      -- 自动清除按「最后访问时间」判断，列表按分享者与时间翻页，各补一条索引。
+      CREATE INDEX IF NOT EXISTS idx_song_share_last_visited
+        ON song_share (last_visited_at) WHERE enabled = 1;
+      CREATE INDEX IF NOT EXISTS idx_song_share_user_created
+        ON song_share (user_id, created_at DESC);
+
+      -- 分享页访客去重。「同一浏览器指纹」用 token + 指纹哈希唯一约束表达，
+      -- 打点用 ON CONFLICT DO NOTHING 的返回行数判断是否首次，天然并发安全。
+      -- 指纹含 UA 与 IP，是派生哈希而非原文，不落个人信息明文。
+      CREATE TABLE IF NOT EXISTS song_share_visitor (
+        token        text NOT NULL REFERENCES song_share(token) ON DELETE CASCADE,
+        visitor_hash text NOT NULL,
+        first_seen_at bigint NOT NULL,
+        PRIMARY KEY (token, visitor_hash)
+      );
+      CREATE INDEX IF NOT EXISTS idx_song_share_visitor_seen
+        ON song_share_visitor (first_seen_at);
+
       -- 老库补列：高潮区间是后加的两列，已存在的 song_share 靠这两条幂等 ALTER 补齐。
       ALTER TABLE song_share ADD COLUMN IF NOT EXISTS refrain_start_ms integer;
       ALTER TABLE song_share ADD COLUMN IF NOT EXISTS refrain_end_ms integer;

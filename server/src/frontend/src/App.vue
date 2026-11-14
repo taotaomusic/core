@@ -126,6 +126,12 @@
               </template>
               <SupporterKeyManager :admin-token="token" />
             </el-tab-pane>
+            <el-tab-pane name="share-links" lazy>
+              <template #label>
+                <div class="tab-label"><el-icon><Share /></el-icon> <span v-show="!isMobile || tab === 'share-links'">分享短链</span></div>
+              </template>
+              <ShareLinkManager :admin-token="token" />
+            </el-tab-pane>
             <el-tab-pane name="open-api-keys" lazy>
               <template #label>
                 <div class="tab-label"><el-icon><Postcard /></el-icon> <span v-show="!isMobile || tab === 'open-api-keys'">开放 API Key</span></div>
@@ -174,7 +180,7 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, ref, onMounted, onUnmounted, watch } from "vue";
 import zhCn from "element-plus/es/locale/lang/zh-cn";
-import { Upload, Connection, Bell, User, Key, Setting, Moon, Sunny, SwitchButton, Loading, Headset, Postcard, Lock } from '@element-plus/icons-vue'
+import { Upload, Connection, Bell, User, Key, Setting, Moon, Sunny, SwitchButton, Loading, Headset, Postcard, Lock, Share } from '@element-plus/icons-vue'
 import { useDark, useToggle } from '@vueuse/core'
 import AdminLogin from "./components/AdminLogin.vue";
 import ForcePasswordChange from "./components/ForcePasswordChange.vue";
@@ -199,6 +205,7 @@ const panelLoaders = {
   SystemSettings: () => import("./components/SystemSettings.vue"),
   AdminUserManager: () => import("./components/AdminUserManager.vue"),
   AuditLogViewer: () => import("./components/AuditLogViewer.vue"),
+  ShareLinkManager: () => import("./components/ShareLinkManager.vue"),
 };
 
 const ReleaseManager = defineAsyncComponent(panelLoaders.ReleaseManager);
@@ -211,6 +218,7 @@ const MusicSourceManager = defineAsyncComponent(panelLoaders.MusicSourceManager)
 const SystemSettings = defineAsyncComponent(panelLoaders.SystemSettings);
 const AdminUserManager = defineAsyncComponent(panelLoaders.AdminUserManager);
 const AuditLogViewer = defineAsyncComponent(panelLoaders.AuditLogViewer);
+const ShareLinkManager = defineAsyncComponent(panelLoaders.ShareLinkManager);
 
 /**
  * 预取所有页签 chunk。

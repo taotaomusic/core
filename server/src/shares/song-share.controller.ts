@@ -8,9 +8,8 @@ import {
   Post,
   Req,
   Res,
-} from "@nestjs/common";
-import type { Request, Response } from "express";
-import { ApiErrors } from "../common/api.exception";
+} from "@nestjs/common";import type { Request, Response } from "express";
+import { ApiErrors, ApiException } from "../common/api.exception";
 import { isMusicSource } from "../upstream/music-source.client";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
 import { Public } from "../common/decorators/public.decorator";
@@ -51,6 +50,38 @@ export class SongShareController {
     @Res() response: Response,
   ): Promise<void> {
     return this.shares.streamPreview(token, request, response);
+  }
+
+  @Public()
+  @RateLimit("app")
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @Post("public/shares/:token/open-app")
+  async openApp(@Param("token") token: string, @Req() request: Request): Promise<void> {
+    await this.trackQuietly(() => this.shares.noteOpenApp(token, request));
+  }
+
+  @Public()
+  @RateLimit("app")
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @Post("public/shares/:token/play")
+  async play(@Param("token") token: string): Promise<void> {
+    await this.trackQuietly(() => this.shares.notePlay(token));
+  }
+
+  /**
+   * 打点兜底：只吞「基础设施故障」，业务语义（非法短码 404/4045、限流 429）如实抛出。
+   *
+   * `.catch(() => undefined)` 一刀切会把非法短码的 404 也吞成 204，和 metadata
+   * 端点的失效语义分叉 —— 分享页拿到 204 会以为打点成功，后台统计却缺一行。
+   * 打点的静默边界是「统计坏了不影响分享页」，不是「错误不存在」。
+   */
+  private async trackQuietly(action: () => Promise<void>): Promise<void> {
+    try {
+      await action();
+    } catch (error) {
+      if (error instanceof ApiException) throw error;
+      // 非业务异常（数据库抖动等）：静默吞掉，打点不阻塞分享页。
+    }
   }
 
   private inputOf(body: Record<string, unknown>): CreateSongShareInput {

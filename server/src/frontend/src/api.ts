@@ -99,6 +99,65 @@ export function apiGetPublic<T>(path: string): Promise<T> {
   return fetch(`${BASE}${path}`).then(unwrap<T>);
 }
 
+/** 分享短链后台行。字段与服务端 ShareAdminRepository 的 snake_case 保持一致。 */
+export interface ShareLinkRow {
+  token: string;
+  userId: number;
+  userName: string;
+  source: string;
+  songId: string;
+  title: string;
+  artist: string;
+  album: string;
+  enabled: number;
+  accessCount: number;
+  visitorCount: number;
+  playCount: number;
+  lastVisitedAt: number | null;
+  lastOpenedAppAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** 分享短链全站汇总与自动清除配置回显。 */
+export interface ShareLinkSummary {
+  total: number;
+  active: number;
+  accessCount: number;
+  visitorCount: number;
+  playCount: number;
+}
+
+export interface ShareLinkListResponse {
+  items: ShareLinkRow[];
+  total: number;
+  summary: ShareLinkSummary;
+  expireDays: number;
+}
+
+/** 后台短链列表：管理端仓储把 snake_case 行映射成 camelCase 再下发。 */
+export async function listShareLinks(
+  adminToken: string,
+  query: { keyword?: string; limit?: number; offset?: number } = {},
+): Promise<ShareLinkListResponse> {
+  const params = new URLSearchParams();
+  if (query.keyword) params.set("keyword", query.keyword);
+  if (query.limit !== undefined) params.set("limit", String(query.limit));
+  if (query.offset !== undefined) params.set("offset", String(query.offset));
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  return apiGet<ShareLinkListResponse>(`/app/admin/share-links${suffix}`, adminToken);
+}
+
+/** 删除短链（物理删除，204）。 */
+export function deleteShareLink(adminToken: string, token: string): Promise<void> {
+  return apiDelete(`/app/admin/share-links/${encodeURIComponent(token)}`, adminToken);
+}
+
+/** 手动触发过期短链清除，返回被清除的短码列表。 */
+export function purgeShareLinks(adminToken: string): Promise<{ removed: string[]; expireDays: number }> {
+  return apiPostJson(`/app/admin/share-links/purge`, adminToken, {});
+}
+
 /** 服务端会边写盘边算 sha256 并比对，不一致直接拒绝，所以上传前必须先算好。 */
 export async function sha256Of(bytes: ArrayBuffer): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", bytes);

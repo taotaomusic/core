@@ -92,10 +92,11 @@ async function main(): Promise<void> {
 
   const database = new DatabaseService(appConfig);
   // 手工组装依赖：注册表与主服务共用同一套适配器，避免脚本里出现第二份分派逻辑。
+  const sourceAccounts = new MusicSourceAccountRepository(database);
   const registry = new MusicSourceRegistry(
-    new TencentClient(appConfig),
-    new NeteaseClient(),
-    new KuwoClient(new MusicSourceAccountRepository(database)),
+    new TencentClient(sourceAccounts),
+    new NeteaseClient(sourceAccounts),
+    new KuwoClient(sourceAccounts),
   );
 
   const rows = await database.all<MissingCoverRow>(

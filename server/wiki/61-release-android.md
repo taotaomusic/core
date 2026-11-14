@@ -2,9 +2,21 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-10-02
+最后更新:2026-11-04
 
-本篇是 Android 版本发布的服务端操作:登记、验证、灰度、抬高下限,以及 `/app/bootstrap` 必须守住的热更新契约。版本号铁律以 [项目 RELEASE.md](../../RELEASE.md) 为准;热更新设计动机见 [HOT_UPDATE.md](../../HOT_UPDATE.md);排障见 [73-troubleshooting-release.md](73-troubleshooting-release.md)。
+本篇是 Android 版本发布的服务端操作:登记、验证、灰度、抬高下限,以及 `/app/bootstrap` 必须守住的热更新契约。版本号铁律以 [项目 RELEASE.md](../../RELEASE.md) 为准;热更新设计动机见 [HOT_UPDATE.md](../../HOT_UPDATE.md);客户端实现与模块结构见 [90-client-android.md](90-client-android.md);排障见 [73-troubleshooting-release.md](73-troubleshooting-release.md)。
+
+发布全链路一览(各节对应其中一步):
+
+```text
+本地/CI 构建 canonical APK(:androidApp:assembleRelease)
+  → XopProtector 加固出 *-protected.apk(§8,业务 DEX 收进 assets/protector/dexes.zip)
+  → 登记(原始字节 POST,rollout=0,§3)
+  → Range/sha256 下载验证(§4)
+  → 灰度放量(§5)
+  → 确认稳定后抬最低支持版本(§6)
+  → 有方法级逻辑修复时:autopatch 生成补丁并登记(§7;补丁链路全图见 90 篇 §8)
+```
 
 ## 1. 热更新契约(`/app/bootstrap`)
 
@@ -26,7 +38,7 @@ APK 下载(`/app/apk/{versionCode}`)必须支持:
 
 ### 云端构建(默认路径)
 
-APK 由单仓 taotaomusic/core 根 CI 的 `client-android` job 构建(**Windows** runner,`incrementVersion` 依赖 PowerShell),流程见 [62-ci-cloud-build.md](62-ci-cloud-build.md):
+- APK 由单仓 taotaomusic/core 根 CI 的 `client-android` job 构建(**ubuntu** runner,`incrementVersion` 已重写为纯 JVM/bash 实现),流程见 [62-ci-cloud-build.md](62-ci-cloud-build.md):
 
 - 签名 Secrets 配置在 **taotaomusic/core** 仓库:`ANDROID_KEYSTORE_BASE64`(keystore 的 base64,名称沿用)+ `TAOTAO_STORE_PASSWORD` / `TAOTAO_KEY_ALIAS` / `TAOTAO_KEY_PASSWORD`(2026-10-02 起 Secret 名对齐为 `TAOTAO_*`,与本地 `local.properties` 的变量名一致;workflow 内 env 变量名仍是 `ANDROID_*`,不受影响)。job 把 keystore 还原为根目录 `taotao-release.jks` 并写入 `local.properties` 后跑 `:androidApp:assembleRelease`。
 - **未配置 `ANDROID_KEYSTORE_BASE64` 时自动改走 `:androidApp:assembleDebug`**,产 Debug 包(文件名 `TaotaoMusic-<版本>-debug.apk`),仅验证工具链;两种情况都会发布到 core 的滚动 Release `latest`。
@@ -46,6 +58,7 @@ APK 由单仓 taotaomusic/core 根 CI 的 `client-android` job 构建(**Windows*
 androidApp/build/outputs/apk/release/androidApp-release.apk
 ```
 
+这是**未加固的 canonical APK**。发布前必须再跑一次 XopProtector 加固(见 §8),产物是同目录的 `androidApp-release-protected.apk`——**登记、放量、上传都只用 `*-protected.apk`**,canonical 包只作加固输入与 autopatch 的方法键核对基准。
 构建会在结束后递增 `version.properties`(本地与云端一致,`incrementVersion` 是构建任务的 `finalizedBy`)。刚生成 APK 的版本**只能**从以下文件读取:
 
 ```text
@@ -136,4 +149,16 @@ curl.exe -X POST "https://你的域名/api/v1/app/admin/min-version" `
 
 补丁登记走 `/app/admin/patches` 与 `/app/admin/patch-rollout`,语义与 APK 灰度一致但目标锁定宿主 `targetVersionCode`。路由清单见 [00-code-index.md](00-code-index.md);完整流程见 [RELEASE.md](../../RELEASE.md)。
 
+补丁的 base 侧 diff 输入是**未加固的 canonical APK 对应的三份 kotlin-classes**(androidApp + `hotupdate` + `:shared` 的 release 变体,CI 归档在 artifact `kotlin-classes-release`);生成器用法与闸门规则见 [63-ci-autopatch.md](63-ci-autopatch.md)。客户端运行时(装载、自愈回滚)在 `:hotupdate` 模块的 `hotfix` 包,见 [90-client-android.md](90-client-android.md) §8。
+
 客户端侧自 2026-10 起**强制校验补丁下载地址必须是 https**(`HotfixInstaller` 对非 https 直接拒绝下载——sha256 防得住字节篡改,防不了清单同源链路上的中间人替换);登记 `patch_url` 外链时别指望用 http 绕过,客户端不会下。
+
+## 8. APK 加固(XopProtector,2026-11 起)
+
+canonical APK 不能直接发:发布包一律经 `tools/apk-hardening/harden-apk.sh` 加固。要点:
+
+- **产物命名**:输入 `androidApp-release.apk` → 输出 `androidApp-release-protected.apk`,同目录留 `hardening-report.txt` 校验报告;CI 的 artifact 与 Release `latest` 上传的都是 `*-protected.apk`。
+- **DEX 布局**:加固后业务 DEX 收进 `assets/protector/dexes.zip`,壳 DEX 负责运行时解压加载;RASP(反调试 / 反 root / 完整性校验)随壳运行。2026-10-31 起反调试命中**不再终止进程**(PR#45,只告警降级——误伤率比拦截收益大)。
+- **与热修的关系**:插桩方法键(`printMethodKeys`)要从 **canonical APK** 读——加固后的业务 DEX 在 `assets/protector/dexes.zip` 里,读不到插桩键;登记、放量、上传只用加固包,两条用途别混。
+- **签名**:加固会重签,复用发布同一组 keystore 与口令;签名校验与许可证细节见 [APK_HARDENING.md](../../APK_HARDENING.md)。
+- **CI 接入**:`protector-tool` job 用缓存构建/复用加固引擎,`client-android` 在 assemble 之后、上传 artifact 之前跑 `harden-apk.sh`(见 [62-ci-cloud-build.md](62-ci-cloud-build.md) §2/§4)。

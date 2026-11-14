@@ -1,6 +1,7 @@
 import { Injectable } from "@nestjs/common";
+import { createHash } from "node:crypto";
 import { ApiErrors } from "../common/api.exception";
-import { AppConfigService } from "../config/app-config.service";
+import { MusicSourceAccountRepository } from "./music-source-account.repository";
 import type { MusicSource, MusicSourceClient, SongKey } from "./music-source.client";
 
 /** v3 搜索结果里的一首歌。字段名以实际响应为准，文档里的 albumImage 实际是 cover。 */
@@ -105,30 +106,64 @@ export type UpstreamSongInfo = {
  */
 export type RichLyric = { lrc: string; yrc: string; trans: string };
 
-/**
- * 音质降级阶梯。
- *
- * v3 的播放链接接口拿不到所选音质时**不会自动降级**，所以必须自己逐级往下试。
- *
- * 这是**兜底路径**：优先用 `/song/info` 的 `qualityInfo` 直接挑一个真实存在的档位
- * （实测 `size == 0` 与「拿不到可用地址」严格对应），只有 info 拿不到时才走阶梯。
- *
- * 另外纠正一处旧注释里的误判：付费歌曲并非一律在 quality=14 失败 ——
- * 实测付费歌的 14 档同样能拿到地址，报 code=110000 的真正原因是该档 size 为 0。
- */
-const QUALITY_LADDER = [14, 11, 10, 8, 4, 0];
+/** 官方接口根地址。搜索走音乐帝(musics.fcg)/ musicu.fcg，歌单详情与 vkey 走 musicu.fcg。 */
+const U_BASE = "https://u.y.qq.com/cgi-bin/";
+const C_BASE = "https://c.y.qq.com/";
 
-/** 最多尝试几档。每档都是一次网络请求，档数太多会把搜索拖慢。 */
-const MAX_QUALITY_ATTEMPTS = 4;
+/** App 端默认浏览器 UA，与 QqMusicApiClient 一致。 */
+const USER_AGENT =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+/** 搜索接口用的是 App 内嵌的 QQMusic 移动端 UA。 */
+const APP_USER_AGENT = "QQMusic 14090508(android 12)";
+/** musicu.fcg 请求固定的 referer。 */
+const REFERER = "https://y.qq.com/";
+const REQUEST_TIMEOUT_MS = 15_000;
+const PROBE_TIMEOUT_MS = 8_000;
+/** 与 App 端 MusicAudioProbe 一致：只拉 8KiB 判断直链可播性。 */
+const PROBE_RANGE = "bytes=0-8191";
 
 /**
- * v3 播放链接接口的风控码：cookie 异常导致整首歌都拿不到地址。
+ * 音质降级阶梯 —— 复刻 App 端 qualityCandidates。
  *
- * 这不是「某一档不存在」（那是 size 为 0、报 110000 的情形），而是上游账号整体被风控，
- * 继续在 v3 上逐档重试没有意义 —— 同一首歌走旧版 v2 的 geturl 往往仍能给出可播直链，
- * 所以命中这个码时优先回退 v2，v2 也拿不到才继续沿阶梯降级。
+ * 官方 vkey 接口按文件名前缀要对应档位，一次请求能把某首歌从高到底的候选全取回来；
+ * 从请求档位起步逐个探测，命中谁就按谁的档位上报（再也不用旧 v3 那种逐档盲试）。
+ *
+ * 映射（values 0–18 是服务端统一档，右侧是对应的 QQ 文件名前缀与媒体格式）：
+ * - 臻品母带 / Hi-Res（14/12/11）→ RS01 .flac（App 端自 jymaster 起都归 hires 试 RS01）
+ * - SQ 无损（10）→ F000 .flac
+ * - 320k HQ（8）→ M800 .mp3
+ * - 128k 标准（4）→ M500 .mp3
+ * - 试听 AAC（0）→ C400 .m4a
  */
-const CODE_LINK_RISK_CONTROL = 110001;
+const QQ_QUALITY_LADDER: { prefix: string; ext: string; type: number; label: string; kbps: string }[] = [
+  { prefix: "RS01", ext: ".flac", type: 11, label: "Hi-Res", kbps: "1411" },
+  { prefix: "F000", ext: ".flac", type: 10, label: "SQ 无损", kbps: "950" },
+  { prefix: "M800", ext: ".mp3", type: 8, label: "320k", kbps: "320" },
+  { prefix: "M500", ext: ".mp3", type: 4, label: "128k", kbps: "128" },
+  { prefix: "C400", ext: ".m4a", type: 0, label: "试听", kbps: "96" },
+];
+
+/** 搜索请求固定填充的 openudid/qimei36 等匿名字段（App 端全文搜索的 comm）。 */
+const SEARCH_COMM = {
+  cv: 0,
+  ct: 11,
+  v: "14090508",
+  tmeAppID: "qqmusic",
+  tmeLoginType: 2,
+  OpenUDID: "",
+  uid: "",
+  phonetype: "",
+  advertisement: "",
+  loginType: 2,
+  subBusinessType: "",
+  authst: "",
+  nettype: 4,
+  userStatus: 0,
+  guid: "",
+};
+
+/** 搜索接口的固定 appkey（App 端 DoSearchForQQMusicMobile 参数）。 */
+const SEARCH_APPKEY = "0AND0HD6FE4HY80U";
 
 @Injectable()
 export class TencentClient implements MusicSourceClient {
@@ -136,68 +171,66 @@ export class TencentClient implements MusicSourceClient {
   readonly displayName = "QQ 音乐";
   /** 腾讯音乐允许 mid-only 身份：songID 为 0 的歌只能靠 mid 解析。 */
   readonly numericIdOnly = false;
-  /** 单曲信息接口的 qualityInfo 能直接给出真实可用档位。 */
+  /** download/info 接口能给出各档位体积，供控制器判定真实可用档位。 */
   readonly supportsTierProbe = true;
 
-  constructor(private readonly config: AppConfigService) {}
+  constructor(private readonly accounts: MusicSourceAccountRepository) {}
 
-  /** 歌曲搜索（v3）。分页参数在 v3 里叫 limit，不叫 num。 */
+  /**
+   * 歌曲搜索 —— 复刻 App 端 search()：先走全文搜索(musics.fcg)，
+   * 空结果且在首页时退回智能搜索(smartbox)。
+   */
   async searchSongs(keyword: string, page: number, limit: number): Promise<SearchResult> {
-    const query = `?keyword=${encodeURIComponent(keyword)}&page=${page}&limit=${limit}`;
-    const data = this.unwrap(await this.requestJson(`${this.config.upstreamV3BaseUrl}/search/song${query}`), "搜索失败");
+    const safePage = Math.max(1, Math.floor(page) || 1);
+    const safeLimit = Math.max(1, Math.floor(limit) || 30);
+    const offset = (safePage - 1) * safeLimit;
+
+    let tracks = await this.fullSearch(keyword, offset, safeLimit);
+    let total = tracks.length;
+    if (tracks.length === 0 && offset === 0) {
+      tracks = await this.smartboxSearch(keyword, safeLimit);
+      total = tracks.length;
+    }
+
     return {
-      total: Number(data.meta?.total ?? 0),
-      perPage: Number(data.meta?.perPage ?? limit),
-      nextPage: data.meta?.nextPage ?? null,
-      list: Array.isArray(data.list) ? data.list : [],
+      total,
+      perPage: safeLimit,
+      nextPage: safePage * safeLimit < total ? safePage + 1 : null,
+      list: tracks.map((t) => this.toSong(t)),
       // 本音源不做可播性预筛，上游返回什么就下发什么。
       dropped: 0,
     };
   }
 
   /**
-   * 歌曲信息与可用音质档位（v3 `/song/info`）。
-   *
-   * 这是唯一能按 id / mid 单曲查询的接口 —— 搜索只能按关键词。它比搜索结果多出来的
-   * 只有 `qualityInfo`，但那正是关键：它列出这首歌**真实存在**的档位与各档字节数。
+   * 歌曲信息与可用音质档位 —— 走 musicu.fcg 的 `get_song_detail_yqq`。
+   * 它按 mid/id 返回歌手、专辑、时长、file（各档位体积），tier 表据此构建。
    */
   async requestSongInfo(key: SongKey): Promise<UpstreamSongInfo> {
-    const data = this.unwrap(
-      await this.requestJson(`${this.config.upstreamV3BaseUrl}/song/info?${this.identityOf(key)}`),
-      "歌曲信息不可用",
-    );
-    const tiers: QualityTier[] = (Array.isArray(data.qualityInfo) ? data.qualityInfo : [])
-      .map((item: any) => ({
-        type: Number(item?.type),
-        size: Number(item?.size ?? 0),
-        label: String(item?.quality ?? ""),
-      }))
-      .filter((tier: QualityTier) => Number.isInteger(tier.type));
+    const track = await this.fetchDetail(key);
+    if (!track) {
+      throw ApiErrors.upstream("歌曲详情不可用");
+    }
     return {
-      songID: Number(data.songID ?? 0),
-      songMID: String(data.songMID ?? ""),
-      title: String(data.title ?? ""),
-      singer: String(data.singer ?? ""),
-      album: String(data.album ?? ""),
-      cover: String(data.cover ?? ""),
-      pay: String(data.pay ?? ""),
-      interval: Number(data.interval ?? 0),
-      tiers,
+      songID: Number(track.id ?? 0),
+      songMID: String(track.mid ?? ""),
+      title: String(track.title ?? ""),
+      singer: String(track.singer ?? ""),
+      album: String(track.albumName ?? ""),
+      cover: this.coverOf(track),
+      pay: track.pay_play ? "付费（VIP 歌曲）" : "",
+      interval: Math.round(Number(track.interval ?? 0)),
+      tiers: this.tiersOf(track),
     };
   }
 
   /**
-   * 获取播放链接（v3），按音质阶梯逐级降级。
+   * 获取播放链接 —— 复刻 App 端 resolvePlayUrl：向 vkey 接口一次性传回全部候选
+   * 文件名（本站 mid 与 mediaMid 各配一档阶梯），拿到 purl 后按 sip 域名展开，
+   * 依次做 8KiB 探测，命中即返回（按匹配文件名回填档位）。
    *
-   * 上游偶尔返回 code=0 但 url 为空、或 kbps 为 0kbps 的死链，所以不能只看返回码。
-   * [verify] 用于在阶梯内部就把死链筛掉：探测放在循环里而不是循环外，
-   * 某一档给出死链时还能继续往下试，否则会白白放弃后面本来可用的低音质档位。
-   *
-   * [available] 是 `/song/info` 给出的可用档位集合，传了就只试这些档 ——
-   * 能把最坏情况从 4 次请求降到 1 次，也不会再把请求打在必定失败的档位上。
-   *
-   * 命中风控码 110001 时 v3 整体不可用：回退 v2 geturl 拿一次地址，
-   * 拿不到再继续走阶梯（后续档大概率同样风控，但保持行为一致、错误信息也完整）。
+   * [available] 是 `/song/info` 给出的可用档位集合，传了就只试这些档，
+   * 避免把请求打在必定失败的档位上。
    */
   async resolveLink(
     key: SongKey,
@@ -205,119 +238,531 @@ export class TencentClient implements MusicSourceClient {
     verify?: (url: string) => Promise<boolean>,
     available?: Set<number>,
   ): Promise<UpstreamLink> {
-    const identity = this.identityOf(key);
-    const typeParam = key.type === undefined ? "" : `&type=${key.type}`;
-    let lastError = "播放地址不可用";
-    for (const attempt of this.qualityLadderFrom(quality, available)) {
-      try {
-        const payload = await this.requestJson(
-          `${this.config.upstreamV3BaseUrl}/song/link?${identity}&quality=${attempt}${typeParam}`,
-        );
-        if (Number(payload?.code) === CODE_LINK_RISK_CONTROL && key.id && key.id > 0) {
-          const rescued = await this.resolveLinkViaV2(key.id);
-          if (rescued) return rescued;
-        }
-        const data = this.unwrap(payload, "播放地址不可用");
-        const url = String(data.url ?? "").replace(/^http:/, "https:");
-        if (!url) {
-          lastError = `音质 ${attempt} 无可用地址`;
-          continue;
-        }
-        if (verify && !(await verify(url))) {
-          lastError = `音质 ${attempt} 的地址拉不动`;
-          continue;
-        }
-        return { url, kbps: String(data.kbps ?? ""), quality: attempt };
-      } catch (error) {
-        lastError = error instanceof Error ? error.message : String(error);
+    const track = await this.fetchDetail(key);
+    if (!track) {
+      throw ApiErrors.upstream("播放地址不可用");
+    }
+    const cookie = await this.currentCookie();
+    const uin = this.cookieUin(cookie);
+    const musicKey = this.cookieMusicKey(cookie);
+
+    const mid = String((track.mid ?? key.mid ?? "").trim());
+    if (!mid) {
+      throw ApiErrors.upstream("播放地址不可用");
+    }
+
+    const candidates = this.ladderFrom(quality, available);
+    const guid = String(Math.floor(Math.random() * 90_000_000) + 10_000_000);
+    // 候选 mid：文件 real-media（mediaMid）优先，缺了退回歌曲 mid，去重保序。
+    const midSet: string[] = [];
+    for (const candidate of [String(track.mediaMid ?? "").trim(), mid]) {
+      if (candidate && !midSet.includes(candidate)) midSet.push(candidate);
+    }
+    const filenames: { filename: string; prefix: string; ext: string; type: number; kbps: string }[] = [];
+    for (const m of midSet) {
+      for (const cand of candidates) {
+        filenames.push({ filename: `${cand.prefix}${m}${cand.ext}`, ...cand });
       }
     }
-    throw ApiErrors.upstream(lastError);
-  }
-
-  /**
-   * 从 v2 的 geturl 接口兜底拿播放地址。
-   *
-   * v3 的 /song/link 偶发 cookie 风控（code=110001），同一首歌走旧版 geturl
-   * 往往仍能给出可播直链。v2 不分音质档，给的多是低码率试听链，
-   * 所以 quality 按最低档 0 上报，避免客户端把未知档位记成高音质。
-   * 拿不到（风控、无 url、网络错误）时返回 undefined，让调用方继续沿阶梯降级。
-   */
-  private async resolveLinkViaV2(id: number): Promise<UpstreamLink | undefined> {
-    try {
-      const data = this.unwrap(
-        await this.requestJson(`${this.config.upstreamV2BaseUrl}/geturl?id=${id}`),
-        "播放地址不可用",
-      );
-      const url = String(data.url ?? "").replace(/^http:/, "https:");
-      if (!url) return undefined;
-      return { url, kbps: String(data.kbps ?? ""), quality: 0 };
-    } catch {
-      return undefined;
+    if (filenames.length === 0) {
+      throw ApiErrors.upstream("播放地址不可用");
     }
+
+    const payload = await this.musicuRequest(
+      {
+        comm: this.commOf(musicKey, uin),
+        req_0: {
+          module: "vkey.GetVkeyServer",
+          method: "CgiGetVkey",
+          param: {
+            guid,
+            songmid: filenames.map(() => mid),
+            songtype: filenames.map(() => 0),
+            filename: filenames.map((f) => f.filename),
+            uin,
+            loginflag: 1,
+            platform: "20",
+          },
+        },
+      },
+      cookie,
+    );
+    const info = payload?.req_0?.data ?? {};
+    const midurlinfo = Array.isArray(info?.midurlinfo) ? info.midurlinfo : [];
+    const sip: string[] = this.dedupe((Array.isArray(info?.sip) ? info.sip : []) as string[]);
+    const hosts = sip.length > 0 ? sip : ["https://ws.stream.qqmusic.qq.com/"];
+
+    const check = verify ?? ((url: string) => this.probePlayable(url));
+    const deadline = Date.now() + 6_200;
+    let message = "该歌曲暂无音源";
+    for (const item of midurlinfo) {
+      if (deadline - Date.now() < 300) break;
+      const target = filenames.find((f) => f.filename === item?.filename);
+      if (!target) continue;
+      for (const host of hosts) {
+        if (deadline - Date.now() < 300) break;
+        const url = this.joinUrl(host, String(item?.purl ?? ""));
+        if (!url || this.looksEncryptedContainer(url)) continue;
+        const playable = await check(url).catch(() => false);
+        if (playable) {
+          return { url, kbps: target.kbps, quality: target.type };
+        }
+        message = "该歌曲暂无音源";
+      }
+    }
+    if (musicKey && this.feeGreaterThanZero(track)) {
+      message = "该歌曲为付费歌曲，请登录 QQ 音乐会员账号";
+    } else if (!musicKey && this.feeGreaterThanZero(track)) {
+      message = "该歌曲为付费歌曲";
+    }
+    throw ApiErrors.upstream(message);
   }
 
   /**
-   * 歌词（v2）。v3 没有等价接口，且只有 v2 同时给出逐字时间轴与翻译。
-   *
-   * v2 只接受数字 ID；搜索结果为 mid-only 时，先用 v3 单曲信息把 mid 解析成正 ID。
+   * 歌词 —— 复刻 App 端 lyric()：musicu.fcg 的 GetPlayLyricInfo 拿 lrc/qrc/trans，
+   * qrc 即逐字（作 yrc 下发）；行级 lrc 为空时回退旧版 fcg_query_lyric_new，
+   * 先试 nobase64=1（明文），再试 nobase64=0（Base64），都按需 HTML 实体解码。
    */
   async requestLyric(key: SongKey): Promise<RichLyric> {
-    this.identityOf(key);
-    let id = Number(key.id);
-    if (!Number.isInteger(id) || id <= 0) {
-      const info = await this.requestSongInfo({ mid: key.mid?.trim() });
-      id = Number(info.songID);
-      if (!Number.isInteger(id) || id <= 0) throw ApiErrors.upstream("歌词歌曲信息不可用");
+    this.requireSongIdOrMid(key);
+    const cookie = await this.currentCookie();
+    const uin = this.cookieUin(cookie);
+
+    // 先用单曲详情把 mid 与数字 ID 备齐（歌词接口两者都能做查询键）。
+    const detail = await this.fetchDetail(key).catch(() => undefined);
+    const mid = String((detail?.mid ?? key.mid ?? "").trim());
+    const songId = Number(detail?.id ?? key.id ?? 0);
+
+    let lrc = "";
+    let yrc = "";
+    let trans = "";
+    if (mid || (Number.isInteger(songId) && songId > 0)) {
+      const lyricPayload = await this.musicuRequest(
+        {
+          comm: { cv: 0, ct: 24 },
+          lyric: {
+            module: "music.musichallSong.PlayLyricInfo",
+            method: "GetPlayLyricInfo",
+            param: { songMID: mid, songID: songId },
+          },
+        },
+        cookie,
+      );
+      const data = lyricPayload?.lyric?.data ?? {};
+      lrc = this.decodePossiblyBase64(data?.lyric);
+      yrc = this.decodePossiblyBase64(data?.qrc);
+      trans = this.decodePossiblyBase64(data?.trans);
     }
-    const data = this.unwrap(await this.requestJson(`${this.config.upstreamV2BaseUrl}/lyric?id=${id}`), "没有歌词");
-    const lrc = String(data.lrc ?? data.lyric ?? "").trim();
-    const yrc = String(data.yrc ?? "").trim();
-    // 没有 lrc 但有 yrc 的情况也算有歌词，客户端能从 yrc 还原出行文本。
-    if (!lrc && !yrc) throw ApiErrors.upstream("没有歌词");
-    return { lrc, yrc, trans: String(data.trans ?? "").trim() };
+
+    if (!lrc && mid) {
+      // 旧歌词接口：musicu 不保证给行级 LRC，回退 fcgi 传统接口补一次。
+      let payload = await this.getJson(
+        `${C_BASE}lyric/fcgi-bin/fcg_query_lyric_new.fcg`,
+        this.legacyLyricParams(mid, uin, true),
+        cookie,
+      );
+      lrc = this.decodePossiblyBase64(payload?.lyric);
+      if (!trans) trans = this.decodePossiblyBase64(payload?.trans ?? payload?.tlyric);
+      if (!lrc) {
+        payload = await this.getJson(
+          `${C_BASE}lyric/fcgi-bin/fcg_query_lyric_new.fcg`,
+          this.legacyLyricParams(mid, uin, false),
+          cookie,
+        );
+        lrc = this.decodePossiblyBase64(payload?.lyric);
+      }
+    }
+
+    if (!lrc && !yrc && !trans) {
+      throw ApiErrors.upstream("没有歌词");
+    }
+    return { lrc, yrc: yrc || lrc, trans };
   }
 
-  /** 身份参数：优先用数字 id，没有正整数 id 时退回 mid。 */
-  private identityOf(key: SongKey): string {
-    if (key.id && Number.isInteger(key.id) && key.id > 0) return `id=${key.id}`;
-    const mid = key.mid?.trim();
-    if (!mid) throw ApiErrors.badRequest(4001, "请提供歌曲 ID 或 mid");
-    return `mid=${encodeURIComponent(mid)}`;
+  // —— 内部实现 ——
+
+  /** 全文搜索（musics.fcg DoSearchForQQMusicMobile）。 */
+  private async fullSearch(keyword: string, offset: number, limit: number): Promise<any[]> {
+    const query: Record<string, unknown> = {
+      module: "music.search.SearchCgiService",
+      method: "DoSearchForQQMusicMobile",
+      param: {
+        searchid: `${Date.now()}${Math.floor(Math.random() * 900_000) + 100_000}`,
+        search_type: 0,
+        query: keyword,
+        page_num: Math.floor(offset / limit) + 1,
+        num_per_page: limit,
+        highlight: 0,
+        nqc_flag: 0,
+        multi_zhinda: 0,
+        cat: 2,
+        grp: 1,
+        sin: offset,
+        sem: 0,
+      },
+    };
+    const body = JSON.stringify({ comm: SEARCH_COMM, req: query });
+    const payload = await this.postJson(
+      `${U_BASE}musics.fcg?sign=${this.qqSearchSign(body)}`,
+      body,
+      { "Content-Type": "application/json", "User-Agent": APP_USER_AGENT },
+    );
+    const data = payload?.req?.data ?? {};
+    const list = data?.body?.song ?? data?.body?.item_song ?? data?.song?.list ?? [];
+    return Array.isArray(list) ? list : [];
+  }
+
+  /** 智能搜索兜底（c.y.qq.com/splcloud）。仅首页且全文搜空时用。 */
+  private async smartboxSearch(keyword: string, pageSize: number): Promise<any[]> {
+    const payload = await this.getJson(
+      `${C_BASE}splcloud/fcgi-bin/smartbox_new.fcg`,
+      {
+        format: "json",
+        key: keyword,
+        g_tk: "5381",
+        loginUin: "0",
+        hostUin: "0",
+        inCharset: "utf8",
+        outCharset: "utf-8",
+        notice: "0",
+        platform: "yqq.json",
+        needNewCode: "0",
+      },
+      "",
+    );
+    const list = payload?.data?.song?.itemlist ?? [];
+    const items = Array.isArray(list) ? list : [];
+    const take = Math.min(items.length, Math.max(1, Math.min(pageSize, 10)));
+    return items.slice(0, take);
   }
 
   /**
-   * 要尝试的档位序列。
-   *
-   * 传了可用档位集合时只保留其中存在的档：请求档位本身可用就直接命中，
-   * 否则取比它低的最高可用档 —— 一次请求就够，不用把阶梯走完。
+   * 按请求档位生成候选文件名前缀序列。
+   * [available] 提供时就只保留其中真实存在的档。
    */
-  private qualityLadderFrom(quality: number, available?: Set<number>): number[] {
-    if (available?.size) {
-      if (available.has(quality)) return [quality];
-      const lower = [...available].filter((value) => value < quality).sort((left, right) => right - left);
-      return lower.slice(0, MAX_QUALITY_ATTEMPTS);
-    }
-    const lower = QUALITY_LADDER.filter((value) => value < quality);
-    return [quality, ...lower].slice(0, MAX_QUALITY_ATTEMPTS);
+  private ladderFrom(
+    quality: number,
+    available?: Set<number>,
+  ): { prefix: string; ext: string; type: number; label: string; kbps: string }[] {
+    let start = 0;
+    if (quality >= 12) start = 0; // 母带/杜比全从最高档试
+    else if (quality >= 10) start = 1; // 无损
+    else if (quality >= 8) start = 2; // 320k
+    else if (quality >= 4) start = 3; // 128k
+    else start = 4; // 试听
+    const ladder = QQ_QUALITY_LADDER.slice(start);
+    if (available?.size) return ladder.filter((c) => available.has(c.type));
+    return ladder;
   }
 
-  /**
-   * 上游返回的成功码不统一：v3 用 0，v2 歌词用 200，两个都要认。
-   * 非成功码时把上游的 message 带出去，便于定位是音质不可用还是歌曲不存在。
-   */
-  private unwrap(payload: any, fallback: string): any {
-    const code = Number(payload?.code);
-    if (code !== 0 && code !== 200) throw ApiErrors.upstream(String(payload?.message ?? fallback));
-    return payload?.data ?? {};
-  }
-
-  private async requestJson(url: string): Promise<any> {
-    const response = await fetch(url, {
-      headers: { accept: "application/json", "user-agent": "TaotaoMusic/1.0" },
+  /** musicu.fcg 通用 POST（带 UID/鉴权、g_tk）。 */
+  private async musicuRequest(body: unknown, cookie: string): Promise<any> {
+    return this.postJson(`${U_BASE}musicu.fcg`, JSON.stringify(body), {
+      "Content-Type": "application/json;charset=UTF-8",
+      "User-Agent": USER_AGENT,
+      Referer: REFERER,
+      ...(cookie ? { Cookie: cookie } : {}),
     });
-    if (!response.ok) throw ApiErrors.upstream(`上游接口错误：${response.status}`);
-    return response.json();
   }
 
+  /** 通用 GET（带 Referer，可选 Cookie）。 */
+  private async getJson(url: string, params: Record<string, string>, cookie: string): Promise<any> {
+    const query = Object.entries(params)
+      .filter(([, value]) => value !== undefined && value !== null && value !== "")
+      .map(([key, value]) => `${key}=${encodeURIComponent(String(value))}`)
+      .join("&");
+    return this.requestText(`${url}?${query}`, {
+      Accept: "application/json",
+      "User-Agent": USER_AGENT,
+      Referer: REFERER,
+      ...(cookie ? { Cookie: cookie } : {}),
+    });
+  }
+
+  private async postJson(url: string, body: string, headers: Record<string, string>): Promise<any> {
+    const response = await fetch(url, {
+      method: "POST",
+      headers,
+      body,
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    if (!response.ok) {
+      throw ApiErrors.upstream(`上游接口错误：${response.status}`);
+    }
+    return this.parseJson(await response.text());
+  }
+
+  private async requestText(url: string, headers: Record<string, string>): Promise<any> {
+    const response = await fetch(url, { headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+    if (!response.ok) {
+      throw ApiErrors.upstream(`上游接口错误：${response.status}`);
+    }
+    return this.parseJson(await response.text());
+  }
+
+  private parseJson(text: string): any {
+    let candidate = text;
+    // musicu.fcg 偶发 JSONP 包裹（callback(...)），剥壳再解析。
+    const jsonp = /^[^(]*\(([\s\S]*)\)\s*;?\s*$/.exec(candidate);
+    if (jsonp) candidate = jsonp[1];
+    try {
+      return JSON.parse(candidate);
+    } catch {
+      throw ApiErrors.upstream(`上游接口返回异常：${text.slice(0, 100)}`);
+    }
+  }
+
+  /** App 端 calcGtk：基于 skey / qm_keyst 的 GTK，登录请求携带。 */
+  private calcGtk(cookie: string): string {
+    const skey = this.cookieValue(cookie, "skey") ?? this.cookieValue(cookie, "p_skey");
+    if (!skey) return "5381";
+    let hash = 5381;
+    for (let i = 0, len = skey.length; i < len; i += 1) {
+      hash += (hash << 5) + skey.charCodeAt(i);
+    }
+    return String(hash & 0x7fffffff);
+  }
+
+  private cookieValue(cookie: string, name: string): string | undefined {
+    for (const part of cookie.split(";")) {
+      const [rawKey, ...rest] = part.trim().split("=");
+      if (rawKey === name) return rest.join("=");
+    }
+    return undefined;
+  }
+
+  private cookieUin(cookie: string): string {
+    const raw = this.cookieValue(cookie, "uin") ?? this.cookieValue(cookie, "wxuin") ?? "";
+    const digits = raw.replace(/\D+/g, "");
+    return digits || "0";
+  }
+
+  private cookieMusicKey(cookie: string): string {
+    return (
+      this.cookieValue(cookie, "qm_keyst") ??
+      this.cookieValue(cookie, "qqmusic_key") ??
+      this.cookieValue(cookie, "music_key") ??
+      ""
+    );
+  }
+
+  private async currentCookie(): Promise<string> {
+    const credential = await this.accounts.credentialFor("tencent");
+    return credential?.token ?? "";
+  }
+
+  private commOf(musicKey: string, uin: string): Record<string, unknown> {
+    if (!musicKey) {
+      return { cv: 0, ct: 24 };
+    }
+    return { uin, format: "json", ct: 19, cv: 0, authst: musicKey };
+  }
+
+  private feeGreaterThanZero(track: any): boolean {
+    const pay = track?.pay ?? track?.payInfo;
+    if (!pay) return false;
+    return Number(pay?.pay_play ?? 0) > 0;
+  }
+
+  private dedupe(items: string[]): string[] {
+    return [...new Set(items.map((s) => s.trim()).filter((s) => s.length > 0))];
+  }
+
+  /** 把 sip 域名与 purl 拼成完整直链；sip 常是 `http://host/` 或裸 `host`。 */
+  private joinUrl(host: string, purl: string): string {
+    if (!purl) return "";
+    let base = host;
+    if (!/^https?:\/\//i.test(base)) base = `https://${base}`;
+    if (!base.endsWith("/")) base += "/";
+    return `${base}${purl}`.replace(/^http:/, "https:");
+  }
+
+  /** 8KiB Range 探测候选直链可播性（等价 App 端 MusicAudioProbe.firstPlayable）。 */
+  private async probePlayable(url: string): Promise<boolean> {
+    try {
+      const response = await fetch(url, {
+        headers: { "user-agent": USER_AGENT, referer: REFERER, range: PROBE_RANGE },
+        signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+      });
+      void response.body?.cancel().catch(() => undefined);
+      const contentType = response.headers.get("content-type") ?? "";
+      return response.ok && !/text\/html|application\/json/i.test(contentType);
+    } catch {
+      return false;
+    }
+  }
+
+  /** App 端 MusicStreamHeaders.looksEncryptedContainer：URL 判定加密容器（QQ 主要是 MFLAC）。 */
+  private looksEncryptedContainer(url: string): boolean {
+    const path = url.toLowerCase().split("?")[0];
+    return path.endsWith(".mflac") || path.includes(".mflac");
+  }
+
+  private requireSongIdOrMid(key: SongKey): void {
+    const mid = key.mid?.trim();
+    if (!mid && (!Number.isInteger(key.id) || key.id! <= 0)) {
+      throw ApiErrors.badRequest(4001, "请提供歌曲 ID 或 mid");
+    }
+  }
+
+  /** 按 mid 或 id 拉单曲详情（musicu get_song_detail_yqq）。 */
+  private async fetchDetail(key: SongKey): Promise<any | undefined> {
+    const mid = key.mid?.trim();
+    if (!mid && (!Number.isInteger(key.id) || key.id! <= 0)) {
+      return undefined;
+    }
+    const cookie = await this.currentCookie();
+    const uin = this.cookieUin(cookie);
+    const musicKey = this.cookieMusicKey(cookie);
+    const payload = await this.musicuRequest(
+      {
+        comm: this.commOf(musicKey, uin),
+        songinfo: {
+          module: "music.pf_song_detail_svr",
+          method: "get_song_detail_yqq",
+          param: mid ? { song_mid: mid } : { song_id: key.id },
+        },
+      },
+      cookie,
+    );
+    return payload?.songinfo?.data?.track_info;
+  }
+
+  /** 把搜索 / 详情条目统一成 v3 的 UpstreamSong 形状。 */
+  private toSong(track: any): UpstreamSong {
+    const singers = Array.isArray(track?.singer)
+      ? track.singer
+      : track?.singers
+        ? track.singers
+        : [];
+    const singerNames = singers
+      .map((s: any) => String(s?.name ?? "").trim())
+      .filter((n: string) => n.length > 0);
+    const mid = String((track?.mid ?? track?.songmid ?? track?.songMID ?? "").trim());
+    const id = Number((String(track?.id ?? track?.songid ?? track?.songID ?? "")).replace(/\D+/g, "0") || 0);
+    return {
+      songID: id || 0,
+      songMID: mid,
+      title: String(track?.name ?? track?.title ?? ""),
+      singer: singerNames.length > 0 ? singerNames.join(" / ") : "未知歌手",
+      album: String(track?.album?.name ?? track?.albumName ?? ""),
+      type: 0,
+      pay: this.feeGreaterThanZero(track) ? "付费（VIP 歌曲）" : "",
+      interval: Math.round(Number(track?.interval ?? 0)),
+      cover: this.coverOf(track),
+    };
+  }
+
+  private coverOf(track: any): string {
+    const albumMid = String(
+      track?.album?.mid ?? track?.album?.pmid ?? track?.albumMid ?? "",
+    ).trim();
+    if (!albumMid) return "";
+    return `https://y.qq.com/music/photo_new/T002R300x300M000${albumMid}.jpg?max_age=2592000`;
+  }
+
+  private tiersOf(track: any): QualityTier[] {
+    const file = track?.file ?? {};
+    const has = (keys: string[]): number => {
+      for (const keyName of keys) {
+        const value = Number(file?.[keyName] ?? 0);
+        if (value > 0) return value;
+      }
+      return 0;
+    };
+    const TYPES = {
+      hires: 11,
+      flac: 10,
+      mp3_320: 8,
+      mp3_128: 4,
+      aac: 0,
+    } as const;
+    return [
+      { type: TYPES.hires, size: has(["size_hires"]), label: "Hi-Res" },
+      { type: TYPES.flac, size: has(["size_flac"]), label: "SQ 无损" },
+      { type: TYPES.mp3_320, size: has(["size_320mp3", "size_320"]), label: "320k" },
+      { type: TYPES.mp3_128, size: has(["size_128mp3", "size_128"]), label: "128k" },
+      { type: TYPES.aac, size: has(["size_aac", "size_c4"]), label: "试听" },
+    ];
+  }
+
+  /** App 端 legacyLyricParams：fcg 老歌词接口的固定参数。 */
+  private legacyLyricParams(mid: string, uin: string, nobase64: boolean): Record<string, string> {
+    return {
+      songmid: mid,
+      songtype: "0",
+      format: "json",
+      g_tk: "5381",
+      loginUin: uin,
+      hostUin: "0",
+      inCharset: "utf8",
+      outCharset: "utf-8",
+      notice: "0",
+      platform: "yqq.json",
+      needNewCode: "0",
+      ...(nobase64 ? { nobase64: "1" } : {}),
+    };
+  }
+
+  /**
+   * App 端 MusicLyricCodec.decodePossiblyBase64：先解 HTML 实体，再判断正文是否 Base64
+   * （且解码后像 LRC / 含 CJK 才采信），否则原样返回。
+   */
+  private decodePossiblyBase64(text: unknown): string {
+    let s = this.decodeHtmlEntities(String(text ?? "")).trim();
+    if (!s) return "";
+    const compact = s.replace(/\s+/g, "");
+    if (compact.length >= 8 && /^[A-Za-z0-9+/_-]+={0,2}$/.test(compact) && !s.startsWith("[")) {
+      try {
+        const b64 = compact.replace(/-/g, "+").replace(/_/g, "/");
+        const bytes = Buffer.from(this.padBase64(b64), "base64");
+        const decoded = bytes.toString("utf8").replace(/^\ufeff/, "");
+        if (decoded.startsWith("[") || decoded.startsWith("(") || this.containsCjk(decoded)) {
+          s = decoded;
+        }
+      } catch {
+        // 非法 Base64 保持原文。
+      }
+    }
+    return this.decodeHtmlEntities(s).replace(/\r\n/g, "\n");
+  }
+
+  private padBase64(base64: string): string {
+    const rem = base64.length % 4;
+    return rem === 0 ? base64 : base64 + "=".repeat(4 - rem);
+  }
+
+  /** App 端 decodeHtmlEntities：把歌词里的 HTML 实体还原成字面字符。 */
+  private decodeHtmlEntities(text: string): string {
+    return text
+      .replace(/&nbsp;/g, " ")
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&apos;/g, "'");
+  }
+
+  private containsCjk(text: string): boolean {
+    for (let i = 0; i < text.length; i += 1) {
+      const code = text.codePointAt(i) ?? 0;
+      if (code >= 19_968 && code <= 40_869) return true;
+    }
+    return false;
+  }
+
+  /**
+   * App 端 qqSearchSign：musics.fcg 签名，SHA-1(body) 取特定下标拼串 + 异或 + Base64 剥壳。
+   * 实现为与 App 端完全一致的算法，否则搜索返回空。
+   */
+  private qqSearchSign(body: string): string {
+    const shaHex = createHash("sha1").update(body, "utf8").digest("hex");
+    const seg1 = [23, 14, 6, 36, 16, 40, 7, 19].map((i) => shaHex[i] ?? "").join("");
+    const seg2 = [16, 1, 32, 12, 19, 27, 8, 5].map((i) => shaHex[i] ?? "").join("");
+    const key = [89, 39, 179, 150, 218, 82, 58, 252, 177, 52, 186, 123, 120, 64, 242, 133, 143, 161, 121, 179];
+    const bytes: number[] = key.map((k, i) => k ^ Number.parseInt(shaHex.slice(i * 2, i * 2 + 2), 16));
+    const b64 = Buffer.from(bytes).toString("base64").replace(/[/+=]/g, "");
+    return `zzc${seg1}${b64}${seg2}`.toLowerCase();
+  }
 }

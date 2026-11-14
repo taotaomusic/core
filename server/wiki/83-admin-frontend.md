@@ -21,6 +21,7 @@
 | `AdminUserManager.vue` / `AuditLogViewer.vue` | 调用 `/admin/auth/**` 下的路径(管理员管理 / 审计中文化展示) |
 | `IpWhitelistManager.vue` | 白名单编辑。**当前没有任何页面引用它,是孤儿组件**;白名单实际通过 `GET/POST /admin/auth/ip-whitelist/:adminId` 接口维护 |
 | `ReleaseManager.vue` / `PatchManager.vue` / `AnnouncementManager.vue` / `UserManager.vue` / `MusicSourceManager.vue` / `OpenApiKeyManager.vue` / `SupporterKeyManager.vue` | 业务管理页,各自调用对应 `/app/admin/**` 路径 |
+| `ShareLinkManager.vue` | 「分享短链」页:四格汇总统计(总数/访问/进App/播放)、关键词搜索、分页列表;点短码复制短链;「隐藏/恢复」走软删除,「删除」物理删除;「清除超期短链」调 `/purge` 并回显 `expireDays` 配置。观察者可见(运营数据),写操作由后端 403/4030 拒绝(见 [35-api-shares.md](35-api-shares.md) §5) |
 | `SystemSettings.vue` | 「系统设置」页:查看当前强制更新下限与可作下限的版本,抬高/取消下限(顺序约束同 `min-version` 接口,409/4091 兜底) |
 | `TotpDialog.vue` | 两步验证(TOTP)开启/关闭弹窗(2026-10-06 补全,PR#10):顶栏盾形按钮入口,开启后图标转绿,**对观察者等全部角色开放**;未开启走「验密码 → 扫码 → 输动态码确认」三步,开启成功态由 `changed` 事件先行置位、避免成功页被「已开启」视图顶掉;关闭需再验动态码。API 对应 `totp-enable` / `totp-confirm` / `totp-disable`(见 [80-admin-auth-login.md](80-admin-auth-login.md)) |
 

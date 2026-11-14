@@ -2,9 +2,36 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-10-11
+最后更新:2026-11-04
 
 本篇讲安卓客户端的模块定位、构建与版本号、包结构、导航实现、关键功能的位置,以及它依赖后端时不能破坏的契约。页面组件与主题的跨端复用在 [93-player-ui.md](93-player-ui.md),共享数据模型在 [94-shared-module.md](94-shared-module.md);发布操作细节以 [61-release-android.md](61-release-android.md) 为准。本篇不讲后端实现,也不讲桌面端(`desktop/`,Tauri + React,独立演进)。
+
+## 0. 模块关系全景图
+
+Gradle 模块之间的依赖是单向的,新功能先想清楚该落在哪个模块再加代码:
+
+```mermaid
+flowchart TD
+    APP["androidApp<br/>入口 / Compose 页面 / data 层<br/>包名 com.taotao.music"]
+    HU["hotupdate<br/>整包更新 + 远程配置 + DEX 热修运行时<br/>update / hotfix 两包"]
+    PATCH["patch<br/>手写补丁源码(PatchEntryImpl)<br/>:patch:buildPatch 打补丁 DEX"]
+    PUI["player-ui<br/>跨端播放主题 / 歌曲行 / 迷你播放器"]
+    SHARED["shared<br/>Song 模型 / 歌词解析 / 音质规则"]
+
+    APP --> HU
+    APP --> PUI
+    APP --> SHARED
+    PUI --> SHARED
+    HU -. 接线说明 .-> NOTE["模块内不出现任何 app 类型:<br/>令牌/Room/AppHttp 经 UpdateHost 契约由宿主注入"]
+    PATCH -.->|"编译期对齐 PatchEntry 契约<br/>不参与 APK 打包"| APP
+```
+
+要点:
+
+- **依赖方向永远是 app → 模块**:`:hotupdate` 里不允许出现任何 app 类型(令牌、Room、`AppHttp` 等),它需要的宿主能力经 `UpdateHost` 契约注入(见 §8)。
+- **`hotupdate` 的两个包名不可改**(`com.taotao.music.update` / `com.taotao.music.hotfix`):插桩白名单、R8 keep 与补丁方法键都以这两个前缀为准,改名即全体系失配。
+- `patch` 是补丁的**源码壳**,不进 APK;它产出的补丁 DEX 由 `HotfixLoader` 在运行时加载。
+- Android、Windows、Web 三端共享的代码只进 `shared` 与 `player-ui`;androidApp 专属的东西不要往上提。
 
 ## 1. 技术栈与模块定位
 
@@ -24,9 +51,10 @@
 
 - 两个 assemble 任务都 `finalizedBy("incrementVersion")`,构建结束会**递增 `version.properties`**。
 - 因此刚产出的 APK 的版本**只能**读 `androidApp/build/outputs/apk/release/output-metadata.json`;不能读构建后的 `version.properties` 当作本包版本,也不要回滚或复用旧号——重号会静默覆盖已发布记录的 sha256,导致更新推不出去;跳号无害。
+- **canonical APK 与加固包**(2026-11 起):`androidApp-release.apk` 是未加固的 canonical APK,发布必须再跑一次 XopProtector 加固(产物 `*-protected.apk`,业务 DEX 收进 `assets/protector/dexes.zip`),登记、放量、上传都只用加固包;策略与校验见 [APK_HARDENING.md](../../APK_HARDENING.md),发布链路见 [61-release-android.md](61-release-android.md) §8。
 - 签名密钥(`taotao-release.jks`)与口令从本机 `local.properties` 读取(`TAOTAO_STORE_PASSWORD` / `TAOTAO_KEY_ALIAS` / `TAOTAO_KEY_PASSWORD`),不进版本库;云端 CI 未配置签名 Secrets 时自动退回 `assembleDebug` 仅验证工具链(见根 `.github/workflows/ci.yml` 的 `还原发布签名` 步骤)。
 - `BuildConfig.VERSION_NAME` 会被拼进全局 User-Agent(`AppHttp.USER_AGENT`,形如 `TaotaoMusic/1.0.236`),全 App 请求共用。
-- Release 启用 **R8 收缩 + 资源收缩**(`isMinifyEnabled = true`,APK 19.2MB → 8.0MB),与热修复插桩共存的三条边界:不混淆(补丁键是「类名#方法名#签名」精确匹配)、关闭优化(`-dontoptimize`——R8 没有 per 规则的禁内联,`-dontinline` 是 ProGuard 选项它不认)、插桩三包(data / player / update)整包 keep;完整规则见 `androidApp/proguard-rules.pro`。
+- Release 启用 **R8 收缩 + 资源收缩**(`isMinifyEnabled = true`,APK 19.2MB → 8.0MB),与热修复插桩共存的三条边界:不混淆(补丁键是「类名#方法名#签名」精确匹配)、关闭优化(`-dontoptimize`——R8 没有 per 规则的禁内联,`-dontinline` 是 ProGuard 选项它不认)、插桩域整包 keep——**data / player 两包的 keep 在 `androidApp/proguard-rules.pro`,update / hotfix 两包的 keep 随 `hotupdate/consumer-rules.pro` 随 AAR 下发**,宿主侧不用再写;完整边界见 `proguard-rules.pro` 首注。
 - AGP 9 有两个**过渡开关**必须保持(`gradle.properties`):`android.builtInKotlin=false` 与 `android.newDsl=false`——KGP 的 `androidTarget()` 与 AGP 9 新 DSL 不兼容;这两笔债要在 AGP 10 之前还掉。
 
 ## 3. 包结构(代码全部在 `com.taotao.music` 层级下)
@@ -36,9 +64,8 @@
 | `MainActivity.kt` / `TaotaoApplication.kt` | Activity 入口与应用初始化;`AppHttp.kt` 统一 HTTP 头;`TaotaoApplication.appState` 持有**进程级状态单例**(详情 Activity 与主界面共享同一份状态) |
 | `crypto/` | 传输层加密:`CryptoTransport`(握手、逐块加解密、PSK 获取)、`NativeCrypto`(JNI 句柄封装)、`CryptoException`;硬件设备号在 `data/crypto/HardwareDeviceId` |
 | `data/` | 业务数据层,详见下表 |
-| `hotfix/` | 热修复补丁:`HotfixInstaller`/`HotfixLoader`/`HotfixStore`/`HotfixDiagnostics`/`PatchDispatcher`/`PatchEntry`;字节码插桩只作用于 data / player / update 包(build-logic 的 `com.taotao.hotfix` 插件),UI 层不碰 |
 | `player/` | `AudioPlayer`(Media3 封装:队列增删、`removeQueueItem`、`keepOnlyCurrent`、上下曲、循环模式)、`PlaybackService`(常驻媒体通知、进程死亡后恢复播放、通知栏收藏)、`PlaybackMediaItem`(队列落盘快照,冷启动恢复)、`SleepTimer`/`SleepTimerPolicy`(定时播放纯规则) |
-| `update/` | 全量更新:`UpdateManager`/`UpdateDownloader`/`UpdateInstaller`/`UpdateModels`/`AppUpdateApi`,对接 `/app/bootstrap` 与 APK 下载 |
+| `update/` | **宿主接线只剩这一个文件**:`TaotaoUpdateHost` 实现 `:hotupdate` 模块的 `UpdateHost` 契约,把端点、User-Agent、访问令牌、设备号、远程配置与「划掉更新」记录递给模块(类仍叫 `TaotaoUpdateHost`,包名与模块侧一致,导入自动命中) |
 | `ui/TaotaoMusicApp.kt` | **61 行主入口**:创建状态容器、强制更新门禁、登录门禁、副作用挂载,自身不写页面布局 |
 
 `data/` 内部按职责分块,挑常用的(文件都在 `androidApp/src/main/java/com/taotao/music/data/`):
@@ -107,7 +134,6 @@
 | 云端歌单 revision | 歌单模型带 `revision`/`updatedAt`,写操作成功后以服务端返回为准;排序必须提交**完整稳定键列表**(`source + songId`,mid-only 歌用 `mid`),缺歌多歌的旧请求会被服务端拒绝 | [33-api-playlists.md](33-api-playlists.md) |
 | 播放上报 | `PlaybackSyncCoordinator`:播放结束/暂停/切歌**先同步落盘 outbox 再走网络**;队列按账号分桶隔离(换号后旧账号的快照绝不能用新账号令牌上传),冷启动补发;清空按服务端 `revision` 代际对齐,不信任设备本地时间 | [34-api-playback.md](34-api-playback.md) |
 | 热更新 | `/app/bootstrap` 检查放在**登录门禁之前**——最需要强制更新的场景恰恰是上个版本把登录搞坏了;每个响应头里的 `X-Latest-Version-Code` 驱动「会话中途发现新版本」;灰度主体按用户/设备稳定哈希分桶,未命中拿不到更新属正常 | [61-release-android.md](61-release-android.md) |
-
 客户端判断成功的唯一依据是响应体 `code === 0`;401/403 语义(401 清会话跳登录、403 是已认证但权限不足)不能在客户端做任何「宽容」处理。
 
 ## 7. 关键功能与实现位置
@@ -130,6 +156,7 @@
 | 队列管理 | `ui/player/PlaybackQueueSheet.kt` | 三个 Tab:当前队列 / 最近播放 / 本地歌曲;正文视口高度固定,避免列表长短反复改变 BottomSheet 高度;当前队列支持拖动排序与「只保留当前」 |
 | 单曲倒带日记 | `ui/library/MineLibraryPages.kt` + `TencentMusicApi.songDiary` | 按歌聚合的播放回顾画像与逐条记录;入口在歌曲更多菜单与收藏/历史列表,`onOpenDiary` 统一走 `openSongDiary` |
 | 分享短链 | `ui/common/Share.kt` | 平台层生成短链(服务端 `/shares/songs`)后调系统分享面板;公开分享页免登录可开 |
+| 分享海报导出(PR#47) | `ui/common/SharePoster.kt` + `ui/app/SharePosterSheet.kt` | 分享歌曲可先取短链并渲染 **1080x1620 海报**(品牌 logo、封面、歌曲信息与二维码,二维码用 `com.google.zxing:core` 纯 JVM 编码);海报写入 `cache/share` 经 FileProvider 交给系统分享面板,文字短链兜底;预览底部面板可选「分享图片 / 复制链接 / 只分享文字链接」;**海报位图来自 Coil 缓存,导出后不得回收**(PR#48 修过的崩溃,`Bitmap.recycle` 打在缓存位图上会让后续渲染拿不到像素) |
 | 分享页唤起(深链接) | `data/OpenSongLink.kt` + `ui/app/AppEffects.kt` 的 `TaotaoAppOpenLinkEffect` | 解析 `taotaomusic://open?...`(Web 分享页「打开桃桃音乐」按钮拼的)还原成 `Song` 接续进 `playSong`;**参数键与 webApp `Main.kt` 的 `openAppUrl` 一一对应,两端必须同步改**;`MainActivity` 是 `singleTask`(已开 App 时链接经 `onNewIntent` 送达),链接在登录门禁之后消费——登录完成的一刻自动接播,残缺参数(无 ID 无 mid、缺标题/歌手)静默忽略 |
 | 收藏 / 歌单 / 最近播放 / 分享 | `ui/library/`、`ui/playlist/`、`ui/common/Share.kt` | 收藏本地优先 + 后台同步账号;歌单写操作走 `PlaylistState`(账号代际绑定,退出/换号取消旧请求并拒绝回写) |
 | 搜索联想 | `ui/app/SearchState.kt` | 输入停止 250ms 后请求联想,上一关键词的在途协程由 `LaunchedEffect` 自动取消;热搜打开搜索页时刷新,失败保持空列表、不阻断正常搜索 |
@@ -143,9 +170,67 @@
 
 ## 8. 发布与热更新
 
-- APK 构建 → 登记(原始字节 POST)→ Range 验证 → 灰度 → 抬最低版本,服务端操作全流程见 [61-release-android.md](61-release-android.md);云端 CI 出包与版本号收编见 [62-ci-cloud-build.md](62-ci-cloud-build.md)。
-- 更新流程在客户端是一个状态机:`UpdateStage { IDLE, CHECKING, UP_TO_DATE, AVAILABLE, DOWNLOADING, READY, FAILED }`;`forced` 贯穿所有阶段——强制更新下即使下载失败也不能放行界面,只能重试,否则被判定必须升级的客户端会绕过门禁继续用旧版本(见 `update/UpdateModels.kt`)。强制更新页与可选更新弹窗都在 `ui/update/UpdateGate.kt`。
-- 热修复补丁:`hotfix/` 装载补丁并按尝试计数自愈——界面组合后再等 5 秒仍活着才 `confirmPatch` 清零计数,否则下次启动按「加载后启动失败」回滚(见 `ui/app/AppEffects.kt`);确认 key 必须是 `activePatchVersion` 而不是 `Unit`,否则会话中途装的补丁尝试计数永远停在 1,「点了能生效,一重启就没了」。
+- APK 构建 → 加固 → 登记(原始字节 POST)→ Range 验证 → 灰度 → 抬最低版本,服务端操作全流程见 [61-release-android.md](61-release-android.md);云端 CI 出包与版本号收编见 [62-ci-cloud-build.md](62-ci-cloud-build.md)。
+- 更新流程在客户端是一个状态机:`UpdateStage { IDLE, CHECKING, UP_TO_DATE, AVAILABLE, DOWNLOADING, READY, FAILED }`;`forced` 贯穿所有阶段——强制更新下即使下载失败也不能放行界面,只能重试,否则被判定必须升级的客户端会绕过门禁继续用旧版本(状态机在 `hotupdate` 模块的 `update/UpdateModels.kt`)。强制更新页与可选更新弹窗都在 `ui/update/UpdateGate.kt`。
+
+### 8.1 热更新已拆成独立模块 `:hotupdate`(2026-11 起)
+
+整包更新(`update` 包)、远程配置与 DEX 热修运行时(`hotfix` 包)整体从 androidApp 迁到 `hotupdate/` 独立 Gradle 模块;androidApp 只保留宿主接线类 `update/TaotaoUpdateHost.kt`。两条不能破的约定(见 `hotupdate/build.gradle.kts` 头注):
+
+1. **包名保持 `com.taotao.music.update` / `com.taotao.music.hotfix` 不动**——插桩白名单、R8 keep 与补丁方法键都以这两个包前缀为准。
+2. **模块不依赖 app 的任何类型**:令牌、Room、`AppHttp` 都归宿主所有,依赖方向永远是 app → 模块。
+
+宿主与模块的边界是一对窄接口(`hotupdate/.../update/UpdateHost.kt`):
+
+| 契约 | 语义 | 宿主实现(`TaotaoUpdateHost`) |
+| --- | --- | --- |
+| `UpdateHost.endpoint` / `userAgent` | 服务端地址与全 App 统一 UA | `TencentMusicApi.ENDPOINT` / `AppHttp.USER_AGENT` |
+| `UpdateHost.currentToken()` | **只给当前令牌,刻意不提供续期**——检查更新是后台动作,令牌过期不能触发续期失败回踢登录页;服务端自行退回按设备号分桶 | `authSession.currentToken()` |
+| `UpdateHost.deviceId()` | 灰度分桶的匿名设备号,首次生成后必须稳定 | `DeviceIdStore` |
+| `UpdateHost.config` | 远程配置的本地缓存,同步可查、永远有默认值 | `RemoteConfigStore`(Room 镜像) |
+| `UpdateHost.dismissedVersionCode()` / `commitDismissed()` | 用户划掉的可选更新版本,跨启动记住;强制更新不允许划掉(模块侧把关) | `MirroredPreference`(`update_dismissal` domain 键与行结构保持不变,老版本记录升级后继续生效) |
+
+接线时序(检查 → 下载 → 补丁确认的自愈环):
+
+```mermaid
+sequenceDiagram
+    participant UI as AppEffects/UpdateGate
+    participant UM as UpdateManager hotupdate模块
+    participant H as TaotaoUpdateHost 宿主接线
+    participant API as /app/bootstrap
+
+    UI->>UM: check()
+    UM->>H: currentToken()/deviceId()
+    UM->>API: GET bootstrap(可选令牌)
+    API-->>UM: 更新/配置/补丁清单
+    alt 整包更新
+        UM->>UM: 断点续传下载 → FileProvider 唤起安装
+    else DEX 补丁
+        UM->>UM: HotfixInstaller 下载(强制 https)→ 装载
+        Note over UM: activePatchVersion 是 Compose 状态:<br/>会话中途装的补丁靠它触发确认效果
+        UI->>UM: 界面组合后再稳 5 秒 → confirmPatch 清零尝试计数
+        Note over UM: 不确认则下次启动按「加载后启动失败」回滚
+    end
+```
+
+三个最容易踩的点(从旧实现原样继承,模块化后依然成立):
+
+- **`activePatchVersion` 必须在构造时就填上**(来自 `TaotaoApplication.activePatchVersion`,即 `HotfixLoader.apply` 的启动加载结果),且**必须是 Compose 状态**——初值留 0 会把已加载补丁当成「有新补丁」重复下载;做成普通 var,会话中途装的补丁永远等不到确认,「点了能生效,一重启就没了」。
+- **补丁确认 key 必须是 `activePatchVersion`** 而不是 `Unit`,原因同上。
+- **插桩是两个模块各自注册的**:AGP 9 的 `InstrumentationScope.PROJECT` 只覆盖本模块类,宿主 androidApp 的注册探不到库模块的类。所以 androidApp 和 `hotupdate` 都应用了 `com.taotao.hotfix` 插件,白名单沿用插件默认的 data / player / update 三前缀(androidApp 实际命中 data / player,`hotupdate` 实际命中 update;`hotfix` 运行时包被工厂 `isInstrumentable` 永久排除,不会自插)。autopatch 的 `--allow` 默认值与这条白名单是同一条热修边界(见 [63-ci-autopatch.md](63-ci-autopatch.md))。
+
+补丁从生成到生效的全链路(括号内是详细篇目):
+
+```text
+autopatch(生成 PatchEntryImpl.class,见 63 篇)
+  → :patch:buildPatch(d8 打成补丁 DEX,zip 成 patch-<n>.apk)
+  → POST /app/admin/patches 登记(绑定 targetVersionCode)
+  → app_patch 表(42 篇 §5)
+  → 客户端经 /app/patch/{target}/{version} 下载(HotfixInstaller,强制 https)
+  → HotfixLoader(DexClassLoader)启动即装载 → 方法插桩分支命中 → 补丁生效
+  → 稳定 5 秒确认 → 自愈回滚(失败时)
+```
+
 - 版本号铁律、不能破坏的客户端契约的完整清单在项目根 [RELEASE.md](../../RELEASE.md);`version.properties` 由每次构建递增、云端构建成功后回写仓库,本地不要手工改它。
 
 ## 9. 测试

@@ -74,7 +74,7 @@ src/
   favorites/              收藏
   playlists/              云端歌单与歌曲顺序
   playback/               最近播放、播放会话与听歌统计
-  shares/                 分享短链、公开元数据与 60 秒低码率试听
+  shares/                 分享短链、公开元数据与 60 秒低码率试听；后台维护（统计/删除/自动清除）
   upstream/               第三方接口适配：腾讯/网易/酷我(波点)客户端、KPK 签名复刻、
                           音源账号凭据仓储与后台管理控制器（成功码、字段名、音质降级也收敛在此）
   music/                  搜索、播放转发、歌词
@@ -326,6 +326,15 @@ npm run dev:frontend      # 独立开发服务器（5173），API 代理到本�
   直接转发（支持 Range），**不裁剪也不落盘** —— 音乐不进服务器磁盘，返回的就是完整音频；
   「最多 60 秒」由分享页 `webApp` 自己守（`previewDurationSeconds` 只是告知）。
 - `GET /s/{token}`：Kotlin/Wasm 分享页，循环播放这一首试听，不包含播放列表和下载歌曲能力。
+- `POST /api/v1/public/shares/{token}/open-app`：公开打点「通过短链进入 App」。访客按浏览器
+  UA+IP 指纹去重（`song_share_visitor` 表），重复点击不重复计数。
+- `POST /api/v1/public/shares/{token}/play`：公开打点「试听播放」，每次开始播放计一次。
+- 管理端（管理员会话）：`GET /api/v1/app/admin/share-links`（列表+汇总统计+`expireDays` 回显）、
+  `DELETE /api/v1/app/admin/share-links/{token}`（删除短链，写审计）、`POST .../purge`
+  （手动清除超期短链）。详见 `wiki/35-api-shares.md` §5。
+- 自动清除：`SHARE_EXPIRE_DAYS`（默认 0 = 永不清除）开启后，启动时与每 6 小时
+  （`SHARE_EXPIRE_SWEEP_SECONDS` 可调）清理连续 N 天无访问的短链；判据是 `last_visited_at`，
+  刚创建还没人点的短链不会被误删。
 - 分享页静态资源托管在 `/share/`、`/share/index.html` 与版本化路径 `/share/v/<内容指纹>/`：
   版本化目录内容不可变，整目录 `immutable` 长缓存；入口 `index.html` 的 `<base>` 改写为
   版本化路径并每次协商，避免新旧批次 JS/wasm 混用。

@@ -2,9 +2,9 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-10-11
+最后更新:2026-11-04
 
-`autopatch/` 是 Android **方法级热修复**的补丁自动生成器:输入修复前后的两份编译产物,自动判定这次改动能不能热修,能修就直接生成补丁入口类。它回答两个问题——「这次改动敢不敢走补丁」和「补丁类怎么写」;补丁的打包、登记与下发仍走既有人工流程。热修的整体设计与下发链路见 [HOT_UPDATE.md](../../HOT_UPDATE.md) 与 [61-release-android.md](61-release-android.md) §7;本文只讲生成器本身与它在 CI 里的位置。
+`autopatch/` 是 Android **方法级热修复**的补丁自动生成器:输入修复前后的两份编译产物,自动判定这次改动能不能热修,能修就直接生成补丁入口类。它回答两个问题——「这次改动敢不敢走补丁」和「补丁类怎么写」;补丁的打包、登记与下发仍走既有人工流程。热修的整体设计与下发链路见 [HOT_UPDATE.md](../../HOT_UPDATE.md) 与 [61-release-android.md](61-release-android.md) §7;模块划分与插桩边界见 [90-client-android.md](90-client-android.md) §0;本文只讲生成器本身与它在 CI 里的位置。
 
 ## 1. 定位:只做「生成器」这一半
 
@@ -12,8 +12,8 @@
 
 | 环节 | 位置 | 职责 |
 | --- | --- | --- |
-| 编译期插桩 | `build-logic/` 的 `com.taotao.hotfix` 插件(`HotfixClassVisitor`) | 用 AGP 8 Instrumentation API 给每个可插桩方法开头插「有补丁就交给补丁并返回」的分支 |
-| 运行时 | `androidApp/src/main/java/com/taotao/music/hotfix/`(`PatchDispatcher` / `PatchEntry` / `HotfixLoader`) | `DexClassLoader` 加载补丁 DEX,把分发器赋给宿主类的静态字段 |
+| 编译期插桩 | `build-logic/` 的 `com.taotao.hotfix` 插件(`HotfixClassVisitor`) | 用 AGP 8 Instrumentation API 给每个可插桩方法开头插「有补丁就交给补丁并返回」的分支;androidApp 与 `:hotupdate` **各自注册,各插自己的模块** |
+| 运行时 | `hotupdate/src/main/java/com/taotao/music/hotfix/`(`PatchDispatcher` / `PatchEntry` / `HotfixLoader` 等) | `DexClassLoader` 加载补丁 DEX,把分发器赋给宿主类的静态字段 |
 | **补丁生成** | **`autopatch/`**(本文) | 扫描 base/head 差异 → 判定能否热修 → 生成 `PatchEntryImpl` 字节码 |
 
 这是独立 JVM 工具项目:自带 `settings.gradle.kts`(`rootProject.name = "autopatch"`,不被主仓 root 构建收编,可整目录拎出去开源),依赖只有 ASM 9.7(大版本对齐主仓 build-logic)与 Kotlin/JVM 21,**纯 ASM + JDK,不需要 Android SDK**。模型与美团 Robust 同路(编译期插桩 + 运行时方法分发),再造的原因与一个关键简化——**宿主不混淆**(反射键天然稳定)——见 `autopatch/README.md`。注意「不混淆」在 2026-10 起不再是「R8 整个关掉」:Release 已启用 R8 收缩(`androidApp/proguard-rules.pro` 显式 `-dontobfuscate` + `-dontoptimize` + 插桩三包整包 keep,与插桩共存的边界见 90 篇 §2),方法键与反射键的稳定性由规则保证,工具链的输入仍是未混淆产物,不需要 mapping。
@@ -27,6 +27,11 @@ autopatch 生成 .class
   → app_patch 表(见 42-database-tables-release.md §5)
   → 客户端经 /app/patch/{targetVersionCode}/{patchVersion} 下载
 ```
+
+> 注意:这里的「补丁 DEX」是插桩分支里 `dispatch` 出来的**原始字节**,客户端会把
+> 补丁 DEX 收进 `assets/`。而发行包(`*-protected.apk`)的**业务 DEX** 是加固后收进
+> `assets/protector/dexes.zip` 的——`PatchDispatcher` 的方法键匹配发生在运行时加载的
+> 补丁类与插桩壳方法之间,不直接读发行 DEX 的布局,两条链路互不干扰(见 61 篇 §8)。
 
 补丁与整包的关系是兜底:有整包更新时服务端不下发补丁(见 [RELEASE.md](../../RELEASE.md) §一)。
 
@@ -81,7 +86,7 @@ autopatch --base <baseClassesDir[,baseClassesDir2...]> --head <headClassesDir[,h
           --out <outDir> [--host com/taotao/music] [--allow com/taotao/music/data,com/taotao/music/player]
 ```
 
-- `--base` / `--head` 是两份编译产物目录(release 变体的 kotlin-classes,支持**逗号分隔多个模块目录**:androidApp 与 `:shared` 各一份,shared 的类不传就进不了 diff;base = 线上那个版本,head = 修好之后);**不收 APK、也不收 mapping**,宿主不混淆所以不需要 mapping。CI 的 client-android job 会归档这两份 kotlin-classes(保留 30 天),生成补丁的 base 侧输入不再随下次构建丢失。
+- `--base` / `--head` 是两份编译产物目录(release 变体的 kotlin-classes,支持**逗号分隔多个模块目录**:androidApp、`hotupdate` 与 `:shared` 各一份,shared 的类不传就进不了 diff;base = 线上那个版本,head = 修好之后);**不收 APK、也不收 mapping**,宿主不混淆所以不需要 mapping。CI 的 client-android job 会归档这三份 kotlin-classes(保留 30 天),生成补丁的 base 侧输入不再随下次构建丢失。
 - `--host` 传宿主包前缀(反射改写范围),`--allow` 传允许热修的包白名单(**未传默认取插桩三包** data / player / update,带尾斜杠与插桩插件逐字对齐;不要再依赖旧的「留空 = 不限制」行为)。
 - 判定必须整包时**以退出码 2** 结束并逐条打印原因;成功则打印方法键清单与产物路径,外加需人工确认的警告。
 

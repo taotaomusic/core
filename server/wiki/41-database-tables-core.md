@@ -97,10 +97,18 @@
 - `token` 为 8–24 位短码,`(user_id, source, song_id)` 唯一。
 - `refrain_start_ms` / `refrain_end_ms`(integer 可空):创建分享时从上游快照落库的高潮区间毫秒值,只有酷我源会有值;NULL 即上游没给,metadata 下发时两键一起缺席,不伪造 0。
 - **不存任何音频文件路径** —— 试听是转发上游音频,不是缓存,也不能保存上游限时直链(旧库的 `preview_file` 列已在迁移里删除)。
-- `access_count`、`enabled` 和时间字段用于公开分享统计与失效控制。
+- `access_count`(元数据读取次数)、`visitor_count`(进入 App 的去重访客数)、`play_count`(试听播放次数)与 `last_visited_at` / `last_opened_app_at` 组成后台运营统计;`last_visited_at` 同时是自动清除的判据(见 [35-api-shares.md](35-api-shares.md) §5.3)。
 - `source` 的 CHECK 已扩到 `('tencent', 'netease', 'kuwo')`。旧库的约束是建表时的旧白名单,`CREATE TABLE IF NOT EXISTS` 改不动它 —— 迁移里用条件 DO 块查 `pg_constraint`,确认旧定义确实不含 `kuwo` 时才 `DROP` 后重建(「修改已有表约束」的第二个实际用例,见 [40-database-overview.md](40-database-overview.md))。
 
-## 10. `user_avatars`
+## 10. `song_share_visitor`
+
+分享短链的访客去重表,主键 `(token, visitor_hash)`。
+
+- `visitor_hash` 是「浏览器 UA + 来源 IP」的 SHA-256 派生哈希,**不落原文** —— 指纹带 IP 属于个人信息面,去重表里只保留派生值。
+- 打点端点用 `INSERT ... ON CONFLICT DO NOTHING` 的返回行数判断首访,天然并发安全;同一条 SQL 里完成「判首访 + 累加 `visitor_count`」,避免先查再插的双计窗口。
+- `token` 外键 `ON DELETE CASCADE`:短链被删除(管理端删除或自动清除)时去重行一并清理。
+
+## 11. `user_avatars`
 
 头像二进制。此前转存第三方图床,图床可用性与外链寿命都不可控,改为服务器自存。
 

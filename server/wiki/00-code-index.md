@@ -2,7 +2,7 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-10-11(路由清单核对日:2026-10-11;表清单核对日:2026-09-30)
+最后更新:2026-11-04(客户端模块清单核对日:2026-11-04;路由清单核对日:2026-10-11;表清单核对日:2026-09-30)
 
 本页是后端源码、接口和数据库文档的导航基准。路由清单中的路径是 Controller 相对路径,除 `/health` 外实际都要加全局前缀 `/api/v1`;文件/节点/路由的具体数量以 `codegraph status` 与 `codegraph query` 实测为准,不要引用本文历史快照的数字。
 
@@ -22,6 +22,25 @@ codegraph query --path server --kind route --limit 200 --json ""
 
 ## 2. 模块地图
 
+### 2.0 客户端 Gradle 模块速览(非 CodeGraph 范围,随仓库核对)
+
+服务端目录之外,仓库的客户端模块如下;依赖图与接线细节见 [90-client-android.md](90-client-android.md) §0:
+
+| 模块 | 责任边界 | 关键约定 |
+| --- | --- | --- |
+| `androidApp/` | Android 应用入口、Compose 页面、`data/` 业务数据层、`crypto/` 传输加密 JNI、宿主接线 `update/TaotaoUpdateHost` | 插桩命中 data / player 两包;R8 keep 见 `proguard-rules.pro` |
+| `hotupdate/` | 热更新独立模块:整包更新 + 远程配置(`update` 包)+ DEX 热修运行时(`hotfix` 包) | 包名不可改;不依赖 app 类型,能力经 `UpdateHost` 契约注入;keep 随 `consumer-rules.pro` 下发;插桩命中 update 包 |
+| `player-ui/` | 三端共享播放主题、歌曲行、迷你播放器、布局组件 | 只依赖 `:shared` |
+| `shared/` | 跨平台数据模型、歌词解析、音质规则(`src/commonMain/`) | 新代码放 `com.taotao.music` 包下;测试进 `src/commonTest/` |
+| `webApp/` | Kotlin/Wasm 分享播放器 | 依赖 `:shared`、`:player-ui` |
+| `patch/` | 手写补丁源码壳(`PatchEntryImpl`),`:patch:buildPatch` 用 d8 打补丁 DEX | 不打进 APK |
+| `build-logic/` | `com.taotao.hotfix` 插桩插件(白名单 data/player/update 三前缀) | androidApp 与 hotupdate 各自应用,各插各的模块 |
+| `autopatch/` | 补丁自动生成器(独立 JVM 工具) | 见 [63-ci-autopatch.md](63-ci-autopatch.md) |
+| `crypto/`、`crypto-src/` | 传输加密产物 / Rust 源码 | 见文档中心 README 维护规则第 6 条 |
+| `desktop/`、`server/` | Tauri 桌面端 / 本后端服务 | 分别见 [91-client-desktop.md](91-client-desktop.md) 与下表 |
+
+### 2.1 服务端模块地图
+
 | 目录/文件 | 责任边界 | 主要依赖或持久化 |
 | --- | --- | --- |
 | `src/main.ts` | Nest 启动、传输加密中间件挂载(先于 body parser)、按路由解析请求体、静态管理后台与分享页、全局前缀 | Express |
@@ -40,7 +59,7 @@ codegraph query --path server --kind route --limit 200 --json ""
 | `src/music/` | 搜索(裸 NDJSON + 分域标签)、歌手/专辑、排行榜、在线歌单、歌曲信息与 MV、直链、音频代理、歌词 | 上游 Client、`favorites` |
 | `src/open-api/`(`OpenApiModule`) | 开放搜歌 API Key 鉴权与第三方搜歌端点:`open-api.module.ts`、`open-api-key.repository.ts`、`open-api-key.service.ts`(`OpenApiKeyService`)、`open-api-key.guard.ts`(`ApiKeyGuard`)、`open-api.controller.ts`(`OpenApiController`)、`open-api-key-admin.controller.ts`(管理端 key CRUD) | `open_api_key` 表(只存 `sha256(key)`),imports `MusicModule` + `UpstreamModule` + `AdminAuthModule` |
 | `src/upstream/` | 多音源协议适配和错误收敛:腾讯/网易/酷我客户端、波点(Bodian)客户端与 KPK 签名复刻、`music-source-account.repository.ts` 音源账号凭据、`music-source.registry.ts` 注册表分派、`music-source-admin.controller.ts` 音源账号后台管理 | 外部音乐 API、`music_source_account` |
-| `src/shares/` | 歌曲短链、公开元数据、试听转发 | `song_share`、`StreamService` |
+| `src/shares/` | 歌曲短链、公开元数据、试听转发、后台维护:`song-share.*`(创建/元数据/试听/公开打点)、`share-admin.*`(后台列表/统计/删除/自动清除定时任务) | `song_share`、`song_share_visitor`、`StreamService`、`AdminAuthModule` |
 | `src/image-generation/` | 图片任务、Key 池、额度预扣和状态轮询 | `api_key`、`image_generation_task`、ApiSweet |
 | `src/release/` | Android APK/补丁、灰度、最低版本、远程配置、发版 webhook 与桌面更新代理 | `app_release`、`app_patch`、`app_channel`、`app_config` |
 | `src/im/` | 悟空 IM 会话凭据和同步代理 | `im_device_session`、悟空 IM HTTP API |

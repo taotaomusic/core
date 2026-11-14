@@ -109,7 +109,7 @@ Controller 不应返回 HTTP 200 加错误业务码;失败应同时使用正确 
 | `/open/**` | 不要求(用 `X-API-Key` 或 `Authorization: Bearer tt_...`) | 不使用 | 开放搜歌,`ApiKeyGuard`,鉴权失败 401/4014;与用户访问令牌、管理员会话三套凭据互相独立。详见 [36-api-open.md](36-api-open.md) |
 | `/admin/auth/login`、`/totp-verify`、`/logout` | 不要求 | 不要求 | 显式公开;2FA 第二步额外要求 `temp_token` |
 | `/admin/auth/**`(其余) | 不使用 | 管理员会话 | 由 AdminAuthGuard + RolesGuard 校验;角色不足为 403/4030 |
-| `/announcements`、`/public/shares/**`、`/files/avatars/**` | 不要求 | 不使用 | 公开公告、分享元数据/试听和头像匿名下载(可枚举性由随机 token 兜住) |
+| `/announcements`、`/public/shares/**`、`/files/avatars/**` | 不要求 | 不使用 | 公开公告、分享元数据/试听/**打点**(`POST /public/shares/{token}/open-app|play`)和头像匿名下载(可枚举性由随机 token 兜住) |
 | `/shares/songs` | 必须 | 不使用 | 创建短链 |
 | `/playback/**`、`/playlists/**` | 必须 | 不使用 | 用户云端数据 |
 | `/im/**` | 必须 | 不使用 | IM 会话和同步代理;未启用时返回 503/5031 |

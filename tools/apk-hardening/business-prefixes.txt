@@ -1,0 +1,44 @@
+# 桃桃音乐 True-VMP 类前缀清单
+#
+# 每行一个 Dalvik 类型描述符前缀，传给 XopProtector 的 --true-vmp-prefix。
+# 匹配规则是 typeDescriptor.startsWith(prefix)：
+#   - 不以分号结尾时，会同时覆盖该类的嵌套类 / Kotlin 合成类 / suspend 状态机。
+#   - 以分号结尾时只匹配该类本身，用于方法数特别大、嵌套 DTO 特别多的类。
+#
+# 约束：
+#   - 只允许业务逻辑层（data/、player/、model/）的核心类。
+#   - 禁止 ui/、playerui/、hotfix/、update/、data/db/、data/im/、crypto/（传输层加密）。
+#     data/crypto/ 仅 HardwareDeviceId 例外，它只做设备标识派生，不碰 JNI 传输层。
+#   - 禁止组件类（如 com.taotao.music.player.PlaybackService），VMP 不跳过组件。
+#   - 新增核心业务类后必须同步本文件，否则加固报告里的 TRUE_VMP 数量会下降。
+#
+# 账号 / 网络 / 设备身份
+# TencentMusicApi; 只匹配类本身，避免把嵌套 DTO 全部卷进来；下面按函数名前缀
+# 单独覆盖响应解析的 suspend 状态机（$1/$2 等合成类），它们才是解析逻辑所在。
+Lcom/taotao/music/data/TencentMusicApi;
+Lcom/taotao/music/data/TencentMusicApi$Companion
+Lcom/taotao/music/data/TencentMusicApi$fetchOnlinePlaylistSongs
+Lcom/taotao/music/data/TencentMusicApi$fetchOnlinePlaylistDetail
+Lcom/taotao/music/data/TencentMusicApi$favoriteLibrary
+Lcom/taotao/music/data/TencentMusicApi$recentPlaybackLibrary
+Lcom/taotao/music/data/TencentMusicApi$toPlaylist
+Lcom/taotao/music/data/TokenProvider
+Lcom/taotao/music/data/DeviceIdStore
+Lcom/taotao/music/data/crypto/HardwareDeviceId
+# 收藏 / 同步 / 配置
+Lcom/taotao/music/data/FavoritesStore
+Lcom/taotao/music/data/PlaybackSyncCoordinator
+Lcom/taotao/music/data/PlaybackSyncStore
+Lcom/taotao/music/data/RemoteConfigStore
+# 播放 / 下载 / 歌词
+Lcom/taotao/music/data/SongCodec
+Lcom/taotao/music/data/OfflineDownloadManager
+Lcom/taotao/music/player/AudioPlayer;
+Lcom/taotao/music/model/LyricParser
+# 历史 / 快照 / 搜索 / 定时
+Lcom/taotao/music/data/PlaybackHistoryPolicy
+Lcom/taotao/music/data/PlaybackSnapshotPolicy
+Lcom/taotao/music/data/SearchHistoryStore
+Lcom/taotao/music/data/SleepTimerStore
+# AI 会话
+Lcom/taotao/music/data/AiChatStore

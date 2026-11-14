@@ -501,6 +501,11 @@ async function main() {
     ["DELETE", "/api/v1/app/admin/music-sources/1"],
     ["POST", "/api/v1/app/admin/music-sources/sms"],
     ["POST", "/api/v1/app/admin/music-sources/login"],
+    // app/admin/share-links —— 分享短链管理与统计
+    ["GET", "/api/v1/app/admin/share-links"],
+    ["GET", "/api/v1/app/admin/share-links/summary"],
+    ["POST", "/api/v1/app/admin/share-links/purge"],
+    ["DELETE", "/api/v1/app/admin/share-links/aaaaaaaa"],
   ];
   for (const [method, path] of guardedAdminRoutes) {
     const response = await fetch(`${base}${path}`, { method });
@@ -3526,6 +3531,234 @@ async function main() {
         (kuwoRefrainStart === kuwoRefrainLine.data.refrainStartMs && kuwoRefrainEnd === kuwoRefrainLine.data.refrainEndMs)),
     JSON.stringify(kuwoShareMetadataBody.data ?? {}).slice(0, 200),
   );
+
+  // ---------- 分享短链后台管理（列表 / 统计 / 删除 / 自动清除） ----------
+  //
+  // 上面的「业务管理接口：角色校验与审计」段尾把 admin 角色账号删掉了
+  // （删账号会级联清掉它的会话），这里重新建一个 admin 角色并登录；
+  // viewer 会话未被清理，直接复用。adminSession（超管）全程存活。
+  // 打点端点匿名可用，靠 UA + IP 指纹去重；这里用两个不同 UA 造两个访客。
+  section("分享短链后台：统计打点与管理端维护");
+
+  const shareAdminRoleName = `sadmin_${randomBytes(3).toString("hex")}`;
+  const shareAdminRoleCreated = await fetch(`${base}/api/v1/admin/auth/users`, {
+    method: "POST", headers: bearer(adminSession),
+    body: JSON.stringify({
+      username: shareAdminRoleName, password: "pass123456", role: "admin", displayName: "分享段验证管理员",
+    }),
+  });
+  const shareAdminRoleLogin = await postJson("/api/v1/admin/auth/login", {
+    username: shareAdminRoleName, password: "pass123456",
+  });
+  const shareAdminRoleSession = shareAdminRoleLogin.body.data?.token;
+  check(
+    "可创建分享段 admin 角色并登录",
+    shareAdminRoleCreated.status === 201 && typeof shareAdminRoleSession === "string",
+    `${shareAdminRoleCreated.status} ${JSON.stringify(shareAdminRoleLogin.body).slice(0, 120)}`,
+  );
+
+  // 上面「管理后台认证」段尾把第一个 viewer 账号删掉了（会话随账号级联失效），
+  // 这里为本段重新建一个 viewer。
+  const shareViewerName = `sview_${randomBytes(3).toString("hex")}`;
+  const shareViewerCreated = await fetch(`${base}/api/v1/admin/auth/users`, {
+    method: "POST", headers: bearer(adminSession),
+    body: JSON.stringify({
+      username: shareViewerName, password: "pass123456", role: "viewer", displayName: "分享段验证只读",
+    }),
+  });
+  const shareViewerLogin = await postJson("/api/v1/admin/auth/login", {
+    username: shareViewerName, password: "pass123456",
+  });
+  const shareViewerSession = shareViewerLogin.body.data?.token;
+  check(
+    "可创建分享段 viewer 并登录",
+    shareViewerCreated.status === 201 && typeof shareViewerSession === "string",
+    `${shareViewerCreated.status} ${JSON.stringify(shareViewerLogin.body).slice(0, 120)}`,
+  );
+
+  const adminShares = (session) =>
+    fetch(`${base}/api/v1/app/admin/share-links?limit=100`, { headers: { authorization: `Bearer ${session}` } });
+
+  const adminShareListResponse = await adminShares(shareAdminRoleSession);
+  const adminShareListBody = await adminShareListResponse.json();
+  check(
+    "admin 角色可读分享短链列表（items/total/summary 结构齐全）",
+    adminShareListResponse.status === 200 &&
+      Array.isArray(adminShareListBody.data?.items) &&
+      Number.isInteger(adminShareListBody.data?.total) &&
+      typeof adminShareListBody.data?.summary?.total === "number",
+    `${adminShareListResponse.status} ${JSON.stringify(adminShareListBody).slice(0, 160)}`,
+  );
+  const listedShare = adminShareListBody.data?.items?.find((row) => row.token === shareToken);
+  check(
+    "列表包含刚创建的短链且带访问 / 进App / 播放三个计数字段",
+    !!listedShare && Number.isInteger(listedShare.accessCount) &&
+      Number.isInteger(listedShare.visitorCount) && Number.isInteger(listedShare.playCount),
+    JSON.stringify(listedShare ?? adminShareListBody.data?.items?.[0]).slice(0, 200),
+  );
+  const shareStatsBefore = {
+    access: listedShare?.accessCount ?? 0,
+    visitor: listedShare?.visitorCount ?? 0,
+    play: listedShare?.playCount ?? 0,
+  };
+
+  // viewer 能读（运营数据）但不能删、不能清除（写权限）。
+  const viewerShareList = await adminShares(shareViewerSession);
+  check("viewer 可读分享短链列表", viewerShareList.status === 200, `实际 ${viewerShareList.status}`);
+  const viewerShareDelete = await fetch(`${base}/api/v1/app/admin/share-links/aaaaaaaa`, {
+    method: "DELETE", headers: { authorization: `Bearer ${shareViewerSession}` },
+  });
+  const viewerShareDeleteBody = await viewerShareDelete.json();
+  check(
+    "viewer 删除分享短链被拒 403 且 code 4030",
+    viewerShareDelete.status === 403 && viewerShareDeleteBody.code === 4030,
+    `${viewerShareDelete.status} ${JSON.stringify(viewerShareDeleteBody).slice(0, 120)}`,
+  );
+  const viewerSharePurge = await fetch(`${base}/api/v1/app/admin/share-links/purge`, {
+    method: "POST", headers: bearer(shareViewerSession), body: JSON.stringify({}),
+  });
+  const viewerSharePurgeBody = await viewerSharePurge.json();
+  check(
+    "viewer 手动清除短链被拒 403 且 code 4030",
+    viewerSharePurge.status === 403 && viewerSharePurgeBody.code === 4030,
+    `${viewerSharePurge.status} ${JSON.stringify(viewerSharePurgeBody).slice(0, 120)}`,
+  );
+
+  // 打点：play 两次（不去重），open-app 用不同 UA 打两次（去重后只 +1）。
+  const track = (path, userAgent, token = shareToken) =>
+    fetch(`${base}/api/v1/public/shares/${token}/${path}`, {
+      method: "POST", headers: userAgent ? { "user-agent": userAgent } : {},
+    });
+  const invalidTrack = await track("play", undefined, "not-valid!");
+  const invalidTrackBody = await invalidTrack.json().catch(() => ({}));
+  check(
+    "播放打点对非法短码 404 且 code 4045（不写脏数据）",
+    invalidTrack.status === 404 && invalidTrackBody.code === 4045,
+    `${invalidTrack.status} ${JSON.stringify(invalidTrackBody).slice(0, 120)}`,
+  );
+  const trackPlay1 = await track("play", "TaotaoVerify/1.0 (visitor-a)");
+  const trackPlay2 = await track("play", "TaotaoVerify/1.0 (visitor-a)");
+  check(
+    "播放打点匿名可调且 204（两次都不去重）",
+    trackPlay1.status === 204 && trackPlay2.status === 204,
+    `${trackPlay1.status} ${trackPlay2.status}`,
+  );
+  const trackOpen1 = await track("open-app", "TaotaoVerify/1.0 (visitor-a)");
+  const trackOpen2 = await track("open-app", "TaotaoVerify/1.0 (visitor-b)");
+  check(
+    "进入App打点匿名可调且 204",
+    trackOpen1.status === 204 && trackOpen2.status === 204,
+    `${trackOpen1.status} ${trackOpen2.status}`,
+  );
+
+  const adminShareListAfter = await adminShares(shareAdminRoleSession);
+  const adminShareListAfterBody = await adminShareListAfter.json();
+  const shareStatsAfter = adminShareListAfterBody.data?.items?.find((row) => row.token === shareToken);
+  check(
+    "播放计数 +2、访客去重 +2（同 UA 不重复计数）",
+    !!shareStatsAfter &&
+      // 本段只对真实短码打了两次 play（visitor-a ×2）与两次 open-app（visitor-a/b 各一）。
+      shareStatsAfter.playCount === shareStatsBefore.play + 2 &&
+      shareStatsAfter.visitorCount === shareStatsBefore.visitor + 2,
+    `before ${JSON.stringify(shareStatsBefore)} after ${JSON.stringify({
+      play: shareStatsAfter?.playCount, visitor: shareStatsAfter?.visitorCount,
+    })}`,
+  );
+  check(
+    "打点刷新了最近访问时间",
+    !!shareStatsAfter && Number.isInteger(shareStatsAfter.lastVisitedAt) &&
+      shareStatsAfter.lastVisitedAt >= Date.now() - 60_000,
+    JSON.stringify({ lastVisitedAt: shareStatsAfter?.lastVisitedAt }),
+  );
+
+  // 同一 UA 再次打 open-app：访客数不再增长（去重生效）。
+  await track("open-app", "TaotaoVerify/1.0 (visitor-a)");
+  const adminShareDedup = await adminShares(shareAdminRoleSession);
+  const adminShareDedupBody = await adminShareDedup.json();
+  const shareStatsDedup = adminShareDedupBody.data?.items?.find((row) => row.token === shareToken);
+  check(
+    "同一浏览器指纹重复进入App不再累加访客数",
+    !!shareStatsDedup && shareStatsDedup.visitorCount === shareStatsAfter.visitorCount,
+    `去重后 ${shareStatsDedup?.visitorCount} vs 期望 ${shareStatsAfter?.visitorCount}`,
+  );
+
+  // 删除：不存在与非法短码先试，再删真短链并确认分享页失效。
+  const deleteShareBadToken = await fetch(`${base}/api/v1/app/admin/share-links/not-a-token!`, {
+    method: "DELETE", headers: bearer(shareAdminRoleSession),
+  });
+  const deleteShareBadTokenBody = await deleteShareBadToken.json();
+  check(
+    "删除非法短码 400 且 code 4001",
+    deleteShareBadToken.status === 400 && deleteShareBadTokenBody.code === 4001,
+    `${deleteShareBadToken.status} ${JSON.stringify(deleteShareBadTokenBody).slice(0, 120)}`,
+  );
+  const deleteShareMissing = await fetch(`${base}/api/v1/app/admin/share-links/zzzzzzzz`, {
+    method: "DELETE", headers: bearer(shareAdminRoleSession),
+  });
+  const deleteShareMissingBody = await deleteShareMissing.json();
+  check(
+    "删除不存在的短链 404 且 code 4045",
+    deleteShareMissing.status === 404 && deleteShareMissingBody.code === 4045,
+    `${deleteShareMissing.status} ${JSON.stringify(deleteShareMissingBody).slice(0, 120)}`,
+  );
+  const deletedShare = await fetch(`${base}/api/v1/app/admin/share-links/${shareToken}`, {
+    method: "DELETE", headers: bearer(shareAdminRoleSession),
+  });
+  check("删除真实短链返回 204", deletedShare.status === 204, `实际 ${deletedShare.status}`);
+  const metadataAfterDelete = await fetch(`${base}/api/v1/public/shares/${shareToken}`);
+  const metadataAfterDeleteBody = await metadataAfterDelete.json();
+  check(
+    "删除后公开分享页 404 且 code 4045（既有失效语义）",
+    metadataAfterDelete.status === 404 && metadataAfterDeleteBody.code === 4045,
+    `${metadataAfterDelete.status} ${JSON.stringify(metadataAfterDeleteBody).slice(0, 120)}`,
+  );
+  const listAfterDelete = await adminShares(shareAdminRoleSession);
+  const listAfterDeleteBody = await listAfterDelete.json();
+  check(
+    "删除后列表不再包含该短链",
+    !(listAfterDeleteBody.data?.items ?? []).some((row) => row.token === shareToken),
+    JSON.stringify((listAfterDeleteBody.data?.items ?? []).slice(0, 2)).slice(0, 160),
+  );
+
+  // 删除动作必须落审计：action=share.delete，目标就是短码本身。
+  const shareAudit = await fetch(`${base}/api/v1/admin/auth/audit-log?action=share.delete&limit=10`, {
+    headers: bearer(adminSession),
+  });
+  const shareAuditBody = await shareAudit.json();
+  check(
+    "短链删除写入审计且操作人为 admin 角色",
+    shareAudit.status === 200 &&
+      (shareAuditBody.data?.items ?? []).some((row) => row.target_id === shareToken),
+    JSON.stringify((shareAuditBody.data?.items ?? []).slice(0, 2)).slice(0, 200),
+  );
+
+  // 手动清除：阈值默认 0（永不清除）时返回空列表，不误删。
+  const purgeResponse = await fetch(`${base}/api/v1/app/admin/share-links/purge`, {
+    method: "POST", headers: bearer(shareAdminRoleSession), body: JSON.stringify({}),
+  });
+  const purgeBody = await purgeResponse.json();
+  check(
+    "阈值未开启时手动清除返回空列表（不删除任何短链）",
+    purgeResponse.status === 200 && Array.isArray(purgeBody.data?.removed) && purgeBody.data.removed.length === 0,
+    `${purgeResponse.status} ${JSON.stringify(purgeBody).slice(0, 160)}`,
+  );
+
+  // 段尾清理：把本段造出来的 admin / viewer 账号删掉（删账号会级联清掉它的会话），
+  // 不给后续断言与下一次运行留脏数据。
+  const shareAdminRoleId = shareAdminRoleLogin.body.data?.admin?.id;
+  if (shareAdminRoleId) {
+    const cleanupShareAdmin = await fetch(`${base}/api/v1/admin/auth/users/${shareAdminRoleId}`, {
+      method: "DELETE", headers: bearer(adminSession),
+    });
+    check("清理分享段 admin 角色账号（204）", cleanupShareAdmin.status === 204, `实际 ${cleanupShareAdmin.status}`);
+  }
+  const shareViewerRoleId = shareViewerLogin.body.data?.admin?.id;
+  if (shareViewerRoleId) {
+    const cleanupShareViewer = await fetch(`${base}/api/v1/admin/auth/users/${shareViewerRoleId}`, {
+      method: "DELETE", headers: bearer(adminSession),
+    });
+    check("清理分享段 viewer 账号（204）", cleanupShareViewer.status === 204, `实际 ${cleanupShareViewer.status}`);
+  }
 
   // ---------- 翻页起点（防「第一页拿到第二页的歌」回归）----------
   //

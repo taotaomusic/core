@@ -251,6 +251,11 @@ node server\tools\min-version.mjs --version 55
 
 新增 `com.taotao.music.update` 包，与 `player` / `data` 平级：
 
+> **模块化现状（2026-11）**：`update/` 与 `hotfix/` 两包已抽成独立 Gradle 模块 `:hotupdate`
+>（包名保持不变，插桩白名单、R8 keep 与补丁方法键都以前缀为准）。宿主经 `UpdateHost`
+> 契约注入令牌、设备号、远程配置与划掉记录，实现见 androidApp 的
+> `update/TaotaoUpdateHost.kt`；强制更新门禁 UI（`ui/update/UpdateGate.kt`）仍留在 androidApp。
+
 | 文件 | 职责 |
 | --- | --- |
 | `update/AppUpdateApi.kt` | `bootstrap` 请求。`HttpURLConnection` 风格对齐 `TencentMusicApi`；令牌可选，不复用 `authorized()` 的强制鉴权与重放逻辑 |
