@@ -64,6 +64,9 @@ object SharePosterRenderer {
     private val BackgroundTop = Color.parseColor("#FFFBF9")
     private val BackgroundBottom = Color.parseColor("#FFEDE7")
     private val Coral = Color.parseColor("#FA5E5B")
+    // 小标签实际承载文字，珊瑚色在白底上偏浅，单独压深一档保证缩略图下也读得清。
+    private val CoralDeep = Color.parseColor("#D6403D")
+    private val CoralTint = Color.parseColor("#1FFA5E5B")
     private val Ink = Color.parseColor("#231E1D")
     private val InkSecondary = Color.parseColor("#8A8280")
     private val InkFaint = Color.parseColor("#A69B98")
@@ -137,10 +140,58 @@ object SharePosterRenderer {
         canvas.drawText("听见这一刻", wordmarkX, HeaderTop + 98f, textPaint(24f, InkSecondary))
 
         // 右上角小标：强调这是「分享图」，同时平衡左侧字标的重量。
-        val tagPaint = textPaint(23f, Coral, bold = true)
+        drawShareTag(canvas)
+    }
+
+    /** 右上角「与你分享」胶囊：浅珊瑚底 + 深珊瑚文字，附分享图标提升辨识度。 */
+    private fun drawShareTag(canvas: Canvas) {
         val tag = "与你分享"
+        val tagPaint = textPaint(22f, CoralDeep, bold = true)
         val tagWidth = tagPaint.measureText(tag)
-        canvas.drawText(tag, Width - Padding - tagWidth, HeaderTop + 62f, tagPaint)
+        val glyphSize = 18f
+        val glyphGap = 9f
+        val horizontalPadding = 18f
+        val pillHeight = 42f
+        val pill = RectF(
+            Width - Padding - (horizontalPadding * 2 + glyphSize + glyphGap + tagWidth),
+            HeaderTop + 22f,
+            Width - Padding,
+            HeaderTop + 22f + pillHeight,
+        )
+        canvas.drawRoundRect(
+            pill,
+            pillHeight / 2f,
+            pillHeight / 2f,
+            Paint(Paint.ANTI_ALIAS_FLAG).apply { color = CoralTint },
+        )
+
+        val glyphCenterX = pill.left + horizontalPadding + glyphSize / 2f
+        drawShareGlyph(canvas, glyphCenterX, pill.centerY(), glyphSize / 2f)
+
+        val metrics = tagPaint.fontMetrics
+        val baseline = pill.centerY() - (metrics.ascent + metrics.descent) / 2f
+        canvas.drawText(tag, glyphCenterX + glyphSize / 2f + glyphGap, baseline, tagPaint)
+    }
+
+    /** 三节点分享图标，纯 Path 绘制，不依赖图标字体或位图资源。 */
+    private fun drawShareGlyph(canvas: Canvas, centerX: Float, centerY: Float, radius: Float) {
+        val leftX = centerX - radius * 0.72f
+        val rightX = centerX + radius * 0.62f
+        val topY = centerY - radius * 0.62f
+        val bottomY = centerY + radius * 0.62f
+        val link = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = CoralDeep
+            strokeWidth = radius * 0.3f
+            strokeCap = Paint.Cap.ROUND
+        }
+        canvas.drawLine(leftX, centerY, rightX, topY, link)
+        canvas.drawLine(leftX, centerY, rightX, bottomY, link)
+
+        val node = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = CoralDeep }
+        val nodeRadius = radius * 0.34f
+        canvas.drawCircle(leftX, centerY, nodeRadius, node)
+        canvas.drawCircle(rightX, topY, nodeRadius, node)
+        canvas.drawCircle(rightX, bottomY, nodeRadius, node)
     }
 
     private suspend fun drawCover(canvas: Canvas, context: Context, song: Song) {
@@ -201,10 +252,11 @@ object SharePosterRenderer {
 
     private fun drawSongText(canvas: Canvas, song: Song) {
         val contentWidth = Width - Padding * 2
-        val titlePaint = textPaint(54f, Ink, bold = true)
+        val titlePaint = textPaint(54f, Ink, black = true)
         canvas.drawText(
             ellipsize(titlePaint, song.title, contentWidth),
-            Padding,
+            // 黑体字面左右留白比正文大，左移 2px 让笔画与下方歌手信息的基准线视觉齐平。
+            Padding - 2f,
             1278f,
             titlePaint,
         )
@@ -252,7 +304,9 @@ object SharePosterRenderer {
         )
 
         val qr = encodeQr(url, 480)
-        val inset = 14f
+        // 二维码四周留足白边：卡片留白 18px，再叠加编码器自带的 2 个模块静区，
+        // 缩略转发或被平台二次压缩后仍能稳定识别。
+        val inset = 18f
         val qrRect = RectF(card.left + inset, card.top + inset, card.right - inset, card.bottom - inset)
         canvas.drawBitmap(
             qr,
@@ -321,7 +375,7 @@ object SharePosterRenderer {
             mapOf(
                 EncodeHintType.ERROR_CORRECTION to ErrorCorrectionLevel.M,
                 EncodeHintType.CHARACTER_SET to "UTF-8",
-                EncodeHintType.MARGIN to 1,
+                EncodeHintType.MARGIN to 2,
             ),
         )
         val pixels = IntArray(sizePx * sizePx)
@@ -334,14 +388,14 @@ object SharePosterRenderer {
         return Bitmap.createBitmap(pixels, sizePx, sizePx, Bitmap.Config.ARGB_8888)
     }
 
-    private fun textPaint(size: Float, color: Int, bold: Boolean = false): Paint =
+    private fun textPaint(size: Float, color: Int, bold: Boolean = false, black: Boolean = false): Paint =
         Paint(Paint.ANTI_ALIAS_FLAG).apply {
             textSize = size
             this.color = color
-            typeface = if (bold) {
-                Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
-            } else {
-                Typeface.SANS_SERIF
+            typeface = when {
+                black -> Typeface.create("sans-serif-black", Typeface.BOLD)
+                bold -> Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+                else -> Typeface.SANS_SERIF
             }
         }
 

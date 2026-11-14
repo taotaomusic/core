@@ -82,6 +82,8 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
     // ---- 平台依赖：与原主入口的 remember { ... } 一一对应 ----
     val authSession = AuthSession(context)
     val audioPlayer = AudioPlayer(context)
+    /** 进程级耗电诊断入口；播放服务回调同一个实例记录后台暂停/续播。 */
+    val powerDiagnostics = TaotaoApplication.powerDiagnostics
     /**
      * 音乐接口客户端，与播放服务用同一个工厂产出。
      *
@@ -210,6 +212,7 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
     /** 排行榜整页开关；页内的目录 / 详情两视图由 rankingPage.selected 决定。 */
     var showRankingPage by mutableStateOf(false)
     var showSettingsPage by mutableStateOf(false)
+    var showPowerDiagnosticsPage by mutableStateOf(false)
     var showSleepTimerDialog by mutableStateOf(false)
     var showProfilePage by mutableStateOf(false)
     var bottomTab by mutableIntStateOf(0)
@@ -1012,6 +1015,7 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
         closePlayerDetail()
         showSearchPage = false
         showSettingsPage = false
+        showPowerDiagnosticsPage = false
         showProfilePage = false
         mineLibrarySection = null
         playlist.closeAll()

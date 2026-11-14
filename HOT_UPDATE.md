@@ -255,6 +255,10 @@ node server\tools\min-version.mjs --version 55
 >（包名保持不变，插桩白名单、R8 keep 与补丁方法键都以前缀为准）。宿主经 `UpdateHost`
 > 契约注入令牌、设备号、远程配置与划掉记录，实现见 androidApp 的
 > `update/TaotaoUpdateHost.kt`；强制更新门禁 UI（`ui/update/UpdateGate.kt`）仍留在 androidApp。
+> 其它 Kotlin 客户端用 `HotUpdate` 门面接入（`hotupdate/README.md` 有 30 秒接入指南）；
+> Node 侧配套 `hotupdate-node/` SDK（bootstrap 客户端、灰度分桶、TOTP、管理接口）。
+
+下表为**拆分前** androidApp 内的原始布局（现 update/hotfix 两包位于 `hotupdate/src/main/java/`，职责不变）：
 
 | 文件 | 职责 |
 | --- | --- |

@@ -43,7 +43,7 @@
 | 模块 | 文件/节点 | 主要职责 | 关键入口或文件 |
 | --- | ---: | --- | --- |
 | `androidApp` | 85 / 2,439 | Android 生命周期、Compose 页面、账号与本地 Store、网络适配、Media3 播放、IM。`ui/` 已拆 15 个功能子包（account/ai/app/auth/chat/common/home/library/mine/player/playlist/search/settings/theme/update），全局状态在 `ui/app/` 状态容器（`TaotaoAppState`、`SearchState`、`PlaylistState`、`AppEffects`、`AppDialogs`、`AppPageRouter`、`AppContent`）；热更新与热修复已拆到 `:hotupdate` 模块，宿主接线在 `update/TaotaoUpdateHost.kt` | `MainActivity.kt`、`TaotaoMusicApp.kt`、`TencentMusicApi.kt`、`AudioPlayer.kt`、`PlaybackService.kt` |
-| `hotupdate` | 待刷新（`codegraph sync`） | 整包更新 + 远程配置（`update/`）与 DEX 热修运行时（`hotfix/`）；包名不变，宿主经 `UpdateHost` 契约注入令牌、设备号与本地存储 | `update/UpdateManager.kt`、`update/UpdateHost.kt`、`hotfix/HotfixLoader.kt` |
+| `hotupdate` | 待刷新（`codegraph sync`） | 整包更新 + 远程配置（`update/`）与 DEX 热修运行时（`hotfix/`）；包名不变，宿主经 `UpdateHost` 契约注入令牌、设备号与本地存储；其它 Kotlin 客户端从 `HotUpdate` 门面接入 | `update/UpdateManager.kt`、`update/HotUpdate.kt`、`update/UpdateHost.kt`、`hotfix/HotfixLoader.kt` |
 | `shared` | 6 / 52 | Kotlin Multiplatform 纯模型和规则：歌曲、歌词、音质与解析器 | `MusicModels.kt`、`Lyric.kt`、`AudioQuality.kt` |
 | `player-ui` | 23 / 381 | Android、Web 共用的播放主题、歌曲行、迷你播放器、播放布局和状态视图；`theme/` 是 Taotao 设计 token 与组件，`layout/` 承载主布局骨架 | `SharedMiniPlayer.kt`、`PlayerSurface.kt`、`layout/SharedMainLayout.kt`、`theme/AppleStyleTheme.kt` |
 | `webApp` | 4 / 106 | Kotlin/Wasm 分享播放器，只负责公开试听页和浏览器音频适配 | `Main.kt`、`WebAudioController.kt` |
@@ -70,6 +70,7 @@
 | --- | ---: | --- | --- |
 | `build-logic` | 8 / 68 | Gradle convention/plugin、热修复字节码插桩 | 编译期能力，不应被运行时模块反向依赖 |
 | `patch` | 2 / 24 | 独立 DEX 补丁入口和补丁构建配置 | 通过 `compileOnly` 读取宿主产物（androidApp + hotupdate + shared 的 kotlin-classes），不打入 APK |
+| `hotupdate-node` | Node SDK（未纳入 CodeGraph） | 热更新的 Node 客户端与运维 SDK：bootstrap 客户端、灰度分桶（与服务端同源）、TOTP、发布/放量/补丁/远程配置管理接口；协议锚点 `src/protocol.ts` | `src/client.ts`、`src/admin.ts`、`src/bucket.ts`、`src/totp.ts` |
 
 索引还记录根目录的 `build.gradle.kts`、`settings.gradle.kts`、`gradle.properties`、`version.properties` 以及维护脚本；这些文件用于定位构建边界，但不计入上面的运行模块职责。
 

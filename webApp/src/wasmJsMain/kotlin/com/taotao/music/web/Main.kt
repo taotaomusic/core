@@ -1,3 +1,8 @@
+// Kotlin 2.4 起 org.w3c.dom 互操作声明（fetch/Response/JsString）与 @JsFun 挂在
+// ExperimentalWasmJsInterop 后面。本文件就是 wasm 浏览器互操作胶水层，逐处 @OptIn
+// 没有意义，统一文件级豁免。
+@file:OptIn(kotlin.js.ExperimentalWasmJsInterop::class)
+
 package com.taotao.music.web
 
 import androidx.compose.foundation.background

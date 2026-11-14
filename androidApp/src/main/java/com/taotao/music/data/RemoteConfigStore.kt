@@ -46,13 +46,15 @@ class RemoteConfigStore(context: Context) : UpdateConfigStore {
         mirror.commit(RemoteConfigSnapshot(version, values))
     }
 
-    override fun text(key: String, default: String): String = mirror.current().values[key]?.takeIf { it.isNotBlank() } ?: default
+    override fun text(key: String, default: String): String =
+        mirror.current().values[key]?.takeIf { it.isNotBlank() } ?: default
 
-    override fun boolean(key: String, default: Boolean): Boolean = when (mirror.current().values[key]?.lowercase()) {
-        "true", "1", "yes" -> true
-        "false", "0", "no" -> false
-        else -> default
-    }
+    override fun boolean(key: String, default: Boolean): Boolean =
+        when (mirror.current().values[key]?.lowercase()) {
+            "true", "1", "yes" -> true
+            "false", "0", "no" -> false
+            else -> default
+        }
 
     override fun int(key: String, default: Int): Int = mirror.current().values[key]?.toIntOrNull() ?: default
 

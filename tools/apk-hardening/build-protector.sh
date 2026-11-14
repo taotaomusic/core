@@ -140,6 +140,24 @@ fi
 [ "$(git -C "$SRC" rev-parse HEAD)" = "$XOP_COMMIT" ] \
   || fail "上游提交校验失败：期望 $XOP_COMMIT"
 
+# 本地补丁只改 packer，不改 native；补丁目录参与 CI 引擎缓存 key。
+# 当前补丁：True-VMP 入口按运行时类型拆箱，包装类形参会撑大寄存器宽度，
+# 导致后续引用参数读到空寄存器（PlaybackSyncStore 线上 NPE 的根因）。
+PATCH_DIR="$SCRIPT_DIR/patches"
+if [ -d "$PATCH_DIR" ]; then
+  for patch in "$PATCH_DIR"/*.patch; do
+    [ -e "$patch" ] || continue
+    # --source-dir 复用同一份源码时补丁已经在，直接跳过，避免二次运行失败。
+    if git -C "$SRC" apply --reverse --check "$patch" >/dev/null 2>&1; then
+      echo "==> 补丁已应用，跳过: $(basename "$patch")"
+      continue
+    fi
+    echo "==> 应用加固引擎补丁: $(basename "$patch")"
+    git -C "$SRC" apply --check "$patch" || fail "补丁无法应用: $(basename "$patch")"
+    git -C "$SRC" apply "$patch"
+  done
+fi
+
 # 只编译 arm64-v8a：上游默认构建四个 ABI，桃桃音乐 APK 只打包 arm64。
 NATIVE_GRADLE="$SRC/native/build.gradle.kts"
 [ -f "$NATIVE_GRADLE" ] || fail "找不到 $NATIVE_GRADLE"

@@ -15,7 +15,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
@@ -28,10 +27,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.taotao.music.playerui.theme.TaotaoMiuixTheme
 import com.taotao.music.playerui.theme.TaotaoShapes
 import com.taotao.music.playerui.theme.TaotaoSpacing
 import com.taotao.music.update.UpdateStage
 import com.taotao.music.update.UpdateStatus
+import top.yukonga.miuix.kmp.window.WindowDialog
 
 /**
  * 强制更新页顶部图标的尺寸。
@@ -123,10 +124,14 @@ fun OptionalUpdateDialog(
     onRetry: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    AlertDialog(
-        onDismissRequest = { if (status.stage != UpdateStage.DOWNLOADING) onDismiss() },
-        title = { Text("发现新版本 ${status.release?.versionName ?: ""}") },
-        text = {
+    // 对话框骨架走 Miuix WindowDialog（居中卡片 + 返回手势关闭）；
+    // 下载进行中不给关闭入口（遮罩点击的 onDismissRequest 也按阶段放行）。
+    TaotaoMiuixTheme {
+        WindowDialog(
+            show = true,
+            title = "发现新版本 ${status.release?.versionName ?: ""}",
+            onDismissRequest = { if (status.stage != UpdateStage.DOWNLOADING) onDismiss() },
+        ) {
             Column(Modifier.heightIn(max = OptionalUpdateNoteMaxHeight).verticalScroll(rememberScrollState())) {
                 Text(
                     status.release?.releaseNote?.takeIf { it.isNotBlank() } ?: "建议更新到最新版本。",
@@ -136,13 +141,17 @@ fun OptionalUpdateDialog(
                 Spacer(Modifier.height(TaotaoSpacing.md))
                 UpdateActionArea(status, onDownload = onDownload, onInstall = onInstall, onRetry = onRetry)
             }
-        },
-        confirmButton = {},
-        dismissButton = {
             // 下载过程中不提供关闭入口，避免用户以为取消了但下载还在继续。
-            if (status.stage != UpdateStage.DOWNLOADING) TextButton(onClick = onDismiss) { Text("稍后再说") }
-        },
-    )
+            if (status.stage != UpdateStage.DOWNLOADING) {
+                TextButton(
+                    onClick = onDismiss,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = TaotaoSpacing.sm),
+                ) { Text("稍后再说") }
+            }
+        }
+    }
 }
 
 /** 按阶段渲染操作区，强制与可选两种界面共用，避免两处各写一份按钮逻辑。 */

@@ -10,7 +10,8 @@
 - `player-ui/`：Android、Windows、Web 共用的播放主题、歌曲行、迷你播放器和布局组件。
 - `shared/`：跨平台共享的数据模型、歌词解析和音质规则，代码放在 `src/commonMain/`。
 - `patch/`、`build-logic/`：热修复补丁模块与 Gradle/字节码插桩构建逻辑。
-- `hotupdate/`：热更新独立模块 —— 整包更新 + 远程配置（`update` 包）与 DEX 热修运行时（`hotfix` 包）。包名与插桩白名单、R8 keep、补丁方法键绑定，**不可改名**；androidApp 经 `UpdateHost` 契约注入能力（接线在 `androidApp/.../update/TaotaoUpdateHost.kt`），强制更新门禁 UI 仍在 androidApp 的 `ui/update/`。
+- `hotupdate/`：热更新独立模块 —— 整包更新 + 远程配置（`update` 包）与 DEX 热修运行时（`hotfix` 包）。包名与插桩白名单、R8 keep、补丁方法键绑定，**不可改名**；androidApp 经 `UpdateHost` 契约注入能力（接线在 `androidApp/.../update/TaotaoUpdateHost.kt`），强制更新门禁 UI 仍在 androidApp 的 `ui/update/`。其它 Kotlin 客户端用 `HotUpdate` 门面接入；非 Compose 界面订阅 `UpdateManager.statusFlow` / `events`（StateFlow/SharedFlow），快速调用见 `hotupdate/README.md`。
+- `hotupdate-node/`：热更新的 Node 客户端与运维 SDK（零运行时依赖）—— `/app/bootstrap` 客户端（超时/重试）、带 sha256 校验的断点续传下载、与服务端同源的灰度分桶算法、TOTP 动态码、发布/放量/补丁/远程配置的管理 SDK，以及 `createHotUpdateServer` 零依赖可自建热更新后端（与主服务端同契约的参考实现）；协议兼容锚点在 `src/protocol.ts`，快速调用见 `hotupdate-node/README.md`。
 - `crypto/`：传输层加密层的**产物目录**，只放 `dist/`（四端编译产物），用 `tools/fetch-crypto.ps1` 从 tools 仓库的 Release 拉取。本地**不需要**安装 Rust / Android NDK / wasm-bindgen 等交叉编译环境。
 - `crypto-src/`：传输层加密层的**Rust 源码**（`core/jni/node/wasm` 四 crate + 自带 `.github/workflows/`）。它由 `tools/sync-repos.ps1` 推到 GitHub `tools` 仓库，交叉编译由那边的 GitHub Actions 负责，产物发 Release 后再经 `fetch-crypto.ps1` 落回 `crypto/dist/`。改加密协议在这里改，别去 `crypto/dist/` 动产物。
 - 根目录 Gradle 文件：定义上述客户端模块和 `:shared` 的构建关系。
@@ -28,13 +29,9 @@
 > 加密产物（`.so`/`.node`）在**同一次 run** 内经 `upload/download-artifact` 流转给下游，
 > 不再跨仓/Release 拉取。**唯一例外是分享播放器**：`client-web` 只在客户端路径改动时才跑，
 > 所以后端 job 改为从**本仓库**的 `share-player-latest` Release 拉（此前拉的是已冻结的
-> `hdppppppp/music` 镜像仓）。PSK 已改**后端动态下发**，产物不含密钥，故 core 可公开。
->
-> ⚠️ **2026-10-18 起：本仓库本地只保留 `core` 一个远端。** 旧的 `music`/`music-server`/`tools`
-> 三个 GitHub 镜像远端与 gitee 的 `origin` 远端**已从本地配置移除**（远端仓库本身未动，仍可访问），
-> 旧 `sync/client`、`sync/crypto`、`sync/server` 本地快照分支亦已删除。
-> 分支/远端已统一为 `main` + `core`；所有历史 SHA 见 `.workbuddy-ai/memory/branch-backup-2026-10-18.txt`。
-> `tools/sync-repos.ps1` 已**停用**（文件保留备查）。
+> `hdppppppp/music` 镜像仓）。`gitee` 的 `origin` 继续做全量备份。
+> `tools/sync-repos.ps1` 已**停用**（文件保留备查）；旧的 `music`/`music-server`/`tools`
+> 三仓及其 Release **暂时保留**、不再更新。PSK 已改**后端动态下发**，产物不含密钥，故 core 可公开。
 >
 > 本地开发若需加密产物：`tools/fetch-crypto.ps1`（默认从 core 的 `crypto-latest` Release 拉），
 > 或直接在 `crypto-src/` 下 `cargo build`。
@@ -90,8 +87,7 @@ GitHub 侧三个仓库（music / music-server / tools）都是**正式仓库**�
 - **git 远端 `core` 走 SSH**（`git@github.com:taotaomusic/core.git`），身份 `hdppppppp`，可推可删分支。
 - ⚠️ **SSH 密钥不能建 PR**：SSH 只承载 `git-upload-pack` / `git-receive-pack`（推拉代码），PR 走 REST API 只认 Bearer token。两者是**并行的两套认证体系**，设计上不通用。
 - ⚠️ **GitHub connector 默认只有读权限**：调 `POST /pulls` 返回 `403 Resource not accessible by integration`。要建 PR 得用 PAT（classic 勾 `repo`；仓库公开时 `public_repo` 也够）或给对应 GitHub App 开 `Pull requests: Read and write`。
-- ⚠️ **本仓库只有 `core` 一个远端**（2026-10-18 起）：`git push` 默认目标即 `core`。旧的 gitee `origin`
-  与三个 GitHub 镜像远端已移除，不要再写 `git push origin`；如需备份，先 `git remote add` 临时加回。
+- ⚠️ **`git push` 到 `origin`（gitee）与推 `core`（GitHub）是两件事**，别用推了 gitee 当作流程走完。
 
 </details>
 
@@ -122,36 +118,11 @@ GitHub 侧三个仓库（music / music-server / tools）都是**正式仓库**�
 ## 源码可读性
 
 - 生产源码不得压缩、混淆或以单行形式提交；必须保持正常缩进、换行、命名和必要注释。
-- Release 构建启用 R8 收缩 + 资源收缩（`isMinifyEnabled = true`），并与热修复插桩共存：规则见 `androidApp/proguard-rules.pro`——不混淆、关闭优化（R8 无 per 规则禁内联，`-dontoptimize` 连带覆盖）、插桩域整包 keep（data/player 两包在 androidApp，update/hotfix 两包的 keep 随 `hotupdate/consumer-rules.pro` 下发），堆栈保持可读，自研逻辑不收缩，库树照常裁剪。
+- Release 构建启用 R8 收缩 + 资源收缩（`isMinifyEnabled = true`），并与热修复插桩共存：规则见 `androidApp/proguard-rules.pro`——不混淆、关闭优化（R8 无 per 规则禁内联，`-dontoptimize` 连带覆盖）、插桩三包（data/player/update）整包 keep，堆栈保持可读，自研逻辑不收缩，库树照常裁剪。
 - 使用 Kotlin 官方风格：四个空格缩进，类型和 Composable 使用 `UpperCamelCase`，函数和属性使用 `lowerCamelCase`。
 - 公共组件、共享模型和非直观的状态转换必须添加简体中文说明。
 - 修改后使用 Android Studio Kotlin formatter 格式化代码。
 - TypeScript 源码也必须保持正常换行、缩进和模块职责边界；压缩仅允许发生在构建产物中。
-
-## 代码注释规范
-
-注释一律使用简体中文（技术名词可保留英文原名，首次出现附中文说明）。
-
-- **公共 API 用文档注释**：Kotlin 用 KDoc（`/** */`），TypeScript 用 JSDoc（`/** */`），说明职责、参数含义和边界条件。正文写清楚即可，不强制逐个 `@param` 罗列。
-- **行内注释只解释「为什么」**：`//` 注释记录非直观的决策、踩坑、契约约束（例如"为什么不能透传上游 401"），不复述代码在做什么；代码已经自明的就不写注释。
-- **段落分隔条统一一种格式**：长文件内分组用一行式 `// ==================== 标题 ====================`（前后各 20 个等号），Kotlin 与 TypeScript 同一格式，不使用 `-----` 分隔线，也不使用上下包夹的三行式。
-- **注释与代码同步**：改代码必须同步改注释，过时的注释比没有注释更糟。迁移或重构后，指向旧位置（旧类名、旧文件路径）的注释要一并更新。TODO/FIXME 必须写明背景，修掉后立即删除，不留长期挂账。
-- **禁止内容**：注释里不得出现密钥、令牌、内网地址等敏感信息；不得保留被注释掉的死代码，历史版本交给 git。
-- **示例**（摘自现有代码的标准写法）：
-
-  ```kotlin
-  /**
-   * 歌手主页资料。
-   *
-   * [source] 是音源（当前固定酷我），与歌曲自身的来源语义一致地透传给服务端。
-   */
-  fun artistDetail(artistId: Long, source: String): ArtistDetail { ... }
-  ```
-
-  ```typescript
-  // `a**b` 里的空段没有对应编码
-  if (part === "") return;
-  ```
 
 ## 构建与运行
 

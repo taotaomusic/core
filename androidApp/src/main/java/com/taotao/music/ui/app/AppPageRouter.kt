@@ -53,6 +53,7 @@ import com.taotao.music.ui.playlist.PlaylistEditorMode
 import com.taotao.music.ui.playlist.PlaylistLibraryPage
 import com.taotao.music.ui.ranking.RankingPage
 import com.taotao.music.ui.search.SearchPage
+import com.taotao.music.ui.settings.PowerDiagnosticsPage
 import com.taotao.music.ui.settings.SettingsPage
 import com.taotao.music.ui.chat.ChatPageHost
 import com.taotao.music.data.im.ImConnectionInfo
@@ -91,6 +92,7 @@ internal fun TaotaoAppPageRouter(
         state.diarySong != null && state.showDiaryRecords -> "diary-records"
         state.diarySong != null -> "song-diary"
         state.showProfilePage -> "profile"
+        state.showPowerDiagnosticsPage -> "power-diagnostics"
         state.showSettingsPage -> "settings"
         // 歌手 / 专辑 / 在线歌单主页排在 search 之前：三者都是从搜索页进入的下级页。
         state.artistPage.selected != null -> "artist"
@@ -178,6 +180,14 @@ internal fun TaotaoAppPageRouter(
                     )
                 }
                 "settings" -> SettingsPageRoute(state)
+                "power-diagnostics" -> PowerDiagnosticsPage(
+                    diagnostics = state.powerDiagnostics,
+                    isPlaying = state.audioPlayer.isPlaying,
+                    currentSong = state.audioPlayer.queue.getOrNull(state.audioPlayer.currentIndex),
+                    imConnection = connection,
+                    onBack = { state.showPowerDiagnosticsPage = false },
+                    onMessage = { state.message = it },
+                )
                 "mine-favorites" -> MusicLibraryPage(
                     title = "收藏夹",
                     subtitle = "${state.favoriteLibrarySongs.size} 首 · 本地优先，后台同步账号收藏",
@@ -667,6 +677,7 @@ private fun SettingsPageRoute(state: TaotaoAppState) {
         onPickPlaybackQuality = { state.qualitySheet = QualitySheetKind.PLAYBACK_DEFAULT },
         onPickDownloadQuality = { state.qualitySheet = QualitySheetKind.DOWNLOAD_DEFAULT },
         onOpenSleepTimer = { state.showSleepTimerDialog = true },
+        onOpenPowerDiagnostics = { state.showPowerDiagnosticsPage = true },
         onPickAppearance = { mode -> state.applyAppearance(mode) },
         onBack = { state.showSettingsPage = false },
     )

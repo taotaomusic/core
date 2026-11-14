@@ -109,7 +109,7 @@ bash tools/apk-hardening/harden-apk.sh \
 方法键，加固后的业务 DEX 已收进 `assets/protector/dexes.zip`。登记、放量、上传都只用
 `*-protected.apk`；加固策略、校验项和 RASP 说明见 [APK_HARDENING.md](APK_HARDENING.md)。
 
-Release 构建启用 R8 收缩/优化与资源收缩，并与热修复插桩共存（不混淆、不内联、插桩域整包 keep——data/player 在 `androidApp/proguard-rules.pro`，update/hotfix 随 `hotupdate/consumer-rules.pro` 下发，见 AGENTS.md），签名配置读 `local.properties`,该文件不进版本库。
+Release 构建启用 R8 收缩/优化与资源收缩，并与热修复插桩共存（不混淆、不内联、插桩三包 keep，见 AGENTS.md 与 `androidApp/proguard-rules.pro`），签名配置读 `local.properties`,该文件不进版本库。
 
 ### 2. 登记(默认不放量)
 

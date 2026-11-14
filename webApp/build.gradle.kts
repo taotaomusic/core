@@ -18,15 +18,17 @@ kotlin {
 
     sourceSets {
         commonMain.dependencies {
-            implementation(compose.components.resources)
+            // compose.components.resources 在 CMP 1.12 已 @Deprecated，改显式坐标
+            // （版本同插件注入的 composeVersion = 1.12.1，理由见 player-ui 同款注释）。
+            implementation("org.jetbrains.compose.components:components-resources:1.12.1")
         }
         wasmJsMain.dependencies {
             implementation(project(":shared"))
             implementation(project(":player-ui"))
-            implementation(compose.runtime)
-            implementation(compose.foundation)
-            implementation(compose.material3)
-            implementation(compose.materialIconsExtended)
+            implementation("org.jetbrains.compose.runtime:runtime:1.12.1")
+            implementation("org.jetbrains.compose.foundation:foundation:1.12.1")
+            implementation("org.jetbrains.compose.material3:material3:1.9.0")
+            implementation("org.jetbrains.compose.material:material-icons-extended:1.7.3")
             implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
             implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
         }
