@@ -434,7 +434,10 @@ jobs:
   protector-tool:
     needs: [changes]
     if: needs.changes.outputs.client == 'true' || needs.changes.outputs.crypto == 'true'
-    runs-on: ubuntu-latest
+    # 固定 22.04：加固引擎是 NDK/CMake 原生编译，ubuntu-latest 已滚动到 24.04，
+    # 镜像升级会让引擎产物与缓存 key 之外的因素（glibc/clang 版本）漂移，
+    # 2026-11-21 实锤过一次「同代码旧镜像正常、新镜像产物真机必崩」。
+    runs-on: ubuntu-22.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
@@ -470,7 +473,9 @@ jobs:
     #    每天都是冷构建；② Windows runner 的 IO/CPU 本身更慢。
     # 旧 music 仓 client.yml 必须 Windows 的唯一理由（incrementVersion 走 powershell）
     # 在 core 里已不存在，签名还原与版本号生成均已用 bash/node 重写，跨平台。
-    runs-on: ubuntu-latest
+    # 固定 22.04：D8/R8/NDK 随 runner 镜像滚动，24.04 产物在一加 Ace 5 上冷启动必崩
+    # （2026-11-21 排查：同代码 22.04 时代构建正常，24.04 构建必崩，见 hardening 排查记录）。
+    runs-on: ubuntu-22.04
     permissions:
       contents: write
     outputs:
