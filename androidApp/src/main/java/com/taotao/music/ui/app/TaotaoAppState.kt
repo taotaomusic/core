@@ -40,7 +40,6 @@ import com.taotao.music.data.SearchHistoryStore
 import com.taotao.music.data.SleepTimerStore
 import com.taotao.music.data.TencentMusicApi
 import com.taotao.music.data.bindDownloadedSongs
-import com.taotao.music.data.withCoverFallback
 import com.taotao.music.data.im.ImSessionStore
 import com.taotao.music.data.im.WukongImClient
 import com.taotao.music.model.Song
@@ -473,9 +472,7 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
                 null
             }
             val playable = when {
-                // 绑本地文件时保留在线封面（同 bindDownloadedSongs 的口径）：本地那份
-                // 当年可能没下下来封面，在线地址是搜索响应刚下发的。
-                offline != null -> song.withCoverFallback(offline)
+                offline != null -> offline.copy(favorited = song.favorited)
                 !isLocalFile && (remoteId?.let { it > 0L } == true || !song.mid.isNullOrBlank()) -> song.copy(
                     audioUri = TencentMusicApi.placeholderUri(
                         remoteId,

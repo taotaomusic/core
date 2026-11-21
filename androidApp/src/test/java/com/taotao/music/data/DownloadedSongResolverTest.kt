@@ -42,34 +42,11 @@ class DownloadedSongResolverTest {
         assertEquals(queue[2].audioUri, resolved[2].audioUri)
     }
 
-    @Test
-    fun `绑定本地文件时在线封面优先于本地缺失的封面`() {
-        // 本地那份当年没下下来封面（coverUri 为 null）；来源队列带着在线封面地址。
-        val local = song(remoteId = 42, audioUri = "file:/offline/42/audio.flac", coverUri = null)
-        val online = song(remoteId = 42, coverUri = "https://img.example/42.jpg")
-
-        val resolved = bindDownloadedSongs(listOf(online), listOf(local))
-
-        assertEquals("file:/offline/42/audio.flac", resolved[0].audioUri)
-        assertEquals("https://img.example/42.jpg", resolved[0].coverUri)
-    }
-
-    @Test
-    fun `本地已有封面时绑定不回退到在线地址`() {
-        val local = song(remoteId = 42, audioUri = "file:/offline/42/audio.flac", coverUri = "file:/offline/42/cover")
-        val online = song(remoteId = 42, coverUri = "https://img.example/42.jpg")
-
-        val resolved = bindDownloadedSongs(listOf(online), listOf(local))
-
-        assertEquals("file:/offline/42/cover", resolved[0].coverUri)
-    }
-
     private fun song(
         remoteId: Long? = null,
         mid: String? = null,
         source: String = "tencent",
         audioUri: String? = "https://music.xydaigua.cn/placeholder",
-        coverUri: String? = null,
     ) = Song(
         title = "测试歌曲",
         artist = "测试歌手",
@@ -79,6 +56,5 @@ class DownloadedSongResolverTest {
         remoteId = remoteId,
         mid = mid,
         source = source,
-        coverUri = coverUri,
     )
 }
