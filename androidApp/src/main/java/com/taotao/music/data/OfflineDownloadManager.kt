@@ -45,10 +45,8 @@ class OfflineDownloadManager(context: Context, private val tokenProvider: TokenP
             download(it.replaceFirst("http://", "https://"), target, onProgress)
         }
         // 音频是离线播放的必要条件，失败直接抛出；封面和歌词属于附加内容，失败不影响下载结果。
-        // 封面与音频一样把 http 明文地址升级成 https：Android 9+ 禁明文，不升级就是
-        // 「封面死活下不下来」，重启后这首歌永久没有封面。
         val cover = song.coverUri?.takeIf { it.startsWith("http") }
-            ?.let { runCatching { download(it.replaceFirst("http://", "https://"), File(dir, "cover")) }.getOrNull() }
+            ?.let { runCatching { download(it, File(dir, "cover")) }.getOrNull() }
         val lyric = lrc?.takeIf { it.isNotBlank() }
             ?.let { text -> runCatching { File(dir, "lyric.txt").apply { writeText(text) } }.getOrNull() }
         val lyricWords = yrc?.takeIf { it.isNotBlank() }
@@ -69,9 +67,6 @@ class OfflineDownloadManager(context: Context, private val tokenProvider: TokenP
             song.mid?.let { setProperty("mid", it) }
             song.type?.let { setProperty("type", it.toString()) }
             setProperty("source", song.source.ifBlank { "tencent" })
-            // 在线封面地址留作兜底：封面文件下载失败（弱网 / 上游抖动）时重启读取，
-            // 还能走网络补图，而不是让这首歌永久退化成音符占位块。
-            if (!song.coverUri.isNullOrBlank()) setProperty("onlineCover", song.coverUri)
         }.also { properties ->
             File(dir, "song.properties").outputStream().use { properties.store(it, "歌曲信息") }
         }
@@ -112,10 +107,7 @@ class OfflineDownloadManager(context: Context, private val tokenProvider: TokenP
             // 一首歌只留一个音频文件，所以这里不存在"挑哪个"的问题。
             audioUri = audioFilesIn(dir).first().toURI().toString(),
             remoteId = properties.getProperty("remoteId").toLong(),
-            // 封面两级兜底：本地文件优先（离线也有封面）；当年没下下来的走下载时
-            // 记下的在线地址补图，都不能保证时才真正置空（旧版本下载的歌没有 onlineCover）。
-            coverUri = File(dir, "cover").takeIf(File::isFile)?.toURI()?.toString()
-                ?: properties.getProperty("onlineCover")?.takeIf { it.isNotBlank() },
+            coverUri = File(dir, "cover").takeIf(File::isFile)?.toURI()?.toString(),
             lyricUri = File(dir, "lyric.txt").takeIf(File::isFile)?.toURI()?.toString(),
             // 早于本版本下载的歌没有 .yrc，逐字高亮会退化成整行高亮而不是报错。
             lyricWordsUri = File(dir, "lyric.yrc").takeIf(File::isFile)?.toURI()?.toString(),
