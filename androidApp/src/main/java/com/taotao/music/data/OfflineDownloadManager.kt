@@ -45,7 +45,12 @@ class OfflineDownloadManager(context: Context, private val tokenProvider: TokenP
             download(it.replaceFirst("http://", "https://"), target, onProgress)
         }
         // 音频是离线播放的必要条件，失败直接抛出；封面和歌词属于附加内容，失败不影响下载结果。
-        val cover = song.coverUri?.takeIf { it.startsWith("http") }
+        // 封面地址与音频一样先升级 https：旧歌单/上游可能存着 http 明文，Android 9+ 默认
+        // 禁明文，不升级就会静默失败，重启后这首歌永久没有封面。
+        val coverUrl = song.coverUri
+            ?.takeIf { it.startsWith("http") }
+            ?.replaceFirst("http://", "https://")
+        val cover = coverUrl
             ?.let { runCatching { download(it, File(dir, "cover")) }.getOrNull() }
         val lyric = lrc?.takeIf { it.isNotBlank() }
             ?.let { text -> runCatching { File(dir, "lyric.txt").apply { writeText(text) } }.getOrNull() }
@@ -67,13 +72,17 @@ class OfflineDownloadManager(context: Context, private val tokenProvider: TokenP
             song.mid?.let { setProperty("mid", it) }
             song.type?.let { setProperty("type", it.toString()) }
             setProperty("source", song.source.ifBlank { "tencent" })
+            // 在线封面地址留作兜底：封面文件下载失败（弱网 / 上游抖动）时重启读取，
+            // 还能走网络补图，而不是让这首歌永久退化成音符占位块。
+            if (!coverUrl.isNullOrBlank()) setProperty("onlineCover", coverUrl)
         }.also { properties ->
             File(dir, "song.properties").outputStream().use { properties.store(it, "歌曲信息") }
         }
         return song.copy(
             audioUri = audio?.toURI()?.toString() ?: song.audioUri,
-            // 封面或歌词下载失败时保留原地址，避免离线歌曲反而丢掉在线资源。
-            coverUri = cover?.toURI()?.toString() ?: song.coverUri,
+            // 封面或歌词下载失败时保留原地址，避免离线歌曲反而丢掉在线资源；
+            // 原地址若是 http 明文，用升级后的 https 版本，否则界面同样加载不出来。
+            coverUri = cover?.toURI()?.toString() ?: coverUrl ?: song.coverUri,
             lyricUri = lyric?.toURI()?.toString() ?: song.lyricUri,
             lyricWordsUri = lyricWords?.toURI()?.toString(),
             localQuality = quality,
@@ -107,7 +116,10 @@ class OfflineDownloadManager(context: Context, private val tokenProvider: TokenP
             // 一首歌只留一个音频文件，所以这里不存在"挑哪个"的问题。
             audioUri = audioFilesIn(dir).first().toURI().toString(),
             remoteId = properties.getProperty("remoteId").toLong(),
-            coverUri = File(dir, "cover").takeIf(File::isFile)?.toURI()?.toString(),
+            // 封面两级兜底：本地文件优先（离线也有封面）；当年没下下来的走下载时
+            // 记下的在线地址补图，都不能保证时才真正置空（旧版本下载的歌没有 onlineCover）。
+            coverUri = File(dir, "cover").takeIf(File::isFile)?.toURI()?.toString()
+                ?: properties.getProperty("onlineCover")?.takeIf { it.isNotBlank() },
             lyricUri = File(dir, "lyric.txt").takeIf(File::isFile)?.toURI()?.toString(),
             // 早于本版本下载的歌没有 .yrc，逐字高亮会退化成整行高亮而不是报错。
             lyricWordsUri = File(dir, "lyric.yrc").takeIf(File::isFile)?.toURI()?.toString(),

@@ -26,10 +26,26 @@ internal fun findDownloadedSong(song: Song, downloadedSongs: List<Song>): Song? 
     }
 }
 
+/**
+ * 把本地下载文件绑回在线歌曲。
+ *
+ * 音频、歌词和音质都用本地那份；封面优先本地文件，本地缺失时回退在线歌曲刚拿到的
+ * 封面地址。此前直接 `copy(favorited = ...)` 会把在线封面一起丢掉 —— 本地封面当年
+ * 没下下来时，明明在线地址是好的，重启后也会永久显示成音符占位块。
+ */
+internal fun bindDownloadedSong(online: Song, local: Song): Song = local.copy(
+    favorited = online.favorited,
+    coverUri = local.coverUri?.takeIf { it.startsWith("file:", ignoreCase = true) }
+        ?: online.coverUri?.takeIf { it.isNotBlank() }
+        ?: local.coverUri,
+)
+
 /** 把来源队列中的每一项都绑定到本机下载文件；未下载的项目保持原样走在线播放。 */
 internal fun bindDownloadedSongs(queue: List<Song>, downloadedSongs: List<Song>): List<Song> =
     queue.map { song ->
-        findDownloadedSong(song, downloadedSongs)?.copy(favorited = song.favorited) ?: song
+        findDownloadedSong(song, downloadedSongs)
+            ?.let { local -> bindDownloadedSong(song, local) }
+            ?: song
     }
 
 private fun Song.normalizedSource(): String =
