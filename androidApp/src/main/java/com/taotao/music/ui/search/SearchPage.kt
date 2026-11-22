@@ -330,7 +330,7 @@ fun SearchPage(
             )
             if (showClearConfirm) {
                 // 清空确认走 Miuix WindowDialog：破坏性操作用组件库对话框规格，
-                // 取消/清空两颗按钮用 Miuix TextButton（清空为危险动作，珊瑚色文字）。
+                // 取消/清空两颗按钮用 Miuix TextButton（清空为主操作，主色底白字）。
                 TaotaoMiuixTheme {
                     WindowDialog(
                         show = true,
@@ -350,7 +350,7 @@ fun SearchPage(
                                     onHistoryClear()
                                     showClearConfirm = false
                                 },
-                                colors = ButtonDefaults.textButtonColors(textColor = TaotaoCoral),
+                                colors = ButtonDefaults.textButtonColorsPrimary(),
                                 modifier = Modifier.weight(1f),
                             )
                         }
