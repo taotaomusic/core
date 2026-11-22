@@ -44,14 +44,6 @@ class UpdateManager(
     private val installer = UpdateInstaller(appContext)
     private val hotfix = HotfixInstaller(appContext, host.userAgent)
 
-    init {
-        // 单向桥接：flow 是事实源，Compose 状态只是它的视图。
-        // 订阅发生在构造线程（主线程），所有写路径都会先落 flow 再由这里同步给 Compose。
-        scope.launch {
-            _statusFlow.collect { status = it }
-        }
-    }
-
     /** 远程配置缓存，界面可直接读取，取不到时用代码内默认值。 */
     val remoteConfig: UpdateConfigStore get() = host.config
 
@@ -67,6 +59,15 @@ class UpdateManager(
 
     var status by mutableStateOf(UpdateStatus())
         private set
+
+    init {
+        // 单向桥接：flow 是事实源，Compose 状态只是它的视图。
+        // 必须放在 _statusFlow / status 初始化之后：Main.immediate 会在构造线程立即启动协程，
+        // 提前订阅会读到尚未初始化的字段（NPE）。
+        scope.launch {
+            _statusFlow.collect { status = it }
+        }
+    }
 
     /**
      * [status] 的 StateFlow 视图。
