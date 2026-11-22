@@ -17,7 +17,6 @@ import com.taotao.music.ui.playlist.PlaylistEditorDialog
 import com.taotao.music.ui.playlist.PlaylistEditorMode
 import com.taotao.music.ui.playlist.PlaylistPickerDialog
 import com.taotao.music.ui.playlist.PlaylistSongPickerDialog
-import com.taotao.music.ui.theme.TaotaoCoral
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
@@ -146,7 +145,7 @@ internal fun TaotaoAppDialogs(state: TaotaoAppState, inDetailActivity: Boolean =
                             state.pendingDelete = null
                             state.deleteDownloaded(target)
                         },
-                        colors = ButtonDefaults.textButtonColors(textColor = TaotaoCoral),
+                        colors = ButtonDefaults.textButtonColorsPrimary(),
                         modifier = Modifier.weight(1f),
                     )
                 }
