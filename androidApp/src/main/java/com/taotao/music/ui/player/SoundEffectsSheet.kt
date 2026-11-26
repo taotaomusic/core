@@ -239,7 +239,7 @@ fun SoundEffectsSheet(
                                 valueRange = 0f..100f,
                                 enabled = settings.enabled && (!status.sessionReady || supported),
                                 modifier = Modifier.weight(1f).semantics {
-                                    contentDescription = "$label强度，百分比"
+                                    contentDescription = "${label}强度，百分比"
                                 },
                             )
                             Text("${strength / 10}%", Modifier.width(42.dp), textAlign = TextAlign.End,
