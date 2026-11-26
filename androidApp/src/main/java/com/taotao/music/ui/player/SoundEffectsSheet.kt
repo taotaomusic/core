@@ -41,6 +41,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.taotao.music.model.SoundEffectPreset
+import com.taotao.music.model.SoundEffectScene
+import com.taotao.music.model.SoundEffectFrequenciesHz
 import com.taotao.music.model.SoundEffectsSettings
 import com.taotao.music.player.SoundEffectsStatus
 import com.taotao.music.playerui.theme.TaotaoMiuixTheme
@@ -105,8 +107,9 @@ fun SoundEffectsSheet(
                     SoundEffectPreset.entries.filter { it != SoundEffectPreset.CUSTOM }.chunked(2).forEach { row ->
                         Row(horizontalArrangement = Arrangement.spacedBy(TaotaoSpacing.xs)) {
                             row.forEach { preset ->
-                                PresetOption(
-                                    preset = preset,
+                                SoundEffectOption(
+                                    label = preset.label,
+                                    description = preset.description,
                                     selected = settings.preset == preset,
                                     enabled = equalizerEnabled,
                                     onClick = { onChange(settings.copy(preset = preset)) },
@@ -115,13 +118,29 @@ fun SoundEffectsSheet(
                             }
                         }
                     }
-                    PresetOption(
-                        preset = SoundEffectPreset.CUSTOM,
+                    SoundEffectOption(
+                        label = SoundEffectPreset.CUSTOM.label,
+                        description = SoundEffectPreset.CUSTOM.description,
                         selected = settings.preset == SoundEffectPreset.CUSTOM,
                         enabled = equalizerEnabled,
                         onClick = { onChange(settings.copy(preset = SoundEffectPreset.CUSTOM)) },
                         modifier = Modifier.fillMaxWidth(),
                     )
+                    Text("音效场景", fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = TaotaoSpacing.xs))
+                    SoundEffectScene.entries.chunked(2).forEach { row ->
+                        Row(horizontalArrangement = Arrangement.spacedBy(TaotaoSpacing.xs)) {
+                            row.forEach { scene ->
+                                SoundEffectOption(
+                                    label = scene.label,
+                                    description = scene.description,
+                                    selected = scene.matches(settings),
+                                    enabled = true,
+                                    onClick = { onChange(scene.applyTo(settings)) },
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                        }
+                    }
                 }
 
                 Column(
@@ -129,7 +148,7 @@ fun SoundEffectsSheet(
                         .background(colors.surface).padding(TaotaoSpacing.md),
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("五段均衡器", modifier = Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
+                        Text("十段均衡器", modifier = Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
                         TextButton(
                             onClick = { onChange(SoundEffectsSettings(enabled = settings.enabled)) },
                         ) { Text("重置音效") }
@@ -144,8 +163,10 @@ fun SoundEffectsSheet(
                         color = colors.onSurfaceVariant,
                     )
                     EqualizerCurve(settings.bandGains, equalizerEnabled)
-                    val labels = listOf("60 Hz", "230 Hz", "910 Hz", "3.6 kHz", "14 kHz")
-                    val descriptions = listOf("低频", "中低频", "中频", "中高频", "高频")
+                    val labels = SoundEffectFrequenciesHz.map { frequency ->
+                        if (frequency >= 1_000) "${frequency / 1_000} kHz" else "$frequency Hz"
+                    }
+                    val descriptions = listOf("超低频", "低频", "中低频", "低中频", "中频", "中频", "中高频", "高频", "超高频", "空气感")
                     settings.bandGains.forEachIndexed { index, gain ->
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(labels[index], Modifier.width(60.dp), style = MaterialTheme.typography.labelMedium)
@@ -189,6 +210,42 @@ fun SoundEffectsSheet(
                         style = MaterialTheme.typography.bodySmall,
                         color = colors.onSurfaceVariant,
                     )
+                    HorizontalDivider(Modifier.padding(vertical = TaotaoSpacing.sm))
+                    Text("空间与混响", fontWeight = FontWeight.SemiBold)
+                    Text(
+                        if (status.sessionReady && !status.spatialAvailable) {
+                            "声场展宽需要双声道 PCM；混响在单声道和立体声均可使用。"
+                        } else {
+                            "声场展宽保留中置人声；轻混响营造自然空间感。"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colors.onSurfaceVariant,
+                    )
+                    listOf(
+                        Triple("立体声展宽", settings.spatialStrength, status.spatialAvailable),
+                        Triple("空间混响", settings.reverbStrength, status.reverbAvailable),
+                    ).forEachIndexed { index, (label, strength, supported) ->
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(label, Modifier.width(88.dp), style = MaterialTheme.typography.labelMedium)
+                            Slider(
+                                value = strength / 10f,
+                                onValueChange = { value ->
+                                    val amount = value.roundToInt() * 10
+                                    onChange(
+                                        if (index == 0) settings.copy(spatialStrength = amount)
+                                        else settings.copy(reverbStrength = amount)
+                                    )
+                                },
+                                valueRange = 0f..100f,
+                                enabled = settings.enabled && (!status.sessionReady || supported),
+                                modifier = Modifier.weight(1f).semantics {
+                                    contentDescription = "$label强度，百分比"
+                                },
+                            )
+                            Text("${strength / 10}%", Modifier.width(42.dp), textAlign = TextAlign.End,
+                                style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
                 }
                 Text(
                     "仅调整本机音乐播放，不改变音源音质或下载文件。增益过高可能产生失真，请适度调整。",
@@ -202,8 +259,9 @@ fun SoundEffectsSheet(
 }
 
 @Composable
-private fun PresetOption(
-    preset: SoundEffectPreset,
+private fun SoundEffectOption(
+    label: String,
+    description: String,
     selected: Boolean,
     enabled: Boolean,
     onClick: () -> Unit,
@@ -220,11 +278,11 @@ private fun PresetOption(
     ) {
         Column(Modifier.weight(1f)) {
             Text(
-                preset.label,
+                label,
                 fontWeight = FontWeight.Medium,
                 color = if (enabled && selected) colors.primary else colors.onSurface.copy(alpha = if (enabled) 1f else 0.5f),
             )
-            Text(preset.description, style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant)
+            Text(description, style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant)
         }
         if (selected) {
             Icon(Icons.Default.Check, null, tint = colors.primary, modifier = Modifier.size(18.dp))

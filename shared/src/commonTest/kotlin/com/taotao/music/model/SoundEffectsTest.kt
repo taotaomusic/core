@@ -10,7 +10,7 @@ class SoundEffectsTest {
     fun `首次使用默认关闭且没有增强`() {
         val settings = SoundEffectsSettings()
         assertFalse(settings.enabled)
-        assertEquals(List(5) { 0 }, settings.bandGains)
+        assertEquals(List(SoundEffectFrequenciesHz.size) { 0 }, settings.bandGains)
         assertEquals(0, settings.bassStrength)
     }
 
@@ -24,16 +24,30 @@ class SoundEffectsTest {
     }
 
     @Test
+    fun `场景预设一起配置十段频响与空间效果`() {
+        val baseline = SoundEffectsSettings(enabled = false)
+        val wide = SoundEffectScene.WIDE.applyTo(baseline)
+        assertTrue(wide.enabled)
+        assertEquals(500, wide.spatialStrength)
+        assertTrue(SoundEffectScene.WIDE.matches(wide))
+        assertEquals(200, SoundEffectScene.LIVE.applyTo(baseline).reverbStrength)
+        assertEquals(300, SoundEffectScene.LIVE.applyTo(baseline).spatialStrength)
+        assertEquals(0, SoundEffectScene.ORIGINAL.applyTo(baseline).reverbStrength)
+        assertEquals(0, SoundEffectScene.ORIGINAL.applyTo(baseline).spatialStrength)
+    }
+
+    @Test
     fun `损坏的自定义频段补齐且限制增益与低音强度`() {
         val settings = SoundEffectsSettings(
             preset = SoundEffectPreset.CUSTOM,
             customGains = listOf(-9999, 9999),
             bassStrength = 2000,
         ).normalized()
-        assertEquals(listOf(-600, 600, 0, 0, 0), settings.bandGains)
+        assertEquals(SoundEffectFrequenciesHz.size, settings.bandGains.size)
+        assertEquals(listOf(-600, 600, 0, 0, 0, 0, 0, 0, 0, 0), settings.bandGains)
         assertEquals(1000, settings.bassStrength)
         assertEquals(0, settings.copy(bassStrength = -1).normalized().bassStrength)
-        assertEquals(5, settings.copy(customGains = List(10) { 1 }).normalized().customGains.size)
+        assertEquals(10, settings.copy(customGains = List(10) { 1 }).normalized().customGains.size)
     }
 
     @Test
@@ -44,7 +58,7 @@ class SoundEffectsTest {
         assertEquals(settings.bandGains.toMutableList().apply { set(2, 400) }, edited.bandGains)
         assertTrue(edited.enabled)
         assertEquals(settings, settings.withBandGain(-1, 400))
-        assertEquals(settings, settings.withBandGain(5, 400))
+        assertEquals(settings, settings.withBandGain(10, 400))
     }
 
     @Test
@@ -68,9 +82,9 @@ class SoundEffectsTest {
 
     @Test
     fun `设备频段以对数频率插值`() {
-        val settings = SoundEffectsSettings(preset = SoundEffectPreset.CUSTOM, customGains = listOf(-600, 600, 0, 0, 0))
-        // sqrt(60 * 230) 约为 117.5 Hz，是对数坐标的中点。
-        assertTrue(settings.gainAt(117) in -5..5)
+        val settings = SoundEffectsSettings(preset = SoundEffectPreset.CUSTOM, customGains = listOf(-600, -600, 600, 0, 0, 0, 0, 0, 0, 0))
+        // sqrt(62 * 125) 约为 88 Hz，是对数坐标的中点。
+        assertTrue(settings.gainAt(88) in -5..5)
         assertEquals(0, SoundEffectsSettings().gainAt(1000))
         for (frequency in 20..20000 step 37) {
             assertTrue(settings.gainAt(frequency) in -600..600)

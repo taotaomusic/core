@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import com.taotao.music.model.SoundEffectPreset
 import com.taotao.music.model.SoundEffectFrequenciesHz
 import com.taotao.music.model.SoundEffectsSettings
+import com.taotao.music.model.migrateLegacySoundEffectGains
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -32,10 +33,13 @@ class SoundEffectsStore(context: Context) {
         internal fun encode(settings: SoundEffectsSettings): String {
             val safe = settings.normalized()
             return JSONObject().apply {
+                put("schema", 2)
                 put("enabled", safe.enabled)
                 put("preset", safe.preset.name)
                 put("gains", JSONArray(safe.customGains))
                 put("bass", safe.bassStrength)
+                put("spatial", safe.spatialStrength)
+                put("reverb", safe.reverbStrength)
             }.toString()
         }
 
@@ -44,11 +48,18 @@ class SoundEffectsStore(context: Context) {
             return runCatching {
                 val json = JSONObject(value)
                 val gains = json.optJSONArray("gains")
+                val customGains = if (json.optInt("schema", 1) < 2) {
+                    migrateLegacySoundEffectGains(List(5) { gains?.optInt(it, 0) ?: 0 })
+                } else {
+                    List(SoundEffectFrequenciesHz.size) { gains?.optInt(it, 0) ?: 0 }
+                }
                 SoundEffectsSettings(
                     enabled = json.optBoolean("enabled", false),
                     preset = SoundEffectPreset.of(json.optString("preset")),
-                    customGains = List(SoundEffectFrequenciesHz.size) { gains?.optInt(it, 0) ?: 0 },
+                    customGains = customGains,
                     bassStrength = json.optInt("bass", 0),
+                    spatialStrength = json.optInt("spatial", 0),
+                    reverbStrength = json.optInt("reverb", 0),
                 ).normalized()
             }.getOrDefault(SoundEffectsSettings())
         }

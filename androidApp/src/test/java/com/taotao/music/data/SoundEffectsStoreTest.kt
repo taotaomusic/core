@@ -4,6 +4,7 @@ import com.taotao.music.model.SoundEffectPreset
 import com.taotao.music.model.SoundEffectsSettings
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 class SoundEffectsStoreTest {
     @Test
@@ -11,8 +12,10 @@ class SoundEffectsStoreTest {
         val settings = SoundEffectsSettings(
             enabled = true,
             preset = SoundEffectPreset.POP,
-            customGains = listOf(-100, 0, 200, 300, 100),
+            customGains = listOf(-100, 0, 200, 300, 100, 0, 0, 0, 0, 0),
             bassStrength = 350,
+            spatialStrength = 250,
+            reverbStrength = 150,
         )
         assertEquals(settings, SoundEffectsStore.decode(SoundEffectsStore.encode(settings)))
     }
@@ -30,7 +33,25 @@ class SoundEffectsStoreTest {
             """{"enabled":true,"preset":"REMOVED","gains":[-9999,9999],"bass":9000}""",
         )
         assertEquals(SoundEffectPreset.ORIGINAL, settings.preset)
-        assertEquals(listOf(-600, 600, 0, 0, 0), settings.customGains)
+        assertEquals(10, settings.customGains.size)
+        assertEquals(-600, settings.customGains.first())
+        assertTrue(settings.customGains.all { it in -600..600 })
         assertEquals(1000, settings.bassStrength)
+        assertEquals(0, settings.spatialStrength)
+        assertEquals(0, settings.reverbStrength)
+    }
+
+    @Test
+    fun `旧五段偏好按对数频率迁移为十段均衡`() {
+        val settings = SoundEffectsStore.decode(
+            """{"enabled":true,"preset":"CUSTOM","gains":[300,0,-100,200,100],"bass":250}""",
+        )
+        assertEquals(10, settings.customGains.size)
+        assertTrue(settings.gainAt(60) in 285..315)
+        assertTrue(settings.gainAt(230) in -30..30)
+        assertTrue(settings.gainAt(910) in -90..-70)
+        assertTrue(settings.gainAt(3600) in 160..190)
+        assertTrue(settings.gainAt(14000) in 95..115)
+        assertEquals(250, settings.bassStrength)
     }
 }

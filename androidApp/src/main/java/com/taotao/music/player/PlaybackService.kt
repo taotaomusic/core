@@ -1,3 +1,5 @@
+@file:OptIn(androidx.media3.common.util.UnstableApi::class)
+
 package com.taotao.music.player
 
 import android.content.Intent
@@ -198,7 +200,10 @@ class PlaybackService : MediaSessionService() {
             // 直链在上游 CDN 上，不需要也不应该带上我们的访问令牌。
             dataSpec.withUri(Uri.parse(direct))
         }
-        val createdPlayer = ExoPlayer.Builder(this)
+        val createdPlayer = ExoPlayer.Builder(
+            this,
+            SoundEffectsRenderersFactory(this, checkNotNull(soundEffects).audioProcessor),
+        )
             .setMediaSourceFactory(DefaultMediaSourceFactory(resolvingFactory))
             // 声明音乐用途，交由系统处理音频焦点；拔耳机时自动暂停。
             .setAudioAttributes(
