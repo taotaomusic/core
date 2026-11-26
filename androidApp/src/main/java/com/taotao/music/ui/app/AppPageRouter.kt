@@ -677,6 +677,12 @@ private fun SettingsPageRoute(state: TaotaoAppState) {
         onPickPlaybackQuality = { state.qualitySheet = QualitySheetKind.PLAYBACK_DEFAULT },
         onPickDownloadQuality = { state.qualitySheet = QualitySheetKind.DOWNLOAD_DEFAULT },
         onOpenSleepTimer = { state.showSleepTimerDialog = true },
+        soundEffectsLabel = if (state.audioPlayer.soundEffectsSettings.enabled) {
+            state.audioPlayer.soundEffectsSettings.preset.label
+        } else {
+            "关闭"
+        },
+        onOpenSoundEffects = { state.soundEffectsSheetInDetail = false },
         onOpenPowerDiagnostics = { state.showPowerDiagnosticsPage = true },
         onPickAppearance = { mode -> state.applyAppearance(mode) },
         onBack = { state.showSettingsPage = false },

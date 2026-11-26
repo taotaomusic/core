@@ -47,6 +47,7 @@ import com.google.common.util.concurrent.SettableFuture
 class PlaybackService : MediaSessionService() {
     private var player: ExoPlayer? = null
     private var mediaSession: MediaSession? = null
+    private var soundEffects: SoundEffectsController? = null
     private lateinit var musicApi: TencentMusicApi
     private val mainHandler = Handler(Looper.getMainLooper())
     private val lyricExecutor = Executors.newSingleThreadExecutor()
@@ -154,6 +155,7 @@ class PlaybackService : MediaSessionService() {
 
     override fun onCreate() {
         super.onCreate()
+        soundEffects = SoundEffectsController(this) { publishSleepTimerState() }
         val authSession = AuthSession(this)
         // 必须走 Application 的工厂：它带上进程级唯一的 CryptoTransport 与加密开关。
         // 此前这里直接 `TencentMusicApi(authSession, versionCode)`，两个加密参数都吃默认值
@@ -213,6 +215,10 @@ class PlaybackService : MediaSessionService() {
             .build()
             .apply {
                 addListener(object : Player.Listener {
+                    override fun onAudioSessionIdChanged(audioSessionId: Int) {
+                        soundEffects?.attach(audioSessionId)
+                    }
+
                     override fun onPlayerError(error: PlaybackException) {
                         Log.e(TAG, "音频播放失败", error)
                     }
@@ -273,6 +279,7 @@ class PlaybackService : MediaSessionService() {
             .setCallback(mediaSessionCallback)
             .setSessionExtras(sleepTimerExtras())
             .build()
+        soundEffects?.attach(createdPlayer.audioSessionId)
         // 媒体通知的自定义「收藏」按钮：Android 13+ 媒体控件与各 ROM 媒体卡
         // （含荣耀流体云）都渲染 session custom layout；图标随当前歌曲的收藏
         // 状态切换，切歌与点按时刷新。
@@ -312,6 +319,8 @@ class PlaybackService : MediaSessionService() {
         sleepTimerWaitingSongEnd = false
         lyricExecutor.shutdownNow()
         resumptionExecutor.shutdownNow()
+        soundEffects?.release()
+        soundEffects = null
         runCatching { mediaSession?.release() }
         runCatching { player?.release() }
         mediaSession = null
@@ -516,6 +525,7 @@ class PlaybackService : MediaSessionService() {
     }
 
     private fun sleepTimerExtras(): Bundle = Bundle().apply {
+        soundEffects?.status?.putInto(this)
         putBoolean(SleepTimerContract.ACTIVE, sleepTimerRemainingMs > 0L)
         putLong(SleepTimerContract.REMAINING_MS, sleepTimerRemainingMs.coerceAtLeast(0L))
         putBoolean(SleepTimerContract.WAITING_SONG_END, sleepTimerWaitingSongEnd)

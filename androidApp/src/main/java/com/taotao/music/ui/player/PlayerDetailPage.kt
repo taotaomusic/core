@@ -2,6 +2,7 @@ package com.taotao.music.ui.player
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -19,6 +20,7 @@ import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Share
@@ -109,6 +111,7 @@ internal fun PlayerDetailPage(
     sleepTimerRemainingMs: Long,
     sleepTimerWaitingSongEnd: Boolean,
     onOpenSleepTimer: () -> Unit,
+    onOpenSoundEffects: () -> Unit,
     onRefrainResolved: (Song, Long?, Long?) -> Unit,
     onOpenMv: (Song) -> Unit,
     // 歌手 / 专辑名点击跳转的宿主回调（AppPageRouter 装配到 TaotaoAppState 的跳转方法上）。
@@ -358,30 +361,40 @@ internal fun PlayerDetailPage(
                 )
             },
             quickActions = {
-                // 已下载的歌不提供可点却无效果的下载入口，只留一个对勾说明在放本地文件。
-                IconButton(onClick = onDownload, enabled = !isLocalFile) {
-                    Icon(
-                        if (isLocalFile) Icons.Default.CheckCircle else Icons.Default.Download,
-                        if (isLocalFile) "已下载" else "下载歌曲",
-                        tint = if (isLocalFile) MaterialTheme.colorScheme.onSurfaceVariant else TaotaoCoral,
-                    )
-                }
-                IconButton(onClick = onShare) {
-                    Icon(Icons.Default.Share, "分享歌曲", tint = TaotaoCoral)
-                }
-                if (song.source == TencentMusicApi.SEARCH_SOURCE_KUWO && song.remoteId?.let { it > 0L } == true) {
-                    // MV 拉取与播放都交给独立的 MV 播放页，这里只负责跳转。
-                    IconButton(onClick = { onOpenMv(song) }) {
-                        Icon(Icons.Default.VideoLibrary, "播放 MV", tint = TaotaoCoral)
+                // 按可用宽度均分，避免新增入口后固定间距把窄屏操作挤出边界。
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                    IconButton(onClick = onOpenSoundEffects) {
+                        Icon(
+                            Icons.Default.GraphicEq,
+                            "播放音效",
+                            tint = if (audioPlayer.soundEffectsSettings.enabled) TaotaoCoral else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
-                }
-                // 本地文件仍保留远端身份，可以和在线播放歌曲一样加入云端歌单。
-                if (
-                    onAddToPlaylist != null &&
-                    (song.remoteId?.let { it > 0L } == true || !song.mid.isNullOrBlank())
-                ) {
-                    IconButton(onClick = { onAddToPlaylist(song) }) {
-                        Icon(Icons.AutoMirrored.Filled.PlaylistAdd, "加入歌单", tint = TaotaoCoral)
+                    // 已下载的歌不提供可点却无效果的下载入口，只留一个对勾说明在放本地文件。
+                    IconButton(onClick = onDownload, enabled = !isLocalFile) {
+                        Icon(
+                            if (isLocalFile) Icons.Default.CheckCircle else Icons.Default.Download,
+                            if (isLocalFile) "已下载" else "下载歌曲",
+                            tint = if (isLocalFile) MaterialTheme.colorScheme.onSurfaceVariant else TaotaoCoral,
+                        )
+                    }
+                    IconButton(onClick = onShare) {
+                        Icon(Icons.Default.Share, "分享歌曲", tint = TaotaoCoral)
+                    }
+                    if (song.source == TencentMusicApi.SEARCH_SOURCE_KUWO && song.remoteId?.let { it > 0L } == true) {
+                        // MV 拉取与播放都交给独立的 MV 播放页，这里只负责跳转。
+                        IconButton(onClick = { onOpenMv(song) }) {
+                            Icon(Icons.Default.VideoLibrary, "播放 MV", tint = TaotaoCoral)
+                        }
+                    }
+                    // 本地文件仍保留远端身份，可以和在线播放歌曲一样加入云端歌单。
+                    if (
+                        onAddToPlaylist != null &&
+                        (song.remoteId?.let { it > 0L } == true || !song.mid.isNullOrBlank())
+                    ) {
+                        IconButton(onClick = { onAddToPlaylist(song) }) {
+                            Icon(Icons.AutoMirrored.Filled.PlaylistAdd, "加入歌单", tint = TaotaoCoral)
+                        }
                     }
                 }
             },

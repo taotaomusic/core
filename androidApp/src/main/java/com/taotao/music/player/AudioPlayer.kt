@@ -18,7 +18,9 @@ import androidx.media3.session.SessionResult
 import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.ListenableFuture
 import com.taotao.music.data.SongCodec
+import com.taotao.music.data.SoundEffectsStore
 import com.taotao.music.model.Song
+import com.taotao.music.model.SoundEffectsSettings
 
 /**
  * Android 音频播放封装，页面只通过 play/pause/resume 使用它。
@@ -36,6 +38,24 @@ import com.taotao.music.model.Song
 class AudioPlayer(context: Context) {
     private val appContext = context.applicationContext
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val soundEffectsStore = SoundEffectsStore(appContext)
+
+    var soundEffectsSettings by mutableStateOf(soundEffectsStore.read())
+        private set
+
+    var soundEffectsStatus by mutableStateOf(SoundEffectsStatus())
+        private set
+
+    /** 保存后由播放服务监听并即时应用，不依赖页面存活或正在播放的曲目。 */
+    fun setSoundEffects(settings: SoundEffectsSettings) {
+        if (!isMainThread()) {
+            mainHandler.post { setSoundEffects(settings) }
+            return
+        }
+        soundEffectsSettings = settings.normalized()
+        soundEffectsStore.write(soundEffectsSettings)
+    }
+
     private var controllerFuture: ListenableFuture<MediaController>? = null
     private var controller: MediaController? = null
 
@@ -120,6 +140,7 @@ class AudioPlayer(context: Context) {
     private val controllerListener = object : MediaController.Listener {
         override fun onExtrasChanged(controller: MediaController, extras: Bundle) {
             updateSleepTimer(extras)
+            soundEffectsStatus = SoundEffectsStatus.from(extras)
         }
     }
 
@@ -230,6 +251,7 @@ class AudioPlayer(context: Context) {
                 controller = connected
                 connected.addListener(listener)
                 updateSleepTimer(connected.sessionExtras)
+                soundEffectsStatus = SoundEffectsStatus.from(connected.sessionExtras)
                 syncFrom(connected)
                 pendingCommand?.let { command ->
                     pendingCommand = null
@@ -458,6 +480,7 @@ class AudioPlayer(context: Context) {
         resumeAfterTransition = false
         isPlaying = false
         hasMedia = false
+        soundEffectsStatus = SoundEffectsStatus()
         durationMs = 0
         positionMs = 0
     }

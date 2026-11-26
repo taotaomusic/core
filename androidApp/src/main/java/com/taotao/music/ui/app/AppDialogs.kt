@@ -12,6 +12,7 @@ import com.taotao.music.ui.player.QualityChoice
 import com.taotao.music.ui.player.QualitySheet
 import com.taotao.music.ui.player.QualitySheetKind
 import com.taotao.music.ui.player.SleepTimerSheet
+import com.taotao.music.ui.player.SoundEffectsSheet
 import com.taotao.music.ui.player.staticQualityChoices
 import com.taotao.music.ui.playlist.PlaylistEditorDialog
 import com.taotao.music.ui.playlist.PlaylistEditorMode
@@ -72,6 +73,14 @@ internal fun TaotaoAppDialogs(state: TaotaoAppState, inDetailActivity: Boolean =
                 state.audioPlayer.setSleepTimerWaitForSongEnd(wait)
             },
             onDismiss = { state.showSleepTimerDialog = false },
+        )
+    }
+    if (state.soundEffectsSheetInDetail == inDetailActivity) {
+        SoundEffectsSheet(
+            settings = state.audioPlayer.soundEffectsSettings,
+            status = state.audioPlayer.soundEffectsStatus,
+            onChange = state.audioPlayer::setSoundEffects,
+            onDismiss = { state.soundEffectsSheetInDetail = null },
         )
     }
     state.playlist.pickerSong?.let { song ->

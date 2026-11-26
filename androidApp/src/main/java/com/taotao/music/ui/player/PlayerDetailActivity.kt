@@ -306,6 +306,7 @@ private fun PlayerDetailPageRoute(state: TaotaoAppState, onBack: (Boolean) -> Un
         sleepTimerRemainingMs = state.audioPlayer.sleepTimerRemainingMs,
         sleepTimerWaitingSongEnd = state.audioPlayer.sleepTimerWaitingSongEnd,
         onOpenSleepTimer = { state.showSleepTimerDialog = true },
+        onOpenSoundEffects = { state.soundEffectsSheetInDetail = true },
         onRefrainResolved = { song, startMs, endMs -> state.applyResolvedRefrain(song, startMs, endMs) },
         onOpenMv = { state.mvSong = it },
         // 播放页头部「歌手 · 专辑」点击跳转：与搜索歌曲行菜单共用同一套
