@@ -102,7 +102,7 @@ class CryptoTransportTest {
 
         fixture.transport.seal("POST", PATH, PAYLOAD)
 
-        assertEquals(listOf("access-old"), fixture.tokens.rejected)
+        assertEquals(listOf<String?>("access-old"), fixture.tokens.rejected)
         assertEquals("Bearer access-old", fixture.connections[0].getRequestProperty("Authorization"))
         assertEquals("Bearer access-new", fixture.connections[1].getRequestProperty("Authorization"))
         assertTrue(fixture.pauses.isEmpty())
