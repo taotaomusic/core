@@ -57,6 +57,8 @@ fun SettingsPage(
     onPickPlaybackQuality: () -> Unit,
     onPickDownloadQuality: () -> Unit,
     onOpenSleepTimer: () -> Unit,
+    soundEffectsLabel: String,
+    onOpenSoundEffects: () -> Unit,
     onOpenPowerDiagnostics: () -> Unit,
     onPickAppearance: (AppearanceMode) -> Unit,
     onBack: () -> Unit,
@@ -103,6 +105,12 @@ fun SettingsPage(
         }
 
         SharedCard(title = "播放", modifier = Modifier.padding(top = TaotaoSpacing.sm)) {
+            SettingRow(
+                title = "播放音效",
+                value = soundEffectsLabel,
+                description = "听感预设、五段均衡器和低音增强，调整后即时试听。",
+                onClick = onOpenSoundEffects,
+            )
             SettingRow(
                 title = "定时关闭",
                 value = when {

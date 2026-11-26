@@ -562,6 +562,8 @@ jobs:
             fs.writeFileSync("version.properties", `VERSION_CODE=${code}\nVERSION_NAME=${parts.join(".")}\n`);
             console.log(`Android version => ${parts.join(".")} (${code})`);
           '
+      - name: 客户端单元测试
+        run: ./gradlew :shared:testDebugUnitTest :androidApp:testDebugUnitTest --build-cache --console=plain
       - name: 构建 APK
         env:
           SIGNED: ${{ steps.signing.outputs.signed }}

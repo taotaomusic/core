@@ -215,6 +215,8 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
     var showSettingsPage by mutableStateOf(false)
     var showPowerDiagnosticsPage by mutableStateOf(false)
     var showSleepTimerDialog by mutableStateOf(false)
+    /** null 关闭；true 由播放详情 Activity 显示，false 由主界面显示，避免弹出两层面板。 */
+    var soundEffectsSheetInDetail by mutableStateOf<Boolean?>(null)
     var showProfilePage by mutableStateOf(false)
     var bottomTab by mutableIntStateOf(0)
     var message by mutableStateOf<String?>(null)
@@ -986,6 +988,7 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
             audioPlayer.cancelSleepTimer()
             audioPlayer.stop()
             showSleepTimerDialog = false
+            soundEffectsSheetInDetail = null
             clearAccountScopedLibraryState()
             playlist.clearState()
             playbackSession = null
@@ -998,6 +1001,7 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
         audioPlayer.cancelSleepTimer()
         audioPlayer.stop()
         showSleepTimerDialog = false
+        soundEffectsSheetInDetail = null
         playbackStateStore.clear()
         playbackHistoryStore.clear(authSession.accountId)
         playbackHistory = emptyList()
@@ -1014,6 +1018,7 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
         // 离开聊天页立即取消活动会话，避免切页期间仍把新消息标成已读并发送回执。
         if (target != 2) wukongImClient.setActivePeer(null)
         bottomTab = target
+        soundEffectsSheetInDetail = null
         closePlayerDetail()
         showSearchPage = false
         showSettingsPage = false

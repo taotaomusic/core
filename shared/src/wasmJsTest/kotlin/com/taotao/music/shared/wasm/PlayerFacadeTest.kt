@@ -5,7 +5,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * wasm 门面回归测试：门面是 Kotlin 逻辑与 TS 消费侧的唯一契约层，
+ * wasm 专用门面回归测试，随 wasmJsMain 编译，不参与 Android/JVM 测试。
+ * 门面是 Kotlin 逻辑与 TS 消费侧的唯一契约层，
  * 用例守住「JSON 结构稳定、缓存时序正确、空态安全、转义无损」四条底线。
  * 门面编译为顶层 @JsExport 函数（wasm 不允许导出 standalone object），
  * 测试直接调用同名顶层函数 —— 与 JS 侧看到的形态完全一致。
