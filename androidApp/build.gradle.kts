@@ -70,7 +70,7 @@ configure<ApplicationExtension> {
     // 传输加密 native 库（`plans/009`）。产物由 tools 仓库云端交叉编译，经
     // tools/fetch-crypto.ps1 落到 crypto/dist/android/<abi>/libtaotao_crypto.so。
     // 目录结构即 jniLibs 约定（<srcDir>/<abi>/lib*.so），abiFilters 只保留 arm64-v8a
-    // 时也只打包对应那份。产物缺失时不阻断构建，运行时由 NativeCrypto.available 兜底降级明文。
+    // 时也只打包对应那份。产物缺失时运行时停止受保护的请求，绝不降级为明文。
     // srcDir(Any) 已弃用，按新 DSL 改 directories 集合（MutableSet<String>，add 不触发重赋值）。
     sourceSets["main"].jniLibs.directories.add(rootProject.file("crypto/dist/android").absolutePath)
 }

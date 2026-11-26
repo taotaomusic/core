@@ -65,7 +65,7 @@ class TaotaoApplication : Application() {
             CryptoTransport(
                 endpoint = TencentMusicApi.ENDPOINT,
                 deviceIdProvider = { HardwareDeviceId(app.contentResolver).deviceId() },
-                tokenProvider = { AuthSession(app).validToken() },
+                tokenProvider = AuthSession(app),
             )
         }
 
