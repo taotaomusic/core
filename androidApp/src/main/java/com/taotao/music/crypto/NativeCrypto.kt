@@ -14,11 +14,11 @@ package com.taotao.music.crypto
  * 都带上它；用完必须 `clientFree` 释放，否则 native 侧注册表泄漏。
  *
  * 领域错误经 [CryptoException] 抛回；native 库缺失时 [available] 为 false，
- * 上层据此完全走明文。
+ * 上层据此停止受保护的请求并提示连接重试。
  */
 object NativeCrypto {
 
-    /** 库是否成功加载。false 时所有 external 调用都不可用，上层必须走明文。 */
+    /** 库是否成功加载。false 时所有 external 调用都不可用，受保护的请求必须停止。 */
     val available: Boolean
 
     init {
@@ -26,7 +26,7 @@ object NativeCrypto {
             System.loadLibrary("taotao_crypto")
             true
         } catch (_: Throwable) {
-            // 产物缺失 / ABI 不匹配 / 符号被 strip：不崩，交给上层降级明文。
+            // 产物缺失 / ABI 不匹配 / 符号被 strip：交给上层停止请求并提示连接重试。
             false
         }
     }

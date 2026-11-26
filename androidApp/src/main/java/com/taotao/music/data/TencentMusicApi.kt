@@ -3,6 +3,7 @@ package com.taotao.music.data
 import com.taotao.music.AppHttp
 import com.taotao.music.data.im.ImConversationSync
 import com.taotao.music.crypto.CryptoTransport
+import com.taotao.music.crypto.CryptoConnectionException
 import com.taotao.music.model.AudioQuality
 import com.taotao.music.model.Song
 import kotlinx.coroutines.Dispatchers
@@ -1705,7 +1706,6 @@ class TencentMusicApi(
         repeat(MAX_AUTH_ATTEMPTS + 1) {
             // 强制加密：封帧失败不回退明文，直接抛错（服务端也会拒绝明文）。
             val sealed = transport.seal(method, path, body ?: ByteArray(0))
-                ?: throw IllegalStateException("加密不可用，且该接口已启用强制加密")
 
             val connection = open(path, method, token).apply {
                 setRequestProperty(CRYPTO_HEADER, sealed.header)
@@ -1734,7 +1734,7 @@ class TencentMusicApi(
                     // 封帧也发不出去），明文就是空字节，不能再送去解密。
                     val plaintext = if (frame.isEmpty()) ByteArray(0) else {
                         transport.openResponse(method, path, frame)
-                            ?: throw IllegalStateException("响应解密失败")
+                            ?: throw CryptoConnectionException()
                     }
                     return read(plaintext)
                 }
