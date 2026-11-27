@@ -756,7 +756,7 @@ class TencentMusicApi(
         require(song.supportsMv) { "该来源暂不支持 MV" }
         if (song.hasMv == false) return null
         val id = song.remoteId?.takeIf { it > 0L } ?: throw IllegalArgumentException("MV 需要歌曲 ID")
-        val source = encode(song.source.ifBlank { DEFAULT_SOURCE })
+        val source = encode(song.source.trim().lowercase().ifBlank { DEFAULT_SOURCE })
         return authorized("/api/v1/songs/$id/mv?source=$source") { bytes ->
             val root = JSONObject(String(bytes, Charsets.UTF_8))
             check(root.optInt("code") == 0) { root.optString("message", "获取 MV 失败") }
@@ -1223,7 +1223,7 @@ class TencentMusicApi(
 
     fun requestSongInfoForPlayback(song: Song, quality: Int = AudioQuality.Default.value): Song {
         val id = song.remoteId?.takeIf { it > 0L } ?: return song
-        return requestSongInfo(id, quality, song.favorited, song.source)
+        return requestSongInfo(id, quality, song.favorited, song.source.trim().lowercase().ifBlank { DEFAULT_SOURCE })
     }
 
     /** mid-only 收藏没有数字 ID 时的可播放占位项；服务端会在取流时按 mid 解析。 */
