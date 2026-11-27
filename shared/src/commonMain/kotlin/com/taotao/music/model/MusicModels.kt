@@ -63,4 +63,6 @@ data class Song(
      * 它是纯展示的瞬态字段，离线持久化（SongCodec）不保存也不读取。
      */
     val lyricSnippet: String? = null,
+    /** 服务端确认的 MV 存在性；null 表示旧缓存尚未补全，入口仅在 true 时显示。 */
+    val hasMv: Boolean? = null,
 )

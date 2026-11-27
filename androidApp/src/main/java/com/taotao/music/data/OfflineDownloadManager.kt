@@ -72,6 +72,7 @@ class OfflineDownloadManager(context: Context, private val tokenProvider: TokenP
             song.mid?.let { setProperty("mid", it) }
             song.type?.let { setProperty("type", it.toString()) }
             setProperty("source", song.source.ifBlank { "tencent" })
+            song.hasMv?.let { setProperty("hasMv", it.toString()) }
             // 在线封面地址留作兜底：封面文件下载失败（弱网 / 上游抖动）时重启读取，
             // 还能走网络补图，而不是让这首歌永久退化成音符占位块。
             if (!coverUrl.isNullOrBlank()) setProperty("onlineCover", coverUrl)
@@ -132,6 +133,7 @@ class OfflineDownloadManager(context: Context, private val tokenProvider: TokenP
             // 旧版本下载的歌没有记音质，显示成未知而不是猜一个。
             localQuality = properties.getProperty("quality")?.toIntOrNull(),
             source = properties.getProperty("source", "tencent"),
+            hasMv = properties.getProperty("hasMv")?.toBooleanStrictOrNull(),
         )
     }
 

@@ -10,6 +10,15 @@ import org.json.JSONObject
 class SongCodecTest {
 
     @Test
+    fun `MV 有无和旧缓存未补全状态保持区分`() {
+        for (hasMv in listOf(true, false, null)) {
+            val song = song().copy(hasMv = hasMv)
+            assertEquals(hasMv, SongCodec.decode(SongCodec.encode(song))?.hasMv)
+        }
+        assertNull(SongCodec.decode("""{"title":"旧缓存歌曲"}""")?.hasMv)
+    }
+
+    @Test
     fun `高潮区间随编解码往返保留`() {
         // 39482 / 69719 取自服务端实测的一首歌的高潮区间，两端都必须原样落盘。
         val song = song(refrainStartMs = 39_482L, refrainEndMs = 69_719L)

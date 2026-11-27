@@ -49,6 +49,8 @@ export interface Song {
    * 原生 KPK 接口可取得完整 128K、320K 与 FLAC。
    */
   playable?: boolean;
+  /** 上游歌曲元数据已经声明的 MV 存在性；不需要逐首探测播放地址。 */
+  hasMv?: boolean;
   /**
    * 视频搜索条目（`search/video/list`）的 MV 播放 ID，来自上游顶层 `vid` 字段。
    * **≤0 表示该条目不是 MV**（上游对纯音频条目给 0 或缺失），由服务端路由层
@@ -318,6 +320,7 @@ export interface NativeAudioOutcome {
 }
 
 export interface MusicInfo {
+  hasMv: boolean;
   name?: string;
   artist?: string;
   album?: string;
@@ -1082,6 +1085,7 @@ export class BodianClient {
       // listen_fragment 是匿名/试听权限，不是“歌曲已下线”。会员账号应允许进入
       // 原生权益取址，由 audioUrl 的业务码给出最终结论。
       playable: this.hasCredentials() || String(s.payInfo?.listen_fragment ?? "0") !== "1",
+      hasMv: this.hasMv(s),
     }));
   }
 
@@ -1294,7 +1298,13 @@ export class BodianClient {
       refrainEndMs: Number(s.payInfo?.refrain_end) > 0 ? Number(s.payInfo.refrain_end) : undefined,
       // 判据与 [searchSongs] 逐字一致，见该方法内的说明。
       playable: this.hasCredentials() || String(s.payInfo?.listen_fragment ?? "0") !== "1",
+      hasMv: this.hasMv(s),
     };
+  }
+
+  /** 波点歌曲对象的 vid/isMv 是后端已经拿到的权威 MV 存在性标记。 */
+  private hasMv(song: any): boolean {
+    return Number(song?.vid) > 0 || song?.isMv === true || Number(song?.isMv) === 1;
   }
 
   /**
@@ -1602,6 +1612,7 @@ export class BodianClient {
     const d = await this.signedGet(`${BASE_URL}service/music/info`, { musicId });
     if (Number(d.code) !== 200) return null;
     return {
+      hasMv: this.hasMv(d.data),
       name: d.data?.songName || d.data?.name || "",
       artist: d.data?.artist || "",
       album: d.data?.album || "",
@@ -1753,9 +1764,21 @@ export class BodianClient {
   }
 
   async getMvInfo(musicId: number | string): Promise<MvInfo | null> {
-    const d = await this.signedGet(`${BASE_URL}service/mv/info`, { musicId });
-    if (Number(d.code) === 200 && d.data?.mv) return d.data.mv;
-    return null;
+    const { status, data: d } = await this.signedGetMeta(`${BASE_URL}service/mv/info`, { musicId });
+    // 只有成功响应才能确认“没有”；网关拦截、超时或业务失败不能伪装成无 MV。
+    if (status < 200 || status >= 300 || Number(d.code) !== 200 ||
+        !d.data || typeof d.data !== "object" || Array.isArray(d.data)) {
+      throw new Error("MV 请求失败，请稍后重试");
+    }
+    if (d.data.mv == null) return null;
+    const mv = d.data.mv;
+    if (typeof mv !== "object" || Array.isArray(mv) || !(Number(mv.mid) > 0)) {
+      throw new Error("MV 响应异常，请稍后重试");
+    }
+    if (![mv.highUrl, mv.lowUrl].some((url) => typeof url === "string" && /^https?:\/\/\S+$/i.test(url.trim()))) {
+      throw new Error("MV 播放地址获取失败，请稍后重试");
+    }
+    return mv;
   }
 
   /**

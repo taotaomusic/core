@@ -41,6 +41,8 @@ export type UpstreamSong = {
    * ⚠️ **2026-09-19 起不再据此丢歌**，而是逐首下发让客户端置灰。原因见 [SearchResult.dropped]。
    */
   playable?: boolean;
+  /** 服务端从音源元数据确认这首歌是否存在 MV；缺失时按没有处理。 */
+  hasMv?: boolean;
   refrainStartMs?: number;
   refrainEndMs?: number;
 };
@@ -76,6 +78,7 @@ export type QualityTier = { type: number; size: number; label: string };
 
 /** 歌曲信息与可用音质档位。 */
 export type UpstreamSongInfo = {
+  hasMv?: boolean;
   songID: number;
   songMID: string;
   title: string;

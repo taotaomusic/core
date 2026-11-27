@@ -34,6 +34,7 @@ internal fun findDownloadedSong(song: Song, downloadedSongs: List<Song>): Song? 
  * 没下下来时，明明在线地址是好的，重启后也会永久显示成音符占位块。
  */
 internal fun bindDownloadedSong(online: Song, local: Song): Song = local.copy(
+    hasMv = online.hasMv ?: local.hasMv,
     favorited = online.favorited,
     coverUri = local.coverUri?.takeIf { it.startsWith("file:", ignoreCase = true) }
         ?: online.coverUri?.takeIf { it.isNotBlank() }

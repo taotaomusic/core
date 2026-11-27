@@ -114,11 +114,17 @@ internal fun MvPlayerPage(
     // ---- MV 信息：进入页面才拉取，失败给整页错误态与重试 ----
     var mvInfo by remember(song) { mutableStateOf<TencentMusicApi.MvInfo?>(null) }
     var loadError by remember(song) { mutableStateOf<String?>(null) }
+    var noMv by remember(song) { mutableStateOf(false) }
     var loadGeneration by remember(song) { mutableIntStateOf(0) }
     LaunchedEffect(song, loadGeneration) {
         loadError = null
+        noMv = false
+        mvInfo = null
         runCatching { withContext(Dispatchers.IO) { musicApi.requestMv(song) } }
-            .onSuccess { mvInfo = it }
+            .onSuccess {
+                mvInfo = it
+                noMv = it == null
+            }
             .onFailure { loadError = it.message ?: "获取 MV 失败，请稍后重试" }
     }
 
@@ -239,6 +245,7 @@ internal fun MvPlayerPage(
                     MvPlaybackArea(
                         mvInfo = mvInfo,
                         loadError = loadError,
+                        noMv = noMv,
                         onRetryLoad = { loadGeneration++ },
                         isFullscreen = isFullscreen,
                         onToggleFullscreen = { isFullscreen = !isFullscreen },
@@ -298,6 +305,7 @@ internal fun MvPlayerPage(
 private fun MvPlaybackArea(
     mvInfo: TencentMusicApi.MvInfo?,
     loadError: String?,
+    noMv: Boolean,
     onRetryLoad: () -> Unit,
     isFullscreen: Boolean,
     onToggleFullscreen: () -> Unit,
@@ -313,7 +321,9 @@ private fun MvPlaybackArea(
                 .background(Color(0xFF101010)),
             contentAlignment = Alignment.Center,
         ) {
-            if (loadError != null) {
+            if (noMv) {
+                MvStatusFallback(message = "该歌曲暂无 MV", onRetry = null)
+            } else if (loadError != null) {
                 MvStatusFallback(message = loadError, onRetry = onRetryLoad)
             } else {
                 CircularProgressIndicator(color = TaotaoCoral)

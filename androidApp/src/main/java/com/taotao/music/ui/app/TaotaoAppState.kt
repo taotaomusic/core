@@ -334,14 +334,15 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
                 !requestedSong.audioUri.orEmpty().startsWith("file:") &&
                 requestedSong.remoteId?.let { it > 0L } == true &&
                 (requestedSong.refrainStartMs == null || requestedSong.refrainEndMs == null ||
-                    (requestedSong.source == TencentMusicApi.SEARCH_SOURCE_KUWO && requestedSong.artistId == null))
+                    (requestedSong.source == TencentMusicApi.SEARCH_SOURCE_KUWO &&
+                        (requestedSong.artistId == null || requestedSong.hasMv == null)))
             ) {
                 val refreshed = withContext(Dispatchers.IO) {
                     runCatching { musicApi.requestSongInfoForPlayback(requestedSong, qualityStore.playbackQuality().value) }
                         .getOrNull()
                 }
                 if (refreshed != null && (refreshed.refrainStartMs != null || refreshed.refrainEndMs != null ||
-                            refreshed.artistId != null || refreshed.albumId != null)) {
+                            refreshed.artistId != null || refreshed.albumId != null || refreshed.hasMv != null)) {
                     queueWithLocalFiles.toMutableList().also { items ->
                         items[index] = requestedSong.copy(
                             // elvis 保底合并：上游没给的字段保留原值，绝不把已有数据洗掉。
@@ -349,6 +350,7 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
                             refrainEndMs = refreshed.refrainEndMs ?: requestedSong.refrainEndMs,
                             artistId = refreshed.artistId ?: requestedSong.artistId,
                             albumId = refreshed.albumId ?: requestedSong.albumId,
+                            hasMv = refreshed.hasMv ?: requestedSong.hasMv,
                         )
                     }
                 } else queueWithLocalFiles

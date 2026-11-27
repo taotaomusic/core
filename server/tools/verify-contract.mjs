@@ -44,6 +44,9 @@ import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
 
+// 固定上游响应覆盖 MV 有/无/故障三种结果，以及歌曲元数据的完整映射链路。
+await import("./verify-mv.mjs");
+
 const base = (process.argv[2] ?? "http://127.0.0.1:4720").replace(/\/+$/, "");
 
 // ==================== 传输加密通道（plans/009 全量接入） ====================

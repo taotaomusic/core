@@ -129,6 +129,7 @@ internal fun PlayerDetailPage(
     var lyricWords by remember(song.lyricWordsUri, song.remoteId, song.mid) { mutableStateOf<String?>(null) }
     var refrainStartMs by remember(song) { mutableStateOf(song.refrainStartMs) }
     var refrainEndMs by remember(song) { mutableStateOf(song.refrainEndMs) }
+    var hasMv by remember(song.remoteId, song.source, song.hasMv) { mutableStateOf(song.hasMv) }
     // 解析结果按原文缓存，避免每帧进度变化都重新解析整段歌词。
     val lyric = remember(lyricText, lyricWords) { LyricParser.parse(lyricText, lyricWords) }
     var showQueue by remember { mutableStateOf(false) }
@@ -178,11 +179,13 @@ internal fun PlayerDetailPage(
         lyricText = loaded.first
         lyricWords = loaded.second
     }
-    LaunchedEffect(song.remoteId, song.source, song.refrainStartMs, song.refrainEndMs) {
-        if (refrainStartMs == null || refrainEndMs == null) {
+    LaunchedEffect(song.remoteId, song.source, song.refrainStartMs, song.refrainEndMs, song.hasMv) {
+        if (refrainStartMs == null || refrainEndMs == null ||
+            (song.source == TencentMusicApi.SEARCH_SOURCE_KUWO && hasMv == null)) {
             val refreshed = withContext(Dispatchers.IO) {
                 runCatching { musicApi.requestSongInfoForPlayback(song) }.getOrNull()
             }
+            refreshed?.hasMv?.let { hasMv = it }
             // 只在真的拉到区间时才覆盖：上游没给的不能把本地已有的非空值写成 null。
             // 拉到后回写全局队列，迷你播放器与冷启动恢复才不会丢标记；
             // 父级换入带区间的新 song 实例后，上面的 remember(song) 会自动带上新值。
@@ -381,7 +384,7 @@ internal fun PlayerDetailPage(
                     IconButton(onClick = onShare) {
                         Icon(Icons.Default.Share, "分享歌曲", tint = TaotaoCoral)
                     }
-                    if (song.source == TencentMusicApi.SEARCH_SOURCE_KUWO && song.remoteId?.let { it > 0L } == true) {
+                    if (song.source == TencentMusicApi.SEARCH_SOURCE_KUWO && hasMv == true && song.remoteId?.let { it > 0L } == true) {
                         // MV 拉取与播放都交给独立的 MV 播放页，这里只负责跳转。
                         IconButton(onClick = { onOpenMv(song) }) {
                             Icon(Icons.Default.VideoLibrary, "播放 MV", tint = TaotaoCoral)
