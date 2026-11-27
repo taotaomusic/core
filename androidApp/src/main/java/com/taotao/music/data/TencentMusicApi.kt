@@ -6,6 +6,7 @@ import com.taotao.music.crypto.CryptoTransport
 import com.taotao.music.crypto.CryptoConnectionException
 import com.taotao.music.model.AudioQuality
 import com.taotao.music.model.Song
+import com.taotao.music.model.supportsMv
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -751,13 +752,16 @@ class TencentMusicApi(
         )
     }
 
-    fun requestMv(song: Song): MvInfo {
+    fun requestMv(song: Song): MvInfo? {
+        require(song.supportsMv) { "该来源暂不支持 MV" }
+        if (song.hasMv == false) return null
         val id = song.remoteId?.takeIf { it > 0L } ?: throw IllegalArgumentException("MV 需要歌曲 ID")
-        val source = encode(song.source.ifBlank { DEFAULT_SOURCE })
+        val source = encode(song.source.trim().lowercase().ifBlank { DEFAULT_SOURCE })
         return authorized("/api/v1/songs/$id/mv?source=$source") { bytes ->
             val root = JSONObject(String(bytes, Charsets.UTF_8))
             check(root.optInt("code") == 0) { root.optString("message", "获取 MV 失败") }
             val data = root.optJSONObject("data") ?: error("暂无 MV")
+            if (data.has("hasMv") && !data.optBoolean("hasMv")) return@authorized null
             MvInfo(
                 mid = data.optString("mid"),
                 name = data.optString("name", song.title),
@@ -1219,7 +1223,7 @@ class TencentMusicApi(
 
     fun requestSongInfoForPlayback(song: Song, quality: Int = AudioQuality.Default.value): Song {
         val id = song.remoteId?.takeIf { it > 0L } ?: return song
-        return requestSongInfo(id, quality, song.favorited, song.source)
+        return requestSongInfo(id, quality, song.favorited, song.source.trim().lowercase().ifBlank { DEFAULT_SOURCE })
     }
 
     /** mid-only 收藏没有数字 ID 时的可播放占位项；服务端会在取流时按 mid 解析。 */
@@ -1272,6 +1276,7 @@ class TencentMusicApi(
             // 没有这组 ID，靠这里的单曲信息在播放期回填，详情页「查看歌手 / 查看专辑」
             // 才能对所有来源生效。
             artistId = data.optLong("artistId").takeIf { it > 0L },
+            hasMv = if (data.has("hasMv") && !data.isNull("hasMv")) data.optBoolean("hasMv") else null,
             albumId = data.optLong("albumId").takeIf { it > 0L },
             refrainStartMs = data.optLong("refrainStartMs").takeIf { it > 0L },
             refrainEndMs = data.optLong("refrainEndMs").takeIf { it > 0L },
@@ -1908,6 +1913,7 @@ class TencentMusicApi(
             playable = optBoolean("playable", true),
             favorited = optBoolean("favorited"),
             source = source,
+            hasMv = if (has("hasMv") && !isNull("hasMv")) optBoolean("hasMv") else null,
             refrainStartMs = optLong("refrainStartMs").takeIf { it > 0L },
             refrainEndMs = optLong("refrainEndMs").takeIf { it > 0L },
             // 歌手 / 专辑 ID 只有酷我搜索结果下发（契约：正数或键缺席）；其他音源缺键时
@@ -2540,6 +2546,7 @@ fun VideoSearchResult.toMvSong(): Song {
         remoteId = id.takeIf { it > 0L },
         coverUri = displayCover,
         source = source,
+        hasMv = true,
     )
 }
 

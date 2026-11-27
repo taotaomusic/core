@@ -51,6 +51,8 @@ export type Song = {
    * `code 20012 歌曲已下线`。搜索**照常列出**它们（波点 App 也列），只是不可播。
    */
   playable: boolean;
+  /** 服务端从音源元数据确认这首歌是否存在 MV；缺失时按没有处理。 */
+  hasMv?: boolean;
   /** 当前用户是否已收藏。由 [SearchService] 批量查询后填入。 */
   favorited: boolean;
   /** 音乐数据源。新客户端据此把后续链接、歌词与收藏请求路由到同一上游。 */
@@ -136,6 +138,7 @@ export class SongMapper {
       vip: (item.pay ?? "").includes("付费"),
       // 只有酷我会判断；`undefined`（QQ 音乐 / 网易云）按可播处理。
       playable: item.playable !== false,
+      hasMv: item.hasMv,
       favorited,
       source,
       refrainStartMs: item.refrainStartMs,

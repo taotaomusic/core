@@ -20,6 +20,7 @@ import com.google.common.util.concurrent.ListenableFuture
 import com.taotao.music.data.SongCodec
 import com.taotao.music.data.SoundEffectsStore
 import com.taotao.music.model.Song
+import com.taotao.music.model.mergePlaybackMetadata
 import com.taotao.music.model.SoundEffectsSettings
 
 /**
@@ -294,6 +295,26 @@ class AudioPlayer(context: Context) {
     fun pause() = submit {
         resumeAfterTransition = false
         it.pause()
+    }
+
+    /** 更新同曲的补充资料，URI 与音频配置保持原值，Media3 可直接更新而不重新起播。 */
+    fun updateSongMetadata(resolved: Song) {
+        if (!isMainThread()) {
+            mainHandler.post { updateSongMetadata(resolved) }
+            return
+        }
+        // 连接尚未完成时不能通过 submit 覆盖排队中的播放命令。
+        val activeController = controller ?: return
+        for (index in 0 until activeController.mediaItemCount) {
+            val item = activeController.getMediaItemAt(index)
+            val song = SongCodec.decode(item.mediaMetadata.extras?.getString(EXTRA_SONG)) ?: continue
+            val merged = song.mergePlaybackMetadata(resolved)
+            if (merged != song) {
+                val metadata = playbackMediaItemOf(merged).mediaMetadata
+                activeController.replaceMediaItem(index, item.buildUpon().setMediaMetadata(metadata).build())
+            }
+        }
+        syncFrom(activeController)
     }
 
     /**

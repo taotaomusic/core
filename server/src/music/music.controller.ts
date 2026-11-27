@@ -798,9 +798,10 @@ export class MusicController {
     const selectedSource = this.sourceOf(source);
     const client = this.registry.of(selectedSource);
     if (!client.getMvInfo) throw ApiErrors.badRequest(4001, `${client.displayName}暂不支持 MV`);
+    this.songKeyOf(id, undefined, selectedSource);
     const mv = await client.getMvInfo(id);
-    if (!mv) throw ApiErrors.upstream("MV 信息不可用");
-    return mv;
+    // 保留已有 MV 的平铺字段，旧客户端仍可读取；无 MV 是正常查询结果。
+    return mv ? { ...mv, hasMv: true } : { hasMv: false };
   }
 
   /**
@@ -863,6 +864,7 @@ export class MusicController {
       coverUrl: info.cover,
       vip: info.pay.includes("付费"),
       durationSeconds: info.interval,
+      hasMv: info.hasMv,
       // 音源内的歌手 / 专辑 ID（仅酷我提供）：老队列 / 收藏恢复的歌曲没有这组 ID，
       // 客户端在播放期用它回填，「查看歌手 / 查看专辑」才能对非搜索来源生效。
       artistId: info.artistId,

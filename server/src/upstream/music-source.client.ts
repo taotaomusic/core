@@ -395,7 +395,7 @@ export interface MusicSourceClient {
    * 歌手详情，产出 `GET /api/v1/artists/:id` 的 `data.artist`（`source` 由调用方补）。
    * 只有上游提供该能力时才实现；调用方必须先判断方法是否存在。
    * 取不到（上游业务码非 200，即查无此人或上游故障）时返回 `null`，由调用方统一归成
-   * 502 —— 与 MV 信息同一套做法，不在这里抛异常，让「取不到」有一个统一的出口。
+   * 502，不在这里抛异常，让「取不到」有一个统一的出口。
    */
   getArtistInfo?(artistId: number): Promise<UpstreamArtistDetail | null>;
 
@@ -491,7 +491,8 @@ export interface MusicSourceClient {
   /** 单曲信息与**真实可用**的音质档位。 */
   requestSongInfo(key: SongKey): Promise<UpstreamSongInfo>;
 
-  getMvInfo?(musicId: number | string): Promise<unknown | null>;
+  /** null 仅表示成功查询后确认没有 MV；请求失败必须抛异常，不能混为“没有”。 */
+  getMvInfo?(musicId: number | string): Promise<object | null>;
 
   /**
    * 解析播放地址。

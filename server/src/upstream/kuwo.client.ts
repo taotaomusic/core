@@ -277,6 +277,7 @@ export class KuwoClient implements MusicSourceClient, MusicSourceCredentialManag
       // 反而失去意义，所以不报。
       pay: "",
       interval: duration,
+      hasMv: info.hasMv,
       artistId: info.artistId,
       albumId: info.albumId,
       refrainStartMs: info.refrainStartMs,
@@ -287,7 +288,12 @@ export class KuwoClient implements MusicSourceClient, MusicSourceCredentialManag
 
   async getMvInfo(musicId: number | string) {
     const client = await this.clientOf();
-    return client.getMvInfo(musicId);
+    try {
+      return await client.getMvInfo(musicId);
+    } catch (error) {
+      this.logger.warn(`MV 请求失败（歌曲 ${musicId}）：${error instanceof Error ? error.message : String(error)}`);
+      throw ApiErrors.upstream("MV 加载失败，请稍后重试");
+    }
   }
 
   /**
@@ -884,6 +890,7 @@ export class KuwoClient implements MusicSourceClient, MusicSourceCredentialManag
       pay: "",
       // `undefined` 按可播处理，只有明确为 false 才置灰 —— 判据见 [searchSongs]。
       playable: song.playable !== false,
+      hasMv: song.hasMv,
       // 以下三键仅视频 / 歌词搜索条目携带，语义见 [UpstreamSongWithExtras]。
       vid: song.vid,
       mv: song.mv,

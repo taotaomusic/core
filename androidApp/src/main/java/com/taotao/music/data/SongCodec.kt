@@ -51,6 +51,7 @@ object SongCodec {
         put("favorited", song.favorited)
         put("localQuality", song.localQuality)
         put("source", song.source)
+        put("hasMv", song.hasMv)
         // artistId / albumId 只作跳转详情页用，与 remoteId 同一套惯例：null 不落键
         // （org.json 的 put(name, null) 会直接移除映射），读回时按「0 或缺键即 null」归一。
         put("artistId", song.artistId)
@@ -80,6 +81,7 @@ object SongCodec {
         localQuality = if (data.has("localQuality") && !data.isNull("localQuality")) data.optInt("localQuality") else null,
         // 旧版本缓存没有来源字段，按服务端兼容规则继续视为 QQ 音乐。
         source = data.optString("source").ifBlank { "tencent" },
+        hasMv = if (data.has("hasMv") && !data.isNull("hasMv")) data.optBoolean("hasMv") else null,
         // 与 remoteId 同一口径：optLong 对缺键（旧缓存）返回 0，takeIf 归一成 null。
         artistId = data.optLong("artistId").takeIf { it > 0L },
         albumId = data.optLong("albumId").takeIf { it > 0L },

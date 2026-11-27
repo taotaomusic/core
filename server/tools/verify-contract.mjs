@@ -44,6 +44,9 @@ import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
 
+// 固定上游响应覆盖 MV 有/无/故障三种结果，以及歌曲元数据的完整映射链路。
+await import("./verify-mv.mjs");
+
 const base = (process.argv[2] ?? "http://127.0.0.1:4720").replace(/\/+$/, "");
 
 // ==================== 传输加密通道（plans/009 全量接入） ====================
@@ -1127,7 +1130,11 @@ async function main() {
   check("data.id 是 number", typeof songs[0]?.data?.id === "number", typeof songs[0]?.data?.id);
   check("duration 是 mm:ss 字符串", /^\d{2}:\d{2}$|^网络歌曲$/.test(songs[0]?.data?.duration ?? ""), songs[0]?.data?.duration);
   check("lyricUrl 是带前导斜杠的相对路径", (songs[0]?.data?.lyricUrl ?? "").startsWith("/api/v1/"), songs[0]?.data?.lyricUrl);
-  check("coverUrl 是绝对 https 地址", (songs[0]?.data?.coverUrl ?? "").startsWith("https://"), songs[0]?.data?.coverUrl);
+  check(
+    "coverUrl 缺失或为绝对 https 地址",
+    !songs[0]?.data?.coverUrl || songs[0].data.coverUrl.startsWith("https://"),
+    songs[0]?.data?.coverUrl,
+  );
   // 搜索不再逐首解析播放地址，一次上游请求就该返回；放宽到 3 秒只是留出网络抖动余量。
   check(`耗时在 3 秒内（实测 ${elapsed}ms）`, elapsed < 3000, `${elapsed}ms`);
 
@@ -1144,9 +1151,14 @@ async function main() {
   section("播放转发");
   const audio = await fetch(`${base}/api/v1/songs/97773/play?quality=10`, { headers: { authorization: `Bearer ${token}`, range: "bytes=0-2047" } });
   const head = Buffer.from(await audio.arrayBuffer());
-  check("带 Range 返回 206（新增能力）", audio.status === 206, `实际 ${audio.status}`);
-  check("回写了 content-range", !!audio.headers.get("content-range"), audio.headers.get("content-range"));
-  check("拿到的是音频字节", head.length > 0, `${head.length} 字节`);
+  check("带 Range 返回 206（新增能力）", audio.status === 206, `实际 ${audio.status}`, { status: audio.status });
+  check(
+    "回写了 content-range",
+    !!audio.headers.get("content-range"),
+    audio.headers.get("content-range"),
+    { status: audio.status },
+  );
+  check("Range 响应体是非空音频字节", audio.status === 206 && head.length > 0, `${head.length} 字节`, { status: audio.status });
 
   // 带上 Range 只是防御：万一将来播放接口真的裸奔了，这条断言会失败但不必把整首歌拉下来。
   // 鉴权在守卫层，与 Range 无关，不影响判定。
@@ -1431,6 +1443,7 @@ async function main() {
     "取址 data.url 是非空字符串",
     typeof openLinkBody.data?.url === "string" && openLinkBody.data.url.length > 0,
     typeof openLinkBody.data?.url,
+    { status: openLink.status, body: openLinkBody },
   );
 
   // ---- 回归：开放端点不能改写内部 401 语义 ----
@@ -1886,8 +1899,14 @@ async function main() {
     "/link 给出的是上游直链",
     (linked.data?.url ?? "").includes("qqmusic.qq.com"),
     (linked.data?.url ?? "").slice(0, 60),
+    linked,
   );
-  check("/link 带实际档位与 kbps", typeof linked.data?.quality === "number" && !!linked.data?.kbps, JSON.stringify(linked.data));
+  check(
+    "/link 带实际档位与 kbps",
+    typeof linked.data?.quality === "number" && !!linked.data?.kbps,
+    JSON.stringify(linked.data),
+    linked,
+  );
 
   // 这首歌没有杜比档（/song/info 里 size 为 0），必须降级而不是报错。
   const downgraded = await (await fetch(`${base}/api/v1/songs/97773/link?quality=12`, {
@@ -1897,6 +1916,7 @@ async function main() {
     "请求不存在的档位会降级并标记 fallback",
     downgraded.code === 0 && downgraded.data?.fallback === true && downgraded.data?.quality < 12,
     JSON.stringify(downgraded.data),
+    downgraded,
   );
 
   // 业务失败绝不能借用 401：那会触发客户端续期重放，二次失败把用户踢回登录页。

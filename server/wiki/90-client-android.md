@@ -2,7 +2,11 @@
 
 [返回文档中心](README.md)
 
-最后更新:2026-11-04
+最后更新:2026-11-27
+
+MV 入口由共享层 `Song.canPlayMv` 统一判断：只有提供 MV 接口的酷我、有效歌曲数字 ID、服务端确认 `hasMv=true` 三者同时成立才展示。QQ、网易云、未知来源和没有远端身份的本地导入文件均不请求 MV 接口。
+
+旧下载、收藏、歌单快照、历史、分享链接和冷启动队列在播放后由 `PlaybackMetadataResolver` 后台补全资料，同曲并发合并，失败保持未知并退避。成功资料回写 Media3 队列与 `SongCodec`；本地已下载歌曲还原地更新 `song.properties`，不重新下载媒体。新下载按 `音源-ID` 分目录，旧数字目录核对 properties 中的音源和 ID 后继续使用，查找、更新和删除均不会跨音源命中同号歌曲。
 
 本篇讲安卓客户端的模块定位、构建与版本号、包结构、导航实现、关键功能的位置,以及它依赖后端时不能破坏的契约。页面组件与主题的跨端复用在 [93-player-ui.md](93-player-ui.md),共享数据模型在 [94-shared-module.md](94-shared-module.md);发布操作细节以 [61-release-android.md](61-release-android.md) 为准。本篇不讲后端实现,也不讲桌面端(`desktop/`,Tauri + React,独立演进)。
 
