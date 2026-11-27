@@ -338,6 +338,12 @@ internal fun TaotaoAppSignedInEffects(state: TaotaoAppState) {
         if (playerIndex in state.playbackSongs.indices) state.selectedIndex = playerIndex
     }
 
+    // 包含自动切歌与冷启动恢复；本地下载也只在后台补资料，不等待网络才能播放。
+    val metadataSong = state.playbackSongs.getOrNull(state.selectedIndex)
+    LaunchedEffect(state.signedIn, metadataSong?.source, metadataSong?.remoteId, metadataSong?.mid) {
+        if (state.signedIn && metadataSong != null) state.resolvePlaybackMetadata(metadataSong)
+    }
+
     /**
      * 统计会话：播放曲目、播放态、轮次或清空代际任一变化时重启一次会话累计。
      * 主体逻辑在 [TaotaoAppState.trackPlaybackSession]，内部读取的都是实时值。

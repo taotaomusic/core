@@ -110,6 +110,7 @@ internal fun MvPlayerPage(
     song: Song,
     musicApi: TencentMusicApi,
     onBack: () -> Unit,
+    onAvailabilityResolved: (Song, Boolean) -> Unit,
 ) {
     // ---- MV 信息：进入页面才拉取，失败给整页错误态与重试 ----
     var mvInfo by remember(song) { mutableStateOf<TencentMusicApi.MvInfo?>(null) }
@@ -124,6 +125,7 @@ internal fun MvPlayerPage(
             .onSuccess {
                 mvInfo = it
                 noMv = it == null
+                onAvailabilityResolved(song, it != null)
             }
             .onFailure { loadError = it.message ?: "获取 MV 失败，请稍后重试" }
     }

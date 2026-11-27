@@ -53,6 +53,7 @@ import com.taotao.music.data.PlaybackHistoryEntry
 import com.taotao.music.data.TencentMusicApi
 import com.taotao.music.model.LyricParser
 import com.taotao.music.model.Song
+import com.taotao.music.model.canPlayMv
 import com.taotao.music.player.AudioPlayer
 import com.taotao.music.playerui.PlayerActions
 import com.taotao.music.playerui.PlayerCompactLayout
@@ -112,7 +113,7 @@ internal fun PlayerDetailPage(
     sleepTimerWaitingSongEnd: Boolean,
     onOpenSleepTimer: () -> Unit,
     onOpenSoundEffects: () -> Unit,
-    onRefrainResolved: (Song, Long?, Long?) -> Unit,
+    onResolveMetadata: suspend (Song) -> Unit,
     onOpenMv: (Song) -> Unit,
     // 歌手 / 专辑名点击跳转的宿主回调（AppPageRouter 装配到 TaotaoAppState 的跳转方法上）。
     onOpenArtist: (Song) -> Unit,
@@ -127,9 +128,8 @@ internal fun PlayerDetailPage(
     // key 不一致就会出现「状态被清空、拉取逻辑却不重跑」的空白歌词和收藏状态丢失。
     var lyricText by remember(song.lyricUri, song.remoteId, song.mid) { mutableStateOf<String?>(null) }
     var lyricWords by remember(song.lyricWordsUri, song.remoteId, song.mid) { mutableStateOf<String?>(null) }
-    var refrainStartMs by remember(song) { mutableStateOf(song.refrainStartMs) }
-    var refrainEndMs by remember(song) { mutableStateOf(song.refrainEndMs) }
-    var hasMv by remember(song.remoteId, song.source, song.hasMv) { mutableStateOf(song.hasMv) }
+    val refrainStartMs = song.refrainStartMs
+    val refrainEndMs = song.refrainEndMs
     // 解析结果按原文缓存，避免每帧进度变化都重新解析整段歌词。
     val lyric = remember(lyricText, lyricWords) { LyricParser.parse(lyricText, lyricWords) }
     var showQueue by remember { mutableStateOf(false) }
@@ -179,22 +179,8 @@ internal fun PlayerDetailPage(
         lyricText = loaded.first
         lyricWords = loaded.second
     }
-    LaunchedEffect(song.remoteId, song.source, song.refrainStartMs, song.refrainEndMs, song.hasMv) {
-        if (refrainStartMs == null || refrainEndMs == null ||
-            (song.source == TencentMusicApi.SEARCH_SOURCE_KUWO && hasMv == null)) {
-            val refreshed = withContext(Dispatchers.IO) {
-                runCatching { musicApi.requestSongInfoForPlayback(song) }.getOrNull()
-            }
-            refreshed?.hasMv?.let { hasMv = it }
-            // 只在真的拉到区间时才覆盖：上游没给的不能把本地已有的非空值写成 null。
-            // 拉到后回写全局队列，迷你播放器与冷启动恢复才不会丢标记；
-            // 父级换入带区间的新 song 实例后，上面的 remember(song) 会自动带上新值。
-            if (refreshed != null && (refreshed.refrainStartMs != null || refreshed.refrainEndMs != null)) {
-                refrainStartMs = refreshed.refrainStartMs
-                refrainEndMs = refreshed.refrainEndMs
-                onRefrainResolved(song, refreshed.refrainStartMs, refreshed.refrainEndMs)
-            }
-        }
+    LaunchedEffect(song.remoteId, song.mid, song.source) {
+        onResolveMetadata(song)
     }
     // positionMs 是本次组合从播放器 State 读取出的普通值，不能再放进无 key 的
     // remember/derivedStateOf：那会把首次进入页面时的数值闭包起来，后续进度不再刷新。
@@ -384,7 +370,7 @@ internal fun PlayerDetailPage(
                     IconButton(onClick = onShare) {
                         Icon(Icons.Default.Share, "分享歌曲", tint = TaotaoCoral)
                     }
-                    if (song.source == TencentMusicApi.SEARCH_SOURCE_KUWO && hasMv == true && song.remoteId?.let { it > 0L } == true) {
+                    if (song.canPlayMv) {
                         // MV 拉取与播放都交给独立的 MV 播放页，这里只负责跳转。
                         IconButton(onClick = { onOpenMv(song) }) {
                             Icon(Icons.Default.VideoLibrary, "播放 MV", tint = TaotaoCoral)

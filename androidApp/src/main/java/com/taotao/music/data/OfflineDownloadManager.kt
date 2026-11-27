@@ -1,15 +1,20 @@
 package com.taotao.music.data
 
 import android.content.Context
+import androidx.core.util.AtomicFile
 import com.taotao.music.model.Song
+import com.taotao.music.model.mergePlaybackMetadata
+import com.taotao.music.model.metadataKey
 import java.io.File
 import java.net.URL
 import java.net.HttpURLConnection
 import java.util.Properties
 
 /** 将网络歌曲及其封面、歌词保存到应用私有目录，避免申请外部存储权限。 */
-class OfflineDownloadManager(context: Context, private val tokenProvider: TokenProvider) {
-    private val root = File(context.filesDir, "offline_music").apply { mkdirs() }
+class OfflineDownloadManager internal constructor(private val root: File, private val tokenProvider: TokenProvider) {
+    constructor(context: Context, tokenProvider: TokenProvider) : this(
+        File(context.filesDir, "offline_music").apply { mkdirs() }, tokenProvider,
+    )
 
     /**
      * 下载一首歌。
@@ -34,7 +39,10 @@ class OfflineDownloadManager(context: Context, private val tokenProvider: TokenP
         onProgress: (downloaded: Long, total: Long) -> Unit = { _, _ -> },
     ): Song {
         val id = requireNotNull(song.remoteId) { "网络歌曲缺少歌曲 ID" }
-        val dir = File(root, id.toString()).apply { mkdirs() }
+        // 新下载按音源分目录；旧下载原地复用，避免已有队列里的 file: 路径失效。
+        val source = song.source.trim().lowercase().ifBlank { "tencent" }
+        require(source in setOf("tencent", "netease", "kuwo") && id > 0L) { "歌曲缺少有效的音源身份" }
+        val dir = (directoryOf(song) ?: File(root, "$source-$id")).apply { mkdirs() }
         val audio = audioUrl.takeIf { it.startsWith("http") }?.let {
             val extension = URL(it).path.substringAfterLast('.', "").lowercase().takeIf { value -> value in AUDIO_EXTENSIONS } ?: "mp3"
             val target = File(dir, "audio.$extension")
@@ -73,11 +81,15 @@ class OfflineDownloadManager(context: Context, private val tokenProvider: TokenP
             song.type?.let { setProperty("type", it.toString()) }
             setProperty("source", song.source.ifBlank { "tencent" })
             song.hasMv?.let { setProperty("hasMv", it.toString()) }
+            song.artistId?.let { setProperty("artistId", it.toString()) }
+            song.albumId?.let { setProperty("albumId", it.toString()) }
+            song.refrainStartMs?.let { setProperty("refrainStartMs", it.toString()) }
+            song.refrainEndMs?.let { setProperty("refrainEndMs", it.toString()) }
             // 在线封面地址留作兜底：封面文件下载失败（弱网 / 上游抖动）时重启读取，
             // 还能走网络补图，而不是让这首歌永久退化成音符占位块。
             if (!coverUrl.isNullOrBlank()) setProperty("onlineCover", coverUrl)
         }.also { properties ->
-            File(dir, "song.properties").outputStream().use { properties.store(it, "歌曲信息") }
+            synchronized(this) { writeProperties(dir, properties) }
         }
         return song.copy(
             audioUri = audio?.toURI()?.toString() ?: song.audioUri,
@@ -101,19 +113,63 @@ class OfflineDownloadManager(context: Context, private val tokenProvider: TokenP
      * 搜索结果里的歌与本地已下载的是同一个 `remoteId`，播放前必须先查这里 ——
      * 否则明明下载过却还是从云端拉流，白费流量。
      */
-    fun findDownloaded(remoteId: Long?): Song? {
-        val dir = File(root, (remoteId ?: return null).toString())
-        if (!File(dir, "song.properties").isFile || audioFilesIn(dir).isEmpty()) return null
+    fun findDownloaded(remoteId: Long?, source: String = "tencent"): Song? {
+        val handle = Song("", "", "", 0L, remoteId = remoteId, source = source)
+        val dir = directoryOf(handle) ?: return null
+        if (audioFilesIn(dir).isEmpty()) return null
         return runCatching { songIn(dir) }.getOrNull()
     }
 
+    /** 已下载的旧文件只补写资料，不重新下载音频、歌词或封面。 */
+    @Synchronized
+    fun updateMetadata(resolved: Song): Boolean {
+        val dir = directoryOf(resolved) ?: return false
+        val local = songIn(dir)
+        val merged = local.mergePlaybackMetadata(resolved)
+        if (local == merged) return false
+        val properties = readProperties(dir)
+        merged.hasMv?.let { properties.setProperty("hasMv", it.toString()) }
+        merged.artistId?.let { properties.setProperty("artistId", it.toString()) }
+        merged.albumId?.let { properties.setProperty("albumId", it.toString()) }
+        merged.refrainStartMs?.let { properties.setProperty("refrainStartMs", it.toString()) }
+        merged.refrainEndMs?.let { properties.setProperty("refrainEndMs", it.toString()) }
+        writeProperties(dir, properties)
+        return true
+    }
+
+    /** 新目录与历史数字目录都要核对 properties 身份，不允许同号跨音源命中。 */
+    private fun directoryOf(song: Song): File? {
+        val id = song.remoteId?.takeIf { it > 0L } ?: return null
+        val key = song.metadataKey ?: return null
+        val source = song.source.trim().lowercase().ifBlank { "tencent" }
+        return listOf(File(root, "$source-$id"), File(root, id.toString())).firstOrNull { dir ->
+            runCatching { songIn(dir).metadataKey == key }.getOrDefault(false)
+        }
+    }
+
+    private fun readProperties(dir: File): Properties = Properties().apply {
+        AtomicFile(File(dir, "song.properties")).openRead().use(::load)
+    }
+
+    private fun writeProperties(dir: File, properties: Properties) {
+        val file = AtomicFile(File(dir, "song.properties"))
+        val output = file.startWrite()
+        try {
+            properties.store(output, "歌曲信息")
+            file.finishWrite(output)
+        } catch (error: Exception) {
+            file.failWrite(output)
+            throw error
+        }
+    }
+
     private fun songIn(dir: File): Song {
-        val properties = Properties().apply { load(File(dir, "song.properties").inputStream()) }
+        val properties = readProperties(dir)
         return Song(
             title = properties.getProperty("title", "未知歌曲"),
             artist = properties.getProperty("artist", "未知歌手"),
             duration = properties.getProperty("duration", "网络歌曲"),
-            color = properties.getProperty("color", "0xFFFFB4A2").toLong(),
+            color = properties.getProperty("color")?.toLongOrNull() ?: 0xFFFFB4A2,
             // 一首歌只留一个音频文件，所以这里不存在"挑哪个"的问题。
             audioUri = audioFilesIn(dir).first().toURI().toString(),
             remoteId = properties.getProperty("remoteId").toLong(),
@@ -134,6 +190,10 @@ class OfflineDownloadManager(context: Context, private val tokenProvider: TokenP
             localQuality = properties.getProperty("quality")?.toIntOrNull(),
             source = properties.getProperty("source", "tencent"),
             hasMv = properties.getProperty("hasMv")?.toBooleanStrictOrNull(),
+            artistId = properties.getProperty("artistId")?.toLongOrNull()?.takeIf { it > 0L },
+            albumId = properties.getProperty("albumId")?.toLongOrNull()?.takeIf { it > 0L },
+            refrainStartMs = properties.getProperty("refrainStartMs")?.toLongOrNull()?.takeIf { it > 0L },
+            refrainEndMs = properties.getProperty("refrainEndMs")?.toLongOrNull()?.takeIf { it > 0L },
         )
     }
 
@@ -198,8 +258,7 @@ class OfflineDownloadManager(context: Context, private val tokenProvider: TokenP
 
     /** 删除一首已下载的歌，连同封面和歌词。 */
     fun delete(song: Song): Boolean {
-        val id = song.remoteId ?: return false
-        val dir = File(root, id.toString())
+        val dir = directoryOf(song) ?: return false
         if (!dir.isDirectory) return false
         return dir.deleteRecursively()
     }

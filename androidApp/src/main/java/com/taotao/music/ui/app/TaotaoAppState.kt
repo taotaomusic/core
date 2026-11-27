@@ -31,6 +31,7 @@ import com.taotao.music.data.PlaybackHistoryEntry
 import com.taotao.music.data.PlaybackHistoryStore
 import com.taotao.music.data.PlaybackSnapshotPolicy
 import com.taotao.music.data.PlaybackStateStore
+import com.taotao.music.data.PlaybackMetadataResolver
 import com.taotao.music.data.PlaylistSearchResult
 import com.taotao.music.data.PlaybackSyncCoordinator
 import com.taotao.music.data.PlaybackSyncStore
@@ -44,6 +45,8 @@ import com.taotao.music.data.bindDownloadedSongs
 import com.taotao.music.data.im.ImSessionStore
 import com.taotao.music.data.im.WukongImClient
 import com.taotao.music.model.Song
+import com.taotao.music.model.mergePlaybackMetadata
+import com.taotao.music.model.metadataKey
 import com.taotao.music.player.AudioPlayer
 import com.taotao.music.ui.common.SharePoster
 import com.taotao.music.ui.common.SharePosterRenderer
@@ -99,6 +102,9 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
      */
     val musicApi = TaotaoApplication.createMusicApi()
     val downloadManager = OfflineDownloadManager(context, authSession)
+    private val metadataResolver = PlaybackMetadataResolver(fetch = { song ->
+        withContext(Dispatchers.IO) { musicApi.requestSongInfoForPlayback(song, playbackQuality.value) }
+    })
     val playbackStateStore = PlaybackStateStore(context)
     val playbackHistoryStore = PlaybackHistoryStore(context)
     val playbackSyncStore = PlaybackSyncStore(context)
@@ -326,37 +332,8 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
             val localDownloads = withContext(Dispatchers.IO) { downloadManager.listDownloaded() }
             val queueWithLocalFiles = bindDownloadedSongs(queue, localDownloads)
             val requestedSong = queueWithLocalFiles[index]
-            // 历史队列/旧版本缓存可能没有高潮区间；播放入队时补齐并回写队列，
-            // 避免详情页临时拉到数据后，迷你播放器和下一次恢复又丢失标记。
-            // 老队列/收藏恢复的歌曲同样没有音源内歌手 / 专辑 ID，一并回填 ——
-            // 详情页「查看歌手 / 查看专辑」才能对非搜索来源生效（2026-10-05 用户反馈）。
-            val queueWithMetadata = if (
-                !requestedSong.audioUri.orEmpty().startsWith("file:") &&
-                requestedSong.remoteId?.let { it > 0L } == true &&
-                (requestedSong.refrainStartMs == null || requestedSong.refrainEndMs == null ||
-                    (requestedSong.source == TencentMusicApi.SEARCH_SOURCE_KUWO &&
-                        (requestedSong.artistId == null || requestedSong.hasMv == null)))
-            ) {
-                val refreshed = withContext(Dispatchers.IO) {
-                    runCatching { musicApi.requestSongInfoForPlayback(requestedSong, qualityStore.playbackQuality().value) }
-                        .getOrNull()
-                }
-                if (refreshed != null && (refreshed.refrainStartMs != null || refreshed.refrainEndMs != null ||
-                            refreshed.artistId != null || refreshed.albumId != null || refreshed.hasMv != null)) {
-                    queueWithLocalFiles.toMutableList().also { items ->
-                        items[index] = requestedSong.copy(
-                            // elvis 保底合并：上游没给的字段保留原值，绝不把已有数据洗掉。
-                            refrainStartMs = refreshed.refrainStartMs ?: requestedSong.refrainStartMs,
-                            refrainEndMs = refreshed.refrainEndMs ?: requestedSong.refrainEndMs,
-                            artistId = refreshed.artistId ?: requestedSong.artistId,
-                            albumId = refreshed.albumId ?: requestedSong.albumId,
-                            hasMv = refreshed.hasMv ?: requestedSong.hasMv,
-                        )
-                    }
-                } else queueWithLocalFiles
-            } else queueWithLocalFiles
-            val requestedSongWithMetadata = queueWithMetadata[index]
-            val isLocalFile = requestedSongWithMetadata.audioUri?.startsWith("file:") == true
+            // 元数据在播放开始后后台补全；旧下载、无网或上游慢都不能阻塞音频起播。
+            val isLocalFile = requestedSong.audioUri?.startsWith("file:") == true
             // remoteId 是别的模块的 public 属性，Kotlin 不做智能转换，先取成局部变量。
             val remoteId = requestedSong.remoteId
             // 下载过就直接放本地文件。搜索结果里的歌与已下载的是同一个 remoteId，
@@ -364,18 +341,18 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
             // 网络歌曲统一用占位地址入队，真正的上游直链在取流那一刻才解析 ——
             // 直链是限时的，存进队列后冷启动恢复时就失效了。
             val playable = when {
-                isLocalFile -> requestedSongWithMetadata
-                !isLocalFile && (remoteId?.let { it > 0L } == true || !requestedSongWithMetadata.mid.isNullOrBlank()) -> requestedSongWithMetadata.copy(
+                isLocalFile -> requestedSong
+                !isLocalFile && (remoteId?.let { it > 0L } == true || !requestedSong.mid.isNullOrBlank()) -> requestedSong.copy(
                     audioUri = TencentMusicApi.placeholderUri(
                         remoteId,
-                        requestedSongWithMetadata.mid,
-                        requestedSongWithMetadata.type,
+                        requestedSong.mid,
+                        requestedSong.type,
                         qualityStore.playbackQuality().value,
-                        requestedSongWithMetadata.source,
-                    ) ?: requestedSongWithMetadata.audioUri,
-                    lyricUri = requestedSongWithMetadata.lyricUri ?: TencentMusicApi.lyricUri(remoteId, requestedSongWithMetadata.mid, requestedSongWithMetadata.source),
+                        requestedSong.source,
+                    ) ?: requestedSong.audioUri,
+                    lyricUri = requestedSong.lyricUri ?: TencentMusicApi.lyricUri(remoteId, requestedSong.mid, requestedSong.source),
                 )
-                else -> requestedSongWithMetadata
+                else -> requestedSong
             }
             if (playable.audioUri.isNullOrBlank()) {
                 message = "歌曲暂时没有可用播放链接"
@@ -422,25 +399,35 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
         }
     }
 
-    /**
-     * 详情页补拉到高潮区间后回写队列并落盘，迷你播放器与下次冷启动恢复才不会丢标记。
-     *
-     * 按实例身份定位队列里的那首歌：定位不到（队列已被整条换掉）就直接放弃，
-     * 不能按 remoteId 猜位置把区间写到另一首同 ID 的歌上。值没变化时也不重复落盘。
-     */
-    fun applyResolvedRefrain(song: Song, startMs: Long?, endMs: Long?) {
-        val index = playbackSongs.indexOfFirst { it === song }
-        if (index < 0) return
-        val current = playbackSongs[index]
-        if (current.refrainStartMs == startMs && current.refrainEndMs == endMs) return
-        playbackSongs = playbackSongs.toMutableList().also { items ->
-            items[index] = current.copy(refrainStartMs = startMs, refrainEndMs = endMs)
+    /** 当前曲目补资料：主界面、自动切歌和独立详情 Activity 共用同一份去重器。 */
+    suspend fun resolvePlaybackMetadata(song: Song) {
+        val resolved = metadataResolver.resolve(song)
+        applyPlaybackMetadata(resolved)
+    }
+
+    /** 播放页查询得到的有/无结果回写缓存，旧搜索快照不能把“暂无 MV”重新洗成有。 */
+    fun applyMvAvailability(song: Song, hasMv: Boolean) {
+        scope.launch {
+            metadataResolver.rememberMv(song, hasMv)
+            applyPlaybackMetadata(song.copy(hasMv = hasMv))
         }
-        // 先在主线程取快照与进度，再交给 IO 线程写盘，与 togglePlayback 的落盘节奏一致。
-        val queueSnapshot = playbackSongs
-        val indexSnapshot = index
-        val positionSnapshot = audioPlayer.currentPositionMs()
-        scope.launch(Dispatchers.IO) { playbackStateStore.save(queueSnapshot, indexSnapshot, positionSnapshot) }
+    }
+
+    private suspend fun applyPlaybackMetadata(resolved: Song) {
+        if (resolved.metadataKey == null) return
+        val updated = playbackSongs.map { it.mergePlaybackMetadata(resolved) }
+        if (updated != playbackSongs) {
+            playbackSongs = updated
+            // 只替换媒体元数据，保持当前音频、进度和播放态；后台队列恢复也能拿到新值。
+            audioPlayer.updateSongMetadata(resolved)
+            val index = selectedIndex
+            val position = audioPlayer.currentPositionMs()
+            withContext(Dispatchers.IO) { runCatching { playbackStateStore.save(updated, index, position) } }
+        }
+        downloadedSongs = downloadedSongs.map { it.mergePlaybackMetadata(resolved) }
+        favoriteLibrarySongs = favoriteLibrarySongs.map { it.mergePlaybackMetadata(resolved) }
+        // 资料写盘失败不影响播放。旧下载留在原目录，媒体文件与离线地址完全不动。
+        withContext(Dispatchers.IO) { runCatching { downloadManager.updateMetadata(resolved) } }
     }
 
     /**
@@ -472,7 +459,7 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
             val remoteId = song.remoteId
             val isLocalFile = song.audioUri?.startsWith("file:") == true
             val offline = if (!isLocalFile && remoteId != null) {
-                withContext(Dispatchers.IO) { downloadManager.findDownloaded(remoteId) }
+                withContext(Dispatchers.IO) { downloadManager.findDownloaded(remoteId, song.source) }
             } else {
                 null
             }
@@ -554,12 +541,14 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
                     }
                 }
             }.onSuccess { offline ->
-                if (playbackSongs.getOrNull(index)?.remoteId == offline.remoteId) {
+                if (playbackSongs.getOrNull(index)?.metadataKey == offline.metadataKey) {
                     playbackSongs = playbackSongs.toMutableList().also { it[index] = offline }
                 }
                 downloadedSongs = withContext(Dispatchers.IO) { downloadManager.listDownloaded() }
                 message = "已下载，可离线播放"
                 downloadNotifier.completed(song.title)
+                // 下载期间补到的资料可能早于 properties 文件落盘，再同步一次即可命中进程缓存。
+                scope.launch { resolvePlaybackMetadata(offline) }
             }.onFailure {
                 message = it.message ?: "下载失败"
                 downloadNotifier.failed(song.title, it.message ?: "请稍后重试")
@@ -570,7 +559,8 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
     /** 删除一首已下载的歌。播放中的那首要先停下来，否则文件删了播放器还握着句柄。 */
     fun deleteDownloaded(song: Song) {
         scope.launch {
-            val playingThis = playbackSongs.getOrNull(selectedIndex)?.remoteId == song.remoteId &&
+            val playingThis = song.metadataKey != null &&
+                playbackSongs.getOrNull(selectedIndex)?.metadataKey == song.metadataKey &&
                 playbackSongs.getOrNull(selectedIndex)?.audioUri?.startsWith("file:") == true
             if (playingThis) audioPlayer.stop()
             val removed = withContext(Dispatchers.IO) { downloadManager.delete(song) }

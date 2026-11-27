@@ -6,6 +6,7 @@ import com.taotao.music.crypto.CryptoTransport
 import com.taotao.music.crypto.CryptoConnectionException
 import com.taotao.music.model.AudioQuality
 import com.taotao.music.model.Song
+import com.taotao.music.model.supportsMv
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -752,6 +753,8 @@ class TencentMusicApi(
     }
 
     fun requestMv(song: Song): MvInfo? {
+        require(song.supportsMv) { "该来源暂不支持 MV" }
+        if (song.hasMv == false) return null
         val id = song.remoteId?.takeIf { it > 0L } ?: throw IllegalArgumentException("MV 需要歌曲 ID")
         val source = encode(song.source.ifBlank { DEFAULT_SOURCE })
         return authorized("/api/v1/songs/$id/mv?source=$source") { bytes ->

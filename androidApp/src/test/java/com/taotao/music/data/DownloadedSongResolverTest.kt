@@ -8,8 +8,8 @@ import kotlin.test.assertNull
 class DownloadedSongResolverTest {
     @Test
     fun `绑定下载文件时使用最新 MV 判断且未知值不覆盖已知状态`() {
-        val local = song(remoteId = 42, audioUri = "file:/offline/42/audio.mp3").copy(hasMv = true)
-        val online = song(remoteId = 42).copy(hasMv = false)
+        val local = song(remoteId = 42, source = "kuwo", audioUri = "file:/offline/42/audio.mp3").copy(hasMv = true)
+        val online = song(remoteId = 42, source = "kuwo").copy(hasMv = false)
 
         assertEquals(false, bindDownloadedSong(online, local).hasMv)
         assertEquals(true, bindDownloadedSong(online.copy(hasMv = null), local).hasMv)

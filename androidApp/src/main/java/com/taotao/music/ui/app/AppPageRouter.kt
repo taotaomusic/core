@@ -402,6 +402,7 @@ internal fun MvPlayerPageRoute(state: TaotaoAppState, song: Song) {
         song = song,
         musicApi = state.musicApi,
         onBack = { state.mvSong = null },
+        onAvailabilityResolved = { target, hasMv -> state.applyMvAvailability(target, hasMv) },
     )
 }
 

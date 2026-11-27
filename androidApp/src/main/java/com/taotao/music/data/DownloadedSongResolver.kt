@@ -1,6 +1,7 @@
 package com.taotao.music.data
 
 import com.taotao.music.model.Song
+import com.taotao.music.model.mergePlaybackMetadata
 import java.util.Locale
 
 /**
@@ -33,8 +34,7 @@ internal fun findDownloadedSong(song: Song, downloadedSongs: List<Song>): Song? 
  * 封面地址。此前直接 `copy(favorited = ...)` 会把在线封面一起丢掉 —— 本地封面当年
  * 没下下来时，明明在线地址是好的，重启后也会永久显示成音符占位块。
  */
-internal fun bindDownloadedSong(online: Song, local: Song): Song = local.copy(
-    hasMv = online.hasMv ?: local.hasMv,
+internal fun bindDownloadedSong(online: Song, local: Song): Song = local.mergePlaybackMetadata(online).copy(
     favorited = online.favorited,
     coverUri = local.coverUri?.takeIf { it.startsWith("file:", ignoreCase = true) }
         ?: online.coverUri?.takeIf { it.isNotBlank() }
