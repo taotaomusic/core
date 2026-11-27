@@ -49,6 +49,7 @@ import com.taotao.music.playerui.theme.TaotaoMiuixTheme
 import com.taotao.music.playerui.theme.TaotaoShapes
 import com.taotao.music.playerui.theme.TaotaoSpacing
 import kotlin.math.roundToInt
+import top.yukonga.miuix.kmp.basic.SwitchDefaults
 import top.yukonga.miuix.kmp.basic.Switch as MiuixSwitch
 import top.yukonga.miuix.kmp.window.WindowBottomSheet
 
@@ -64,6 +65,13 @@ fun SoundEffectsSheet(
     val equalizerEnabled = settings.enabled && (!status.sessionReady || status.equalizerAvailable)
     val bassEnabled = settings.enabled && (!status.sessionReady || status.bassAvailable)
     TaotaoMiuixTheme {
+        // 开启使用品牌色，关闭使用中性灰，避免主题次色使两种状态看起来相同。
+        val effectSwitchColors = SwitchDefaults.switchColors(
+            checkedTrackColor = colors.primary,
+            checkedThumbColor = colors.onPrimary,
+            uncheckedTrackColor = colors.outlineVariant,
+            uncheckedThumbColor = colors.onSurfaceVariant,
+        )
         WindowBottomSheet(show = true, title = "播放音效", onDismissRequest = onDismiss) {
             Column(
                 Modifier.fillMaxWidth()
@@ -74,11 +82,17 @@ fun SoundEffectsSheet(
             ) {
                 Row(
                     Modifier.fillMaxWidth().clip(TaotaoShapes.card)
-                        .background(colors.primaryContainer.copy(alpha = 0.4f))
+                        .background(
+                            if (settings.enabled) colors.primaryContainer else colors.surfaceContainerLow,
+                        )
                         .padding(TaotaoSpacing.md),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Icon(Icons.Default.GraphicEq, null, tint = colors.primary)
+                    Icon(
+                        Icons.Default.GraphicEq,
+                        null,
+                        tint = if (settings.enabled) colors.primary else colors.onSurfaceVariant,
+                    )
                     Spacer(Modifier.width(TaotaoSpacing.sm))
                     Column(Modifier.weight(1f)) {
                         Text("找到喜欢的听感", fontWeight = FontWeight.Bold)
@@ -96,6 +110,7 @@ fun SoundEffectsSheet(
                         )
                     }
                     MiuixSwitch(
+                        colors = effectSwitchColors,
                         checked = settings.enabled,
                         onCheckedChange = { onChange(settings.copy(enabled = it)) },
                         modifier = Modifier.semantics { contentDescription = "启用播放音效" },
