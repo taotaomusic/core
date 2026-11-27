@@ -22,6 +22,7 @@ import com.taotao.music.playerui.theme.AnimationDurations
 import com.taotao.music.playerui.theme.TaotaoMiuixTheme
 import com.taotao.music.playerui.theme.taotaoTween
 import top.yukonga.miuix.kmp.basic.NavigationBar
+import top.yukonga.miuix.kmp.basic.NavigationBarDefaults
 import top.yukonga.miuix.kmp.basic.NavigationBarItem
 
 /** 平台导航项；共享布局不解释页面含义，只负责一致的视觉和选中反馈。 */
@@ -92,6 +93,12 @@ fun SharedMainLayout(
                     // 把 MaterialTheme 当前配色喂给它，选中色与全应用珊瑚色系同源；
                     // 组件自身处理导航栏/字幕栏 insets，不再需要 M3 的 windowInsets 参数。
                     TaotaoMiuixTheme {
+                        // Miuix 默认选中与未选中都取 onSurfaceContainer，深色下会呈现近白色。
+                        // 导航项自行计算按压透明度（indication = null），必须通过 colors 指定品牌色。
+                        val navigationColors = NavigationBarDefaults.navigationBarItemColors(
+                            selectedContentColor = MaterialTheme.colorScheme.primary,
+                            unselectedContentColor = MaterialTheme.colorScheme.onSurface,
+                        )
                         NavigationBar {
                             navigationItems.forEach { item ->
                                 NavigationBarItem(
@@ -99,6 +106,7 @@ fun SharedMainLayout(
                                     onClick = { onNavigationSelected(item.id) },
                                     icon = item.icon,
                                     label = item.label,
+                                    colors = navigationColors,
                                 )
                             }
                         }
