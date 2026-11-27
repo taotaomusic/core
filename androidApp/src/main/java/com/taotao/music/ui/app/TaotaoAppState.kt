@@ -71,6 +71,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.util.UUID
 
 /**
@@ -105,6 +107,7 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
     private val metadataResolver = PlaybackMetadataResolver(fetch = { song ->
         withContext(Dispatchers.IO) { musicApi.requestSongInfoForPlayback(song, playbackQuality.value) }
     })
+    private val metadataApplyMutex = Mutex()
     val playbackStateStore = PlaybackStateStore(context)
     val playbackHistoryStore = PlaybackHistoryStore(context)
     val playbackSyncStore = PlaybackSyncStore(context)
@@ -413,8 +416,8 @@ internal class TaotaoAppState(private val context: Context, internal val scope: 
         }
     }
 
-    private suspend fun applyPlaybackMetadata(resolved: Song) {
-        if (resolved.metadataKey == null) return
+    private suspend fun applyPlaybackMetadata(resolved: Song): Unit = metadataApplyMutex.withLock {
+        if (resolved.metadataKey == null) return@withLock
         val updated = playbackSongs.map { it.mergePlaybackMetadata(resolved) }
         if (updated != playbackSongs) {
             playbackSongs = updated

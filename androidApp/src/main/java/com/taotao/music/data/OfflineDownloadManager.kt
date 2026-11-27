@@ -257,6 +257,7 @@ class OfflineDownloadManager internal constructor(private val root: File, privat
     }
 
     /** 删除一首已下载的歌，连同封面和歌词。 */
+    @Synchronized
     fun delete(song: Song): Boolean {
         val dir = directoryOf(song) ?: return false
         if (!dir.isDirectory) return false
